@@ -1,0 +1,39 @@
+name: Production check
+
+# After Vercel finishes deploying main, confirm the live site is up, connected to its
+# database and has the tutor's key. Needs no secrets: it only reads public pages.
+#
+# Vercel reports each deployment as a commit status named "Vercel", so that is what
+# starts this. (It does not send GitHub's deployment events for this project, which is
+# why an earlier version of this workflow, waiting for those, never ran.)
+#
+# The address below is public, not a secret. A repository variable named PRODUCTION_URL
+# overrides it, should the site ever move. Vercel's own <project>-<account>.vercel.app
+# address is no use here because it sits behind a Vercel login.
+on:
+  status:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Verify production
+    if: >-
+      github.event.context == 'Vercel' && github.event.state == 'success' &&
+      contains(github.event.branches.*.name, 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+        env:
+          LIVE_URL: ${{ vars.PRODUCTION_URL || 'https://bedrock.arnavraja.in' }}
