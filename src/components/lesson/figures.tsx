@@ -3050,6 +3050,87 @@ function UnionFind(props: Props) {
   );
 }
 
+const MEAL_STAGES = [
+  { name: "main", options: ["Rajma", "Kadhi", "Paneer"] },
+  { name: "drink", options: ["Lassi", "Chaas", "Nimbu pani"] },
+  { name: "sweet", options: ["Halwa", "Jalebi", "Barfi"] },
+];
+
+/** A meal chosen in three stages, drawn as a tree with one leaf for each meal, so that the leaves number the product of the choices at each stage. */
+function ChoiceTree(props: Props) {
+  const [counts, setCounts] = useState([clamp(Math.round(num(props.mains, 3)), 1, 3), clamp(Math.round(num(props.drinks, 2)), 1, 3), clamp(Math.round(num(props.sweets, 2)), 1, 3)]);
+  const total = counts[0] * counts[1] * counts[2];
+  const [pick, setPick] = useState(clamp(Math.round(num(props.pick, 1)), 1, total));
+  const chosen = Math.min(pick, total);
+  const digits = [Math.floor((chosen - 1) / (counts[1] * counts[2])), Math.floor((chosen - 1) / counts[2]) % counts[1], (chosen - 1) % counts[2]];
+  const setStage = (stage: number, value: number) => {
+    const next = counts.map((c, i) => (i === stage ? value : c));
+    setCounts(next);
+    setPick(Math.min(chosen, next[0] * next[1] * next[2]));
+  };
+  const gap = total > 1 ? 400 / (total - 1) : 0;
+  const leafX = (leaf: number) => (total > 1 ? 20 + leaf * gap : 220);
+  const levelY = [26, 90, 156, 222];
+  type Placed = { x: number; y: number; label: string; path: number[] };
+  const nodes: Placed[] = [];
+  const edges: { from: Spot; to: Spot; on: boolean }[] = [];
+  const build = (path: number[], first: number, width: number): Spot => {
+    const depth = path.length;
+    const x = (leafX(first) + leafX(first + width - 1)) / 2;
+    const at: Spot = [x, levelY[depth]];
+    nodes.push({ x, y: at[1], label: depth === 0 ? "" : MEAL_STAGES[depth - 1].options[path[depth - 1]], path });
+    if (depth < 3) {
+      const share = width / counts[depth];
+      for (let k = 0; k < counts[depth]; k++) {
+        const child = build([...path, k], first + k * share, share);
+        edges.push({ from: at, to: child, on: [...path, k].every((v, i) => v === digits[i]) });
+      }
+    }
+    return at;
+  };
+  build([], 0, total);
+  const small = total > 12;
+  const meal = digits.map((d, i) => MEAL_STAGES[i].options[d]);
+  return (
+    <Frame
+      title="Counting choices with a tree"
+      summary={`A meal is one main, then one drink, then one sweet. There ${counts[0] === 1 ? "is 1 main" : `are ${counts[0]} mains`}, each can be followed by ${plural(counts[1], "drink")}, and each of those by ${plural(counts[2], "sweet")}, so the tree branches ${counts[0]} ways, then ${counts[1]}, then ${counts[2]}, and has ${counts[0]} × ${counts[1]} × ${counts[2]} = ${total} ${total === 1 ? "leaf" : "leaves"}, one for each meal. Meal ${chosen} is ${meal.join(", ")}.`}
+      controls={
+        <>
+          {MEAL_STAGES.map((stage, i) => (
+            <Stepper key={stage.name} label={`${stage.name}s`} value={counts[i]} onChange={(v) => setStage(i, v)} min={1} max={3} />
+          ))}
+          <Stepper label="meal" value={chosen} onChange={setPick} min={1} max={total} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`A tree of choices with ${total} ${total === 1 ? "leaf" : "leaves"}, with the path to meal ${chosen} marked`}>
+        {edges.map((edge, i) => (
+          <line key={i} x1={edge.from[0]} y1={edge.from[1]} x2={edge.to[0]} y2={edge.to[1]} className={edge.on ? "fig-accent-line" : "fig-axis"} />
+        ))}
+        {nodes.map((node) => {
+          const on = node.path.every((v, i) => v === digits[i]);
+          const leaf = node.path.length === 3;
+          const r = leaf && small ? 5 : 11;
+          return (
+            <g key={"n" + node.path.join("-")}>
+              <circle cx={node.x} cy={node.y} r={r} className={on ? "fig-accent" : "fig-fill"} />
+              {leaf && small ? null : (
+                <text x={node.x} y={node.y + 4} textAnchor="middle" className="fig-small" style={{ fill: on ? "var(--bg)" : "var(--text)" }}>
+                  {node.label.slice(0, 1)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+        <text x="12" y="246" className="fig-small">
+          {`${counts[0]} × ${counts[1]} × ${counts[2]} = ${total}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -4331,6 +4412,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   trie: Trie,
   "graph-storage": GraphStorage,
   "union-find": UnionFind,
+  "choice-tree": ChoiceTree,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
