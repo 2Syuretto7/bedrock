@@ -3246,6 +3246,87 @@ function Pigeonholes(props: Props) {
   );
 }
 
+const OVERLAP_SPOTS: Record<string, Spot> = { A: [118, 92], B: [322, 92], C: [220, 252], AB: [220, 70], AC: [158, 186], BC: [282, 186], ABC: [220, 146] };
+const OVERLAP_STAGES = ["add the three sets", "subtract the three overlaps of two", "add back the overlap of all three"];
+
+/** The multiples of 2, 3 and 5 up to n as three overlapping sets, with the number of times inclusion and exclusion has counted each region after one, two or three of its steps. */
+function InclusionExclusion(props: Props) {
+  const [top, setTop] = useState(clamp(Math.round(num(props.n, 30) / 10) * 10, 10, 100));
+  const [stage, setStage] = useState(clamp(Math.round(num(props.stage, 1)), 1, 3));
+  const divisors: Record<string, number> = { A: 2, B: 3, C: 5 };
+  const region = (name: string) => {
+    let count = 0;
+    for (let x = 1; x <= top; x++) {
+      const inside = (["A", "B", "C"] as const).filter((set) => x % divisors[set] === 0).join("");
+      if (inside === name) count += 1;
+    }
+    return count;
+  };
+  const sizes = Object.fromEntries(Object.keys(OVERLAP_SPOTS).map((name) => [name, region(name)]));
+  const choose = (m: number, j: number) => (j === 1 ? m : j === 2 ? (m * (m - 1)) / 2 : m === 3 ? 1 : 0);
+  const times = (name: string) => [1, 2, 3].slice(0, stage).reduce((sum, j) => sum + (j % 2 === 1 ? 1 : -1) * choose(name.length, j), 0);
+  const single = (d: number) => Math.floor(top / d);
+  const singles = single(2) + single(3) + single(5);
+  const pairs = single(6) + single(10) + single(15);
+  const triple = single(30);
+  const running = [singles, singles - pairs, singles - pairs + triple][stage - 1];
+  const truth = Object.values(sizes).reduce((a, b) => a + b, 0);
+  const steps = [
+    `Adding the sizes of the three sets, ${single(2)} + ${single(3)} + ${single(5)}, gives ${singles}`,
+    `Subtracting the numbers in each pair of sets, ${single(6)} + ${single(10)} + ${single(15)} multiples of 6, 10 and 15, leaves ${singles - pairs}`,
+    `Adding back the ${plural(triple, "number")} in all three, the multiples of 30, gives ${singles - pairs + triple}`,
+  ];
+  const wrong = Object.keys(OVERLAP_SPOTS).filter((name) => times(name) !== 1);
+  return (
+    <Frame
+      title="Inclusion and exclusion"
+      summary={`Among 1 to ${top}, A is the multiples of 2, B of 3 and C of 5. ${steps.slice(0, stage).join(". ")}. ${
+        wrong.length === 0
+          ? `Every region is now counted exactly once, so ${running} is right: ${running} of the numbers are multiples of 2, 3 or 5.`
+          : `So far ${wrong.map((name) => `the region in ${name.split("").join(" and ")} is counted ${times(name)} ${times(name) === 1 ? "time" : "times"}`).join(", ")}, where it should be once, so ${running} is ${running > truth ? "too many" : "too few"}; the true count is ${truth}.`
+      }`}
+      controls={
+        <>
+          <Stepper label="numbers up to" value={top} onChange={(v) => setTop(v)} min={10} max={100} />
+          <Stepper label="step" value={stage} onChange={setStage} min={1} max={3} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`Three overlapping sets after the step: ${OVERLAP_STAGES[stage - 1]}`}>
+        <circle cx="170" cy="112" r="92" className="fig-ghost" fill="none" />
+        <circle cx="270" cy="112" r="92" className="fig-ghost" fill="none" />
+        <circle cx="220" cy="196" r="92" className="fig-ghost" fill="none" />
+        <text x="62" y="26" className="fig-small">
+          A: ×2
+        </text>
+        <text x="346" y="26" className="fig-small">
+          B: ×3
+        </text>
+        <text x="318" y="282" className="fig-small">
+          C: ×5
+        </text>
+        {Object.entries(OVERLAP_SPOTS).map(([name, at]) => {
+          const t = times(name);
+          return (
+            <g key={name}>
+              <rect x={at[0] - 22} y={at[1] - 14} width="44" height="34" className={t === 1 ? "fig-fill" : "fig-accent"} />
+              <text x={at[0]} y={at[1]} textAnchor="middle" className="fig-small" style={{ fill: t === 1 ? "var(--text)" : "var(--bg)" }}>
+                {sizes[name]}
+              </text>
+              <text x={at[0]} y={at[1] + 14} textAnchor="middle" className="fig-small" style={{ fill: t === 1 ? "var(--text)" : "var(--bg)" }}>
+                {`×${t}`}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="282" className="fig-small">
+          {`running total ${running}, true ${truth}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -4530,6 +4611,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "choice-tree": ChoiceTree,
   "pascal-triangle": PascalTriangle,
   pigeonholes: Pigeonholes,
+  "inclusion-exclusion": InclusionExclusion,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
