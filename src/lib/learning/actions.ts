@@ -5,7 +5,7 @@ import { getCurrentUser } from "@/lib/auth/session";
 import { blockHtml, displayOrder, findQuestion } from "@/lib/lessons/content";
 import { grade } from "@/lib/lessons/grade";
 import { late, secondsFor } from "@/lib/lessons/timing";
-import { recordAttempt, saveSnapshot } from "./service";
+import { recordAttempt, saveSnapshot, sinceStart, startQuestion } from "./service";
 import { masteryOf, weakCheck } from "./standing";
 import { clearTutorHistory } from "../tutor/service";
 
@@ -29,8 +29,24 @@ async function learner() {
 const clean = (value: unknown, max: number) => String(value ?? "").slice(0, max);
 
 const TIME_UP = "Time was up before this answer arrived. Start the question again when you are ready.";
-/** Time is kept only for timed (System One) questions. For the rest it is neither measured nor stored. */
-const kept = (question: Parameters<typeof secondsFor>[0], ms: number) => (secondsFor(question) === null ? null : Number(ms) || 0);
+const NOT_STARTED = "This question's time has not started. Press Start first.";
+
+/**
+ * How long a timed (System One) question has been open, measured by the server from when Start was pressed.
+ * `null` for an untimed question, whose time is neither measured nor stored; `undefined` if it was never started.
+ */
+async function timeTaken(userId: string, unitId: string, question: Parameters<typeof secondsFor>[0] & { id: string }) {
+  if (secondsFor(question) === null) return null;
+  return (await sinceStart(getDb(), userId, unitId, question.id)) ?? undefined;
+}
+
+/** Starts a timed question's clock on the server. The question is shown only once this has returned. */
+export async function startTimed(conceptId: string, questionId: string): Promise<void> {
+  const user = await learner();
+  const { unitId, question } = findQuestion(clean(conceptId, 200), clean(questionId, 200));
+  if (secondsFor(question) === null) return;
+  await startQuestion(getDb(), user.id, unitId, question.id);
+}
 
 /** Mastery of a unit at the moment it is finished, as a whole percentage. */
 async function finishedMastery(userId: string, unitId: string, complete: boolean): Promise<number | undefined> {
@@ -40,10 +56,12 @@ async function finishedMastery(userId: string, unitId: string, complete: boolean
 }
 
 /** Grades a numeric, choice, predict or order answer on the server and records the attempt. */
-export async function submitAnswer(conceptId: string, questionId: string, answer: unknown, ms: number): Promise<AnswerResult> {
+export async function submitAnswer(conceptId: string, questionId: string, answer: unknown): Promise<AnswerResult> {
   const user = await learner();
   const { unitId, questions, question } = findQuestion(clean(conceptId, 200), clean(questionId, 200));
   if (question.type === "code") throw new Error("Code answers are checked by their tests");
+  const ms = await timeTaken(user.id, unitId, question);
+  if (ms === undefined) return { correct: false, note: NOT_STARTED, lessonComplete: false };
 
   // The browser speaks in screen positions; translate them back to the lesson's own order.
   const order = displayOrder(unitId, question);
@@ -53,11 +71,11 @@ export async function submitAnswer(conceptId: string, questionId: string, answer
   else given = clean(answer, 4000);
 
   // A timed question answered after its time is up is not solved, whatever the answer.
-  const verdict = late(question, Number(ms)) ? { correct: false, note: TIME_UP } : grade(question, given);
+  const verdict = ms !== null && late(question, ms) ? { correct: false, note: TIME_UP } : grade(question, given);
   const outcome = await recordAttempt(
     getDb(),
     user.id,
-    { conceptId: unitId, questionId: question.id, system: question.system, correct: verdict.correct, answer: given ?? null, ms: kept(question, ms) },
+    { conceptId: unitId, questionId: question.id, system: question.system, correct: verdict.correct, answer: given ?? null, ms },
     questions.map((q) => q.id),
     weakCheck(unitId),
   );
@@ -79,16 +97,18 @@ export async function codeTests(conceptId: string, questionId: string): Promise<
 }
 
 /** Records the outcome of running a code question's checks. */
-export async function reportCode(conceptId: string, questionId: string, passed: boolean, code: string, ms: number): Promise<AnswerResult> {
+export async function reportCode(conceptId: string, questionId: string, passed: boolean, code: string): Promise<AnswerResult> {
   const user = await learner();
   const { unitId, questions, question } = findQuestion(clean(conceptId, 200), clean(questionId, 200));
   if (question.type !== "code") throw new Error("Not a code question");
-  const tooLate = late(question, Number(ms));
+  const ms = await timeTaken(user.id, unitId, question);
+  if (ms === undefined) return { correct: false, note: NOT_STARTED, lessonComplete: false };
+  const tooLate = ms !== null && late(question, ms);
   const correct = passed === true && !tooLate;
   const outcome = await recordAttempt(
     getDb(),
     user.id,
-    { conceptId: unitId, questionId: question.id, system: question.system, correct, answer: clean(code, 50_000), ms: kept(question, ms) },
+    { conceptId: unitId, questionId: question.id, system: question.system, correct, answer: clean(code, 50_000), ms },
     questions.map((q) => q.id),
     weakCheck(unitId),
   );
@@ -106,7 +126,8 @@ export async function timeUp(conceptId: string, questionId: string): Promise<voi
   const user = await learner();
   const { unitId, questions, question } = findQuestion(clean(conceptId, 200), clean(questionId, 200));
   const seconds = secondsFor(question);
-  if (seconds === null) return;
+  // Only a question that was started can run out of time.
+  if (seconds === null || (await sinceStart(getDb(), user.id, unitId, question.id)) === null) return;
   await recordAttempt(
     getDb(),
     user.id,

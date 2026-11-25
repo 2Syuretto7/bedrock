@@ -4,7 +4,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../db/schema";
 
 type Db = NodePgDatabase<typeof schema>;
-const { attempts, lessonProgress, codeSnapshots, tutorMessages } = schema;
+const { attempts, lessonProgress, codeSnapshots, tutorMessages, questionStarts } = schema;
 
 export type AttemptInput = {
   conceptId: string;
@@ -16,6 +16,23 @@ export type AttemptInput = {
 };
 
 export type AttemptRow = { questionId: string; correct: boolean; hintsUsed: number; ms: number | null; at: Date };
+
+/** Starts a timed question's clock. Starting it again, after its time ran out, restarts it. */
+export async function startQuestion(db: Db, userId: string, unitId: string, questionId: string, now = new Date()) {
+  await db
+    .insert(questionStarts)
+    .values({ userId, unitId, questionId, startedAt: now })
+    .onConflictDoUpdate({ target: [questionStarts.userId, questionStarts.unitId, questionStarts.questionId], set: { startedAt: now } });
+}
+
+/** Milliseconds since a timed question was last started, by the server's clock, or null if it was never started. */
+export async function sinceStart(db: Db, userId: string, unitId: string, questionId: string, now = new Date()): Promise<number | null> {
+  const [row] = await db
+    .select({ startedAt: questionStarts.startedAt })
+    .from(questionStarts)
+    .where(and(eq(questionStarts.userId, userId), eq(questionStarts.unitId, unitId), eq(questionStarts.questionId, questionId)));
+  return row ? Math.max(0, now.getTime() - row.startedAt.getTime()) : null;
+}
 
 /** Every answer the learner has given in a lesson or a mini-capstone, oldest first. */
 export async function attemptsIn(db: Db, userId: string, conceptId: string): Promise<AttemptRow[]> {

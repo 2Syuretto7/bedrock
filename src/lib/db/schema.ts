@@ -109,4 +109,18 @@ export const reviewQuestions = pgTable("review_questions", {
   correct: boolean("correct"),
   answer: jsonb("answer"),
   ms: integer("ms"),
+  /** When the learner pressed Start. The time an answer took is measured from here on the server. */
+  startedAt: timestamp("started_at", { withTimezone: true }),
 });
+
+/** When each timed question of a lesson or mini-capstone was last started. The server measures answer times from here. */
+export const questionStarts = pgTable(
+  "question_starts",
+  {
+    userId: uuid("user_id").notNull(),
+    unitId: text("unit_id").notNull(),
+    questionId: text("question_id").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.unitId, t.questionId] })],
+);

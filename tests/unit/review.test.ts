@@ -21,7 +21,7 @@ import {
   TARGET_RECALL,
   type Memory,
 } from "@/lib/review/schedule";
-import { answerReview, dueBy, keepQuestion, questionsWritten, rememberFinishedLessons, showIn, shownIn, waitingQuestion } from "@/lib/review/service";
+import { answerReview, dueBy, keepQuestion, questionsWritten, rememberFinishedLessons, showIn, shownIn, startReview, waitingQuestion } from "@/lib/review/service";
 import { migrate } from "../../scripts/migrate";
 
 const DAY = 86_400_000;
@@ -227,6 +227,13 @@ describe("writing a fresh question", () => {
 });
 
 const url = process.env.TEST_DATABASE_URL ?? "postgres://bedrock:bedrock@localhost:5432/bedrock_test";
+
+/** Starts a fresh question by the server's clock, then answers it `ms` later. */
+const answerAfter = async (user: string, id: number, read: Parameters<typeof answerReview>[3], ms: number, gaveUp = false) => {
+  const startedAt = new Date();
+  await startReview(db, user, id, startedAt);
+  return answerReview(db, user, id, read, new Date(startedAt.getTime() + ms), gaveUp);
+};
 const pool = new Pool({ connectionString: url });
 const db = drizzle(pool, { schema });
 let userId: string;
@@ -276,7 +283,7 @@ describe("reviews in the database", () => {
       ["f0.adding", false, null],
     ]);
 
-    await answerReview(db, userId, first!.id, () => "25", 900);
+    await answerAfter(userId, first!.id, () => "25", 900);
     expect((await shownIn(db, userId, "s0.printing")).map((row) => [row.conceptId, row.answered, row.correct])).toEqual([
       ["f0.counting", true, false],
       ["f0.adding", false, null],
@@ -306,10 +313,10 @@ describe("reviews in the database", () => {
     expect(await waitingQuestion(db, userId, "f0.counting", "s0.variables")).toEqual(kept);
 
     // Letters where a number belongs are not an answer, so the one try is kept.
-    expect(await answerReview(db, userId, kept!.id, () => "two dozen", 500)).toMatchObject({ correct: false, note: expect.any(String) });
+    expect(await answerAfter(userId, kept!.id, () => "two dozen", 500)).toMatchObject({ correct: false, note: expect.any(String) });
     expect(await waitingQuestion(db, userId, "f0.counting")).not.toBeNull();
 
-    const outcome = await answerReview(db, userId, kept!.id, () => "24", 1500);
+    const outcome = await answerAfter(userId, kept!.id, () => "24", 1500);
     expect(outcome).toMatchObject({ correct: true, conceptId: "f0.counting" });
     expect(outcome!.nextDueAt.getTime()).toBeGreaterThan(Date.now() + 10 * DAY);
     expect(await dueBy(db, userId, new Date())).toEqual([]);
@@ -319,12 +326,12 @@ describe("reviews in the database", () => {
 
     // An answer that arrives after the time is up is a miss, even if it is right.
     const slow = await keepQuestion(db, userId, "f0.adding", write({ ...numeric, prompt: "Three hens and four hens. How many?", answer: "7" }));
-    expect(await answerReview(db, userId, slow!.id, () => "7", 90_000, new Date(), () => true)).toMatchObject({ correct: false, conceptId: "f0.adding" });
+    expect(await answerAfter(userId, slow!.id, () => "7", 90_000)).toMatchObject({ correct: false, conceptId: "f0.adding" });
     expect(await waitingQuestion(db, userId, "f0.adding")).toBeNull();
 
     // Answered once: it is gone for good, cannot be answered again, and can never be written again.
     expect(await waitingQuestion(db, userId, "f0.counting")).toBeNull();
-    expect(await answerReview(db, userId, kept!.id, () => "24", 1500)).toBeNull();
+    expect(await answerAfter(userId, kept!.id, () => "24", 1500)).toBeNull();
     expect(await keepQuestion(db, userId, "f0.counting", write({ ...numeric, prompt: "a tray holds 4 rows of 6 eggs, how many eggs" }))).toBeNull();
     const next = await keepQuestion(db, userId, "f0.counting", write(choice));
     expect(next).not.toBeNull();
@@ -333,14 +340,41 @@ describe("reviews in the database", () => {
     expect((await questionsWritten(db, userId, "f0.counting")).map((row) => row.question.type)).toEqual(["numeric", "choice"]);
   });
 
+  it("times a fresh question by the server's clock, from Start, and starts it only once", async () => {
+    await finish("f0.counting", 30);
+    await rememberFinishedLessons(db, userId);
+    const kept = await keepQuestion(db, userId, "f0.counting", write(numeric));
+    // An answer to a question that was never started is refused, and the one try is kept.
+    expect(await answerReview(db, userId, kept!.id, () => "24")).toMatchObject({ correct: false, note: expect.stringContaining("Start") });
+    expect(await waitingQuestion(db, userId, "f0.counting")).not.toBeNull();
+
+    const startedAt = new Date();
+    expect(await startReview(db, userId, kept!.id, startedAt)).toBe(60_000);
+    // Leaving and coming back resumes the same clock instead of starting a new one.
+    expect(await startReview(db, userId, kept!.id, new Date(startedAt.getTime() + 20_000))).toBe(40_000);
+    expect(await startReview(db, randomUUID(), kept!.id)).toBeNull();
+
+    // A right answer 70 seconds after Start is late, whatever the browser says.
+    expect(await answerReview(db, userId, kept!.id, () => "24", new Date(startedAt.getTime() + 70_000))).toMatchObject({ correct: false });
+    // The one try is spent.
+    expect(await waitingQuestion(db, userId, "f0.counting")).toBeNull();
+  });
+
+  it("believes a browser that says the time ran out, since that can only cost the learner", async () => {
+    await finish("f0.counting", 30);
+    await rememberFinishedLessons(db, userId);
+    const kept = await keepQuestion(db, userId, "f0.counting", write(numeric));
+    expect(await answerAfter(userId, kept!.id, () => "24", 5_000, true)).toMatchObject({ correct: false });
+  });
+
   it("brings a missed lesson back within days, and keeps other learners' questions out of reach", async () => {
     await finish("f0.counting", 60);
     await rememberFinishedLessons(db, userId);
     const kept = await keepQuestion(db, userId, "f0.counting", write(choice));
     const other = randomUUID();
-    expect(await answerReview(db, other, kept!.id, () => 1, 100)).toBeNull();
+    expect(await answerAfter(other, kept!.id, () => 1, 100)).toBeNull();
 
-    const outcome = await answerReview(db, userId, kept!.id, () => 0, 100);
+    const outcome = await answerAfter(userId, kept!.id, () => 0, 100);
     expect(outcome!.correct).toBe(false);
     expect(outcome!.nextDueAt.getTime()).toBeLessThan(Date.now() + 4 * DAY);
     const [state] = await dueBy(db, userId, later(new Date(), 400));
@@ -366,7 +400,7 @@ describe("reviews in the database", () => {
     expect(await keepQuestion(db, userId, "f0.counting", write(numeric))).toBeNull();
 
     // Answering one moves no recall schedule: the lesson is not finished yet.
-    expect(await answerReview(db, userId, first!.id, () => "24", 900)).toMatchObject({ correct: true, purpose: "consolidation" });
+    expect(await answerAfter(userId, first!.id, () => "24", 900)).toMatchObject({ correct: true, purpose: "consolidation" });
     expect(await dueBy(db, userId, later(new Date(), 400))).toEqual([]);
 
     // A finish that is not weak finishes the lesson, and a finished lesson is never held again.

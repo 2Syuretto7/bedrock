@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { clock, spoken } from "@/lib/lessons/timing";
 import { useCountdown } from "../lesson/countdown";
 import { useWorkspace } from "../workspace/context";
-import { submitRecall } from "@/lib/review/actions";
+import { startRecall, submitRecall } from "@/lib/review/actions";
 import type { RecallView, Revealed } from "@/lib/review/view";
 
 // The text is written by the model, so the server renders it with raw HTML shown as text.
@@ -17,6 +17,7 @@ const Html = ({ html, className }: { html: string; className?: string }) => <div
 export function RecallCard({ view, number, kind = "recall" }: { view: RecallView; number: number; kind?: "recall" | "consolidation" }) {
   const ws = useWorkspace();
   const [pending, start] = useTransition();
+  const [starting, startClock] = useTransition();
   const [done, setDone] = useState<(Revealed & { nextInDays?: number }) | null>(view.done ?? null);
   const [note, setNote] = useState<string | null>(null);
   const [text, setText] = useState("");
@@ -25,10 +26,10 @@ export function RecallCard({ view, number, kind = "recall" }: { view: RecallView
   const name = kind === "recall" ? `Fresh recall question ${number}` : `Consolidation question ${number}`;
   const locked = done !== null || pending;
 
-  const send = (answer: unknown, ms: number) => {
+  const send = (answer: unknown, timedOut = false) => {
     start(async () => {
       try {
-        const result = await submitRecall(view.id, answer, ms);
+        const result = await submitRecall(view.id, answer, timedOut);
         if (result.note !== undefined) setNote(result.note);
         else {
           setNote(null);
@@ -41,9 +42,22 @@ export function RecallCard({ view, number, kind = "recall" }: { view: RecallView
     });
   };
   // Recall is fast retrieval, so the question is timed. If the time runs out, the one try is spent and it is a miss.
-  const timer = useCountdown(view.seconds, () => send(null, Number.MAX_SAFE_INTEGER), done === null);
-  const submit = (answer: unknown) => send(answer, timer.elapsed());
-  const waiting = done === null && !timer.running && !pending;
+  const timer = useCountdown(view.seconds, () => send(null, true), done === null);
+  const submit = (answer: unknown) => send(answer);
+  // The server keeps the clock. A question started before, on another visit, resumes with the time it has left.
+  const begin = () => {
+    startClock(async () => {
+      try {
+        const { remainingMs } = await startRecall(view.id);
+        setNote(null);
+        timer.begin(remainingMs);
+      } catch {
+        setNote("Could not reach Bedrock to start the clock. Check your connection and try again.");
+      }
+    });
+  };
+  // Hidden until the server has started the clock. Once time runs out, the question stays in view while the miss is recorded.
+  const waiting = done === null && (starting || (!timer.running && !pending));
   const checkButton = (disabled: boolean) => (
     <button type="submit" className="btn btn-primary btn-small" disabled={locked || disabled}>
       {pending ? "Checking" : "Check"}
@@ -69,8 +83,8 @@ export function RecallCard({ view, number, kind = "recall" }: { view: RecallView
             Answer from memory. The question appears when you start, and you have {spoken(view.seconds)}. If the time runs out it counts as a miss.
           </p>
           {note ? <p className="text-error">{note}</p> : null}
-          <button type="button" className="btn btn-primary btn-small" onClick={timer.begin}>
-            Start
+          <button type="button" className="btn btn-primary btn-small" onClick={begin} disabled={starting}>
+            {starting ? "Starting" : "Start"}
           </button>
         </div>
       ) : (

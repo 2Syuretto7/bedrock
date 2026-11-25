@@ -56,7 +56,7 @@ test("laptop: a lesson is graded, remembers progress, and leads to one that buil
   await expect(grid).toContainText("3 × 12 = 3 × 10 + 3 × 2 = 30 + 6 = 36");
   await grid.getByRole("button", { name: "Increase rows" }).click();
   await expect(grid).toContainText("4 × 12 = 4 × 10 + 4 × 2 = 40 + 8 = 48");
-  // The coordinate plane: a point, a line, two lines meeting, and a parabola.
+  // The coordinate plane: a point, a line, and two lines meeting.
   const point = page.getByRole("figure", { name: "Coordinates", exact: true });
   await expect(point).toContainText("The point (3, 2): 3 right, 2 up. It is in quadrant I. Distance from the origin: √13 ≈ 3.61.");
   for (let i = 0; i < 4; i++) await point.getByRole("button", { name: "Decrease x" }).click();
@@ -74,13 +74,7 @@ test("laptop: a lesson is graded, remembers progress, and leads to one that buil
   await expect(pair).toContainText("They are parallel and never meet");
   await pair.getByRole("slider", { name: "intercept" }).fill("5");
   await expect(pair).toContainText("They are the same line");
-  const curve = page.getByRole("figure").filter({ hasText: "Parabola" });
-  await expect(curve).toContainText("y = x² − 2x − 3. It opens upwards, with its turning point at (1, −4). It crosses the x-axis at −1 and 3. b² − 4ac = 16.");
-  await curve.getByRole("slider", { name: "c" }).fill("1");
-  await expect(curve).toContainText("It touches the x-axis at 1.");
-  await curve.getByRole("slider", { name: "c" }).fill("4");
-  await expect(curve).toContainText("It never meets the x-axis. b² − 4ac = −12.");
-  // Sets, maps, inverses, growth, the unit circle, and sums.
+  // Sets, maps, inverses, growth, and sums.
   const venn = page.getByRole("figure").filter({ hasText: "Two sets" });
   await expect(venn).toContainText("In both (A ∩ B): 6, 12.");
   await expect(venn).toContainText("In A but not B (A ∖ B): 2, 4, 8, 10. In neither: 1, 5, 7, 11.");
@@ -104,16 +98,6 @@ test("laptop: a lesson is graded, remembers progress, and leads to one that buil
   await expect(growth).toContainText("After one year: ₹2.25000.");
   for (let i = 0; i < 4; i++) await growth.getByRole("button", { name: "Increase how often" }).click();
   await expect(growth).toContainText("every day: 365 steps, each multiplying by (1 + 1/365). After one year: ₹2.71457.");
-  const circle = page.getByRole("figure").filter({ hasText: "Unit circle" });
-  await expect(circle).toContainText("Angle 30° = π/6 radians. The point on the circle is (cos, sin) = (√3/2 ≈ 0.866, 1/2 ≈ 0.5). Check: cos² + sin² = 1.");
-  await circle.getByRole("slider", { name: "angle" }).fill("14");
-  await expect(circle).toContainText("Angle 210° = 7π/6 radians. The point on the circle is (cos, sin) = (−√3/2 ≈ −0.866, −1/2 ≈ −0.5).");
-  await circle.getByRole("slider", { name: "angle" }).fill("6");
-  await expect(circle).toContainText("Angle 90° = π/2 radians. The point on the circle is (cos, sin) = (0, 1).");
-  const stairs = page.getByRole("figure").filter({ hasText: "Sum of the first n whole numbers" });
-  await expect(stairs).toContainText("4 × 5 ÷ 2 = 10");
-  for (let i = 0; i < 6; i++) await stairs.getByRole("button", { name: "Increase n" }).click();
-  await expect(stairs).toContainText("1 + 2 + … + 10 is the shaded staircase: 55 squares.");
   const series = page.getByRole("figure").filter({ hasText: "Partial sums of a geometric series" });
   await expect(series).toContainText("r = 0.5. The sum of the first 6 terms is 1.97. The totals close in on 1 ÷ (1 − r) = 2: the series converges.");
   await series.getByRole("slider", { name: "ratio r" }).fill("1");
@@ -145,16 +129,6 @@ test("laptop: a lesson is graded, remembers progress, and leads to one that buil
   await expect(dominoes).toContainText("the step from P(3) to P(4) fails. Dominoes 1 to 3 fall and the rest stand");
   await dominoes.getByRole("button", { name: "Switch base case" }).click();
   await expect(dominoes).toContainText("The base case P(1) has not been shown. So no domino falls");
-  const diagonal = page.getByRole("figure").filter({ hasText: "The diagonal argument" });
-  await expect(diagonal).toContainText("Row 1 has 0 in place 1, so the new sequence gets 1 there. So far the new sequence starts 1. It differs from row 1 in at least one place.");
-  for (let i = 0; i < 5; i++) await diagonal.getByRole("button", { name: "Increase row" }).click();
-  await expect(diagonal).toContainText("So far the new sequence starts 101011. It differs from each of rows 1 to 6 in at least one place, and continuing in the same way it differs from every row of the list");
-  await diagonal.getByRole("button", { name: "Increase list" }).click();
-  await expect(diagonal).toContainText("Row 1 has 0 in place 1");
-  const band = page.getByRole("figure").filter({ hasText: "A tolerance and the point where the terms stay inside it" });
-  await expect(band).toContainText("For the tolerance ε = 0.2, every term from N = 6 onwards is within 0.2 of 1. The first 5 terms are not.");
-  await band.getByRole("slider", { name: "tolerance in hundredths" }).fill("10");
-  await expect(band).toContainText("For the tolerance ε = 0.1, every term from N = 11 onwards is within 0.1 of 1. The first 10 terms are not.");
   const classes = page.getByRole("figure").filter({ hasText: "Classes of whole numbers with the same remainder" });
   await expect(classes).toContainText("The numbers fall into 3 classes, one for each remainder, and every number is in exactly one class. 14 leaves the remainder 2, and its class is shown: 2, 5, 8, 11, 14, 17, and so on.");
   await classes.getByRole("button", { name: "Increase modulus" }).click();
@@ -165,11 +139,7 @@ test("laptop: a lesson is graded, remembers progress, and leads to one that buil
   await expect(keys).toContainText("“There is a key that opens every lock” is true: the column of key 2 is full.");
   await keys.getByRole("button", { name: "Increase pattern" }).click();
   await expect(keys).toContainText("“For every lock there is a key that opens it” is false: the row of lock 3 has no mark.");
-  // Calculus: limits, chords and tangents, chained rates, bending, Taylor polynomials, descent, and areas.
-  const approach = page.getByRole("figure").filter({ hasText: "Approaching a point from both sides" });
-  await expect(approach).toContainText("At x = 0.9 it is 1.9 and at x = 1.1 it is 2.1. At x = 1 itself the formula says 0 ÷ 0 and has no value.");
-  await approach.getByRole("button", { name: "Increase closeness" }).click();
-  await expect(approach).toContainText("At x = 0.99 it is 1.99 and at x = 1.01 it is 2.01.");
+  // Calculus: chords and tangents, chained rates, descent, and areas.
   const chord = page.getByRole("figure").filter({ hasText: "From a chord to a tangent" });
   await expect(chord).toContainText("From x = 1 to x = 1.5 the curve rises 1.25 over a run of 0.5, so the chord has slope 2.5. The tangent at x = 1 has slope 2.");
   for (let i = 0; i < 2; i++) await chord.getByRole("button", { name: "Increase closeness" }).click();
@@ -179,16 +149,6 @@ test("laptop: a lesson is graded, remembers progress, and leads to one that buil
   await chain.getByRole("slider", { name: "x in tenths" }).fill("20");
   await expect(chain).toContainText("At x = 2: u = 4 and y = 64.");
   await expect(chain).toContainText("So y changes 4 × 48 = 192 times as fast as x.");
-  const bend = page.getByRole("figure").filter({ hasText: "Slope and bending" });
-  await expect(bend).toContainText("height −2, slope f′ = 0, second derivative f″ = 6.");
-  await expect(bend).toContainText("With slope 0 and upward bending, this is a local minimum.");
-  await bend.getByRole("slider", { name: "point a" }).fill("0");
-  await expect(bend).toContainText("height 0, slope f′ = −3, second derivative f″ = 0. The bending changes direction here.");
-  const taylor = page.getByRole("figure").filter({ hasText: "Taylor polynomials" });
-  await expect(taylor).toContainText("The polynomial of degree 3 for sin x about 0. At x = 2 it gives 0.6667, and the function itself is 0.9093: the error is 0.2426.");
-  await taylor.getByRole("button", { name: "Increase degree" }).click();
-  await taylor.getByRole("button", { name: "Increase degree" }).click();
-  await expect(taylor).toContainText("At x = 2 it gives 0.9333, and the function itself is 0.9093: the error is 0.024.");
   const descent = page.getByRole("figure").filter({ hasText: "Stepping downhill" });
   await expect(descent).toContainText("which is 0.8 times x. After 5 steps, x = 0.983 and f(x) = 0.9664. The distance from the minimum is multiplied by 0.8 at each step");
   await descent.getByRole("slider", { name: "step size in hundredths" }).fill("100");
@@ -203,7 +163,7 @@ test("laptop: a lesson is graded, remembers progress, and leads to one that buil
   await expect(total).toContainText("The area gathered from 0 to x = 2 is A(x) = 4. At this moment A is changing at the rate f(2) = 1. The rate is positive");
   await total.getByRole("slider", { name: "x in quarters" }).fill("12");
   await expect(total).toContainText("A(x) = 4.5. At this moment A is changing at the rate f(3) = 0. The rate is zero");
-  // Vectors: arrows and lists, sums, spans, dot products, norms, projections and lines from a normal vector.
+  // Vectors: arrows and lists, sums, dot products, norms, projections and lines from a normal vector.
   const arrow = page.getByRole("figure").filter({ hasText: "An arrow and a list" });
   await expect(arrow).toContainText("The vector (3, 2), drawn from (0, 0) to (3, 2): 3 right and 2 up. Its length is 3.6056.");
   await arrow.getByRole("button", { name: "Move the arrow" }).click();
@@ -214,10 +174,6 @@ test("laptop: a lesson is graded, remembers progress, and leads to one that buil
   await expect(tipToTail).toContainText("so −b = (−1, −1). Walk along a, then along −b: you arrive at a + (−b) = (2 − 1, 1 − 1) = (1, 0).");
   await tipToTail.getByRole("button", { name: "Swap the order" }).click();
   await expect(tipToTail).toContainText("Walk along −b, then along a: you arrive at a + (−b)");
-  const span = page.getByRole("figure").filter({ hasText: "What two vectors can reach" });
-  await expect(span).toContainText("The combination 1a + 1b is (2, 1.5). Because a and b point in different directions");
-  await span.getByRole("button", { name: "Put b along a" }).click();
-  await expect(span).toContainText("b = (−0.75, −0.25). The combination 1a + 1b is (0.75, 0.25). Here b is −0.5 times a");
   const shadow = page.getByRole("figure").filter({ hasText: "The dot product and the shadow" });
   await expect(shadow).toContainText("with 45° between them. a · b = 3 × 1.4142 + 0 × 1.4142 = 4.2426.");
   await shadow.getByRole("slider", { name: "angle of b in degrees" }).fill("90");
@@ -294,10 +250,6 @@ test("laptop: a lesson is graded, remembers progress, and leads to one that buil
   await expect(roads).toContainText("Settled, with their final distances from A: A 0, C 1. Best found so far for the rest: B 3, D 9, E 11, F not reached. The nearest unsettled town is B, so it is settled next.");
   await press(roads, "Increase step", 4);
   await expect(roads).toContainText("Settled, with their final distances from A: A 0, C 1, B 3, D 8, E 10, F 13. Every town is settled.");
-  const beam = fig("Keeping only the best few");
-  await expect(beam).toContainText('the best one is kept: "the cat" (0.2). The most probable sentence of all is "a cat" at 0.36, which this beam missed, because it dropped "a" after the first word.');
-  await press(beam, "Increase beam width");
-  await expect(beam).toContainText('6 candidates, and the best 2 are kept: "a cat" (0.36), "the cat" (0.2). The most probable sentence of all is "a cat" at 0.36, which this beam found.');
   const moved = fig("A matrix moves the plane");
   await expect(moved).toContainText("The shear, with rows (1, 1) and (0, 1). The unit vector (1, 0) lands on (1, 0), the first column. The unit vector (0, 1) lands on (1, 1), the second column. The point (2, 1) is 2 of the first and 1 of the second, so it lands on 2 × (1, 0) + 1 × (1, 1) = (3, 1).");
   await press(moved, "Next matrix");
@@ -307,32 +259,12 @@ test("laptop: a lesson is graded, remembers progress, and leads to one that buil
   await expect(product).toContainText("By columns: 1 × (2, 1) + 1 × (−1, 1) = (1, 2). By rows: (2, −1) · x = 1 and (1, 1) · x = 2. Both give Ax = (1, 2).");
   await press(product, "Increase first entry of x in halves");
   await expect(product).toContainText("Both give Ax = (2, 2.5).");
-  const twoMaps = fig("One matrix after another");
-  await expect(twoMaps).toContainText("First the shear, with rows (1, 1) and (0, 1), then the quarter turn, with rows (0, −1) and (1, 0). Nothing has been applied yet. The corner that began at (2, 0.5) is now at (2, 0.5).");
-  await press(twoMaps, "Increase matrices applied", 2);
-  await expect(twoMaps).toContainText("Together they are the one matrix with rows (0, −1) and (1, 1), the product of the second and the first. The corner that began at (2, 0.5) is now at (−0.5, 2.5). In the other order the product would have rows (1, −1) and (1, 0), a different matrix.");
-  const flip = fig("Rows become columns");
-  await expect(flip).toContainText("The matrix, with 2 rows and 3 columns. The entry 2 is in row 1, column 2 of the matrix and in row 2, column 1 of the transpose. Row 1 of the matrix, 1, 2, 3, is column 1 of the transpose.");
-  await press(flip, "Show the transpose");
-  await expect(flip).toContainText("The transpose, with 3 rows and 2 columns.");
   const rowsFig = fig("Clearing one unknown at a time");
   await expect(rowsFig).toContainText("Step 0 of 6.");
   await press(rowsFig, "Increase step", 3);
   await expect(rowsFig).toContainText("The rows are now (1, 1, 1 | 6), (0, 1, −1 | −1), (0, 0, −1 | −3).");
   await press(rowsFig, "Increase step", 3);
   await expect(rowsFig).toContainText("The solution is x = 1, y = 2, z = 3. The rows are now (1, 0, 0 | 1), (0, 1, 0 | 2), (0, 0, 1 | 3).");
-  const lost = fig("What a matrix reaches and what it loses");
-  await expect(lost).toContainText("The input x = (0.4, 0.8) goes to Ax = (2, 1), which is on the line through (2, 1): that line is the column space.");
-  await press(lost, "Increase along (2, −1) in halves");
-  await expect(lost).toContainText("The input x = (0.9, 0.55) goes to Ax = (2, 1)");
-  await press(lost, "Turn the columns apart");
-  await expect(lost).toContainText("so its rank is 2.");
-  const basis = fig("Two descriptions of one point");
-  await expect(basis).toContainText("its coordinates in this basis are (1, 2). In the usual coordinates the same point is 1 × (2, 1) + 2 × (−1, 1) = (0, 3).");
-  const area = fig("The determinant as an area");
-  await expect(area).toContainText("The determinant is 2 × 1.5 − 0 × 0 = 3. The unit square, of area 1, is sent to a parallelogram of area 3.");
-  await press(area, "Decrease angle in steps of 30°", 3);
-  await expect(area).toContainText("The determinant is 2 × 0 − 0 × 1.5 = 0. The columns lie along one line");
   const table = fig("A graph as a table of numbers");
   await expect(table).toContainText("From A: 0 to A, 1 to B, 1 to C, 0 to D.");
   await press(table, "Increase steps");

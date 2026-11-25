@@ -450,55 +450,6 @@ function PlaneLines(props: Props) {
   );
 }
 
-/** The curve y = ax² + bx + c, with its turning point and the places it meets the x-axis. */
-function Parabola(props: Props) {
-  const [a, setA] = useState(clamp(num(props.a, 1), -2, 2));
-  const [b, setB] = useState(clamp(num(props.b, -2), -6, 6));
-  const [c, setC] = useState(clamp(num(props.c, -3), -8, 8));
-  const name = `y = ${sumOf([[a, "x²"], [b, "x"], [c, ""]])}`;
-  const f = (x: number) => a * x * x + b * x + c;
-  const points = Array.from({ length: 161 }, (_, i) => -REACH + i / 10)
-    .map((x) => `${px(x).toFixed(1)},${py(clamp(f(x), -3 * REACH, 3 * REACH)).toFixed(1)}`)
-    .join(" ");
-  const disc = b * b - 4 * a * c;
-  let detail: string;
-  let roots: number[] = [];
-  if (a === 0) {
-    detail = "With no x² term this is a straight line, not a parabola.";
-  } else {
-    const h = -b / (2 * a);
-    if (disc > 0) roots = [(-b - Math.sqrt(disc)) / (2 * a), (-b + Math.sqrt(disc)) / (2 * a)].sort((p, q) => p - q);
-    else if (disc === 0) roots = [h];
-    const crossing =
-      roots.length === 2
-        ? `It crosses the x-axis at ${fmt(roots[0])} and ${fmt(roots[1])}.`
-        : roots.length === 1
-          ? `It touches the x-axis at ${fmt(roots[0])}.`
-          : "It never meets the x-axis.";
-    detail = `It opens ${a > 0 ? "upwards" : "downwards"}, with its turning point at (${fmt(h)}, ${fmt(f(h))}). ${crossing} b² − 4ac = ${fmt(disc)}.`;
-  }
-  return (
-    <Frame
-      title="Parabola"
-      summary={`${name}. ${detail}`}
-      controls={
-        <>
-          <Slider label="a" value={a} onChange={setA} min={-2} max={2} step={0.5} />
-          <Slider label="b" value={b} onChange={setB} min={-6} max={6} />
-          <Slider label="c" value={c} onChange={setC} min={-8} max={8} />
-        </>
-      }
-    >
-      <PlaneGrid label={`The curve ${name}`}>
-        <polyline points={points} fill="none" className="fig-accent-line" />
-        {roots.map((r) => (
-          <circle key={r} cx={px(r)} cy={py(0)} r="5" className="fig-accent" />
-        ))}
-      </PlaneGrid>
-    </Frame>
-  );
-}
-
 const listOf = (items: number[]) => (items.length === 0 ? "nothing" : items.map(fmt).join(", "));
 
 /** Two sets of whole numbers drawn as overlapping regions, with their union, intersection and differences. */
@@ -694,92 +645,6 @@ function Growth(props: Props) {
         </text>
         <polyline points={curve} fill="none" className="fig-line" />
         <polyline points={stairs} fill="none" className="fig-accent-line" />
-      </svg>
-    </Frame>
-  );
-}
-
-const EXACT: Record<number, string> = { 0: "0", 30: "1/2", 45: "√2/2", 60: "√3/2", 90: "1" };
-/** The exact value of the sine of a multiple of 15 degrees where it has a short form, with its decimal. */
-const trig = (degrees: number, value: number) => {
-  const d = ((degrees % 360) + 360) % 360;
-  const reference = d <= 90 ? d : d <= 180 ? 180 - d : d <= 270 ? d - 180 : 360 - d;
-  const exact = EXACT[reference];
-  const decimal = String(Math.round(value * 1000) / 1000 || 0).replace("-", "−");
-  if (exact === undefined || exact === "0" || exact === "1") return decimal;
-  return `${value < 0 ? "−" : ""}${exact} ≈ ${decimal}`;
-};
-
-/** A point travelling round the circle of radius 1: its two coordinates are the cosine and sine of the angle. */
-function UnitCircle(props: Props) {
-  const [turns, setTurns] = useState(clamp(Math.round(num(props.degrees, 30) / 15), -24, 48));
-  const degrees = turns * 15;
-  const radians = (degrees * Math.PI) / 180;
-  const c = Math.cos(radians);
-  const s = Math.sin(radians);
-  const cx = (x: number) => 170 + x * 120;
-  const cy = (y: number) => 150 - y * 120;
-  const piFraction = (() => {
-    const g = (p: number, q: number): number => (q === 0 ? Math.abs(p) : g(q, p % q));
-    const d = g(turns, 12) || 1;
-    const top = turns / d;
-    const bottom = 12 / d;
-    if (top === 0) return "0";
-    const head = Math.abs(top) === 1 ? "π" : `${Math.abs(top)}π`;
-    return `${top < 0 ? "−" : ""}${head}${bottom === 1 ? "" : `/${bottom}`}`;
-  })();
-  const cosine = trig(90 - degrees, c);
-  const sine = trig(degrees, s);
-  return (
-    <Frame
-      title="Unit circle"
-      summary={`Angle ${fmt(degrees)}° = ${piFraction} radians. The point on the circle is (cos, sin) = (${cosine}, ${sine}). Check: cos² + sin² = ${fmt(Math.round((c * c + s * s) * 1000) / 1000)}.`}
-      controls={<Slider label="angle" value={turns} onChange={setTurns} min={-24} max={48} />}
-    >
-      <svg viewBox="0 0 340 300" role="img" aria-label={`The unit circle with a point at an angle of ${degrees} degrees`}>
-        <line x1={cx(-1.3)} x2={cx(1.3)} y1={cy(0)} y2={cy(0)} className="fig-axis" />
-        <line x1={cx(0)} x2={cx(0)} y1={cy(-1.2)} y2={cy(1.2)} className="fig-axis" />
-        <circle cx={cx(0)} cy={cy(0)} r="120" className="fig-ghost" />
-        <text x={cx(1) + 4} y={cy(0) + 13} className="fig-small">
-          1
-        </text>
-        <text x={cx(0) + 5} y={cy(1) - 4} className="fig-small">
-          1
-        </text>
-        <line x1={cx(0)} y1={cy(0)} x2={cx(c)} y2={cy(s)} className="fig-line" />
-        <line x1={cx(0)} y1={cy(0)} x2={cx(c)} y2={cy(0)} className="fig-accent-line" />
-        <line x1={cx(c)} y1={cy(0)} x2={cx(c)} y2={cy(s)} className="fig-accent-line" />
-        <text x={cx(c / 2)} y={cy(0) + (s >= 0 ? 14 : -6)} textAnchor="middle" className="fig-small">
-          cos
-        </text>
-        <text x={cx(c) + (c >= 0 ? 6 : -6)} y={cy(s / 2) + 4} textAnchor={c >= 0 ? "start" : "end"} className="fig-small">
-          sin
-        </text>
-        <circle cx={cx(c)} cy={cy(s)} r="6" className="fig-accent" />
-      </svg>
-    </Frame>
-  );
-}
-
-/** 1 + 2 + … + n as a staircase of squares, and two staircases fitted together into an n by (n + 1) rectangle. */
-function TriangleSum(props: Props) {
-  const [n, setN] = useState(clamp(Math.round(num(props.n, 4)), 1, 10));
-  const size = Math.min(26, 250 / (n + 1));
-  const total = (n * (n + 1)) / 2;
-  const cells: ReactNode[] = [];
-  for (let row = 1; row <= n; row++) {
-    for (let col = 1; col <= n + 1; col++) {
-      cells.push(<rect key={`${row}-${col}`} x={20 + (col - 1) * size} y={15 + (row - 1) * size} width={size - 2} height={size - 2} className={col <= row ? "fig-accent" : "fig-fill"} />);
-    }
-  }
-  return (
-    <Frame
-      title="Sum of the first n whole numbers"
-      summary={`1 + 2 + … + ${n} is the shaded staircase: ${total} squares. A second copy, turned over, completes a rectangle ${n} by ${n + 1} with ${n * (n + 1)} squares, so the staircase is half of it: ${n} × ${n + 1} ÷ 2 = ${total}.`}
-      controls={<Stepper label="n" value={n} onChange={setN} min={1} max={10} />}
-    >
-      <svg viewBox="0 0 340 280" role="img" aria-label={`A staircase of ${total} squares and its copy, forming a rectangle ${n} by ${n + 1}`}>
-        {cells}
       </svg>
     </Frame>
   );
@@ -1087,125 +952,6 @@ function Dominoes(props: Props) {
   );
 }
 
-const BIT_LISTS = [
-  ["010101", "111111", "000000", "100100", "001101", "110010"],
-  ["000000", "100000", "010000", "110000", "001000", "101000"],
-  ["101010", "011011", "110110", "000111", "111000", "010010"],
-];
-
-/** Cantor's diagonal argument: flip the diagonal of any list of bit sequences to build one the list missed. */
-function Diagonal(props: Props) {
-  const [list, setList] = useState(clamp(Math.round(num(props.list, 1)), 1, BIT_LISTS.length));
-  const [k, setK] = useState(clamp(Math.round(num(props.k, 1)), 1, 6));
-  const rows = BIT_LISTS[list - 1];
-  const flipped = rows.map((row, i) => (row[i] === "0" ? "1" : "0"));
-  const soFar = flipped.slice(0, k).join("");
-  return (
-    <Frame
-      title="The diagonal argument"
-      summary={`Row ${k} has ${rows[k - 1][k - 1]} in place ${k}, so the new sequence gets ${flipped[k - 1]} there. So far the new sequence starts ${soFar}. It differs from ${k === 1 ? "row 1" : `each of rows 1 to ${k}`} in at least one place${k === 6 ? ", and continuing in the same way it differs from every row of the list, however long the list is. The list has missed it." : "."}`}
-      controls={
-        <>
-          <Stepper label="row" value={k} onChange={setK} min={1} max={6} />
-          <Stepper
-            label="list"
-            value={list}
-            onChange={(v) => {
-              setList(v);
-              setK(1);
-            }}
-            min={1}
-            max={BIT_LISTS.length}
-          />
-        </>
-      }
-    >
-      <svg viewBox="0 0 440 280" role="img" aria-label={`A list of six sequences of bits with the first ${k} diagonal entries marked, and a new sequence that starts ${soFar}`}>
-        {rows.map((row, i) => (
-          <g key={i}>
-            <text x="60" y={36 + i * 32} textAnchor="end" className="fig-small">
-              row {i + 1}
-            </text>
-            {row.split("").map((bit, j) => {
-              const marked = i === j && i < k;
-              return (
-                <g key={j}>
-                  {marked ? <rect x={82 + j * 40} y={16 + i * 32} width="28" height="28" className="fig-fill" /> : null}
-                  <text x={96 + j * 40} y={37 + i * 32} textAnchor="middle" className="fig-mono">
-                    {bit}
-                  </text>
-                </g>
-              );
-            })}
-            <text x={96 + 6 * 40} y={37 + i * 32} textAnchor="middle" className="fig-small">
-              …
-            </text>
-          </g>
-        ))}
-        <line x1="20" x2="420" y1="214" y2="214" className="fig-axis" />
-        <text x="60" y="246" textAnchor="end" className="fig-small">
-          new
-        </text>
-        {flipped.map((bit, j) =>
-          j < k ? (
-            <g key={j}>
-              <rect x={82 + j * 40} y="226" width="28" height="28" className="fig-accent" />
-              <text x={96 + j * 40} y="247" textAnchor="middle" className="fig-mono" style={{ fill: "var(--bg)" }}>
-                {bit}
-              </text>
-            </g>
-          ) : null,
-        )}
-      </svg>
-    </Frame>
-  );
-}
-
-/** The terms of a convergent sequence and a band of tolerance about its limit: from some N onwards every term is inside. */
-function EpsilonBand(props: Props) {
-  const [hundredths, setHundredths] = useState(clamp(Math.round(num(props.tolerance, 0.2) * 20) * 5, 5, 50));
-  const eps = hundredths / 100;
-  const outside = Math.floor(100 / hundredths); // terms with 1/n >= eps
-  const from = outside + 1;
-  const gx = (n: number) => 44 + ((n - 1) / 29) * 380;
-  const gy = (v: number) => 250 - (v / 2) * 230;
-  return (
-    <Frame
-      title="A tolerance and the point where the terms stay inside it"
-      summary={`The sequence aₙ = 1 + (−1)ⁿ ÷ n has the limit 1. For the tolerance ε = ${fmt(eps)}, every term from N = ${from} onwards is within ${fmt(eps)} of 1. The first ${outside} term${outside === 1 ? " is" : "s are"} not. A smaller ε needs a larger N, but some N always works.`}
-      controls={<Slider label="tolerance in hundredths" value={hundredths} onChange={setHundredths} min={5} max={50} step={5} />}
-    >
-      <svg viewBox="0 0 440 280" role="img" aria-label={`The first 30 terms of a sequence with limit 1, a band of half-width ${fmt(eps)} about 1, and a line at N = ${from}`}>
-        <rect x={gx(1)} y={gy(1 + eps)} width={gx(30) - gx(1)} height={gy(1 - eps) - gy(1 + eps)} className="fig-fill" opacity="0.45" />
-        <line x1={gx(1)} x2={gx(30)} y1={gy(0)} y2={gy(0)} className="fig-axis" />
-        <line x1={gx(1)} x2={gx(30)} y1={gy(1)} y2={gy(1)} className="fig-guide" />
-        <text x={gx(1) - 14} y={gy(1) + 4} textAnchor="end" className="fig-small">
-          1
-        </text>
-        <text x={gx(1) - 14} y={gy(0) + 4} textAnchor="end" className="fig-small">
-          0
-        </text>
-        <text x={gx(1) - 14} y={gy(2) + 4} textAnchor="end" className="fig-small">
-          2
-        </text>
-        {from <= 30 ? (
-          <>
-            <line x1={gx(from)} x2={gx(from)} y1={gy(0)} y2={gy(2)} className="fig-guide" />
-            <text x={gx(from)} y={gy(0) + 16} textAnchor="middle" className="fig-small">
-              N = {from}
-            </text>
-          </>
-        ) : null}
-        {Array.from({ length: 30 }, (_, i) => {
-          const n = i + 1;
-          const v = 1 + (n % 2 === 0 ? 1 : -1) / n;
-          return <circle key={n} cx={gx(n)} cy={gy(v)} r="4" className={n >= from ? "fig-accent" : "fig-line"} />;
-        })}
-      </svg>
-    </Frame>
-  );
-}
-
 /** The whole numbers sorted into classes by their remainder: an equivalence relation seen as a partition. */
 function RemainderClasses(props: Props) {
   const [m, setM] = useState(clamp(Math.round(num(props.modulus, 3)), 2, 6));
@@ -1341,64 +1087,6 @@ function Axes({ view }: { view: View }) {
 }
 
 const APPROACH = [1, 0.5, 0.1, 0.01, 0.001];
-const LIMIT_CASES: Record<string, { name: string; at: number; f: (x: number) => number; view: View; limit: number | null; atPoint: string }> = {
-  hole: {
-    name: "f(x) = (x² − 1) ÷ (x − 1)",
-    at: 1,
-    f: (x) => (x * x - 1) / (x - 1),
-    view: { x0: -1, x1: 3, y0: 0, y1: 4 },
-    limit: 2,
-    atPoint: "At x = 1 itself the formula says 0 ÷ 0 and has no value.",
-  },
-  sinc: {
-    name: "f(x) = sin x ÷ x",
-    at: 0,
-    f: (x) => Math.sin(x) / x,
-    view: { x0: -4, x1: 4, y0: -0.5, y1: 1.5 },
-    limit: 1,
-    atPoint: "At x = 0 itself the formula says 0 ÷ 0 and has no value.",
-  },
-  jump: {
-    name: "f(x) = 1 for x < 2 and 3 for x ≥ 2",
-    at: 2,
-    f: (x) => (x < 2 ? 1 : 3),
-    view: { x0: 0, x1: 4, y0: 0, y1: 4 },
-    limit: null,
-    atPoint: "At x = 2 itself the value is 3.",
-  },
-};
-
-/** Values of a function on both sides of a point, taken closer and closer, with the point itself left out. */
-function LimitApproach(props: Props) {
-  const which = typeof props.fn === "string" && props.fn in LIMIT_CASES ? props.fn : "hole";
-  const c = LIMIT_CASES[which];
-  const [k, setK] = useState(clamp(Math.round(num(props.closeness, 1)), 0, 4));
-  const d = APPROACH[k];
-  const { sx, sy } = scales(c.view);
-  const left = c.f(c.at - d);
-  const right = c.f(c.at + d);
-  return (
-    <Frame
-      title="Approaching a point from both sides"
-      summary={`${c.name}. At x = ${dp(c.at - d)} it is ${dp(left)} and at x = ${dp(c.at + d)} it is ${dp(right)}. ${c.atPoint} ${
-        c.limit === null
-          ? `From the left the values stay at ${dp(left)} and from the right at ${dp(right)}. They do not close in on one number, so there is no limit at ${c.at}.`
-          : `The nearer x is to ${c.at}, the nearer f(x) is to ${c.limit}: the limit is ${c.limit}.`
-      }`}
-      controls={<Stepper label="closeness" value={k} onChange={setK} min={0} max={4} />}
-    >
-      <svg viewBox="0 0 440 280" role="img" aria-label={`Graph of ${c.name} near x = ${c.at}, with points at distance ${d} on each side`}>
-        <Axes view={c.view} />
-        <polyline points={curvePoints(c.f, c.view, c.view.x0, c.at - 0.0001)} className="fig-line" />
-        <polyline points={curvePoints(c.f, c.view, c.at + 0.0001, c.view.x1)} className="fig-line" />
-        <line x1={sx(c.at)} x2={sx(c.at)} y1={sy(c.view.y0)} y2={sy(c.view.y1)} className="fig-guide" />
-        {c.limit === null ? null : <circle cx={sx(c.at)} cy={sy(c.limit)} r="5" className="fig-ghost" style={{ fill: "var(--bg)", stroke: "var(--text-secondary)" }} />}
-        <circle cx={sx(c.at - d)} cy={sy(left)} r="5" className="fig-accent" />
-        <circle cx={sx(c.at + d)} cy={sy(right)} r="5" className="fig-accent" />
-      </svg>
-    </Frame>
-  );
-}
 
 const CURVES: Record<string, { name: string; f: (x: number) => number; d: (x: number) => number; view: View; low: number; high: number }> = {
   square: { name: "x²", f: (x) => x * x, d: (x) => 2 * x, view: { x0: -3, x1: 3, y0: -1, y1: 9 }, low: -2, high: 2 },
@@ -1486,88 +1174,6 @@ function ChainRates(props: Props) {
         {arrow(274, 316, 105, `× ${dp(outer, 2)}`)}
         {arrow(70, 370, 180, `altogether × ${dp(inner * outer, 2)}`)}
         <line x1="70" x2="70" y1="140" y2="180" className="fig-guide" />
-      </svg>
-    </Frame>
-  );
-}
-
-/** A curve with its tangent, read for height, slope and bending at one point. */
-function Bend(props: Props) {
-  const view: View = { x0: -2.5, x1: 2.5, y0: -5, y1: 5 };
-  const f = (x: number) => x ** 3 - 3 * x;
-  const [a, setA] = useState(clamp(num(props.at, 1), -2, 2));
-  const slope = 3 * a * a - 3;
-  const second = 6 * a;
-  const { sx, sy } = scales(view);
-  const bending =
-    second > 0
-      ? "The slope is increasing, so the curve bends upwards and lies above its tangent near here."
-      : second < 0
-        ? "The slope is decreasing, so the curve bends downwards and lies below its tangent near here."
-        : "The bending changes direction here. This is a point of inflection, and the curve crosses its tangent.";
-  const flat = slope !== 0 ? "" : second > 0 ? " With slope 0 and upward bending, this is a local minimum." : " With slope 0 and downward bending, this is a local maximum.";
-  return (
-    <Frame
-      title="Slope and bending"
-      summary={`f(x) = x³ − 3x at x = ${dp(a)}: height ${dp(f(a))}, slope f′ = ${dp(slope)}, second derivative f″ = ${dp(second)}. ${bending}${flat}`}
-      controls={<Slider label="point a" value={a} onChange={setA} min={-2} max={2} step={0.25} />}
-    >
-      <svg viewBox="0 0 440 280" role="img" aria-label={`The curve y = x³ − 3x with its tangent at x = ${dp(a)}`}>
-        <Axes view={view} />
-        <polyline points={curvePoints(f, view)} className="fig-line" />
-        <polyline points={curvePoints((x) => f(a) + slope * (x - a), view, a - 1, a + 1)} className="fig-accent-line" fill="none" style={{ strokeWidth: 2 }} />
-        <circle cx={sx(a)} cy={sy(f(a))} r="5" className="fig-accent" />
-      </svg>
-    </Frame>
-  );
-}
-
-const factorials = [1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880];
-const SERIES: Record<string, { name: string; f: (x: number) => number; coeff: (k: number) => number; view: View; low: number; high: number; note: string }> = {
-  sin: { name: "sin x", f: Math.sin, coeff: (k) => (k % 2 === 0 ? 0 : (k % 4 === 1 ? 1 : -1) / factorials[k]), view: { x0: -7, x1: 7, y0: -2.5, y1: 2.5 }, low: -6, high: 6, note: "" },
-  cos: { name: "cos x", f: Math.cos, coeff: (k) => (k % 2 === 1 ? 0 : (k % 4 === 0 ? 1 : -1) / factorials[k]), view: { x0: -7, x1: 7, y0: -2.5, y1: 2.5 }, low: -6, high: 6, note: "" },
-  exp: { name: "eˣ", f: Math.exp, coeff: (k) => 1 / factorials[k], view: { x0: -3, x1: 3, y0: -1, y1: 10 }, low: -3, high: 3, note: "" },
-  ln: {
-    name: "ln(1 + x)",
-    f: (x) => Math.log(1 + x),
-    coeff: (k) => (k === 0 ? 0 : (k % 2 === 1 ? 1 : -1) / k),
-    view: { x0: -0.9, x1: 2.5, y0: -2.5, y1: 2.5 },
-    low: -0.75,
-    high: 2.25,
-    note: " For this function the polynomials only help between −1 and 1. Beyond 1, raising the degree makes them worse.",
-  },
-};
-
-/** A function and its Taylor polynomial about 0, degree by degree. */
-function Taylor(props: Props) {
-  const which = typeof props.fn === "string" && props.fn in SERIES ? props.fn : "sin";
-  const s = SERIES[which];
-  const [degree, setDegree] = useState(clamp(Math.round(num(props.degree, 1)), 0, 9));
-  const [x, setX] = useState(clamp(num(props.x, 2), s.low, s.high));
-  const poly = (t: number) => {
-    let total = 0;
-    for (let k = degree; k >= 0; k--) total = total * t + s.coeff(k);
-    return total;
-  };
-  const { sx, sy } = scales(s.view);
-  return (
-    <Frame
-      title="Taylor polynomials"
-      summary={`The polynomial of degree ${degree} for ${s.name} about 0. At x = ${dp(x)} it gives ${dp(poly(x))}, and the function itself is ${dp(s.f(x))}: the error is ${dp(Math.abs(poly(x) - s.f(x)))}. Near 0 the two agree closely, and a higher degree keeps them together further out.${s.note}`}
-      controls={
-        <>
-          <Stepper label="degree" value={degree} onChange={setDegree} min={0} max={9} />
-          <Slider label="x" value={x} onChange={setX} min={s.low} max={s.high} step={0.25} />
-        </>
-      }
-    >
-      <svg viewBox="0 0 440 280" role="img" aria-label={`The graph of ${s.name} and its Taylor polynomial of degree ${degree}`}>
-        <Axes view={s.view} />
-        <polyline points={curvePoints(s.f, s.view)} className="fig-line" />
-        <polyline points={curvePoints(poly, s.view)} className="fig-accent-line" fill="none" style={{ strokeWidth: 2 }} />
-        <line x1={sx(x)} x2={sx(x)} y1={sy(s.f(x))} y2={sy(poly(x))} className="fig-guide" />
-        <circle cx={sx(x)} cy={sy(s.f(x))} r="4" className="fig-line" />
-        <circle cx={sx(x)} cy={sy(poly(x))} r="4" className="fig-accent" />
       </svg>
     </Frame>
   );
@@ -1817,50 +1423,6 @@ function VectorSum(props: Props) {
         <Arrow to={bFirst ? cb : a} name={bFirst ? scaled : "a"} />
         <Arrow from={bFirst ? cb : a} to={sum} name={bFirst ? "a" : scaled} />
         <Arrow to={sum} accent />
-      </svg>
-    </Frame>
-  );
-}
-
-/** Every point two vectors can reach by scaling and adding: the whole plane, or only a line when they point the same way. */
-function Span(props: Props) {
-  const a: Pair = [1.5, 0.5];
-  const [parallel, setParallel] = useState(props.parallel === true);
-  const b: Pair = parallel ? [-0.75, -0.25] : [0.5, 1];
-  const [sq, setSq] = useState(clamp(Math.round(num(props.s, 1) * 4), -8, 8));
-  const [tq, setTq] = useState(clamp(Math.round(num(props.t, 1) * 4), -8, 8));
-  const [s, t] = [sq / 4, tq / 4];
-  const at: Pair = [s * a[0] + t * b[0], s * a[1] + t * b[1]];
-  const reach: Pair[] = [];
-  for (let i = -4; i <= 4; i++) for (let j = -4; j <= 4; j++) reach.push([(i / 2) * a[0] + (j / 2) * b[0], (i / 2) * a[1] + (j / 2) * b[1]]);
-  return (
-    <Frame
-      title="What two vectors can reach"
-      summary={`a = ${pair(a)} and b = ${pair(b)}. The combination ${dp(s)}a + ${dp(t)}b is ${pair(at)}. ${
-        parallel
-          ? "Here b is −0.5 times a, so every combination lies on the one line through a. The two vectors span only a line, and b reaches nothing that a could not reach alone."
-          : "Because a and b point in different directions, some choice of the two numbers reaches any point of the plane. The two vectors span the plane."
-      }`}
-      controls={
-        <>
-          <Slider label="multiple of a in quarters" value={sq} onChange={setSq} min={-8} max={8} />
-          <Slider label="multiple of b in quarters" value={tq} onChange={setTq} min={-8} max={8} />
-          <button type="button" className="btn btn-secondary btn-small" onClick={() => setParallel(!parallel)}>
-            {parallel ? "Turn b away from a" : "Put b along a"}
-          </button>
-        </>
-      }
-    >
-      <svg viewBox="0 0 440 280" role="img" aria-label={`The points reachable from a and b, with ${dp(s)}a + ${dp(t)}b marked at ${pair(at)}`}>
-        <Grid />
-        {reach.map(([px, py], i) => (
-          <circle key={i} cx={gx(px)} cy={gy(py)} r="2" className="fig-fill" />
-        ))}
-        <Arrow to={[s * a[0], s * a[1]]} dashed />
-        <Arrow from={[s * a[0], s * a[1]]} to={at} dashed />
-        <Arrow to={a} name="a" />
-        <Arrow to={b} name="b" />
-        <circle cx={gx(at[0])} cy={gy(at[1])} r="5" className="fig-accent" />
       </svg>
     </Frame>
   );
@@ -2793,90 +2355,11 @@ function ShortestPath(props: Props) {
   );
 }
 
-const FIRST_WORDS: [string, number][] = [
-  ["the", 0.5],
-  ["a", 0.4],
-  ["one", 0.1],
-];
-const SECOND_WORDS: Record<string, [string, number][]> = {
-  the: [
-    ["cat", 0.4],
-    ["dog", 0.35],
-    ["end", 0.25],
-  ],
-  a: [
-    ["cat", 0.9],
-    ["dog", 0.06],
-    ["end", 0.04],
-  ],
-  one: [
-    ["cat", 0.5],
-    ["dog", 0.3],
-    ["end", 0.2],
-  ],
-};
-
-/** Beam search over two-word sentences: keep only the best few after each word, and see what that can miss. */
-function BeamSearch(props: Props) {
-  const [width, setWidth] = useState(clamp(Math.round(num(props.width, 1)), 1, 3));
-  const kept = FIRST_WORDS.slice(0, width).map(([word]) => word);
-  const all = FIRST_WORDS.flatMap(([first, p]) => SECOND_WORDS[first].map(([second, q]) => ({ first, second, p: p * q })));
-  const candidates = all.filter((sentence) => kept.includes(sentence.first)).sort((a, b) => b.p - a.p);
-  const finals = candidates.slice(0, width);
-  const best = [...all].sort((a, b) => b.p - a.p)[0];
-  const found = finals.some((sentence) => sentence.first === best.first && sentence.second === best.second);
-  const isFinal = (first: string, second: string) => finals.some((sentence) => sentence.first === first && sentence.second === second);
-  return (
-    <Frame
-      title="Keeping only the best few"
-      summary={`Beam width ${width}. After the first word the beam keeps ${FIRST_WORDS.slice(0, width)
-        .map(([word, p]) => `"${word}" (${dp(p, 3)})`)
-        .join(" and ")}. Each is extended by every second word, ${plural(candidates.length, "candidate")}, and the best ${width === 1 ? "one is" : `${width} are`} kept: ${finals
-        .map((sentence) => `"${sentence.first} ${sentence.second}" (${dp(sentence.p, 3)})`)
-        .join(", ")}. The most probable sentence of all is "${best.first} ${best.second}" at ${dp(best.p, 3)}, which this beam ${found ? "found" : `missed, because it dropped "${best.first}" after the first word`}.`}
-      controls={<Stepper label="beam width" value={width} onChange={setWidth} min={1} max={3} />}
-    >
-      <svg viewBox="0 0 440 280" role="img" aria-label={`A tree of two-word sentences searched with beam width ${width}`}>
-        {FIRST_WORDS.map(([first, p], i) => {
-          const at: Spot = [150, 50 + i * 90];
-          const on = kept.includes(first);
-          return (
-            <g key={first}>
-              <Link from={[44, 140]} to={at} gap={36} faint={!on} />
-              {SECOND_WORDS[first].map(([second, q], j) => {
-                const end: Spot = [330, 22 + i * 90 + j * 28];
-                const final = isFinal(first, second);
-                return (
-                  <g key={second}>
-                    <Link from={at} to={end} gap={36} faint={!on} hot={final} />
-                    <text x={end[0] - 26} y={end[1] + 4} className="fig-small" style={on ? { fill: final ? "var(--focus)" : "var(--text)" } : undefined}>
-                      {second} {dp(q, 3)} → {dp(p * q, 3)}
-                    </text>
-                  </g>
-                );
-              })}
-              <Dot at={at} name={`${first} ${dp(p, 3)}`} wide mark={on ? "now" : "wait"} />
-            </g>
-          );
-        })}
-        <Dot at={[44, 140]} name="start" wide mark="done" />
-      </svg>
-    </Frame>
-  );
-}
 
 /* Matrices are drawn on the same grid as vectors. A matrix here is two rows of two numbers. */
 type M2 = [Pair, Pair];
 const mv = (m: M2, [x, y]: Pair): Pair => [m[0][0] * x + m[0][1] * y, m[1][0] * x + m[1][1] * y];
-const mm = (a: M2, b: M2): M2 => [
-  [a[0][0] * b[0][0] + a[0][1] * b[1][0], a[0][0] * b[0][1] + a[0][1] * b[1][1]],
-  [a[1][0] * b[0][0] + a[1][1] * b[1][0], a[1][0] * b[0][1] + a[1][1] * b[1][1]],
-];
 const rowsOf = (m: M2) => `rows (${dp(m[0][0])}, ${dp(m[0][1])}) and (${dp(m[1][0])}, ${dp(m[1][1])})`;
-const IDENTITY: M2 = [
-  [1, 0],
-  [0, 1],
-];
 
 /** The grid lines of the plane after a matrix has moved every point. */
 function Warped({ m }: { m: M2 }) {
@@ -2981,112 +2464,6 @@ function MatrixVector(props: Props) {
   );
 }
 
-const FLAG: Pair[] = [
-  [0, 0],
-  [2, 0],
-  [2, 0.5],
-  [0.5, 0.5],
-  [0.5, 1],
-  [0, 1],
-];
-const TURN: M2 = [
-  [0, -1],
-  [1, 0],
-];
-const LEAN: M2 = [
-  [1, 1],
-  [0, 1],
-];
-const UNLEAN: M2 = [
-  [1, -1],
-  [0, 1],
-];
-
-/** Two matrices applied one after the other, in either order, and the single matrix that does both. */
-function ComposeMaps(props: Props) {
-  const undo = props.pair === "undo";
-  const [swapped, setSwapped] = useState(props.swapped === true);
-  const [stage, setStage] = useState(clamp(Math.round(num(props.stage, 0)), 0, 2));
-  const names = undo ? ["shear", "opposite shear"] : ["shear", "quarter turn"];
-  const maps: M2[] = undo ? [LEAN, UNLEAN] : [LEAN, TURN];
-  const order = swapped ? [1, 0] : [0, 1];
-  const [firstMap, secondMap] = [maps[order[0]], maps[order[1]]];
-  const both = mm(secondMap, firstMap);
-  const now = stage === 0 ? IDENTITY : stage === 1 ? firstMap : both;
-  const corner = mv(now, [2, 0.5]);
-  return (
-    <Frame
-      title="One matrix after another"
-      summary={`First the ${names[order[0]]}, with ${rowsOf(firstMap)}, then the ${names[order[1]]}, with ${rowsOf(secondMap)}. ${
-        stage === 0 ? "Nothing has been applied yet." : stage === 1 ? `The ${names[order[0]]} has been applied.` : `Both have been applied. Together they are the one matrix with ${rowsOf(both)}, the product of the second and the first.`
-      } The corner that began at (2, 0.5) is now at ${pair(corner)}.${
-        stage === 2 ? (undo ? " The second matrix undoes the first, and the product is the identity, which moves nothing." : ` In the other order the product would have ${rowsOf(mm(firstMap, secondMap))}, a different matrix.`) : ""
-      }`}
-      controls={
-        <>
-          <Stepper label="matrices applied" value={stage} onChange={setStage} min={0} max={2} />
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            onClick={() => {
-              setSwapped(!swapped);
-              setStage(0);
-            }}
-          >
-            Swap the order
-          </button>
-        </>
-      }
-    >
-      <svg viewBox="0 0 440 280" role="img" aria-label={`A flag shape after ${stage} of two matrices, its corner at ${pair(corner)}`}>
-        <Grid />
-        <Warped m={now} />
-        <Outline points={FLAG} />
-        <Outline points={FLAG.map((p) => mv(now, p))} accent />
-        <circle cx={gx(corner[0])} cy={gy(corner[1])} r="5" className="fig-accent" />
-      </svg>
-    </Frame>
-  );
-}
-
-const TABLE = [
-  [1, 2, 3],
-  [4, 5, 6],
-];
-
-/** A matrix and its transpose: rows become columns, and the entry in row i, column j moves to row j, column i. */
-function TransposeFlip(props: Props) {
-  const [flipped, setFlipped] = useState(props.flipped === true);
-  const [entry, setEntry] = useState(clamp(Math.round(num(props.entry, 2)), 1, 6));
-  const [r, c] = [Math.floor((entry - 1) / 3), (entry - 1) % 3];
-  const shown = flipped ? [0, 1, 2].map((j) => [TABLE[0][j], TABLE[1][j]]) : TABLE;
-  const [hr, hc] = flipped ? [c, r] : [r, c];
-  const [w, h] = [56, 44];
-  return (
-    <Frame
-      title="Rows become columns"
-      summary={`${flipped ? "The transpose, with 3 rows and 2 columns" : "The matrix, with 2 rows and 3 columns"}. The entry ${TABLE[r][c]} is in row ${r + 1}, column ${c + 1} of the matrix and in row ${c + 1}, column ${r + 1} of the transpose. Row ${r + 1} of the matrix, ${TABLE[r].join(", ")}, is column ${r + 1} of the transpose.`}
-      controls={
-        <>
-          <Stepper label="entry" value={entry} onChange={setEntry} min={1} max={6} />
-          <button type="button" className="btn btn-secondary btn-small" onClick={() => setFlipped(!flipped)}>
-            {flipped ? "Show the matrix" : "Show the transpose"}
-          </button>
-        </>
-      }
-    >
-      <svg viewBox="0 0 440 190" role="img" aria-label={`${flipped ? "The transpose" : "The matrix"} with the entry ${TABLE[r][c]} marked`}>
-        {shown.map((line, i) => (
-          <Cells key={i} values={line} x={130} y={24 + i * h} w={w} h={h - 6} hot={i === hr ? [hc] : []} />
-        ))}
-        <line x1={130} y1={24} x2={130 + 2 * w} y2={24 + 2 * h} className="fig-guide" />
-        <text x="130" y={flipped ? 176 : 132} className="fig-small">
-          flipped across the dashed diagonal
-        </text>
-      </svg>
-    </Frame>
-  );
-}
 
 const ELIMINATION: { rows: number[][]; changed: number; did: string }[] = [
   { rows: [[1, 1, 1, 6], [2, 3, 1, 11], [1, -1, 2, 5]], changed: -1, did: "The three equations x + y + z = 6, 2x + 3y + z = 11 and x − y + 2z = 5, written as rows of numbers. Nothing has been done yet." },
@@ -3129,119 +2506,6 @@ function Elimination(props: Props) {
   );
 }
 
-const FLAT: M2 = [
-  [1, 2],
-  [0.5, 1],
-];
-const FULL: M2 = [
-  [1, 0.5],
-  [0.5, 1],
-];
-
-/** A matrix of rank 1 flattens the plane onto a line, and a whole line of inputs lands on each output. */
-function NullSpace(props: Props) {
-  const [full, setFull] = useState(props.full === true);
-  const [tq, setT] = useState(clamp(Math.round(num(props.t, 1) * 2), -4, 4));
-  const [sq, setS] = useState(clamp(Math.round(num(props.s, 0) * 2), -4, 4));
-  const [t, s] = [tq / 2, sq / 2];
-  const m = full ? FULL : FLAT;
-  const x: Pair = [0.4 * t + s, 0.8 * t - 0.5 * s];
-  const out = mv(m, x);
-  return (
-    <Frame
-      title="What a matrix reaches and what it loses"
-      summary={
-        full
-          ? `The matrix with ${rowsOf(m)} has columns pointing in different directions, so its rank is 2. The input x = ${pair(x)} goes to Ax = ${pair(out)}. Every point of the plane is reached, and only x = (0, 0) is sent to (0, 0). Moving x always moves Ax.`
-          : `The matrix with ${rowsOf(m)} has a second column that is twice the first, so its rank is 1. The input x = ${pair(x)} goes to Ax = ${pair(out)}, which is on the line through (2, 1): that line is the column space. Sliding x along the direction (2, −1) does not move Ax at all, because the matrix sends (2, −1) to (0, 0): that direction is the null space.`
-      }
-      controls={
-        <>
-          <Stepper label="along (1, 2) in halves" value={tq} onChange={setT} min={-4} max={4} />
-          <Stepper label="along (2, −1) in halves" value={sq} onChange={setS} min={-4} max={4} />
-          <button type="button" className="btn btn-secondary btn-small" onClick={() => setFull(!full)}>
-            {full ? "Make the columns parallel" : "Turn the columns apart"}
-          </button>
-        </>
-      }
-    >
-      <svg viewBox="0 0 440 280" role="img" aria-label={`The input ${pair(x)} and its output ${pair(out)} under a matrix of rank ${full ? 2 : 1}`}>
-        <Grid />
-        {full ? null : (
-          <g clipPath="url(#grid-clip)">
-            <line x1={gx(-12)} y1={gy(-6)} x2={gx(12)} y2={gy(6)} className="fig-accent-line" opacity="0.4" />
-            <line x1={gx(x[0] - 12)} y1={gy(x[1] + 6)} x2={gx(x[0] + 12)} y2={gy(x[1] - 6)} className="fig-guide" />
-          </g>
-        )}
-        <Arrow to={x} name="x" />
-        <Arrow to={out} accent name="Ax" />
-      </svg>
-    </Frame>
-  );
-}
-
-/** One point described by two sets of coordinates: along the usual axes, and along a different pair of basis vectors. */
-function BasisGrid(props: Props) {
-  const [c1h, setC1] = useState(clamp(Math.round(num(props.c1, 1) * 2), -2, 2));
-  const [c2h, setC2] = useState(clamp(Math.round(num(props.c2, 2) * 2), -4, 4));
-  const c: Pair = [c1h / 2, c2h / 2];
-  const b1: Pair = [COLUMNS[0][0], COLUMNS[1][0]];
-  const b2: Pair = [COLUMNS[0][1], COLUMNS[1][1]];
-  const p = mv(COLUMNS, c);
-  const along: Pair = [c[0] * b1[0], c[0] * b1[1]];
-  return (
-    <Frame
-      title="Two descriptions of one point"
-      summary={`The basis vectors are b₁ = ${pair(b1)} and b₂ = ${pair(b2)}, and the dashed lines are their grid. The point is ${dp(c[0])} of b₁ and ${dp(c[1])} of b₂, so its coordinates in this basis are ${pair(c)}. In the usual coordinates the same point is ${dp(c[0])} × ${pair(b1)} + ${dp(c[1])} × ${pair(b2)} = ${pair(p)}. The point has not moved. Only its description has changed.`}
-      controls={
-        <>
-          <Stepper label="amount of b₁ in halves" value={c1h} onChange={setC1} min={-2} max={2} />
-          <Stepper label="amount of b₂ in halves" value={c2h} onChange={setC2} min={-4} max={4} />
-        </>
-      }
-    >
-      <svg viewBox="0 0 440 280" role="img" aria-label={`A point at ${pair(p)} in the usual coordinates and ${pair(c)} in the basis ${pair(b1)}, ${pair(b2)}`}>
-        <Grid />
-        <Warped m={COLUMNS} />
-        <Arrow to={along} dashed />
-        <Arrow from={along} to={p} dashed />
-        <Arrow to={b1} name="b₁" />
-        <Arrow to={b2} name="b₂" />
-        <circle cx={gx(p[0])} cy={gy(p[1])} r="5" className="fig-accent" />
-      </svg>
-    </Frame>
-  );
-}
-
-/** The determinant as the area of the parallelogram on the two columns, with a sign for their order. */
-function Determinant(props: Props) {
-  const a: Pair = [2, 0];
-  const [angle, setAngle] = useState(clamp(Math.round(num(props.angle, 90) / 30) * 30, 0, 330));
-  const tidy = (v: number) => (Math.abs(v) < 1e-9 ? 0 : Math.round(v * 1e6) / 1e6);
-  const b: Pair = [tidy(1.5 * Math.cos((angle * Math.PI) / 180)), tidy(1.5 * Math.sin((angle * Math.PI) / 180))];
-  const d = tidy(a[0] * b[1] - a[1] * b[0]);
-  const sum: Pair = [a[0] + b[0], a[1] + b[1]];
-  return (
-    <Frame
-      title="The determinant as an area"
-      summary={`The columns are ${pair(a)} and ${pair(b)}, with the second at ${angle}° from the first. The determinant is 2 × ${dp(b[1])} − 0 × ${dp(b[0])} = ${dp(d)}. ${
-        d === 0
-          ? "The columns lie along one line, the parallelogram is squashed flat, and the matrix flattens the plane: it has no inverse."
-          : d > 0
-            ? `The unit square, of area 1, is sent to a parallelogram of area ${dp(d)}. The second column is anticlockwise from the first, as (0, 1) is from (1, 0), so the sign is positive.`
-            : `The unit square, of area 1, is sent to a parallelogram of area ${dp(-d)}. The second column is clockwise from the first, so the plane has been turned over and the sign is negative.`
-      }`}
-      controls={<Stepper label="angle in steps of 30°" value={angle / 30} onChange={(v) => setAngle(v * 30)} min={0} max={11} />}
-    >
-      <svg viewBox="0 0 440 280" role="img" aria-label={`The parallelogram on the columns ${pair(a)} and ${pair(b)}, of signed area ${dp(d)}`}>
-        <Grid />
-        <Outline points={[[0, 0], a, sum, b]} accent={d >= 0} />
-        <Arrow to={a} name="col 1" />
-        <Arrow to={b} name={d === 0 ? undefined : "col 2"} />
-      </svg>
-    </Frame>
-  );
-}
 
 const NET: Record<string, Spot> = { A: [70, 60], B: [190, 60], C: [70, 190], D: [190, 190] };
 const NET_NAMES = ["A", "B", "C", "D"];
@@ -3877,33 +3141,24 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "plane-point": PlanePoint,
   "plane-line": PlaneLine,
   "plane-lines": PlaneLines,
-  parabola: Parabola,
   venn: Venn,
   "arrow-map": ArrowMap,
   "inverse-line": InverseLine,
   growth: Growth,
-  "unit-circle": UnitCircle,
-  "triangle-sum": TriangleSum,
   "partial-sums": PartialSums,
   "call-stack": CallStack,
   "growth-rates": GrowthRates,
   "truth-table": TruthTable,
   dominoes: Dominoes,
-  diagonal: Diagonal,
-  "epsilon-band": EpsilonBand,
   "remainder-classes": RemainderClasses,
   "quantifier-grid": QuantifierGrid,
-  "limit-approach": LimitApproach,
   secant: Secant,
   "chain-rates": ChainRates,
-  bend: Bend,
-  taylor: Taylor,
   descent: Descent,
   riemann: Riemann,
   accumulation: Accumulation,
   "vector-arrow": VectorArrow,
   "vector-sum": VectorSum,
-  span: Span,
   "dot-product": DotProduct,
   "norm-balls": NormBalls,
   projection: Projection,
@@ -3919,15 +3174,9 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "doubling-array": DoublingArray,
   "topo-order": TopoOrder,
   "shortest-path": ShortestPath,
-  "beam-search": BeamSearch,
   "linear-map": LinearMap,
   "matrix-vector": MatrixVector,
-  "compose-maps": ComposeMaps,
-  "transpose-flip": TransposeFlip,
   elimination: Elimination,
-  "null-space": NullSpace,
-  "basis-grid": BasisGrid,
-  determinant: Determinant,
   "adjacency-matrix": AdjacencyMatrix,
   "array-shape": ArrayShape,
   "array-slice": ArraySlice,

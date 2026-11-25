@@ -8,8 +8,10 @@ import {
   completedConcepts,
   recordAttempt,
   saveSnapshot,
+  sinceStart,
   snapshotsFor,
   solvedQuestions,
+  startQuestion,
 } from "@/lib/learning/service";
 import { saveTutorMessage } from "@/lib/tutor/service";
 import { migrate } from "../../scripts/migrate";
@@ -80,6 +82,19 @@ describe("recording learning", () => {
     await reply("a", true);
     await attempt("f0.counting", "a", true);
     expect((await pool.query("select hints_used from attempts order by id")).rows.map((row) => row.hints_used)).toEqual([0, 1, 2]);
+  });
+
+  it("times a quick question from when Start was pressed, by the server's clock", async () => {
+    expect(await sinceStart(db, userId, "f0.counting", "a")).toBeNull();
+    const startedAt = new Date("2026-01-01T10:00:00Z");
+    await startQuestion(db, userId, "f0.counting", "a", startedAt);
+    expect(await sinceStart(db, userId, "f0.counting", "a", new Date("2026-01-01T10:00:12.5Z"))).toBe(12_500);
+    // Starting again, after the time ran out, restarts the clock.
+    await startQuestion(db, userId, "f0.counting", "a", new Date("2026-01-01T10:05:00Z"));
+    expect(await sinceStart(db, userId, "f0.counting", "a", new Date("2026-01-01T10:05:03Z"))).toBe(3_000);
+    // Each question, lesson and learner has its own clock.
+    expect(await sinceStart(db, userId, "f0.counting", "b")).toBeNull();
+    expect(await sinceStart(db, userId, "f0.adding", "a")).toBeNull();
   });
 
   it("keeps the latest code for each editor document", async () => {

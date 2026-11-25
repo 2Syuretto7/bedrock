@@ -1,0 +1,76 @@
+import { z } from "zod";
+import type { FigureName } from "./figures";
+
+/**
+ * The props each figure accepts. Every prop is optional, because each figure has a sensible starting state;
+ * a prop that is not listed, or has the wrong type, is refused by the lesson checks instead of being ignored.
+ */
+export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
+  "place-value": z.strictObject({ columns: z.number().optional(), start: z.number().optional() }),
+  "number-line": z.strictObject({ max: z.number().optional(), min: z.number().optional(), parts: z.number().optional(), start: z.number().optional() }),
+  "area-grid": z.strictObject({ columns: z.number().optional(), rows: z.number().optional(), split: z.number().optional() }),
+  "fraction-bar": z.strictObject({ denominator: z.number().optional(), finer: z.number().optional(), numerator: z.number().optional() }),
+  "powers-of-ten": z.strictObject({ start: z.number().optional() }),
+  "ratio-table": z.strictObject({ a: z.number().optional(), b: z.number().optional(), first: z.string().min(1).optional(), second: z.string().min(1).optional(), start: z.number().optional() }),
+  "plane-point": z.strictObject({ x: z.number().optional(), y: z.number().optional() }),
+  "plane-line": z.strictObject({ intercept: z.number().optional(), slope: z.number().optional() }),
+  "plane-lines": z.strictObject({ intercept: z.number().optional(), otherIntercept: z.number().optional(), otherSlope: z.number().optional(), slope: z.number().optional() }),
+  "venn": z.strictObject({ a: z.number().optional(), b: z.number().optional() }),
+  "arrow-map": z.strictObject({ inputs: z.number().optional(), outputs: z.number().optional(), plain: z.boolean().optional(), rule: z.number().optional() }),
+  "inverse-line": z.strictObject({ intercept: z.number().optional(), slope: z.number().optional(), x: z.number().optional() }),
+  "growth": z.strictObject({ start: z.number().optional() }),
+  "partial-sums": z.strictObject({ ratio: z.number().optional(), terms: z.number().optional() }),
+  "call-stack": z.strictObject({ n: z.number().optional() }),
+  "growth-rates": z.strictObject({ n: z.number().optional() }),
+  "truth-table": z.strictObject({ p: z.boolean().optional(), q: z.boolean().optional() }),
+  "dominoes": z.strictObject({ base: z.boolean().optional(), gap: z.number().optional() }),
+  "remainder-classes": z.strictObject({ modulus: z.number().optional(), number: z.number().optional() }),
+  "quantifier-grid": z.strictObject({ pattern: z.number().optional() }),
+  "secant": z.strictObject({ at: z.number().optional(), closeness: z.number().optional(), fn: z.enum(["square", "cube", "recip", "sin", "exp", "ln"]).optional() }),
+  "chain-rates": z.strictObject({ x: z.number().optional() }),
+  "descent": z.strictObject({ rate: z.number().optional(), steps: z.number().optional() }),
+  "riemann": z.strictObject({ doublings: z.number().optional(), fn: z.enum(["square", "line", "sin", "recip"]).optional(), rule: z.number().optional() }),
+  "accumulation": z.strictObject({ x: z.number().optional() }),
+  "vector-arrow": z.strictObject({ x: z.number().optional(), y: z.number().optional() }),
+  "vector-sum": z.strictObject({ ax: z.number().optional(), ay: z.number().optional(), bx: z.number().optional(), by: z.number().optional(), scale: z.number().optional() }),
+  "dot-product": z.strictObject({ angle: z.number().optional(), length: z.number().optional() }),
+  "norm-balls": z.strictObject({ norm: z.number().optional(), x: z.number().optional(), y: z.number().optional() }),
+  "projection": z.strictObject({ bx: z.number().optional(), by: z.number().optional() }),
+  "hyperplane": z.strictObject({ c: z.number().optional(), px: z.number().optional(), py: z.number().optional(), w1: z.number().optional(), w2: z.number().optional() }),
+  "array-list": z.strictObject({ index: z.number().optional() }),
+  "stack-queue": z.strictObject({ items: z.number().optional(), mode: z.enum(["stack", "queue"]).optional() }),
+  "hash-table": z.strictObject({ buckets: z.number().optional(), keys: z.number().optional() }),
+  "heap": z.strictObject({}),
+  "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
+  "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
+  "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
+  "dp-grid": z.strictObject({ cols: z.number().optional(), filled: z.number().optional(), rows: z.number().optional() }),
+  "doubling-array": z.strictObject({ appends: z.number().optional() }),
+  "topo-order": z.strictObject({ step: z.number().optional() }),
+  "shortest-path": z.strictObject({ step: z.number().optional() }),
+  "linear-map": z.strictObject({ amount: z.number().optional(), map: z.enum(["stretch", "shear", "quarter turn", "reflection", "squash"]).optional() }),
+  "matrix-vector": z.strictObject({ x: z.number().optional(), y: z.number().optional() }),
+  "elimination": z.strictObject({ step: z.number().optional() }),
+  "adjacency-matrix": z.strictObject({ from: z.number().optional(), steps: z.number().optional() }),
+  "array-shape": z.strictObject({ item: z.number().optional(), shape: z.enum(["12", "2x6", "3x4", "4x3", "6x2", "2x3x2"]).optional() }),
+  "array-slice": z.strictObject({ start: z.number().optional(), step: z.number().optional(), stop: z.number().optional() }),
+  "broadcast": z.strictObject({ pair: z.number().optional() }),
+  "loop-vs-array": z.strictObject({ power: z.number().optional() }),
+  "axis-reduce": z.strictObject({ axis: z.union([z.literal(0), z.literal(1), z.enum(["0", "1", "none"])]).optional(), keepdims: z.boolean().optional() }),
+  "strides": z.strictObject({ item: z.number().optional(), view: z.number().optional() }),
+  "einsum": z.strictObject({ code: z.enum(["ij,j->i", "ij,jk->ik", "ij->ji", "ij->i", "j,j->", "i,j->ij"]).optional() }),
+  "random-samples": z.strictObject({ normal: z.boolean().optional(), power: z.number().optional(), seed: z.number().optional() }),
+  "log-sum-exp": z.strictObject({ shift: z.union([z.literal(0), z.literal(100), z.literal(700), z.literal(1000), z.literal(-1000)]).optional() }),
+  "float-gaps": z.strictObject({ power: z.number().optional(), single: z.boolean().optional() }),
+};
+
+/** What is wrong with a figure's props, in plain words, or null if nothing is. */
+export function figurePropsProblem(name: string, props: unknown): string | null {
+  const schema = (FIGURE_PROPS as Record<string, z.ZodType | undefined>)[name];
+  if (!schema) return null;
+  const parsed = schema.safeParse(props ?? {});
+  if (parsed.success) return null;
+  const issue = parsed.error.issues[0];
+  const at = issue.path.length ? `${issue.path.join(".")}: ` : "";
+  return `Figure ${name} props: ${at}${issue.message}`;
+}

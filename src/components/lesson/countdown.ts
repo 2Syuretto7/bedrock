@@ -33,12 +33,17 @@ export function useCountdown(seconds: number | undefined, onExpire: () => void, 
     return () => clearInterval(timer);
   }, [deadline, active]);
 
-  const begin = useCallback(() => {
-    if (seconds === undefined) return;
-    startedAt.current = Date.now();
-    setLeft(seconds);
-    setDeadline(Date.now() + seconds * 1000);
-  }, [seconds]);
+  /** Starts the clock with the question's full time, or with `remainingMs` when the server says part of it is already used. */
+  const begin = useCallback(
+    (remainingMs?: number) => {
+      if (seconds === undefined) return;
+      const ms = Math.max(0, Math.min(seconds * 1000, remainingMs ?? seconds * 1000));
+      startedAt.current = Date.now() - (seconds * 1000 - ms);
+      setLeft(Math.ceil(ms / 1000));
+      setDeadline(Date.now() + ms);
+    },
+    [seconds],
+  );
   const stop = useCallback(() => setDeadline(null), []);
   /** Milliseconds since the question was revealed. */
   const elapsed = useCallback(() => Date.now() - startedAt.current, []);

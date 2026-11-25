@@ -6,7 +6,10 @@
  * path contains that text, and `npm run lessons -- capstones/s0` does the same
  * for a mini-capstone. CI always checks everything.
  */
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 import { validateCapstones } from "../src/lib/capstones/validate";
+import { Figure } from "../src/components/lesson/figures";
 import { loadGraph } from "../src/lib/graph/load";
 import { FIGURE_NAMES } from "../src/lib/lessons/figures";
 import {
@@ -28,11 +31,20 @@ async function main() {
   const graph = loadGraph(graphDir());
   const features = loadPythonFeatures();
   const figures = new Set<string>(FIGURE_NAMES);
+  // Every figure a lesson places is drawn here with its props, as the browser would draw it.
+  const renderFigure = (name: string, props: Record<string, unknown>) => {
+    try {
+      return renderToString(createElement(Figure, { name, props })).includes("<svg") ? null : `Figure ${name} draws nothing`;
+    } catch (error) {
+      return `Figure ${name} does not render: ${(error as Error).message}`;
+    }
+  };
   const issues = await validateLessons({
     graph,
     files,
     features,
     figures,
+    renderFigure,
     run: runPython,
     minWords: 1200,
     only: forCapstones !== undefined ? () => false : filter ? (file) => file.includes(filter) : undefined,
@@ -44,6 +56,7 @@ async function main() {
     written,
     features,
     figures,
+    renderFigure,
     run: runPython,
     minWords: 350,
     only: forCapstones !== undefined ? (file) => file.includes(forCapstones) : filter ? () => false : undefined,
