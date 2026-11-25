@@ -1,0 +1,870 @@
+concept: s1.testing-with-pytest
+minutes: 105
+claim: You can write tests as small functions that assert what code promises, explain how a test runner finds them, runs them and reports, choose test cases at the boundaries where bugs live, test that a function refuses bad input, compare floats safely, check a fast function against a slow one on random inputs, and say exactly what a passing test does and does not establish.
+recalls: [s1.type-hints-and-dataclasses]
+uses: [s1.comprehensions-and-iterators, s1.modules-and-imports, s1.classes-and-objects, s1.special-methods, s1.exceptions, s1.files-and-data-formats, s1.recursion, s1.generators-and-context-managers, s0.booleans-and-conditionals, s0.functions, s0.lists-and-tuples, s0.dictionaries-and-sets, s0.reading-errors-and-debugging, f0.fractions-decimals-and-percentages, f1.functions-as-machines, f1.composition-and-inverses]
+leads: [f2.propositions-and-connectives]
+starter: |
+  # Scratch space. Two tests, and the smallest possible test runner.
+  def median(xs):
+      ordered = sorted(xs)
+      middle = len(ordered) // 2
+      return ordered[middle]
+
+  def test_odd_length():
+      assert median([3, 1, 2]) == 2, "middle of three"
+
+  def test_even_length():
+      assert median([4, 1, 3, 2]) == 2.5, "mean of the middle two"
+
+  for test in [test_odd_length, test_even_length]:
+      try:
+          test()
+          print("pass", test.__name__)
+      except AssertionError as error:
+          print("FAIL", test.__name__, "-", error)
+parts:
+  recall:
+    - text: |
+        [[s1.type-hints-and-dataclasses]] ended on the limit of a type checker: it settles what **kind** of value flows where, and never whether the value is right. Whether `median([4, 1, 3, 2])` really is 2.5 can only be found by running the code and checking. This last lesson of the cluster turns that checking into a habit that costs nothing to repeat. Three quick pulls, and then the puzzle.
+  puzzle:
+    - text: |
+        You write a function for the median of a list, the middle value once the list is sorted.
+
+        ```python
+        def median(xs):
+            ordered = sorted(xs)
+            middle = len(ordered) // 2
+            return ordered[middle]
+        ```
+
+        You try it. `median([3, 1, 2])` gives 2. Correct. `median([5])` gives 5. Correct. You are satisfied, and you move on. Over the next month the function is used in forty places. One day a report built on it turns out to be subtly wrong, and after two hours you trace the fault to the median of a list with an **even** number of items, where the answer should be the mean of the middle two, and where this function has been wrong since the day it was written.
+
+        You fix it. A week later a colleague, or you yourself, speeds the function up with a cleverer method. Is it still right? For odd lengths? For even ones? For a single item? Somebody has to try all those cases again, by hand, at the keyboard. And again after the next change. In practice nobody does. People try one case, see a sensible number, and hope.
+
+        There are two puzzles here. First, checking by hand is work that must be **repeated in full after every change**, and so it is not done. How can checking be made so cheap that it is done every time? Second, even on the first day you did check, and it did not help, because you checked the wrong cases. **Which cases should you have tried?** There are infinitely many lists. You can try five. Which five?
+  intuition:
+    - text: |
+        The first puzzle has a simple answer, and you have been living inside it for the whole of this course. Every exercise you have done was checked in a fraction of a second by code that somebody wrote once. A check that is written down **as a program** can be run again at no cost, for ever. So write your checks down. A piece of code whose only job is to check other code is called a **test**.
+
+        You already have the one tool needed. From [[s0.reading-errors-and-debugging]]: `assert` states a claim, and stops the program with an `AssertionError` if the claim is false. A test is a claim about what a function returns:
+
+        ```python
+        assert median([4, 1, 3, 2]) == 2.5
+        ```
+
+        Had that single line existed on the first day, and been run after every change, the bug would have lived for five seconds instead of a month.
+
+        Think of a pilot's checklist before take-off. The pilot is not stupid and has flown a thousand times. The checklist exists because people under pressure forget, and because a check that depends on someone remembering to do it will one day not be done. A written list, gone through every time without exception, removes memory and mood from the matter. A set of tests is that checklist for a program, with the advantage that the computer goes through it for you.
+
+        The second puzzle, which cases to try, is harder and more interesting, and most of this lesson is about it. Here is the idea in a sentence. A function usually treats large groups of inputs in the same way, and **bugs live at the borders between the groups**. The median function has two groups, odd lengths and even lengths, and the bug was in the group nobody visited. A good tester looks for every group and tries at least one member of each, paying most attention to the edges.
+  derivation:
+    - text: |
+        **A test is a function.** A bare `assert` in the middle of a program runs once, when the program reaches it. To be able to run a check at will, and to give it a name that says what is being promised, wrap it in a function. The custom is that the name begins with `test_`.
+
+        ```python
+        def test_median_of_odd_length():
+            assert median([3, 1, 2]) == 2
+
+        def test_median_of_even_length():
+            assert median([4, 1, 3, 2]) == 2.5
+
+        def test_median_of_one_item():
+            assert median([5]) == 5
+        ```
+
+        Each test takes no arguments and returns nothing. It either finishes quietly, which means it passed, or it raises an exception, which means it failed. A test has three parts, though in a small one they may share a line: **arrange** the input, **act** by calling the code, and **assert** something about the result.
+
+        The name matters more than it seems. When a test fails six months from now, its name is the first thing you will read. `test_2` tells you nothing. `test_median_of_even_length` tells you what is broken before you have looked at a line of code.
+    - text: |
+        **Running many tests.** Now call the three tests, one after another.
+
+        ```python
+        test_median_of_odd_length()
+        test_median_of_even_length()
+        test_median_of_one_item()
+        ```
+
+        With the buggy median, the second call raises `AssertionError`, and the program stops. The third test is never run. That is the wrong behaviour for a checklist. One failed item should not hide the state of all the others. You want every test to run, and a report at the end.
+
+        You know how to survive an exception, from [[s1.exceptions]]. And a function is a value like any other, as you saw in [[f1.composition-and-inverses]], so tests can be put in a list and called in a loop.
+
+        ```python
+        def run(tests):
+            failed = 0
+            for test in tests:
+                try:
+                    test()
+                except AssertionError as error:
+                    failed += 1
+                    print("FAIL", test.__name__, "-", error)
+                else:
+                    print("pass", test.__name__)
+            print(len(tests) - failed, "passed,", failed, "failed")
+
+        run([test_median_of_odd_length, test_median_of_even_length, test_median_of_one_item])
+        ```
+
+        Every function carries its own name as a string, in the attribute `__name__`, and the runner uses that in its report. The `try` is inside the loop, so that a failure costs one test and the loop goes on. With the buggy median this prints one pass, one FAIL and another pass, and then the totals. That loop is a **test runner**. It is ten lines long, and it is the heart of every testing tool there is.
+    - question:
+        id: predict-runner
+        type: predict
+        system: s2
+        concepts: [s1.exceptions]
+        prompt: What does this print?
+        code: |
+          def double(x):
+              return x + x
+
+          def test_number():
+              assert double(4) == 8
+
+          def test_text():
+              assert double("ab") == "ab ab", "text should be repeated with a space"
+
+          def test_zero():
+              assert double(0) == 0
+
+          failed = []
+          for test in [test_number, test_text, test_zero]:
+              try:
+                  test()
+              except AssertionError as error:
+                  failed.append(test.__name__)
+          print(len(failed), failed)
+        output: "1 ['test_text']"
+        explanation: The first and third tests pass. In the second, doubling a string joins it to itself with no space, giving "abab", so the assertion fails. The runner catches the failure, records the name and carries on to the third test.
+    - text: |
+        **Finding the tests: what pytest does.** One annoyance is left. Each new test must be added by hand to the list given to `run`, and a test that is forgotten there is never run, which is the very failure of memory that tests were meant to cure.
+
+        Recall from [[s1.modules-and-imports]] that a module is a table from names to values. The built-in function `globals()` returns the table of the current module, as a dictionary. So a program can look through its own names and pick out every function whose name begins with `test_`.
+
+        ```python
+        def find_tests():
+            return [value for name, value in list(globals().items())
+                    if name.startswith("test_") and callable(value)]
+
+        run(find_tests())
+        ```
+
+        `callable(value)` is true for anything that can be called, such as a function. `name.startswith("test_")` is a string method that does what it says. Now the naming custom has become a mechanism: **name a function `test_something`, and it is run.** Nothing can be forgotten.
+
+        You have just built, in about fifteen lines, the core of **pytest**, the tool that nearly every Python project uses. You put tests in files whose names begin with `test_`, and you type one command:
+
+        ```text
+        $ pytest
+        ========================= test session starts =========================
+        collected 3 items
+
+        test_stats.py .F.                                                 [100%]
+
+        ============================== FAILURES ===============================
+        _____________________ test_median_of_even_length ______________________
+
+            def test_median_of_even_length():
+        >       assert median([4, 1, 3, 2]) == 2.5
+        E       assert 3 == 2.5
+        E        +  where 3 = median([4, 1, 3, 2])
+
+        test_stats.py:12: AssertionError
+        ===================== 1 failed, 2 passed in 0.02s =====================
+        ```
+
+        pytest searches the folder for test files, imports each, collects every function named `test_...`, runs each inside its own `try`, and reports. The line `.F.` is one character for each test, a dot for a pass and an F for a failure. For the failure it shows the line, and, most usefully, the **values**: `assert 3 == 2.5`, where 3 is what `median` returned. It can do that because it examines the `assert` statement itself, which is why tests for pytest are written with plain `assert` and usually need no message.
+
+        The workspace of this course runs in your browser and does not include pytest, so here you will use the runner you built. Every test you write in this lesson is a valid pytest test as it stands, and on your own machine `pytest` will run it unchanged.
+    - question:
+        id: predict-discovery
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          def test_one():
+              assert 1 + 1 == 2
+
+          def helper_test():
+              assert False
+
+          def test_two():
+              assert "a" < "b"
+
+          test_count = 2
+
+          found = [name for name, value in list(globals().items())
+                   if name.startswith("test_") and callable(value)]
+          print(sorted(found))
+        output: "['test_one', 'test_two']"
+        explanation: A name must begin with test_ and must refer to something that can be called. helper_test does not begin with test_. test_count does, but it is a number, which cannot be called.
+    - text: |
+        **Which cases? Partition the inputs.** Now the second puzzle. You cannot test every input. But a function does not treat every input differently. Look at what `median` does: it sorts, then picks from the middle. Its behaviour depends on whether the length is odd or even, and hardly at all on what the numbers are. All lists of odd length are handled by the same path through the code. If the function is right for `[3, 1, 2]`, it is very likely right for `[9, 7, 8]`, and testing both teaches you little more than testing one.
+
+        So divide the inputs into groups that the function ought to treat alike, and take at least one case from **each** group. For the median:
+
+        | Group | Example | Expected |
+        | --- | --- | --- |
+        | odd length | `[3, 1, 2]` | 2 |
+        | even length | `[4, 1, 3, 2]` | 2.5 |
+        | one item | `[5]` | 5 |
+        | repeated values | `[2, 2, 2, 9]` | 2 |
+        | already sorted, and sorted backwards | `[1, 2, 3]`, `[3, 2, 1]` | 2 |
+        | no items | `[]` | should raise an error |
+
+        Five or six cases, chosen this way, are worth more than a thousand chosen at random from one group.
+
+        **The edges.** Within the groups, bugs gather at the **boundaries**. You have met the reason again and again: `<` where `<=` was meant, a range that stops one short, a first or last item that is handled specially. These off-by-one errors do no harm in the middle of a range and strike exactly at its edge. So for every limit in a problem, test **at** the limit and **just to each side** of it. And always try the smallest inputs there are: the empty list, the list of one item, zero, the empty string. They are the cases a programmer's imagination skips and the cases real data always contain.
+
+        For a function `grade(mark)` that returns `"pass"` for a mark of 40 or more and `"fail"` below, the tests that matter are 39, 40 and 41. A test at 75 would pass whether the code said `>= 40` or `> 40`. Only a test **at** 40 can tell the two apart.
+    - question:
+        id: choice-boundary
+        type: choice
+        system: s2
+        prompt: |
+          `is_adult(age)` should return `True` for ages 18 and over. A programmer wrote `return age > 18` by mistake. Which single test would catch the mistake?
+        options:
+          - "`assert is_adult(30) is True`"
+          - "`assert is_adult(5) is False`"
+          - "`assert is_adult(18) is True`"
+          - "`assert is_adult(17) is False`"
+        answer: 2
+        explanation: The correct code and the mistaken code agree on every age except 18 itself. Only a test at the boundary can tell them apart. The other three tests pass for both versions.
+    - text: |
+        **Testing that a function refuses.** A function's promises include what it does with bad input. `median([])` should raise a `ValueError`. A test for that must pass when the exception **is** raised and fail when it is not. The `else` clause of `try` is made for this.
+
+        ```python
+        def test_median_of_nothing_is_refused():
+            try:
+                median([])
+            except ValueError:
+                pass
+            else:
+                assert False, "median([]) should raise ValueError"
+        ```
+
+        If the call raises `ValueError`, the handler does nothing and the test passes. If the call returns normally, the `else` block runs and fails the test. If the call raises some other exception, it is not caught, and it leaves the test function, which also counts as a failure. This is one of the few honest uses of a handler that does nothing: the exception was the thing being waited for.
+
+        pytest gives the pattern a short form. `pytest.raises(ValueError)` is used with the `with` statement, and it fails the test unless the block raises that exception:
+
+        ```python
+        import pytest
+
+        def test_median_of_nothing_is_refused():
+            with pytest.raises(ValueError):
+                median([])
+        ```
+
+        **Comparing floats.** There is a trap in asserting that two floats are equal. Floats are stored in binary, and most decimal fractions cannot be stored exactly, so
+
+        ```python
+        print(0.1 + 0.2 == 0.3)       # False
+        print(0.1 + 0.2)              # 0.30000000000000004
+        ```
+
+        A test `assert total([0.1, 0.2]) == 0.3` fails although the function is right. For floats, assert that the two values are **close**: `assert abs(result - 0.3) < 1e-9`. pytest has `pytest.approx` for the same purpose, as in `assert result == pytest.approx(0.3)`.
+    - question:
+        id: predict-raises-pattern
+        type: predict
+        system: s2
+        concepts: [s1.exceptions]
+        prompt: What does this print?
+        code: |
+          def check_refuses(action):
+              try:
+                  action()
+              except ValueError:
+                  return "pass"
+              else:
+                  return "FAIL"
+
+          def bad_int():
+              return int("x")
+
+          def good_int():
+              return int("7")
+
+          print(check_refuses(bad_int), check_refuses(good_int), abs((0.1 + 0.2) - 0.3) < 1e-9)
+        output: "pass FAIL True"
+        explanation: The first action raises ValueError, which is what the check is waiting for. The second returns normally, so the else block runs and reports a failure. And although 0.1 + 0.2 is not exactly 0.3, the difference is far smaller than the tolerance.
+    - text: |
+        **Testing without knowing the answer.** For some functions the right answer is hard to state in advance, but something about it is easy to check. There are three such strategies, and you have met the makings of all three.
+
+        **A slow version you trust.** A clever, fast function can be checked against a slow one that is obviously right. To merge two sorted lists into one sorted list, a fast `merge` walks along both lists at once, always taking the smaller front item. The slow version is `sorted(a + b)`. The test generates many random inputs and demands that the two agree. Set the seed, as in [[s1.modules-and-imports]], so that a failure can be reproduced.
+
+        ```python
+        import random
+
+        def test_merge_agrees_with_sorting():
+            random.seed(0)
+            for trial in range(200):
+                a = sorted(random.randint(0, 9) for k in range(random.randint(0, 6)))
+                b = sorted(random.randint(0, 9) for k in range(random.randint(0, 6)))
+                assert merge(a, b) == sorted(a + b), f"merge({a}, {b})"
+        ```
+
+        Short lists over a small range of values are best here. They hit the awkward cases, empty lists and repeated values, far more often than long lists of large numbers would.
+
+        **A round trip.** In [[s1.files-and-data-formats]] an encoder and a decoder had to be inverses. That is a test: `assert decode(encode(x)) == x`, for many values of `x`. You need not know what the encoded text looks like.
+
+        **A property.** Whatever a sorting function returns, the result must be in order and must have the same items as the input. Whatever `standardise` returns must have mean 0. Such facts are true of **every** correct output and can be checked for any input, including random ones.
+
+        These matter a great deal in machine learning, where the "right answer" of a model is not known at all. You cannot assert what a network will output. You can assert that the output has the right shape, that the error falls when the network is trained on a single small batch, and that two runs with the same seed give identical results.
+    - text: |
+        **Good tests, and what they cannot do.** A few habits separate tests that help from tests that annoy.
+
+        **Each test is independent.** It builds what it needs afresh and leaves nothing behind. If one test adds to a shared list and another relies on that, they will pass or fail according to the order in which they run, and you will lose a day finding out why. Remember aliasing: make new objects inside each test.
+
+        **Each test checks one idea**, and its name says which. When it fails, you know what is broken.
+
+        **Tests are deterministic.** The same code gives the same result every time. Anything random is seeded.
+
+        **A bug becomes a test before it is fixed.** When you find a bug, first write a test that fails because of it. Then fix the code and watch the test pass. Keep the test for ever. It is now impossible for that bug to return unnoticed.
+
+        And test the test. A test that cannot fail is worse than none, because it gives confidence that has not been earned. Here is a famous one:
+
+        ```python
+        assert (median([4, 1, 3, 2]) == 2.5, "even length")
+        ```
+
+        The brackets turn the claim and the message into a **tuple** of two items, and a tuple that is not empty counts as true. This assertion passes whatever `median` returns. The surest way to know that a test can fail is to see it fail: break the code on purpose, run the test, and watch it go red.
+
+        Finally, the limit of all this. Consider the claim that $n^2 + n + 41$ is a prime number for every whole number $n \ge 0$. Test it. For $n = 0$ it gives 41, prime. For $n = 1$, 43, prime. It is prime for $n = 2$, for $n = 3$, and for every $n$ up to 39. Forty tests, forty passes. And the claim is false: at $n = 40$ it gives $40^2 + 40 + 41 = 41^2$.
+
+        **A passing test shows that the code is right for the inputs that were tried.** It says nothing certain about any other input. Tests can reveal that a bug is present. They can never show that no bug is present. To know that something holds for **all** inputs, infinitely many of them, takes a different kind of argument altogether, one that does not go through the cases one at a time. That kind of argument is called a proof, and it is not far ahead of you.
+    - question:
+        id: choice-never-fails
+        type: choice
+        system: s1
+        prompt: |
+          Which of these tests can never fail, whatever `square` does?
+        options:
+          - "`assert square(3) == 9`"
+          - '`assert (square(3) == 9, "three squared")`'
+          - '`assert square(3) == 9, "three squared"`'
+          - "`assert square(-2) == 4`"
+        answer: 1
+        explanation: The brackets make a tuple of two items, the comparison and the message. A tuple with items in it always counts as true, so the assertion passes even if the comparison inside it is False.
+  formal:
+    - text: |
+        A **test** is a function that takes no arguments, calls the code under test, and raises an exception, usually `AssertionError` from an `assert`, if the result is not as promised. A test **passes** if it returns without raising and **fails** otherwise.
+
+        A **test runner** collects tests, calls each inside a `try` so that one failure does not prevent the others from running, and reports which passed and which failed.
+
+        **pytest.** The command `pytest` collects every function whose name starts with `test_`, in every file whose name starts with `test_` or ends with `_test.py`, and runs each as a separate test. On failure it shows the failing `assert` and the values of its parts.
+
+        | Need | Plain Python | pytest |
+        | --- | --- | --- |
+        | state a claim | `assert f(x) == y` | the same |
+        | expect an exception | `try`, `except E: pass`, `else: assert False` | `with pytest.raises(E):` |
+        | compare floats | `abs(a - b) < 1e-9` | `a == pytest.approx(b)` |
+        | run everything | a loop over the test functions | the command `pytest` |
+
+        **Choosing cases.** Partition the inputs into classes that the code should treat alike, and test at least one member of each class. For each boundary between classes, test at the boundary and immediately on each side. Include the smallest inputs: empty, one item, zero.
+
+        **Strategies that need no known answer.**
+
+        - **Reference:** for many inputs $x$, `fast(x) == slow(x)`, where `slow` is trusted.
+        - **Round trip:** for many $x$, $\text{decode}(\text{encode}(x)) = x$.
+        - **Property:** a statement true of every correct output, such as "the result is sorted and has the same items as the input".
+
+        **What a test establishes.** If a test fails, the code is wrong, or the test is. If a test passes, the code is right for the inputs that test used. No finite set of passing tests shows that code is right for all inputs.
+  drill:
+    - question:
+        id: drill-what-fails
+        type: choice
+        system: s1
+        prompt: |
+          What makes a test count as failed?
+        options:
+          - It prints the word FAIL.
+          - It returns False.
+          - It raises an exception.
+          - It takes more than a second.
+        answer: 2
+        explanation: A test passes by returning quietly and fails by raising an exception, which the runner catches. What it prints or returns plays no part.
+    - question:
+        id: drill-collected
+        type: numeric
+        system: s1
+        prompt: |
+          A file defines the functions `test_add`, `check_add`, `test_sub`, `subtest` and `testing_mul`. How many of them does pytest collect, given that it takes the functions whose names start with `test_`?
+        answer: "2"
+        explanation: Only test_add and test_sub begin with test followed by an underscore. testing_mul begins with test but has no underscore after it.
+    - question:
+        id: drill-float
+        type: predict
+        system: s1
+        concepts: [f0.fractions-decimals-and-percentages]
+        prompt: What does this print?
+        code: |
+          total = 0.1 + 0.1 + 0.1
+          print(total == 0.3, abs(total - 0.3) < 1e-9)
+        output: "False True"
+        explanation: A tenth cannot be stored exactly in binary, and the tiny errors add up, so the sum is not exactly equal to the stored value of 0.3. The difference is far below the tolerance.
+    - question:
+        id: drill-boundaries
+        type: choice
+        system: s1
+        prompt: |
+          `discount(total)` should take 10% off when `total` is 1000 or more, and nothing otherwise. Which set of three test inputs is the most valuable?
+        options:
+          - 100, 200 and 300
+          - 5000, 6000 and 7000
+          - 999, 1000 and 1001
+          - 500, 1500 and 2500
+        answer: 2
+        explanation: The behaviour changes at 1000. Testing at the limit and just to each side of it is the only way to catch a comparison that is off by one.
+    - question:
+        id: drill-name
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          def test_empty():
+              assert len([]) == 0
+
+          checks = [test_empty, len, print]
+          print([f.__name__ for f in checks])
+        output: "['test_empty', 'len', 'print']"
+        explanation: Every function carries its own name in the attribute __name__, the built-in functions included. Functions are values and can be kept in a list.
+    - question:
+        id: drill-other-exception
+        type: choice
+        system: s1
+        prompt: |
+          A test contains `assert parse("12") == 12`. The function `parse` has a typing mistake inside it and raises a `NameError`. Under pytest, what is the result for this test?
+        options:
+          - It passes, because no assertion was false.
+          - It fails. Any exception that leaves a test makes it fail.
+          - It is skipped.
+          - pytest itself crashes and runs no further tests.
+        answer: 1
+        explanation: A test passes only by returning normally. An exception of any kind that escapes the test counts as a failure, and pytest carries on with the remaining tests.
+    - question:
+        id: drill-independent
+        type: predict
+        system: s1
+        concepts: [s1.classes-and-objects]
+        prompt: What does this print?
+        code: |
+          shared = []
+
+          def test_first():
+              shared.append(1)
+              assert len(shared) == 1
+
+          def test_second():
+              shared.append(2)
+              assert len(shared) == 1
+
+          results = []
+          for test in [test_first, test_second]:
+              try:
+                  test()
+                  results.append("pass")
+              except AssertionError:
+                  results.append("FAIL")
+          print(results)
+        output: "['pass', 'FAIL']"
+        explanation: Both tests use the same list. The first leaves an item in it, so when the second adds another the length is 2. Run in the other order, the results would be the other way round. Tests that share data depend on the order in which they run.
+    - question:
+        id: drill-meaning
+        type: choice
+        system: s1
+        prompt: |
+          All 200 tests of a function pass. What has been established?
+        options:
+          - The function is correct for every possible input.
+          - The function is correct for the inputs those tests used.
+          - The function has no bugs.
+          - The function is fast.
+        answer: 1
+        explanation: A passing test speaks only for its own inputs. A formula can hold for the first forty whole numbers and fail at the forty-first.
+  work:
+    - question:
+        id: write-run-tests
+        type: code
+        mode: write
+        system: s2
+        concepts: [s1.exceptions]
+        prompt: |
+          Write the core of a test runner. `run_tests(tests)` takes a list of test functions, calls every one of them, and returns a tuple `(passed, failed)`: the number of tests that passed, and the list of the **names** of the tests that failed, in the order they were run.
+
+          A test fails if it raises **any** exception that inherits from `Exception`, not only `AssertionError`. One failure must not stop the remaining tests from running.
+        starter: |
+          def run_tests(tests):
+              # Replace the next line with your own.
+              return (0, [])
+
+          def test_true():
+              assert 1 + 1 == 2
+
+          def test_false():
+              assert 1 + 1 == 3
+
+          def test_crash():
+              return [][0]
+
+          print(run_tests([test_true, test_false, test_crash, test_true]))
+        solution: |
+          def run_tests(tests):
+              passed = 0
+              failed = []
+              for test in tests:
+                  try:
+                      test()
+                  except Exception:
+                      failed.append(test.__name__)
+                  else:
+                      passed += 1
+              return (passed, failed)
+
+          def test_true():
+              assert 1 + 1 == 2
+
+          def test_false():
+              assert 1 + 1 == 3
+
+          def test_crash():
+              return [][0]
+
+          print(run_tests([test_true, test_false, test_crash, test_true]))
+        tests: |
+          _ran = []
+          def _ok():
+              _ran.append("ok")
+          def _bad():
+              _ran.append("bad")
+              assert False, "always fails"
+          def _crash():
+              _ran.append("crash")
+              raise KeyError("missing")
+          def _ok2():
+              _ran.append("ok2")
+          _result = run_tests([_ok, _bad, _crash, _ok2])
+          assert _ran == ["ok", "bad", "crash", "ok2"], "Every test must be run, in order, even after one has failed"
+          assert _result == (2, ["_bad", "_crash"]), "Two tests pass. The names of the two that fail, in order, are _bad and _crash."
+          assert run_tests([]) == (0, []), "With no tests, nothing passes and nothing fails"
+          assert run_tests([_ok, _ok]) == (2, []), "When every test passes the list of failures is empty"
+          assert run_tests([_bad]) == (0, ["_bad"]), "A single failing test"
+        wrong:
+          - "def run_tests(tests):\n    passed = 0\n    failed = []\n    for test in tests:\n        try:\n            test()\n        except AssertionError:\n            failed.append(test.__name__)\n        else:\n            passed += 1\n    return (passed, failed)\n"
+          - "def run_tests(tests):\n    passed = 0\n    failed = []\n    try:\n        for test in tests:\n            test()\n            passed += 1\n    except Exception:\n        failed.append(test.__name__)\n    return (passed, failed)\n"
+          - "def run_tests(tests):\n    passed = 0\n    failed = []\n    for test in tests:\n        try:\n            test()\n        except Exception:\n            failed.append(test)\n        passed += 1\n    return (passed, failed)\n"
+        explanation: |
+          The `try` is inside the loop, around the single call, so each test has its own safety net. `except Exception` is deliberately broad here, and this is a place where that is right: a test runner is the one piece of code whose job is to witness every kind of failure and report it, and it does not hide anything, since each failure is recorded by name. The count of passes is raised in the `else` block, which runs only when the call finished without raising. The second wrong answer in the tests puts the loop inside the `try`, so the first failure ends the run.
+    - question:
+        id: write-check-raises
+        type: code
+        mode: write
+        system: s2
+        concepts: [s1.exceptions]
+        prompt: |
+          Write `raises(action, kind)`, the plain-Python core of `pytest.raises`. It calls the function `action()` with no arguments.
+
+          - If the call raises an exception that is an instance of the class `kind`, return `True`.
+          - If the call returns normally, return `False`.
+          - If the call raises any other exception, let it pass up to the caller.
+
+          `raises(lambda: int("x"), ValueError)` is `True`, and `raises(lambda: int("7"), ValueError)` is `False`.
+        starter: |
+          def raises(action, kind):
+              # Replace the next line with your own.
+              return True
+
+          print(raises(lambda: int("x"), ValueError), raises(lambda: int("7"), ValueError))
+        solution: |
+          def raises(action, kind):
+              try:
+                  action()
+              except kind:
+                  return True
+              return False
+
+          print(raises(lambda: int("x"), ValueError), raises(lambda: int("7"), ValueError))
+        tests: |
+          assert raises(lambda: int("x"), ValueError) is True, "int('x') raises ValueError"
+          assert raises(lambda: int("7"), ValueError) is False, "int('7') returns normally, so the answer is False"
+          assert raises(lambda: [1, 2][5], IndexError) is True, "A position past the end raises IndexError"
+          assert raises(lambda: [1, 2][5], LookupError) is True, "IndexError is a subclass of LookupError, so it counts"
+          assert raises(lambda: {}["k"], LookupError) is True, "KeyError is a subclass of LookupError too"
+          _passed_up = False
+          try:
+              raises(lambda: 1 / 0, ValueError)
+          except ZeroDivisionError:
+              _passed_up = True
+          assert _passed_up, "A ZeroDivisionError is not a ValueError. It should pass up to the caller, not be turned into True or False."
+          _calls = []
+          raises(lambda: _calls.append(1), ValueError)
+          assert len(_calls) == 1, "The action should be called exactly once"
+        wrong:
+          - "def raises(action, kind):\n    try:\n        action()\n    except Exception:\n        return True\n    return False\n"
+          - "def raises(action, kind):\n    try:\n        action()\n    except kind:\n        return True\n    except Exception:\n        return False\n    return False\n"
+          - "def raises(action, kind):\n    try:\n        action()\n    except kind:\n        return False\n    return True\n"
+        explanation: |
+          An `except` clause names a class, and the class can be held in a variable: `except kind:` catches instances of whatever class was passed in, and of its subclasses. Everything else is not caught and so passes up, with no extra code. With this helper a test that a function refuses bad input is a single line, `assert raises(lambda: median([]), ValueError)`. The `lambda` is needed because `raises` must make the call itself, inside its own `try`. Writing `raises(median([]), ValueError)` would call `median` first, outside any `try`, and the exception would escape before `raises` had even started.
+    - question:
+        id: write-tests-clamp
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          `clamp(x, low, high)` forces a number into a range: it returns `x` if `x` lies between `low` and `high`, returns `low` if `x` is below the range, and `high` if it is above. A correct version is given.
+
+          Write **tests** for it: at least three functions whose names begin with `test_`. Your tests will be run against the correct `clamp`, where all must pass, and then against four faulty versions. Each faulty version must be caught, which means that at least one of your tests must fail on it.
+
+          Think about the groups of inputs, and the edges of the range.
+        starter: |
+          def clamp(x, low, high):
+              if x < low:
+                  return low
+              if x > high:
+                  return high
+              return x
+
+          def test_inside():
+              # Replace this test and add more.
+              assert True
+        solution: |
+          def clamp(x, low, high):
+              if x < low:
+                  return low
+              if x > high:
+                  return high
+              return x
+
+          def test_inside_is_unchanged():
+              assert clamp(5, 0, 10) == 5
+
+          def test_below_gives_low():
+              assert clamp(-3, 0, 10) == 0
+
+          def test_above_gives_high():
+              assert clamp(42, 0, 10) == 10
+
+          def test_edges_are_inside():
+              assert clamp(0, 0, 10) == 0
+              assert clamp(10, 0, 10) == 10
+
+          def test_range_not_starting_at_zero():
+              assert clamp(1, 2, 8) == 2
+              assert clamp(9, 2, 8) == 8
+              assert clamp(3, 2, 8) == 3
+        tests: |
+          def _suite():
+              return [_f for _n, _f in list(globals().items()) if _n.startswith("test_") and callable(_f)]
+          def _all_pass():
+              for _t in _suite():
+                  try:
+                      _t()
+                  except Exception:
+                      return False
+              return True
+          assert len(_suite()) >= 3, "Write at least three functions whose names begin with test_"
+          def clamp(x, low, high):
+              return max(low, min(high, x))
+          assert _all_pass(), "One of your tests fails on a correct clamp. Check the values you expect."
+          def clamp(x, low, high):
+              return x
+          assert not _all_pass(), "Your tests all pass on a clamp that returns x unchanged. Test a value outside the range."
+          def clamp(x, low, high):
+              if x < low:
+                  return low
+              return x
+          assert not _all_pass(), "Your tests all pass on a clamp that forgets the upper limit. Test a value above the range."
+          def clamp(x, low, high):
+              if x > high:
+                  return high
+              return x
+          assert not _all_pass(), "Your tests all pass on a clamp that forgets the lower limit. Test a value below the range."
+          def clamp(x, low, high):
+              if x < low:
+                  return high
+              if x > high:
+                  return low
+              return x
+          assert not _all_pass(), "Your tests all pass on a clamp that returns the wrong end of the range. Check which limit comes back for a value below, and for a value above."
+          def clamp(x, low, high):
+              if x <= low:
+                  return 0
+              if x >= high:
+                  return 10
+              return x
+          assert not _all_pass(), "Your tests all pass on a clamp that only works for the range 0 to 10. Use a second range with different limits."
+        wrong:
+          - "def clamp(x, low, high):\n    if x < low:\n        return low\n    if x > high:\n        return high\n    return x\n\ndef test_a():\n    assert clamp(5, 0, 10) == 5\n\ndef test_b():\n    assert clamp(6, 0, 10) == 6\n\ndef test_c():\n    assert clamp(7, 0, 10) == 7\n"
+          - "def clamp(x, low, high):\n    if x < low:\n        return low\n    if x > high:\n        return high\n    return x\n\ndef test_a():\n    assert clamp(5, 0, 10) == 5\n\ndef test_b():\n    assert clamp(-1, 0, 10) == 0\n\ndef test_c():\n    assert clamp(11, 0, 10) == 10\n"
+          - "def clamp(x, low, high):\n    if x < low:\n        return low\n    if x > high:\n        return high\n    return x\n\ndef test_a():\n    assert clamp(5, 2, 8) == 5\n\ndef test_b():\n    assert clamp(1, 2, 8) == 8\n\ndef test_c():\n    assert clamp(9, 2, 8) == 2\n"
+          - "def clamp(x, low, high):\n    if x < low:\n        return low\n    if x > high:\n        return high\n    return x\n\ndef test_a():\n    assert (clamp(-1, 2, 8) == 2, \"below\")\n\ndef test_b():\n    assert (clamp(11, 2, 8) == 8, \"above\")\n\ndef test_c():\n    assert (clamp(5, 2, 8) == 5, \"inside\")\n"
+        explanation: |
+          The inputs fall into three groups: below the range, inside it, above it. A suite needs a case from each, or a version that forgets one branch goes unnoticed. The two edges, `x == low` and `x == high`, are worth a test of their own. And a second range with limits other than 0 and 10 catches code that has the numbers of the first example built into it. Three tests that all sit comfortably inside the range, like the first wrong answer in the tests, pass for every faulty version and so check nothing. This way of judging a test suite, by planting faults and seeing whether they are caught, is called mutation testing.
+    - question:
+        id: fix-useless-tests
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `mean(xs)` is given and is correct. Below it are three tests, and all three pass. But they would also pass if `mean` were badly broken, because each of them has a fault that stops it from ever failing. Repair the three tests so that they really check the three facts in their names. Do not change `mean`.
+        starter: |
+          def mean(xs):
+              if len(xs) == 0:
+                  raise ValueError("mean of an empty list")
+              return sum(xs) / len(xs)
+
+          def test_mean_of_three():
+              assert (mean([1, 2, 6]) == 3, "the mean of 1, 2 and 6 is 3")
+
+          def test_mean_of_decimals():
+              mean([0.1, 0.2]) == 0.15
+
+          def test_mean_of_nothing_is_refused():
+              try:
+                  mean([])
+              except ValueError:
+                  pass
+        solution: |
+          def mean(xs):
+              if len(xs) == 0:
+                  raise ValueError("mean of an empty list")
+              return sum(xs) / len(xs)
+
+          def test_mean_of_three():
+              assert mean([1, 2, 6]) == 3, "the mean of 1, 2 and 6 is 3"
+
+          def test_mean_of_decimals():
+              assert abs(mean([0.1, 0.2]) - 0.15) < 1e-9
+
+          def test_mean_of_nothing_is_refused():
+              try:
+                  mean([])
+              except ValueError:
+                  pass
+              else:
+                  assert False, "mean([]) should raise ValueError"
+        tests: |
+          _names = ["test_mean_of_three", "test_mean_of_decimals", "test_mean_of_nothing_is_refused"]
+          def _passes(_name):
+              try:
+                  globals()[_name]()
+              except Exception:
+                  return False
+              return True
+          assert all(_n in globals() for _n in _names), "Keep the three tests, with their names"
+          assert all(_passes(_n) for _n in _names), "All three tests should pass on the correct mean. If the decimals test fails, remember how floats should be compared."
+          def mean(xs):
+              return 0
+          assert not _passes("test_mean_of_three"), "test_mean_of_three still passes when mean always returns 0. Look at what the brackets after assert create."
+          assert not _passes("test_mean_of_decimals"), "test_mean_of_decimals still passes when mean always returns 0. Does it assert anything?"
+          assert not _passes("test_mean_of_nothing_is_refused"), "test_mean_of_nothing_is_refused still passes when mean([]) returns 0 instead of raising. What happens in the test when no exception is raised?"
+          def mean(xs):
+              if len(xs) == 0:
+                  raise ValueError("empty")
+              return sum(xs) / len(xs) + 0.01
+          assert not _passes("test_mean_of_decimals"), "test_mean_of_decimals passes for a mean that is off by 0.01. The tolerance is too generous."
+          def mean(xs):
+              if len(xs) == 0:
+                  raise KeyError("empty")
+              return sum(xs) / len(xs)
+          assert not _passes("test_mean_of_nothing_is_refused"), "test_mean_of_nothing_is_refused passes when the wrong kind of exception is raised"
+        wrong:
+          - "def mean(xs):\n    if len(xs) == 0:\n        raise ValueError(\"mean of an empty list\")\n    return sum(xs) / len(xs)\n\ndef test_mean_of_three():\n    assert mean([1, 2, 6]) == 3\n\ndef test_mean_of_decimals():\n    assert mean([0.1, 0.2]) == 0.15\n\ndef test_mean_of_nothing_is_refused():\n    try:\n        mean([])\n    except ValueError:\n        pass\n    else:\n        assert False\n"
+          - "def mean(xs):\n    if len(xs) == 0:\n        raise ValueError(\"mean of an empty list\")\n    return sum(xs) / len(xs)\n\ndef test_mean_of_three():\n    assert mean([1, 2, 6]) == 3\n\ndef test_mean_of_decimals():\n    assert abs(mean([0.1, 0.2]) - 0.15) < 1e-9\n\ndef test_mean_of_nothing_is_refused():\n    try:\n        mean([])\n    except Exception:\n        pass\n    else:\n        assert False\n"
+          - "def mean(xs):\n    if len(xs) == 0:\n        raise ValueError(\"mean of an empty list\")\n    return sum(xs) / len(xs)\n\ndef test_mean_of_three():\n    assert mean([1, 2, 6]) == 3\n\ndef test_mean_of_decimals():\n    assert abs(mean([0.1, 0.2]) - 0.15) < 1\n\ndef test_mean_of_nothing_is_refused():\n    try:\n        mean([])\n    except ValueError:\n        pass\n    else:\n        assert False\n"
+        explanation: |
+          Three tests, three ways of checking nothing. In the first, the brackets made a tuple of the comparison and the message, and a tuple with items in it is always true. In the second there was no `assert` at all: the comparison was worked out and thrown away. And when the `assert` is added, the comparison must allow for floats, since the mean of 0.1 and 0.2 is not exactly 0.15. In the third, the `try` handled the exception when it came but had nothing to say when it did not, so a `mean` that returned quietly passed just as well. The `else` clause fails the test in that case. The way to find faults like these is the one the hidden tests use: break the code on purpose and see whether the tests notice.
+    - question:
+        id: write-tests-batches
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          `batches(items, size)` cuts a list into consecutive pieces of length `size`, the last piece being shorter if the items do not divide evenly. You wrote it in an earlier lesson, and a correct version is given.
+
+          Write at least three tests for it, with names beginning with `test_`. They will be run against the correct version, where all must pass, and against five faulty versions, each of which must be caught. The faults are of the kinds you have met: a last short piece that is lost, an empty piece at the end, pieces of the wrong length, items out of order.
+        starter: |
+          import math
+
+          def batches(items, size):
+              count = math.ceil(len(items) / size)
+              return [items[i * size:(i + 1) * size] for i in range(count)]
+
+          def test_something():
+              # Replace this test and add more.
+              assert batches([], 3) == []
+        solution: |
+          import math
+
+          def batches(items, size):
+              count = math.ceil(len(items) / size)
+              return [items[i * size:(i + 1) * size] for i in range(count)]
+
+          def test_remainder_makes_a_short_last_piece():
+              assert batches([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]
+
+          def test_exact_division_has_no_empty_piece():
+              assert batches([1, 2, 3, 4], 2) == [[1, 2], [3, 4]]
+
+          def test_no_items_gives_no_pieces():
+              assert batches([], 3) == []
+
+          def test_size_larger_than_the_list():
+              assert batches([7, 8], 5) == [[7, 8]]
+
+          def test_size_one():
+              assert batches([3, 1, 2], 1) == [[3], [1], [2]]
+        tests: |
+          import math as _math
+          def _suite():
+              return [_f for _n, _f in list(globals().items()) if _n.startswith("test_") and callable(_f)]
+          def _all_pass():
+              for _t in _suite():
+                  try:
+                      _t()
+                  except Exception:
+                      return False
+              return True
+          assert len(_suite()) >= 3, "Write at least three functions whose names begin with test_"
+          def batches(items, size):
+              return [items[_i:_i + size] for _i in range(0, len(items), size)]
+          assert _all_pass(), "One of your tests fails on a correct version of batches. Check the values you expect."
+          def batches(items, size):
+              return [items[_i * size:(_i + 1) * size] for _i in range(len(items) // size)]
+          assert not _all_pass(), "Your tests all pass on a version that loses the last, shorter piece. Test a list whose length is not a multiple of the size."
+          def batches(items, size):
+              return [items[_i * size:(_i + 1) * size] for _i in range(len(items) // size + 1)]
+          assert not _all_pass(), "Your tests all pass on a version that adds an empty piece at the end when the size divides the length exactly. Test that case."
+          def batches(items, size):
+              return [items[_i:_i + size + 1] for _i in range(0, len(items), size + 1)]
+          assert not _all_pass(), "Your tests all pass on a version whose pieces are one item too long"
+          def batches(items, size):
+              _ordered = sorted(items)
+              return [_ordered[_i:_i + size] for _i in range(0, len(_ordered), size)]
+          assert not _all_pass(), "Your tests all pass on a version that sorts the items first. Use a list that is not already in order."
+          def batches(items, size):
+              if len(items) == 0:
+                  return [[]]
+              return [items[_i:_i + size] for _i in range(0, len(items), size)]
+          assert not _all_pass(), "Your tests all pass on a version that returns one empty piece for an empty list. Test the empty list."
+        wrong:
+          - "import math\n\ndef batches(items, size):\n    count = math.ceil(len(items) / size)\n    return [items[i * size:(i + 1) * size] for i in range(count)]\n\ndef test_a():\n    assert batches([1, 2, 3, 4], 2) == [[1, 2], [3, 4]]\n\ndef test_b():\n    assert batches([1, 2, 3, 4, 5, 6], 3) == [[1, 2, 3], [4, 5, 6]]\n\ndef test_c():\n    assert batches([], 3) == []\n"
+          - "import math\n\ndef batches(items, size):\n    count = math.ceil(len(items) / size)\n    return [items[i * size:(i + 1) * size] for i in range(count)]\n\ndef test_a():\n    assert batches([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]\n\ndef test_b():\n    assert batches([1, 2, 3], 2) == [[1, 2], [3]]\n\ndef test_c():\n    assert batches([3, 1, 2], 2) == [[3, 1], [2]]\n"
+          - "import math\n\ndef batches(items, size):\n    count = math.ceil(len(items) / size)\n    return [items[i * size:(i + 1) * size] for i in range(count)]\n\ndef test_a():\n    assert len(batches([1, 2, 3, 4, 5], 2)) == 3\n\ndef test_b():\n    assert len(batches([1, 2, 3, 4], 2)) == 2\n\ndef test_c():\n    assert len(batches([], 2)) == 0\n"
+        explanation: |
+          The inputs divide by one question above all: does the size divide the length exactly, or is there a remainder? Those are two groups, and each hides its own classic bug, the empty piece at the end and the lost short piece. Then come the smallest inputs: no items at all, and a size larger than the whole list. An input that is not in sorted order catches a function that reorders. The third wrong answer in the tests asserts only the **number** of pieces, and so cannot see what is inside them. Assert the whole expected value when you can.
+    - question:
+        id: numeric-counterexample
+        type: numeric
+        system: s2
+        prompt: |
+          A function `is_prime_formula(n)` returns $n^2 - n + 11$ and is claimed to give a prime number for every whole number $n \ge 0$. Tests for $n = 0, 1, 2, \dots, 10$ all confirm a prime: 11, 11, 13, 17, 23, 31, 41, 53, 67, 83, 101. What is the smallest $n$ for which the claim fails?
+        answer: "11"
+        explanation: At n = 11 the formula gives 121 - 11 + 11 = 121, which is 11 times 11. Eleven passing tests said nothing about the twelfth input. When n equals the constant term, every term is divisible by it.
+  connections:
+    - text: |
+        There were two puzzles. The first was that checking by hand has to be repeated after every change, and so is not done. The answer was to write each check as a function that asserts what the code promises, and to let a runner find those functions by their names, run every one, and report. You built such a runner, and it is what pytest is at its core. The second was which cases to try. The answer was to divide the inputs into groups that the code should treat alike, take a case from each, and test hardest at the edges between them, with the empty and the single always included.
+
+        You also learnt to judge a test by whether it can fail, and that a passing test speaks only for its own inputs.
+
+        And keep hold of the formula that produced forty primes and then failed. It marks the edge of what testing can do, and the place where a stronger method must take over.
+
+        This closes the cluster, and it is worth seeing it whole. You began with comprehensions and the iterator, the sigma notation made to run. Then came the dot, as the look-up in a module and then in an object. Classes, and the special methods that let your objects use the language's own syntax. Exceptions, for failure that cannot be ignored. Files, where data outlive the program. Recursion, which solves a problem by trusting itself on a smaller one. Generators, which hand out a sequence one term at a time, and `with`, which tidies up without fail. Types, written into the code where a checker can read them. And now tests, which check the values the types cannot. You can read almost any Python you will meet, including the libraries you are about to use.
+
+        One thread has been gathering all through this cluster. Again and again you met a claim about **every** case. `all(...)` asked whether a condition holds for every member of a collection. A recursive function was trusted for every smaller input. A type checker established something for every path at once. And a formula gave a prime for forty inputs and failed at the forty-first, so no amount of testing could have settled it. To state such claims exactly, to say what "every", "some", "and", "or", "not" and "if ... then" mean, and what would count as establishing them beyond any doubt, is the subject of logic. It begins with [[f2.propositions-and-connectives]], where the `and`, `or` and `not` you have used in code since your first conditional return as objects of study in their own right.

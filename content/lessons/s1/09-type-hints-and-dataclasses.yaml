@@ -1,0 +1,765 @@
+concept: s1.type-hints-and-dataclasses
+minutes: 95
+claim: You can annotate parameters, results and variables with their types, including lists, dictionaries, tuples, optional values, functions and your own classes, explain that Python itself ignores these notes while people and type checkers read them, say what a type checker can establish that tests cannot, and use a dataclass to have Python write a class's routine methods from its annotated fields.
+recalls: [s1.generators-and-context-managers]
+uses: [s1.comprehensions-and-iterators, s1.modules-and-imports, s1.classes-and-objects, s1.special-methods, s1.exceptions, s1.files-and-data-formats, s0.values-types-and-variables, s0.functions, s0.lists-and-tuples, s0.dictionaries-and-sets, s0.reading-errors-and-debugging, s1.recursion, f1.functions-as-machines]
+leads: [s1.testing-with-pytest]
+starter: |
+  # Scratch space. Python does not check the hints. Try it.
+  def scale(values: list[float], factor: float) -> list[float]:
+      return [v * factor for v in values]
+
+  print(scale([1.0, 2.5], 2))
+  print(scale("ab", 2))
+  print(scale.__annotations__)
+parts:
+  recall:
+    - text: |
+        [[s1.generators-and-context-managers]] ended with a function that says it wants "anything a `for` loop can walk", and nothing in the code to say so. Many of the failures in a program come from a function being handed the wrong kind of thing. This lesson is about writing down, in the code itself, what kind of thing each function takes and gives back, and about a tool that reads those notes and finds mistakes before the program runs. Three quick pulls first.
+  puzzle:
+    - text: |
+        Here is a function from somebody else's program. You have to call it.
+
+        ```python
+        def scale(data, factor):
+            return [d * factor for d in data]
+        ```
+
+        What is `data`? A list of numbers, probably. Or a dictionary? A set? Would a string do? And `factor`, is it a number, or could it be a list to be matched up item by item? Does the function give back a list, or change `data` in place? To find out, you read the body. Here the body is one line. In real code it is forty lines and calls three other functions, whose bodies you must also read. You do this for every function you ever call.
+
+        Now somebody calls it with the arguments the wrong way round.
+
+        ```python
+        scale(3, [1.5, 2.5])
+        ```
+
+        This fails, with `TypeError: 'int' object is not iterable`, which is at least a failure. But the next mistake is worse:
+
+        ```python
+        scale("12", 3)          # ['111', '222']
+        ```
+
+        The caller forgot to convert a string read from a file. No error at all. Python multiplied each character by three, as it does for strings, and returned rubbish that looks like a result. The rubbish flows on.
+
+        There is a deeper trouble behind both. Python finds out that a value has the wrong type only **when the offending line is run**. Suppose that line is in the part of a program that saves the results, and the program first trains a model for nine hours. The mistake was there from the beginning, sitting in the text of the program, and it took nine hours to be found. In [[s1.testing-with-pytest]] you learnt to catch such things with tests, but a test catches it only if some test happens to pass that value down that path.
+
+        Could a mistake of this kind be found **without running the program at all**, just by reading it? You, reading carefully, could spot `scale("12", 3)` at once, if only you knew what `scale` expected. So could a machine.
+  intuition:
+    - text: |
+        In a physics calculation, a careful person writes the units beside every number: 5 m, 2 s, 10 m/s. The units are not part of the arithmetic. The number 5 is 5 with or without them. But they do two jobs. They tell a reader what each number **means**. And they let a whole class of mistakes be caught before any arithmetic is done: if you find yourself adding metres to seconds, you have gone wrong, and you know it without computing anything.
+
+        Python lets you write the same sort of note beside every name: what **type** of value it is meant to hold. These notes are called **type hints**, or annotations.
+
+        ```python
+        def scale(data: list[float], factor: float) -> list[float]:
+            return [d * factor for d in data]
+        ```
+
+        Read it aloud. `scale` takes `data`, a list of floats, and `factor`, a float, and gives back a list of floats. Every question of the puzzle is answered by the first line, and the body need not be read.
+
+        Like units, the hints change nothing about how the program runs. Python reads them, stores them, and otherwise **ignores them completely**. Their readers are people, and one kind of program: a **type checker**, which reads your code without running it, follows every value from where it is made to where it is used, and reports each place where the type that arrives is not the type that was promised. `scale("12", 3)` hands a string to a parameter labelled as a list of floats. A type checker finds that in a second, in a program that would take nine hours to reach the line.
+
+        There is an older idea underneath, one you already have. In [[f1.functions-as-machines]] you wrote $f : A \to B$ to say that a function takes inputs from the set $A$ and gives outputs in the set $B$. A type is a set of values: `int` is the set of whole numbers, `str` the set of all strings. So
+
+        $$\texttt{def f(x: float) -> float} \qquad \text{is} \qquad f : \mathbb{R} \to \mathbb{R},$$
+
+        typed into a program. The hint states the domain and the codomain. You have been reading type hints since the first lesson on functions. They were only written in a different notation.
+  derivation:
+    - text: |
+        **The notation.** There are three places for a hint.
+
+        ```python
+        def area(width: float, height: float) -> float:
+            return width * height
+
+        count: int = 0
+        name: str = "first run"
+        ```
+
+        After a **parameter**, a colon and a type. After the brackets of a **function**, an arrow `->` and the type of the result. After a **variable**, a colon and a type, before the `=`. A function that returns nothing is marked `-> None`.
+
+        Variables seldom need hints, because the checker can see what is assigned: after `count = 0` it knows that `count` is an `int`. Hints matter most on functions, since a function is a boundary, and its first line is all that a caller sees.
+
+        **Python does not enforce them.** This must be seen once to be believed.
+
+        ```python
+        def double(x: int) -> int:
+            return x * 2
+
+        print(double("ab"))                 # abab
+        ```
+
+        No error. The hint says `int`, a string arrived, and Python ran the body as it always would. The hints are stored, in a dictionary attached to the function, and nothing more is done with them:
+
+        ```python
+        print(double.__annotations__)       # {'x': <class 'int'>, 'return': <class 'int'>}
+        ```
+
+        So a hint is a claim, and nothing in Python itself checks the claim. It can be wrong, like a comment. What makes hints better than comments is that a machine can check them.
+    - question:
+        id: predict-not-enforced
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          def add_one(n: int) -> int:
+              return n + 1
+
+          print(add_one(2.5), add_one.__annotations__["n"] == int)
+        output: "3.5 True"
+        explanation: Python does not check hints when a function is called. A float arrives where an int was promised, and the body runs regardless. The hint itself is stored in the function's __annotations__, where the entry for n is the class int.
+    - text: |
+        **The type checker.** A type checker is a separate program, run on your code before the code itself is run, much as a spelling checker is run over an essay before anyone reads it. The best known are called mypy and pyright, and most code editors run one continuously and underline mistakes as you type. Here is a file and what mypy says about it.
+
+        ```python
+        def scale(data: list[float], factor: float) -> list[float]:
+            return [d * factor for d in data]
+
+        text = "12"
+        result = scale(text, 3)
+        print(result.upper())
+        ```
+
+        ```text
+        $ mypy example.py
+        example.py:5: error: Argument 1 to "scale" has incompatible type "str"; expected "list[float]"
+        example.py:6: error: "list[float]" has no attribute "upper"
+        Found 2 errors in 1 file
+        ```
+
+        Two mistakes found, and the program was never run. Look at how the second was found. The checker knows from the hint that `scale` returns a list of floats, so it knows the type of `result`, so it knows that `.upper()` cannot work on it. It reasons along the whole chain of the program from the notes on each function.
+
+        This kind of checking is called **static**, meaning done on the text of the program at rest. Running the program and seeing what happens is **dynamic**. Tests, the small functions full of `assert` that check what code does and that the last lesson of this cluster makes into a habit, are dynamic.
+
+        Now set the two side by side, because they are complementary and neither replaces the other.
+
+        | | Tests | Type checker |
+        | --- | --- | --- |
+        | Needs the program to run | yes | no |
+        | Checks | that particular inputs give the right **values** | that every value has the right **kind**, wherever it flows |
+        | Covers | the inputs and paths that the tests exercise | **every** path through the code, including ones no test visits |
+        | Can tell that `mean([1, 2, 6])` is 3 and not 4 | yes | no |
+
+        The third row is the remarkable one. Testing has a limit: a test speaks only for the inputs it tried. A type checker does not try inputs. It reasons about the code, and its conclusion, "no string ever reaches this parameter", holds for **all** runs of the program. It is a modest fact, far short of "the program is correct", but it is established for every case at once and not sampled. That is a different kind of knowledge from a passing test, and it is your first taste of it.
+    - question:
+        id: choice-static
+        type: choice
+        system: s1
+        prompt: |
+          A function with correct type hints is called wrongly on a line that runs only when a nine-hour job finishes. Which tool can report the mistake before the job is started, without any input being supplied?
+        options:
+          - A test that calls a different function.
+          - A type checker.
+          - A print statement on that line.
+          - A try block around that line.
+        answer: 1
+        explanation: A type checker reads the code without running it and follows types along every path, so it reaches that line at once. A print or a try acts only when the line is run.
+    - text: |
+        **Collections.** "A list" is rarely enough. A list of what? Square brackets after the name of a collection say what is inside.
+
+        | Hint | Meaning | Example value |
+        | --- | --- | --- |
+        | `list[float]` | a list whose items are floats | `[0.5, 1.5]` |
+        | `dict[str, int]` | a dictionary from strings to whole numbers | `{"a": 1}` |
+        | `set[str]` | a set of strings | `{"x", "y"}` |
+        | `tuple[float, float]` | a tuple of exactly two floats | `(3.0, 4.0)` |
+        | `tuple[str, int, bool]` | a tuple of exactly three items of those types, in that order | `("a", 1, True)` |
+        | `list[list[float]]` | a list of lists of floats: a table of numbers | `[[1.0, 2.0], [3.0, 4.0]]` |
+
+        A list is described by one type, since its items are all of one kind and there may be any number of them. A tuple is described position by position, since it has a fixed length and each place may hold a different kind of thing.
+
+        These, too, are ideas you have met. `tuple[str, int]` stands for every pair of a string and a whole number, the Cartesian product of the two kinds that you met with two `for` clauses in [[s1.comprehensions-and-iterators]]. A dictionary `dict[str, int]` is a function from some strings to whole numbers, written out as a table.
+
+        One convention: a parameter hinted `float` also accepts an `int`, since every whole number can serve as a real number. So `scale([1, 2], 3)` passes the checker.
+    - text: |
+        **Values that may be missing.** Many functions sometimes have nothing to return: a search that finds nothing, a look-up of a key that is absent. They return `None`. The hint says so with a bar, read "or":
+
+        ```python
+        def find(names: list[str], target: str) -> int | None:
+            for position, name in enumerate(names):
+                if name == target:
+                    return position
+            return None
+        ```
+
+        `int | None` is the union of two sets: the whole numbers, together with the single value `None`. In older code the same thing is spelt `Optional[int]`.
+
+        This small hint prevents what may be the most common crash in all programming. A caller writes:
+
+        ```python
+        position = find(names, "asha")
+        print(position + 1)
+        ```
+
+        and it works in every trial, since Asha is always found. One day she is not. `position` is `None`, and `None + 1` is a `TypeError`. A type checker refuses the second line outright: `position` might be `None`, and `None` cannot be added to. To satisfy it you must deal with the missing case:
+
+        ```python
+        position = find(names, "asha")
+        if position is None:
+            print("not found")
+        else:
+            print(position + 1)
+        ```
+
+        Inside the `else` branch the checker knows that `position` is not `None`, since that case has just been ruled out, and so there it is a plain `int`. This is called **narrowing**. The hint has turned "remember to check for None" from a matter of memory into something the machine will not let you forget.
+    - question:
+        id: predict-optional
+        type: predict
+        system: s2
+        prompt: What does this print?
+        code: |
+          def find(names: list[str], target: str) -> int | None:
+              for position, name in enumerate(names):
+                  if name == target:
+                      return position
+              return None
+
+          def describe(names: list[str], target: str) -> str:
+              position = find(names, target)
+              if position is None:
+                  return target + " is absent"
+              return target + " is number " + str(position + 1)
+
+          print(describe(["asha", "ravi"], "ravi"), "/", describe(["asha", "ravi"], "meena"))
+        output: "ravi is number 2 / meena is absent"
+        explanation: ravi is at position 1, so the function reports number 2. meena is not in the list, so find returns None, and the check for None is what stops the program from trying to add 1 to it.
+    - text: |
+        **Functions as values, and anything that can be walked.** A parameter may be a function. Its hint is written with `Callable`, from the module `typing`, giving the types of the arguments in a list and then the type of the result:
+
+        ```python
+        from typing import Callable
+
+        def apply_twice(f: Callable[[float], float], x: float) -> float:
+            return f(f(x))
+        ```
+
+        `Callable[[float], float]` is the type of any function that takes one float and returns a float, which is precisely $f : \mathbb{R} \to \mathbb{R}$.
+
+        The same module has `Iterable`. In [[s1.comprehensions-and-iterators]] you learnt that a `for` loop accepts anything that can hand out an iterator: a list, a tuple, a set, a generator, a file. If a function only loops over its argument, it should say so:
+
+        ```python
+        from typing import Iterable
+
+        def total(xs: Iterable[float]) -> float:
+            result = 0.0
+            for x in xs:
+                result += x
+            return result
+        ```
+
+        Hinted as `list[float]`, the function would be marked wrong when given a generator, though it would work perfectly. **Ask for as little as you need, and promise as much as you can**: accept the widest type that works, and return the most exact type you can state.
+
+        Finally, `Any`, also from `typing`, means "anything at all, do not check". It switches the checker off for that value. It is sometimes necessary, for data whose form really is unknown, and every use of it is a hole in the net.
+
+        **Your own classes are types.** A class is a type, as you learnt in [[s1.classes-and-objects]], so its name can be used in a hint just like `int`:
+
+        ```python
+        class Point:
+            def __init__(self, x: float, y: float) -> None:
+                self.x = x
+                self.y = y
+
+        def midpoint(a: Point, b: Point) -> Point:
+            return Point((a.x + b.x) / 2, (a.y + b.y) / 2)
+        ```
+
+        The methods of a class take hints like any other function. `self` is left without one, since its type is always the class itself, and a constructor is marked `-> None` because it returns nothing.
+    - question:
+        id: choice-which-hint
+        type: choice
+        system: s2
+        prompt: |
+          A function receives a list of students, each given as a name and a mark out of 100, for example `[("asha", 91), ("ravi", 78)]`, and returns the name of the best student, or `None` if the list is empty. Which first line describes it?
+        options:
+          - "`def best(students: list[str, int]) -> str:`"
+          - "`def best(students: list[tuple[str, int]]) -> str | None:`"
+          - "`def best(students: tuple[list[str], list[int]]) -> str:`"
+          - "`def best(students: dict[str, int]) -> int | None:`"
+        answer: 1
+        explanation: The argument is a list, each of whose items is a pair of a string and a whole number, so list[tuple[str, int]]. The result is a name, a string, or None when there is nobody. A list takes a single type in its brackets, the type of every item.
+    - text: |
+        **Classes written from their hints: the dataclass.** Many classes exist only to hold a few named values together. Writing one by hand is tedious, as you found in the lesson on special methods:
+
+        ```python
+        class Config:
+            def __init__(self, rate, steps, name):
+                self.rate = rate
+                self.steps = steps
+                self.name = name
+
+            def __repr__(self):
+                return f"Config(rate={self.rate}, steps={self.steps}, name={self.name!r})"
+
+            def __eq__(self, other):
+                return (self.rate, self.steps, self.name) == (other.rate, other.steps, other.name)
+        ```
+
+        Every name is typed three or four times, and each of the three methods follows mechanically from the list of fields. So Python can write them for you. State the fields, with their types, and put one line above the class:
+
+        ```python
+        from dataclasses import dataclass
+
+        @dataclass
+        class Config:
+            rate: float
+            steps: int = 1000
+            name: str = "run"
+
+        a = Config(0.01)
+        b = Config(rate=0.01, steps=1000)
+        print(a)                  # Config(rate=0.01, steps=1000, name='run')
+        print(a == b)             # True
+        ```
+
+        The line beginning with `@` is called a **decorator**. It hands the class that follows to the function `dataclass`, which reads the annotated fields and adds an `__init__`, a `__repr__` and an `__eq__` built from them. A field written with `= value` has a default and may be left out when the object is made. Fields with defaults must come after those without.
+
+        Here the hints are doing real work at last: the dataclass machinery reads them to learn what the fields are. It still does not check the types of the values you pass. The settings of every training run you launch will be held in an object like this one.
+
+        **Where hints stop.** Three cautions keep hints in their place.
+
+        A hint is not a check at run time. Data that arrive from outside the program, from a file or a user, have whatever type they have, whatever your hints say. The validation you learnt in [[s1.files-and-data-formats]] is still needed at the edge. After the edge, the hints let the checker follow the data through the rest of the program.
+
+        A hint must not lie. A function marked `-> int` that sometimes returns `None` is worse than one with no hint, because readers and the checker will believe it.
+
+        And types say nothing about values. `list[float]` does not say that the list is not empty, or that its numbers are positive, or that a table has three columns. In machine learning the commonest mistake of all is an array of the wrong **shape**, and to the type checker every array is simply an array. For those properties you still need assertions and tests.
+    - question:
+        id: predict-dataclass
+        type: predict
+        system: s2
+        concepts: [s1.special-methods]
+        prompt: What does this print?
+        code: |
+          from dataclasses import dataclass
+
+          @dataclass
+          class Step:
+              number: int
+              loss: float = 0.0
+
+          a = Step(3, 0.5)
+          b = Step(3, 0.5)
+          c = Step(4)
+          print(a == b, a is b, c)
+        output: "True False Step(number=4, loss=0.0)"
+        explanation: The dataclass decorator wrote an __eq__ that compares the fields, so two steps with equal fields are equal, though they are separate objects. It also wrote a __repr__ that shows the fields by name. The third step was made without a loss, so the default was used.
+  formal:
+    - text: |
+        A **type hint** is an annotation stating the intended type of a parameter, a result or a variable.
+
+        | Where | Syntax |
+        | --- | --- |
+        | parameter | `def f(name: T):` |
+        | parameter with a default | `def f(name: T = value):` |
+        | result | `def f(...) -> T:` |
+        | variable | `name: T = value` |
+
+        **Run-time meaning.** None. Python evaluates the hints, stores those of a function in its `__annotations__` dictionary, and does not check any value against them.
+
+        **Static meaning.** A **type checker** analyses the source without running it and reports every expression whose type, as it follows from the hints, is not acceptable where it is used. Its conclusions hold for every execution path.
+
+        | Hint | The set of values it describes |
+        | --- | --- |
+        | `int`, `float`, `str`, `bool` | values of that class; `float` also admits `int` |
+        | `None` | the single value `None` |
+        | `list[T]`, `set[T]` | lists, or sets, whose items all have type `T` |
+        | `dict[K, V]` | dictionaries with keys of type `K` and values of type `V` |
+        | `tuple[A, B]` | pairs with first item of type `A` and second of type `B`: the product $A \times B$ |
+        | `A \| B` | the union $A \cup B$; `T \| None` is "a `T`, or nothing" |
+        | `Callable[[A, B], R]` | functions taking an `A` and a `B` and returning an `R` |
+        | `Iterable[T]` | anything that a `for` loop can walk, yielding values of type `T` |
+        | `Any` | every value; checking is switched off |
+        | a class `C` | instances of `C` and of its subclasses |
+
+        A function `def f(x: A) -> B` is annotated as a map $f : A \to B$.
+
+        **Narrowing.** After a test such as `if x is None:`, the checker treats `x` as `None` in that branch and as the remaining types in the other.
+
+        **Dataclass.** `@dataclass` above a class whose body lists annotated fields generates `__init__`, `__repr__` and `__eq__` from those fields, in the order written. Fields with defaults follow fields without.
+  drill:
+    - question:
+        id: drill-read-signature
+        type: choice
+        system: s1
+        prompt: |
+          What does `def count_words(text: str) -> dict[str, int]:` promise to return?
+        options:
+          - A string.
+          - A list of pairs.
+          - A dictionary from strings to whole numbers.
+          - A whole number.
+        answer: 2
+        explanation: The type after the arrow is the result. dict[str, int] is a dictionary whose keys are strings and whose values are whole numbers.
+    - question:
+        id: drill-runtime
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          def shout(text: str) -> str:
+              return text * 2
+
+          print(shout(4))
+        output: "8"
+        explanation: The hint says str, but Python does not check it. The whole number 4 arrives and is multiplied by 2.
+    - question:
+        id: drill-optional
+        type: choice
+        system: s1
+        prompt: |
+          Which hint says "a float, or nothing at all"?
+        options:
+          - "`float | None`"
+          - "`float | 0`"
+          - "`list[float]`"
+          - "`float, None`"
+        answer: 0
+        explanation: The bar is read "or". The value is either in the set of floats or is the single value None.
+    - question:
+        id: drill-tuple-list
+        type: choice
+        system: s1
+        prompt: |
+          Which value fits the hint `tuple[str, float]`?
+        options:
+          - '`["loss", 0.5]`'
+          - '`("loss", 0.5)`'
+          - '`("loss", 0.5, 0.25)`'
+          - '`(0.5, "loss")`'
+        answer: 1
+        explanation: The hint describes a tuple of exactly two items, a string and then a float. The first option is a list, the third has three items, and the last has them the wrong way round.
+    - question:
+        id: drill-annotations
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          def area(width: float, height: float) -> float:
+              return width * height
+
+          print(sorted(area.__annotations__.keys()), area.__annotations__["return"] == float)
+        output: "['height', 'return', 'width'] True"
+        explanation: The dictionary of annotations has one entry for each hinted parameter, and one under the key return for the result. Each value is the type that was written.
+    - question:
+        id: drill-math-notation
+        type: choice
+        system: s1
+        concepts: [f1.functions-as-machines]
+        prompt: |
+          Which first line corresponds to the mathematical statement $f : \mathbb{Z} \to \{\text{True}, \text{False}\}$?
+        options:
+          - "`def f(x: bool) -> int:`"
+          - "`def f(x: int) -> bool:`"
+          - "`def f(x: float) -> bool:`"
+          - "`def f(x: int) -> int | bool:`"
+        answer: 1
+        explanation: The set before the arrow is the domain, the type of the parameter. The set after it is the codomain, the type of the result. The whole numbers are int, and the set of the two truth values is bool.
+    - question:
+        id: drill-checker-flags
+        type: choice
+        system: s1
+        prompt: |
+          Given `def mean(xs: list[float]) -> float:`, which call would a type checker report?
+        options:
+          - "`mean([1.5, 2.5])`"
+          - "`mean([1, 2, 3])`"
+          - '`mean("123")`'
+          - "`mean([])`"
+        answer: 2
+        explanation: A string is not a list of floats. A list of whole numbers is accepted where floats are wanted, and the empty list is a list of floats that happens to have none. The checker knows nothing of the trouble an empty list would cause, since types do not describe lengths.
+    - question:
+        id: drill-dataclass-default
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          from dataclasses import dataclass
+
+          @dataclass
+          class Point:
+              x: float
+              y: float = 0.0
+
+          print(Point(2.0), Point(1.0, 3.0).y)
+        output: "Point(x=2.0, y=0.0) 3.0"
+        explanation: The first point was given only x, so y took its default. The printed form was written by the dataclass decorator. The second point was given both, and its y is 3.0.
+  work:
+    - question:
+        id: write-annotate-mean
+        type: code
+        mode: write
+        system: s1
+        prompt: |
+          Add type hints to the two functions below. `mean` takes a list of floats and returns a float. `largest_gap` takes a list of floats and returns the largest difference between neighbouring items, or `None` when the list has fewer than two items. Do not change what the functions do.
+
+          The tests read the hints from each function's `__annotations__`.
+        starter: |
+          def mean(xs):
+              return sum(xs) / len(xs)
+
+          def largest_gap(xs):
+              if len(xs) < 2:
+                  return None
+              return max(abs(b - a) for a, b in zip(xs, xs[1:]))
+
+          print(mean([1.0, 2.0, 6.0]), largest_gap([1.0, 4.0, 2.0]), largest_gap([5.0]))
+        solution: |
+          def mean(xs: list[float]) -> float:
+              return sum(xs) / len(xs)
+
+          def largest_gap(xs: list[float]) -> float | None:
+              if len(xs) < 2:
+                  return None
+              return max(abs(b - a) for a, b in zip(xs, xs[1:]))
+
+          print(mean([1.0, 2.0, 6.0]), largest_gap([1.0, 4.0, 2.0]), largest_gap([5.0]))
+        tests: |
+          assert mean([1.0, 2.0, 6.0]) == 3, "mean must still work"
+          assert largest_gap([1.0, 4.0, 2.0]) == 3 and largest_gap([5.0]) is None, "largest_gap must still work"
+          _m = mean.__annotations__
+          assert "xs" in _m, "Give the parameter xs of mean a hint"
+          assert _m["xs"] == list[float], "The parameter of mean is a list of floats"
+          assert "return" in _m, "Give mean a hint for its result, after an arrow"
+          assert _m["return"] == float, "mean returns a float"
+          _g = largest_gap.__annotations__
+          assert _g.get("xs") == list[float], "The parameter of largest_gap is a list of floats"
+          assert "return" in _g, "Give largest_gap a hint for its result"
+          assert _g["return"] == (float | None), "largest_gap returns a float, or None when there are fewer than two items"
+        wrong:
+          - "def mean(xs: list) -> float:\n    return sum(xs) / len(xs)\n\ndef largest_gap(xs: list) -> float:\n    if len(xs) < 2:\n        return None\n    return max(abs(b - a) for a, b in zip(xs, xs[1:]))\n"
+          - "def mean(xs: list[float]) -> float:\n    return sum(xs) / len(xs)\n\ndef largest_gap(xs: list[float]) -> float:\n    if len(xs) < 2:\n        return None\n    return max(abs(b - a) for a, b in zip(xs, xs[1:]))\n"
+          - "def mean(xs: float) -> list[float]:\n    return sum(xs) / len(xs)\n\ndef largest_gap(xs: list[float]) -> float | None:\n    if len(xs) < 2:\n        return None\n    return max(abs(b - a) for a, b in zip(xs, xs[1:]))\n"
+        explanation: |
+          `list[float]` says what the list holds, which a bare `list` does not. The result of `largest_gap` is the important one. The function has a path that returns `None`, so its honest return type is `float | None`. Marking it plain `float`, as the second wrong answer in the tests does, is a hint that lies: every caller would be told that the result can safely be used as a number, and the checker would believe it.
+    - question:
+        id: fix-none-crash
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `first_word` returns the first word of a text, or `None` if the text has no words. `initial` should return the first letter of the first word, in upper case, or the empty string `""` if there is no word. A type checker reports:
+
+          `error: Item "None" of "str | None" has no attribute "upper"`
+
+          And indeed `initial("   ")` crashes. Fix `initial`. Leave `first_word` as it is.
+        starter: |
+          def first_word(text: str) -> str | None:
+              words = text.split()
+              if len(words) == 0:
+                  return None
+              return words[0]
+
+          def initial(text: str) -> str:
+              word = first_word(text)
+              return word.upper()[0]
+
+          print(initial("hello world"))
+          print(initial("   "))
+        solution: |
+          def first_word(text: str) -> str | None:
+              words = text.split()
+              if len(words) == 0:
+                  return None
+              return words[0]
+
+          def initial(text: str) -> str:
+              word = first_word(text)
+              if word is None:
+                  return ""
+              return word.upper()[0]
+
+          print(initial("hello world"))
+          print(initial("   "))
+        tests: |
+          assert initial("hello world") == "H", "The initial of hello world is H"
+          assert initial("   ") == "", "A text with no words should give the empty string"
+          assert initial("") == "", "The empty text should give the empty string"
+          assert initial("  axiom") == "A", "Leading spaces should be ignored"
+          assert first_word("") is None, "first_word must be left as it is, returning None when there is no word"
+          assert first_word("a b") == "a", "first_word must be left as it is"
+          assert initial.__annotations__.get("return") == str, "initial should still promise to return a str, and now it must keep that promise"
+        wrong:
+          - "def first_word(text: str) -> str | None:\n    words = text.split()\n    if len(words) == 0:\n        return None\n    return words[0]\n\ndef initial(text: str) -> str:\n    word = first_word(text)\n    if word is None:\n        return None\n    return word.upper()[0]\n\nprint(initial(\"hello world\"))\n"
+          - "def first_word(text: str) -> str | None:\n    words = text.split()\n    if len(words) == 0:\n        return \"\"\n    return words[0]\n\ndef initial(text: str) -> str:\n    word = first_word(text)\n    if word == \"\":\n        return \"\"\n    return word.upper()[0]\n\nprint(initial(\"hello world\"))\n"
+          - "def first_word(text: str) -> str | None:\n    words = text.split()\n    if len(words) == 0:\n        return None\n    return words[0]\n\ndef initial(text: str) -> str | None:\n    word = first_word(text)\n    try:\n        return word.upper()[0]\n    except Exception:\n        return None\n\nprint(initial(\"hello world\"))\n"
+        explanation: |
+          The checker's message says it all: `first_word` returns `str | None`, and one of those two cannot be upper-cased. The hint on `first_word` announced that a missing word was possible, and `initial` ignored the announcement. The repair is to deal with the `None` case before using the value. After the line `if word is None: return ""`, the checker knows that `word` is a string, which is narrowing, and the last line is accepted. The first wrong answer in the tests handles the case by returning `None`, which breaks the promise made by `initial`'s own hint, `-> str`.
+    - question:
+        id: write-apply-all
+        type: code
+        mode: write
+        system: s2
+        concepts: [f1.functions-as-machines, s1.comprehensions-and-iterators]
+        prompt: |
+          Write `apply_all(f, xs)` **with type hints**. It takes a function `f` from floats to floats, and anything that can be walked and yields floats, and returns the list of the values of `f` at each item.
+
+          Use `Callable` and `Iterable` from `typing`. The function must accept a generator as well as a list.
+        starter: |
+          from typing import Callable, Iterable
+
+          def apply_all(f, xs):
+              # Add the hints, and replace the next line with your own.
+              return []
+
+          print(apply_all(lambda x: x * x, [1.0, 2.0, 3.0]))
+        solution: |
+          from typing import Callable, Iterable
+
+          def apply_all(f: Callable[[float], float], xs: Iterable[float]) -> list[float]:
+              return [f(x) for x in xs]
+
+          print(apply_all(lambda x: x * x, [1.0, 2.0, 3.0]))
+        tests: |
+          from typing import Callable as _C, Iterable as _I
+          assert apply_all(lambda x: x * x, [1.0, 2.0, 3.0]) == [1.0, 4.0, 9.0], "Each item should be squared"
+          assert apply_all(lambda x: x + 1, []) == [], "No items in, no items out"
+          assert apply_all(abs, (x - 2.0 for x in [1.0, 2.0, 4.0])) == [1.0, 0.0, 2.0], "It should accept a generator"
+          assert type(apply_all(abs, (1.0, -1.0))) == list, "The result should be a list, whatever was passed in"
+          _a = apply_all.__annotations__
+          assert _a.get("f") == _C[[float], float], "f is a function that takes one float and returns a float: Callable[[float], float]"
+          assert _a.get("xs") == _I[float], "xs is anything that can be walked and yields floats: Iterable[float]"
+          assert _a.get("return") == list[float], "The result is a list of floats"
+        wrong:
+          - "from typing import Callable, Iterable\n\ndef apply_all(f: Callable[[float], float], xs: list[float]) -> list[float]:\n    return [f(x) for x in xs]\n"
+          - "from typing import Callable, Iterable\n\ndef apply_all(f: Callable[[float], float], xs: Iterable[float]) -> list[float]:\n    return [f(xs[i]) for i in range(len(xs))]\n"
+          - "from typing import Callable, Iterable\n\ndef apply_all(f: Callable[[float], float], xs: Iterable[float]) -> Iterable[float]:\n    return (f(x) for x in xs)\n"
+        explanation: |
+          The body is one comprehension. The first line carries the lesson. `Callable[[float], float]` is the type of a function $\mathbb{R} \to \mathbb{R}$: the inner list holds the types of its arguments, and after it comes the type of its result. `Iterable[float]` asks for no more than the body uses, which is a `for` loop, so lists, tuples and generators are all welcome. The second wrong answer in the tests claims to accept any iterable and then uses `len` and indexing, which a generator does not have. Its hint promises more than its body can deliver, and a type checker would say so. The result is hinted as the exact thing built, a `list[float]`.
+    - question:
+        id: fix-hint-lies
+        type: code
+        mode: find-bug
+        system: s2
+        concepts: [s1.files-and-data-formats]
+        prompt: |
+          `parse_scores` reads a line such as `"91,78,85"` and promises, by its hint, a list of whole numbers. A type checker reports:
+
+          `error: Incompatible return value type (got "list[str]", expected "list[int]")`
+
+          The promise is the right one, and the body breaks it. As a result `best` gives a wrong answer for `"9,78,100"`. Fix the body so that it keeps the promise.
+        starter: |
+          def parse_scores(line: str) -> list[int]:
+              return line.split(",")
+
+          def best(line: str) -> int:
+              return max(parse_scores(line))
+
+          print(best("9,78,100"))
+        solution: |
+          def parse_scores(line: str) -> list[int]:
+              return [int(piece) for piece in line.split(",")]
+
+          def best(line: str) -> int:
+              return max(parse_scores(line))
+
+          print(best("9,78,100"))
+        tests: |
+          assert parse_scores("91,78,85") == [91, 78, 85], "The pieces should be whole numbers, not strings"
+          assert all(type(_s) == int for _s in parse_scores("1,2")), "Every item of the result should be an int"
+          assert parse_scores("7") == [7], "A line with one score"
+          assert parse_scores(" 4 , 5 ") == [4, 5], "Spaces around the numbers are harmless to int"
+          assert best("9,78,100") == 100, "The best of 9, 78 and 100 is 100"
+          assert parse_scores.__annotations__.get("return") == list[int], "Keep the hint. The promise was right."
+        wrong:
+          - "def parse_scores(line: str) -> list[str]:\n    return line.split(\",\")\n\ndef best(line: str) -> int:\n    return max(parse_scores(line))\n\nprint(best(\"9,78,100\"))\n"
+          - "def parse_scores(line: str) -> list[int]:\n    return [len(piece) for piece in line.split(\",\")]\n\ndef best(line: str) -> int:\n    return max(parse_scores(line))\n\nprint(best(\"9,78,100\"))\n"
+          - "def parse_scores(line: str) -> list[int]:\n    return [float(piece) for piece in line.split(\",\")]\n\ndef best(line: str) -> int:\n    return max(parse_scores(line))\n\nprint(best(\"9,78,100\"))\n"
+        explanation: |
+          `split` returns strings, so the function returned `["9", "78", "100"]` while promising whole numbers. Nothing crashed, because `max` works on strings too, by alphabetical order, where `"9"` comes after `"78"` and after `"100"`. So `best` returned the string `"9"`. This is the puzzle's kind of bug: the wrong type, no error, a wrong answer. Python did not notice. The checker did, by comparing what the body returns with what the first line says. There were two ways to make them agree, and changing the hint to `list[str]` would have been the wrong one, since the callers need numbers.
+    - question:
+        id: write-config-dataclass
+        type: code
+        mode: write
+        system: s2
+        concepts: [s1.classes-and-objects, s1.special-methods]
+        prompt: |
+          Write a dataclass `TrainConfig` that holds the settings of a training run.
+
+          - Fields, in this order: `rate`, a float with no default; `steps`, an int with default 1000; `batch`, an int with default 32; `name`, a str with default `"run"`.
+          - A method `examples_seen(self) -> int` that returns `steps * batch`.
+          - A method `with_rate(self, rate: float) -> TrainConfig` that returns a **new** config, equal to this one except for the rate. The original must not change. Inside a class, the class's own name in a hint is written in quotes, as `"TrainConfig"`.
+        starter: |
+          from dataclasses import dataclass
+
+          # Write the dataclass TrainConfig here.
+
+          base = TrainConfig(0.01)
+          fast = base.with_rate(0.1)
+          print(base)
+          print(fast.rate, fast.examples_seen(), base == TrainConfig(0.01, 1000, 32, "run"))
+        solution: |
+          from dataclasses import dataclass
+
+          @dataclass
+          class TrainConfig:
+              rate: float
+              steps: int = 1000
+              batch: int = 32
+              name: str = "run"
+
+              def examples_seen(self) -> int:
+                  return self.steps * self.batch
+
+              def with_rate(self, rate: float) -> "TrainConfig":
+                  return TrainConfig(rate, self.steps, self.batch, self.name)
+
+          base = TrainConfig(0.01)
+          fast = base.with_rate(0.1)
+          print(base)
+          print(fast.rate, fast.examples_seen(), base == TrainConfig(0.01, 1000, 32, "run"))
+        tests: |
+          _c = TrainConfig(0.01)
+          assert (_c.rate, _c.steps, _c.batch, _c.name) == (0.01, 1000, 32, "run"), "With only a rate given, the other three fields take their defaults"
+          assert repr(_c) == "TrainConfig(rate=0.01, steps=1000, batch=32, name='run')", "A dataclass should print its fields by name, in the order rate, steps, batch, name"
+          assert _c == TrainConfig(0.01, 1000, 32, "run"), "Two configs with equal fields should be equal"
+          assert _c != TrainConfig(0.02), "Two configs with different rates should not be equal"
+          assert list(TrainConfig.__annotations__.items()) == [("rate", float), ("steps", int), ("batch", int), ("name", str)], "The four fields should be annotated as float, int, int and str, in that order"
+          _d = TrainConfig(0.5, steps=10, batch=4, name="tiny")
+          assert _d.examples_seen() == 40, "10 steps of 4 examples is 40 examples"
+          _e = _d.with_rate(0.25)
+          assert _e == TrainConfig(0.25, 10, 4, "tiny"), "with_rate should keep every field except the rate"
+          assert _d.rate == 0.5, "with_rate must not change the original config"
+          assert _e is not _d, "with_rate should return a new object"
+          _raised = False
+          try:
+              TrainConfig()
+          except TypeError:
+              _raised = True
+          assert _raised, "rate has no default, so TrainConfig() with no arguments should be refused"
+        wrong:
+          - "from dataclasses import dataclass\n\n@dataclass\nclass TrainConfig:\n    rate: float\n    steps: int = 1000\n    batch: int = 32\n    name: str = \"run\"\n\n    def examples_seen(self) -> int:\n        return self.steps * self.batch\n\n    def with_rate(self, rate: float) -> \"TrainConfig\":\n        self.rate = rate\n        return self\n"
+          - "class TrainConfig:\n    def __init__(self, rate, steps=1000, batch=32, name=\"run\"):\n        self.rate = rate\n        self.steps = steps\n        self.batch = batch\n        self.name = name\n\n    def examples_seen(self):\n        return self.steps * self.batch\n\n    def with_rate(self, rate):\n        return TrainConfig(rate, self.steps, self.batch, self.name)\n"
+          - "from dataclasses import dataclass\n\n@dataclass\nclass TrainConfig:\n    rate: float = 0.01\n    steps: int = 1000\n    batch: int = 32\n    name: str = \"run\"\n\n    def examples_seen(self) -> int:\n        return self.steps + self.batch\n\n    def with_rate(self, rate: float) -> \"TrainConfig\":\n        return TrainConfig(rate, self.steps, self.batch, self.name)\n"
+        explanation: |
+          Four annotated lines replace a constructor, a `__repr__` and an `__eq__`, and a dataclass may have ordinary methods as well. `with_rate` builds a new object and leaves `self` alone, for the reason you met with vectors: a config is a value, and somebody else may be holding a reference to the original. The second wrong answer in the tests writes the class by hand without the special methods, so two equal configs compare as different and print as a memory address. The quotes around `"TrainConfig"` in the hint are needed because, while the body of the class is being read, the name `TrainConfig` does not exist yet.
+    - question:
+        id: numeric-errors-found
+        type: numeric
+        system: s2
+        prompt: |
+          How many of the numbered lines would a type checker report?
+
+          ```python
+          def area(width: float, height: float) -> float:
+              return width * height
+
+          def label(value: float) -> str:
+              return "area: " + str(value)
+
+          a = area(3, 4.5)            # line 1
+          b = area("3", 4.5)          # line 2
+          c = label(a)                # line 3
+          d = label(a) + 1            # line 4
+          e = area(a, label(a))       # line 5
+          f = area(2.0, -1.0)         # line 6
+          ```
+        answer: "3"
+        explanation: Line 2 passes a string where a float is wanted. Line 4 adds a whole number to a string. Line 5 passes a string, the result of label, as the height. Line 1 is accepted, since a whole number may be used as a float. Line 6 is accepted too. A negative height is nonsense, but it is a float, and types say nothing about values.
+  connections:
+    - text: |
+        The puzzle asked whether a mistake of type could be found without running the program. It can. You write, on the first line of each function, the type of every parameter and of the result. Python ignores the notes. A reader no longer has to study the body to learn how to call the function, and a type checker follows the types along every path of the program and reports each place where the wrong kind of value could arrive. `float | None` turns "remember to check" into something that cannot be forgotten.
+
+        You also saw where this sits beside testing. Tests check values, for the inputs that were tried. A type checker checks kinds, for every path at once. The second is a weaker statement about more cases, and it is your first example of knowing something about **all** runs of a program without running any of them.
+
+        One thread continues directly, and it closes this cluster.
+
+        A type checker settles kinds, never values. It cannot tell you that `mean([1, 2, 6])` is 3, that a list comes back sorted, or that a function refuses a negative price. For those you still run the code on chosen inputs and check the answers, as you have done with `assert` since [[s0.reading-errors-and-debugging]]. Done seriously, that becomes a discipline of its own: tests written as small functions, kept beside the code, run by a tool in one command every time anything changes, and chosen at the edges where bugs live. That is [[s1.testing-with-pytest]], next, the last lesson of this cluster.

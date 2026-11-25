@@ -1,0 +1,889 @@
+concept: s1.exceptions
+minutes: 100
+claim: You can trace what happens from the moment an error is raised to the moment it is caught or stops the program, catch particular exceptions with try and except, use else and finally, raise exceptions of a fitting type with a useful message, define exception classes of your own, and decide where an error ought to be handled and where it must be left alone.
+recalls: [s1.special-methods]
+uses: [s1.classes-and-objects, s1.comprehensions-and-iterators, s1.modules-and-imports, s0.strings, s0.booleans-and-conditionals, s0.loops, s0.functions, s0.lists-and-tuples, s0.dictionaries-and-sets, s0.reading-errors-and-debugging]
+leads: [s1.files-and-data-formats, s1.testing-with-pytest, s1.generators-and-context-managers]
+starter: |
+  # Scratch space. A function that refuses, and a caller that copes.
+  def mean(xs):
+      if len(xs) == 0:
+          raise ValueError("mean of an empty list")
+      return sum(xs) / len(xs)
+
+  for data in [[2, 4], [], [10]]:
+      try:
+          print(mean(data))
+      except ValueError as error:
+          print("skipped:", error)
+parts:
+  recall:
+    - text: |
+        In [[s1.special-methods]] several methods were handed something they could not deal with, and you got by with an assertion, or with `NotImplemented`, or with nothing. That lesson also showed that the things Python works with are objects of classes, whatever they look like on the surface. Errors are no exception to that, and this lesson is about them. Three quick pulls first.
+  puzzle:
+    - text: |
+        Here is a function you have written more than once.
+
+        ```python
+        def mean(xs):
+            return sum(xs) / len(xs)
+        ```
+
+        What should `mean([])` be? There is no mean of no numbers. The function has been asked a question that has no answer, and it must do *something*. Consider what it could do.
+
+        It could **return 0**. But that is false, and the falsehood is silent. The 0 flows on into later calculations and corrupts them, and nothing ever points back to where it came from.
+
+        It could **return `None`**. Then every caller, everywhere, must remember to check for `None` before using the result. The one who forgets gets a baffling error many lines later, when something tries to add `None` to a number.
+
+        It could **print a warning**. But a printed line is for a person. The program that called `mean` cannot read the screen, and carries on with whatever was returned.
+
+        All three fail for the same reason. Now here is the real difficulty. Imagine a program that trains a model. At the top is a loop over a million data files. It calls a function that loads one file, which calls a function that parses a line, which calls a function that converts a piece of text to a number. And in file number 613,402, one piece of text is `"n/a"`.
+
+        The function at the bottom **knows** something is wrong, but has no idea what to do about it. Should the run stop? Should the file be skipped? It cannot tell. The loop at the top **knows what to do**, which is to skip the file and note its name, but it is four calls away from the problem. How does the news travel from the place that detects the trouble to the place that can deal with it, without every function in between having to be rewritten to carry it?
+  intuition:
+    - text: |
+        Think of a factory, and a worker at a machine who finds that the metal delivered is the wrong kind. The worker cannot fix that, and should certainly not carry on and make faulty parts. So the worker stops and tells the supervisor. The supervisor cannot fix it either, stops the line, and tells the floor manager. The floor manager happens to be the one who orders the metal, and deals with it. Had nobody along the way been able to deal with it, the news would have reached the top, and the factory would have shut for the day.
+
+        Notice three things. Each person who cannot handle the problem **stops what they were doing**. The problem travels **upwards**, through the same chain by which the work was handed down. And it stops travelling at the **first** person who says "I will take that".
+
+        Python works in exactly this way. When a function finds that it cannot do its job, it **raises an exception**. The function stops at once. It does not return a value, since it has no value to return. The function that called it is stopped too, at the line of the call, and so is the one that called that, on up the chain. This continues until it reaches a function that has announced, in advance, that it is prepared to **catch** that kind of exception. If none has, the exception reaches the top and the program stops.
+
+        You know the end of that story well. The traceback you learnt to read in [[s0.reading-errors-and-debugging]], with its list of calls and its last line naming the error, is the record of an exception's journey to the top of a program where nobody caught it. Until now, errors were things that happened to you. From here on you can raise them yourself, and you can catch them.
+
+        The functions in the middle of the chain do nothing at all. That is the answer to the puzzle. The news passes through them without a single line of their code having to know about it.
+  derivation:
+    - text: |
+        **Raising.** The statement `raise` starts the journey. It is given an exception object, which is made by calling a class.
+
+        ```python
+        def mean(xs):
+            if len(xs) == 0:
+                raise ValueError("mean of an empty list")
+            return sum(xs) / len(xs)
+        ```
+
+        `ValueError` is a class that Python provides, and `ValueError("mean of an empty list")` makes an instance of it carrying a message, just as `Point(3, 4)` made a point. An exception is an ordinary object. The `raise` statement is what is special. It abandons the function then and there. The `return` on the next line is never reached.
+
+        If nothing catches it, you see what you have seen many times:
+
+        ```text
+        Traceback (most recent call last):
+          File "main.py", line 6, in <module>
+            print(mean([]))
+          File "main.py", line 3, in mean
+            raise ValueError("mean of an empty list")
+        ValueError: mean of an empty list
+        ```
+
+        Every error message you have ever read was produced by a `raise` somewhere, in your code or inside Python. `int("n/a")` contains one. So does `[1, 2][5]`. So does `1 / 0`.
+    - text: |
+        **Catching.** To catch an exception, put the code that might raise it inside a `try` block, and follow it with an `except` block that names the kind of exception you are prepared to handle.
+
+        ```python
+        try:
+            value = mean(data)
+            print("the mean is", value)
+        except ValueError:
+            print("no data, skipping")
+        print("carrying on")
+        ```
+
+        There are two paths through this, and you must be able to trace both.
+
+        **If nothing goes wrong**, the two lines of the `try` block run, the `except` block is skipped entirely, and the program continues with the last line.
+
+        **If `mean` raises a `ValueError`**, the `try` block is abandoned at that point. The line that prints "the mean is" never runs, and `value` is never assigned. Python jumps to the `except` block, runs it, and then continues with the last line. It does **not** go back to where the error happened.
+
+        Either way, "carrying on" is printed. The program has survived something that would otherwise have ended it.
+
+        The exception need not be raised directly inside the `try` block. It can come from any depth of calls made from there. That is the whole point: `try` at the top, `raise` at the bottom, and any number of unknowing functions between.
+    - question:
+        id: predict-flow
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          def reciprocal(x):
+              return 1 / x
+
+          try:
+              print("a")
+              y = reciprocal(0)
+              print("b")
+          except ZeroDivisionError:
+              print("c")
+          print("d")
+        output: |
+          a
+          c
+          d
+        explanation: The first print runs. The call divides by zero inside the function, which raises an exception. The rest of the try block is abandoned, so b is never printed. The handler prints c, and the program continues after the whole try statement.
+    - question:
+        id: order-unwind
+        type: order
+        system: s2
+        prompt: |
+          A program's top level calls `load()` inside a `try` block with `except ValueError`. `load` calls `parse`, and `parse` calls `float("n/a")`. Put in order what happens.
+        steps:
+          - Inside float, a ValueError object is created and raised.
+          - float stops without returning a value.
+          - parse is stopped at the line where it called float, and has no handler.
+          - load is stopped at the line where it called parse, and has no handler.
+          - The top level is stopped at the line where it called load, which is inside a try block that names ValueError.
+          - The except block runs.
+          - The program continues with the line after the whole try statement.
+        explanation: The exception travels up the chain of calls, from the innermost to the outermost, stopping each function at the line of its call. The first try block it meets that names a matching class catches it, and the program resumes after that statement.
+    - text: |
+        **Catching the right thing.** An `except` clause names a class, and it catches exceptions that are instances of that class. Others pass straight through it.
+
+        ```python
+        try:
+            number = int(text)
+        except ValueError:
+            number = 0
+        ```
+
+        This handles text that is not a number. If `text` were not defined at all, the `NameError` would not be caught here, and it should not be: that is a mistake in the program, not bad data, and you want to hear about it.
+
+        These are the exception classes you have already met as error messages, and what each is for.
+
+        | Class | Raised when |
+        | --- | --- |
+        | `ValueError` | a value has the right type but is not acceptable: `int("n/a")`, `math.sqrt(-1)` |
+        | `TypeError` | a value has the wrong type for the operation: `"a" + 1`, calling an integer |
+        | `KeyError` | a dictionary has no such key |
+        | `IndexError` | a position is outside a list or string |
+        | `ZeroDivisionError` | the divisor is zero |
+        | `NameError` | a bare name has not been defined |
+        | `AttributeError` | an object has no attribute of that name |
+        | `AssertionError` | an `assert` was false |
+        | `StopIteration` | `next` was called on an exhausted iterator |
+
+        The classes are arranged by **inheritance**, as in [[s1.classes-and-objects]]. `KeyError` and `IndexError` are both subclasses of `LookupError`. Nearly every exception is a subclass of `Exception`. Since an instance of a subclass is an instance of the parent, `except LookupError` catches both kinds of failed look-up, and `except Exception` catches almost anything.
+
+        A `try` may have several `except` clauses. They are tested from top to bottom and the **first** that matches is used, so the more specific classes must come before the more general.
+
+        To look at the exception object itself, give it a name with `as`:
+
+        ```python
+        try:
+            number = int("n/a")
+        except ValueError as error:
+            print("could not convert:", error)
+        ```
+
+        Printing the object, or calling `str` on it, gives its message.
+    - question:
+        id: predict-which-handler
+        type: predict
+        system: s2
+        prompt: What does this print?
+        code: |
+          def look(table, key):
+              try:
+                  return table[key]
+              except KeyError:
+                  return "no key"
+              except LookupError:
+                  return "no such position"
+
+          print(look({"a": 1}, "a"), look({"a": 1}, "b"), look([5, 6], 9))
+        output: "1 no key no such position"
+        explanation: The first call succeeds, so no handler runs. A missing key raises KeyError, which the first handler catches. A position past the end of a list raises IndexError, which is not a KeyError, so the first handler is passed over, but it is a LookupError, so the second handler catches it.
+    - text: |
+        **Choosing what to raise.** Return to the puzzle. `mean([])` should raise an exception, because there is no honest value to return. Which class? The argument is a list, as it should be, so it is not a `TypeError`. It is a list with an unacceptable value, an empty one. That is a `ValueError`.
+
+        The message is for the person who will read it at three in the morning. Say what was wrong, and include the offending value when you can.
+
+        ```python
+        def parse_age(text):
+            age = int(text)
+            if age < 0 or age > 150:
+                raise ValueError(f"age must be between 0 and 150, got {age}")
+            return age
+        ```
+
+        Notice that this function has **two** ways of raising a `ValueError`, and only one of them is written out. If `text` is `"abc"`, the call to `int` raises one, and since `parse_age` has no `try`, it passes straight up to the caller. A function does not have to catch what it cannot handle. Doing nothing is the correct way to pass an error on.
+
+        Compare this with returning `None` or `False` to signal trouble. A returned `False` can be ignored, and a careless caller will ignore it. An exception **cannot be ignored by accident**. A caller who does nothing about it does not carry on with bad data. The caller is stopped. Silence is no longer the easy path.
+
+        **`assert` or `raise`?** They look alike, and both stop the program, but they are for different things. An `assert` states something you believe is always true if **your own code** is correct. When it fails, you have a bug to fix. A `raise` reports a condition that can arise even in a correct program: a file that is missing, input that a user mistyped. Assertions can be switched off altogether when a program is run in earnest, so nothing that the program depends on should ever live inside one.
+    - question:
+        id: choice-which-class
+        type: choice
+        system: s1
+        prompt: |
+          A function `sqrt_newton(x)` computes a square root and is given `x = -4`. It should refuse. Which exception is the most fitting?
+        options:
+          - "`TypeError`, because the argument is wrong."
+          - "`ValueError`, because the argument is a number, as required, but not an acceptable one."
+          - "`KeyError`, because -4 was not found."
+          - "`NameError`, because x is not usable."
+        answer: 1
+        explanation: The type is right, a number. The value is outside what the function can accept. That is what ValueError is for. TypeError would fit if a string had been passed.
+    - text: |
+        **Exception classes of your own.** The built-in classes describe general kinds of failure. Often your program has failures of its own, and a class for each lets a caller catch exactly that failure and nothing else. An exception class is made by inheriting from `Exception`, and it usually needs no body.
+
+        ```python
+        class InsufficientFunds(Exception):
+            pass
+
+        class Account:
+            def __init__(self, opening):
+                self.balance = opening
+
+            def withdraw(self, amount):
+                if amount > self.balance:
+                    raise InsufficientFunds(f"balance is {self.balance}, asked for {amount}")
+                self.balance -= amount
+        ```
+
+        Compare this `withdraw` with the one from two lessons ago, which returned `True` or `False`. A caller there could ignore the result and hand over money that was never taken. Here a refused withdrawal stops the caller in its tracks, unless the caller has made a plan:
+
+        ```python
+        try:
+            account.withdraw(500)
+        except InsufficientFunds as error:
+            print("declined:", error)
+        ```
+
+        The check and the change sit in the right order inside `withdraw`: the `raise` comes **before** the balance is touched. An operation that fails should leave things as they were.
+    - text: |
+        **Two more clauses: `else` and `finally`.** A `try` statement can have up to four parts.
+
+        ```python
+        try:
+            value = int(text)
+        except ValueError:
+            print("not a number")
+        else:
+            print("converted", value)
+        finally:
+            print("done with", text)
+        ```
+
+        The `else` block runs only if the `try` block finished **without** an exception. It is the place for the code that should follow a success, kept out of the `try` so that its own errors are not caught by mistake.
+
+        The `finally` block runs **always**: after a success, after a caught exception, and even when an exception is not caught and is on its way up. It is for things that must happen whatever the outcome, and above all for giving back something that was borrowed, such as closing a file that was opened. An uncaught exception pauses at the `finally` block, lets it run, and then continues its journey.
+    - question:
+        id: predict-finally
+        type: predict
+        system: s2
+        prompt: What does this print?
+        code: |
+          def convert(text):
+              try:
+                  value = int(text)
+              except ValueError:
+                  print("bad", end=" ")
+                  return -1
+              else:
+                  print("good", end=" ")
+                  return value
+              finally:
+                  print("end", end=" ")
+
+          print(convert("12"), convert("x"))
+        output: "good end bad end 12 -1"
+        explanation: Both calls are made before the outer print can show anything. For "12" the conversion succeeds, so the else block runs, and the finally block runs on the way out. For "x" the handler runs, and again the finally block runs on the way out. A finally block runs even when the function is in the middle of returning. Only then does the outer print show the two returned values.
+    - text: |
+        **Where to catch, and where not to.** Now the most important judgement in this lesson. Being able to catch every error does not mean you should.
+
+        **Catch an exception only where you can do something sensible about it.** Sensible things are: try again, use a stated fallback, skip one item and record that you did, or stop the program with a clearer message. If a function can do none of these, it should not have a `try` at all. The error will pass up to someone who can.
+
+        The worst line in Python is this one:
+
+        ```python
+        try:
+            batch = load(file)
+        except Exception:
+            pass
+        ```
+
+        It catches everything and does nothing. Whatever went wrong, a missing file, a misspelt variable, a full disk, is now invisible. There is a true and often repeated story of a training run that used such a line around its data loading. A small bug made every file fail to load. Every failure was swallowed. The model trained for days on no data at all, and the only symptom was that it learnt nothing.
+
+        A handler should be **narrow**, naming the one class you expect, and it should **never be silent**. Compare:
+
+        ```python
+        skipped = []
+        for file in files:
+            try:
+                batch = load(file)
+            except ValueError as error:
+                skipped.append((file, str(error)))
+        ```
+
+        This catches only bad data, keeps a record, and lets every other kind of error stop the run, which is what you want from an error you did not foresee.
+
+        Sometimes a handler needs to do something and then let the error continue. A bare `raise` inside an `except` block raises the same exception again.
+
+        **Closing a loop.** In [[s1.comprehensions-and-iterators]] you were told that an exhausted iterator "signals" `StopIteration` and that the `for` loop notices. Now you can read the signal for what it is: an exception, used here to carry news that is not a mistake. The loop `for x in xs: print(x)` is this, written out in full:
+
+        ```python
+        it = iter(xs)
+        while True:
+            try:
+                x = next(it)
+            except StopIteration:
+                break
+            print(x)
+        ```
+
+        The `for` statement is a `try` that you never had to write.
+    - question:
+        id: fix-too-broad
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `ratio(part, whole)` should return `part / whole`, or `0.0` when `whole` is zero. It returns `0.0` for **every** input, even `ratio(1, 2)`. The author wrapped the body in a handler that catches everything, and that handler is hiding a second mistake. Narrow the handler so that the hidden error shows itself, read it, and fix it.
+        starter: |
+          def ratio(part, whole):
+              try:
+                  return part / whol
+              except Exception:
+                  return 0.0
+
+          print(ratio(1, 2), ratio(1, 0))
+        solution: |
+          def ratio(part, whole):
+              try:
+                  return part / whole
+              except ZeroDivisionError:
+                  return 0.0
+
+          print(ratio(1, 2), ratio(1, 0))
+        tests: |
+          assert ratio(1, 2) == 0.5, "ratio(1, 2) should be 0.5"
+          assert ratio(3, 4) == 0.75, "ratio(3, 4) should be 0.75"
+          assert ratio(1, 0) == 0, "A zero denominator should give 0.0"
+          assert ratio(0, 5) == 0, "Zero divided by five is zero"
+          _raised = False
+          try:
+              ratio("a", 2)
+          except TypeError:
+              _raised = True
+          assert _raised, "Only division by zero should be caught. Dividing a string by a number is a different error, and it must not be hidden."
+        wrong:
+          - "def ratio(part, whole):\n    try:\n        return part / whole\n    except Exception:\n        return 0.0\n\nprint(ratio(1, 2), ratio(1, 0))\n"
+          - "def ratio(part, whole):\n    return part / whole\n\nprint(ratio(1, 2))\n"
+          - "def ratio(part, whole):\n    try:\n        return part / whol\n    except NameError:\n        return 0.0\n\nprint(ratio(1, 2), ratio(1, 0))\n"
+        explanation: |
+          The name `whol` is a typing mistake, and using it raises a `NameError`. The handler `except Exception` caught that too, and turned a bug in the program into a plausible-looking 0.0. Once the handler names only `ZeroDivisionError`, the `NameError` is no longer caught, the program stops, and the traceback points at the misspelt name. A broad handler does not make a program more reliable. It makes its faults invisible.
+  formal:
+    - text: |
+        An **exception** is an instance of a class that inherits from `BaseException`; nearly all inherit from its subclass `Exception`.
+
+        **Raising.** `raise E(message)` creates an instance of the class `E` and begins propagation. `raise` alone, inside a handler, raises again the exception being handled.
+
+        **Propagation.** When an exception is raised, the function that is running stops at that line. If the line is inside the `try` block of a `try` statement with an `except` clause naming a class of which the exception is an instance, that clause handles it. Otherwise the function ends without returning, and the exception is raised again at the line of its caller where the call was made. This repeats up the chain of calls. If no handler is found, the program stops and prints a traceback.
+
+        **The `try` statement.**
+
+        | Clause | Runs when |
+        | --- | --- |
+        | `try:` | always, up to the first exception raised within it |
+        | `except E as name:` | an exception that is an instance of `E` was raised in the `try` block and no earlier clause matched |
+        | `else:` | the `try` block finished without raising |
+        | `finally:` | always, last, whether the block finished, an exception was handled, or one is still propagating |
+
+        After a handler finishes, execution continues after the whole `try` statement. At most one `except` clause runs, the first that matches.
+
+        **Part of the class hierarchy.**
+
+        ```text
+        Exception
+        ├── ArithmeticError
+        │   └── ZeroDivisionError
+        ├── LookupError
+        │   ├── IndexError
+        │   └── KeyError
+        ├── ValueError
+        ├── TypeError
+        ├── NameError
+        ├── AttributeError
+        ├── AssertionError
+        └── StopIteration
+        ```
+
+        **A new exception class** is defined by `class Name(Exception): pass`. `str(error)` gives the message with which the exception was created.
+  drill:
+    - question:
+        id: drill-skip
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          try:
+              print("one")
+              print("two")
+          except ValueError:
+              print("three")
+          print("four")
+        output: |
+          one
+          two
+          four
+        explanation: Nothing in the try block raises an exception, so the handler is skipped altogether.
+    - question:
+        id: drill-int
+        type: choice
+        system: s1
+        prompt: |
+          Which exception does `int("3.5")` raise?
+        options:
+          - "`TypeError`"
+          - "`ValueError`"
+          - "`KeyError`"
+          - None. It returns 3.
+        answer: 1
+        explanation: The argument is a string, which int accepts, but this particular string is not the text of a whole number. Right type, unacceptable value.
+    - question:
+        id: drill-as
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          try:
+              raise ValueError("too small")
+          except ValueError as error:
+              print("caught:", error)
+        output: "caught: too small"
+        explanation: The exception object carries the message it was created with. The as clause gives the object a name, and printing it shows the message.
+    - question:
+        id: drill-uncaught
+        type: choice
+        system: s1
+        prompt: |
+          A `try` block raises a `KeyError`. Its only handler is `except ValueError:`. What happens?
+        options:
+          - The handler runs anyway, since some handler must.
+          - The exception is not caught here and continues up to the caller.
+          - The exception is discarded and the program continues after the try statement.
+          - The try block is run a second time.
+        answer: 1
+        explanation: A handler catches only exceptions that are instances of the class it names. A KeyError is not a ValueError, so it passes through and keeps travelling up the chain of calls.
+    - question:
+        id: drill-hierarchy
+        type: choice
+        system: s1
+        prompt: |
+          Which single handler catches both an `IndexError` and a `KeyError`, and does not catch a `ZeroDivisionError`?
+        options:
+          - "`except Exception:`"
+          - "`except LookupError:`"
+          - "`except ValueError:`"
+          - "`except ArithmeticError:`"
+        answer: 1
+        explanation: IndexError and KeyError both inherit from LookupError. ZeroDivisionError inherits from ArithmeticError instead. Exception would catch all three.
+    - question:
+        id: drill-finally
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          for text in ["4", "four"]:
+              try:
+                  print(int(text) * 2)
+              except ValueError:
+                  print("no")
+              finally:
+                  print("-")
+        output: |
+          8
+          -
+          no
+          -
+        explanation: The finally block runs each time round, after a success and after a handled failure alike.
+    - question:
+        id: drill-custom
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          class TooHot(Exception):
+              pass
+
+          def check(degrees):
+              if degrees > 100:
+                  raise TooHot(f"{degrees} degrees")
+              return "fine"
+
+          try:
+              print(check(40))
+              print(check(140))
+              print(check(50))
+          except TooHot as error:
+              print("alarm:", error)
+        output: |
+          fine
+          alarm: 140 degrees
+        explanation: The first check passes. The second raises TooHot, which abandons the rest of the try block, so the third check never happens. The handler prints the message.
+    - question:
+        id: drill-assert-or-raise
+        type: choice
+        system: s1
+        prompt: |
+          A function reads a number typed by a user and finds that it is negative, which is not allowed. What should it do?
+        options:
+          - "`assert number >= 0`, since assertions are for checking values."
+          - "`raise ValueError(...)`, since bad input can occur in a correct program."
+          - Return None and hope the caller checks.
+          - Print a warning and carry on with the negative number.
+        answer: 1
+        explanation: A user typing a bad value is not a bug in the program. It is an event the program must expect, so it is reported with raise. An assert is for things that can only be false if your own code is wrong, and assertions may be switched off.
+  work:
+    - question:
+        id: write-safe-mean
+        type: code
+        mode: write
+        system: s1
+        prompt: |
+          Write `mean(xs)` that returns the mean of a list of numbers, and raises a `ValueError` with the message `mean of an empty list` when the list is empty.
+        starter: |
+          def mean(xs):
+              # Replace the next line with your own.
+              return 0
+
+          print(mean([2, 4, 9]))
+        solution: |
+          def mean(xs):
+              if len(xs) == 0:
+                  raise ValueError("mean of an empty list")
+              return sum(xs) / len(xs)
+
+          print(mean([2, 4, 9]))
+        tests: |
+          assert mean([2, 4, 9]) == 5, "The mean of 2, 4 and 9 is 5"
+          assert mean([7]) == 7, "The mean of one number is that number"
+          assert abs(mean([0.5, 1]) - 0.75) < 1e-12, "It should work for decimals"
+          _error = None
+          try:
+              mean([])
+          except ValueError as _e:
+              _error = _e
+          except Exception as _e:
+              assert False, "An empty list should raise a ValueError, not some other kind of exception"
+          assert _error is not None, "An empty list should raise a ValueError"
+          assert str(_error) == "mean of an empty list", "The message should be: mean of an empty list"
+        wrong:
+          - "def mean(xs):\n    if len(xs) == 0:\n        return 0\n    return sum(xs) / len(xs)\n"
+          - "def mean(xs):\n    return sum(xs) / len(xs)\n"
+          - "def mean(xs):\n    if len(xs) == 0:\n        raise ValueError(\"empty\")\n    return sum(xs) / len(xs)\n"
+          - "def mean(xs):\n    if len(xs) == 0:\n        return ValueError(\"mean of an empty list\")\n    return sum(xs) / len(xs)\n"
+        explanation: |
+          The check comes first, and `raise` leaves the function at once, so the division is reached only when it is safe. Without the check, the empty list would still fail, but with a `ZeroDivisionError`, which describes how the function is written and not what the caller did wrong. Note the last wrong answer in the tests: it **returns** the exception object instead of raising it. That creates the object and hands it back as if it were the mean. Only `raise` starts the journey up the chain.
+    - question:
+        id: write-parse-numbers
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A column of a data file has been read as a list of strings. Most are numbers, and a few are rubbish. Write `parse_numbers(texts)` that returns a tuple of two lists: first the numbers, as floats, in order; then the strings that could not be converted, in order.
+
+          Use `float(text)` and catch the `ValueError` it raises for a bad string. Catch nothing else.
+
+          `parse_numbers(["1.5", "n/a", "2", ""])` is `([1.5, 2.0], ["n/a", ""])`.
+        starter: |
+          def parse_numbers(texts):
+              # Replace the next line with your own.
+              return ([], [])
+
+          print(parse_numbers(["1.5", "n/a", "2", ""]))
+        solution: |
+          def parse_numbers(texts):
+              numbers = []
+              bad = []
+              for text in texts:
+                  try:
+                      numbers.append(float(text))
+                  except ValueError:
+                      bad.append(text)
+              return (numbers, bad)
+
+          print(parse_numbers(["1.5", "n/a", "2", ""]))
+        tests: |
+          assert parse_numbers(["1.5", "n/a", "2", ""]) == ([1.5, 2.0], ["n/a", ""]), "Two strings convert and two do not"
+          assert parse_numbers([]) == ([], []), "No strings give two empty lists"
+          assert parse_numbers(["3", "4"]) == ([3.0, 4.0], []), "When every string is a number the second list is empty"
+          assert parse_numbers(["x", "y"]) == ([], ["x", "y"]), "When no string is a number the first list is empty"
+          assert parse_numbers([" 7 ", "-2.5", "1e3"]) == ([7.0, -2.5, 1000.0], []), "float accepts spaces around a number, signs and powers of ten"
+          _raised = False
+          try:
+              parse_numbers(["1", None])
+          except TypeError:
+              _raised = True
+          assert _raised, "Catch only ValueError. Something that is not a string at all is a different error, and it must not be hidden."
+        wrong:
+          - "def parse_numbers(texts):\n    numbers = []\n    bad = []\n    for text in texts:\n        try:\n            numbers.append(float(text))\n        except Exception:\n            bad.append(text)\n    return (numbers, bad)\n"
+          - "def parse_numbers(texts):\n    numbers = []\n    bad = []\n    try:\n        for text in texts:\n            numbers.append(float(text))\n    except ValueError:\n        bad.append(text)\n    return (numbers, bad)\n"
+          - "def parse_numbers(texts):\n    numbers = []\n    bad = []\n    for text in texts:\n        try:\n            numbers.append(float(text))\n        except ValueError:\n            numbers.append(0.0)\n    return (numbers, bad)\n"
+        explanation: |
+          The `try` goes **inside** the loop, around the one conversion. Then a bad string costs only itself, and the loop goes on to the next. The second wrong answer in the tests puts the loop inside the `try`, so the first bad string abandons the whole loop and everything after it is lost. The handler is narrow, and it keeps a record: the caller receives the rejected strings and can decide whether three bad values in a million are tolerable. Replacing a bad value by 0.0, as the third wrong answer does, is the silent falsehood that the lesson began with.
+    - question:
+        id: write-insufficient
+        type: code
+        mode: write
+        system: s2
+        concepts: [s1.classes-and-objects]
+        prompt: |
+          Rewrite the bank account so that it refuses by raising.
+
+          - Define an exception class `InsufficientFunds` that inherits from `Exception`.
+          - `Account(opening)` raises a `ValueError` if `opening` is negative.
+          - `a.withdraw(amount)` raises `InsufficientFunds` if the amount exceeds the balance, and otherwise reduces the balance. It returns nothing.
+          - `a.transfer(other, amount)` moves the money, and lets any `InsufficientFunds` pass up to its caller. If the withdrawal is refused, neither balance may change.
+        starter: |
+          # Define InsufficientFunds here.
+
+          class Account:
+              def __init__(self, opening):
+                  self.balance = opening
+
+              def deposit(self, amount):
+                  self.balance += amount
+
+              # Add withdraw and transfer here.
+
+          a = Account(100)
+          b = Account(0)
+          a.transfer(b, 60)
+          try:
+              a.transfer(b, 60)
+          except InsufficientFunds as error:
+              print("declined:", error)
+          print(a.balance, b.balance)
+        solution: |
+          class InsufficientFunds(Exception):
+              pass
+
+          class Account:
+              def __init__(self, opening):
+                  if opening < 0:
+                      raise ValueError(f"opening balance cannot be negative, got {opening}")
+                  self.balance = opening
+
+              def deposit(self, amount):
+                  self.balance += amount
+
+              def withdraw(self, amount):
+                  if amount > self.balance:
+                      raise InsufficientFunds(f"balance is {self.balance}, asked for {amount}")
+                  self.balance -= amount
+
+              def transfer(self, other, amount):
+                  self.withdraw(amount)
+                  other.deposit(amount)
+
+          a = Account(100)
+          b = Account(0)
+          a.transfer(b, 60)
+          try:
+              a.transfer(b, 60)
+          except InsufficientFunds as error:
+              print("declined:", error)
+          print(a.balance, b.balance)
+        tests: |
+          assert isinstance(InsufficientFunds("x"), Exception), "InsufficientFunds should inherit from Exception"
+          assert not isinstance(InsufficientFunds("x"), ValueError), "InsufficientFunds should be a class of its own, inheriting directly from Exception"
+          _raised = False
+          try:
+              Account(-5)
+          except ValueError:
+              _raised = True
+          assert _raised, "A negative opening balance should raise a ValueError"
+          _a = Account(100)
+          _a.withdraw(30)
+          assert _a.balance == 70, "A withdrawal that can be afforded reduces the balance"
+          _raised = False
+          try:
+              _a.withdraw(500)
+          except InsufficientFunds:
+              _raised = True
+          assert _raised, "A withdrawal that cannot be afforded should raise InsufficientFunds"
+          assert _a.balance == 70, "A refused withdrawal must leave the balance as it was"
+          _b = Account(10)
+          _a.transfer(_b, 70)
+          assert (_a.balance, _b.balance) == (0, 80), "A transfer moves the money from one account to the other"
+          _raised = False
+          try:
+              _a.transfer(_b, 1)
+          except InsufficientFunds:
+              _raised = True
+          assert _raised, "A transfer that cannot be afforded should let InsufficientFunds pass up to the caller"
+          assert (_a.balance, _b.balance) == (0, 80), "A refused transfer must change neither account"
+          assert output.strip().endswith("40 60"), "After one successful transfer of 60 and one refused, the balances are 40 and 60"
+        wrong:
+          - "class InsufficientFunds(Exception):\n    pass\n\nclass Account:\n    def __init__(self, opening):\n        if opening < 0:\n            raise ValueError(\"negative\")\n        self.balance = opening\n\n    def deposit(self, amount):\n        self.balance += amount\n\n    def withdraw(self, amount):\n        if amount > self.balance:\n            raise InsufficientFunds(\"no\")\n        self.balance -= amount\n\n    def transfer(self, other, amount):\n        other.deposit(amount)\n        self.withdraw(amount)\n\nprint(\"40 60\")\n"
+          - "class InsufficientFunds(Exception):\n    pass\n\nclass Account:\n    def __init__(self, opening):\n        if opening < 0:\n            raise ValueError(\"negative\")\n        self.balance = opening\n\n    def deposit(self, amount):\n        self.balance += amount\n\n    def withdraw(self, amount):\n        if amount > self.balance:\n            raise InsufficientFunds(\"no\")\n        self.balance -= amount\n\n    def transfer(self, other, amount):\n        try:\n            self.withdraw(amount)\n            other.deposit(amount)\n        except InsufficientFunds:\n            pass\n\nprint(\"40 60\")\n"
+          - "class InsufficientFunds(Exception):\n    pass\n\nclass Account:\n    def __init__(self, opening):\n        self.balance = opening\n\n    def deposit(self, amount):\n        self.balance += amount\n\n    def withdraw(self, amount):\n        self.balance -= amount\n        if self.balance < 0:\n            raise InsufficientFunds(\"no\")\n\n    def transfer(self, other, amount):\n        self.withdraw(amount)\n        other.deposit(amount)\n\nprint(\"40 60\")\n"
+        explanation: |
+          Look at `transfer`. It is two lines and contains no `try`, no `if` and no mention of any error, yet it is correct. If `withdraw` raises, `transfer` stops at that line, the deposit never happens, and the exception passes to the caller. The order of the two lines is what makes it safe: take the money out first, and put it in only if that worked. The first wrong answer in the tests deposits first, and so creates money before discovering it cannot be paid for. The second swallows the exception, and the caller never learns that the transfer failed. Inside `withdraw`, the check comes before the change, so a refusal leaves the balance untouched.
+    - question:
+        id: fix-wrong-order
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `describe(table, key)` looks a key up in a dictionary of lists and returns the first item of the list. It should return `"unknown key"` when the key is missing, and `"empty list"` when the key is there but its list has nothing in it. For an empty list it wrongly returns `"unknown key"`. Fix the handlers.
+        starter: |
+          def describe(table, key):
+              try:
+                  return table[key][0]
+              except LookupError:
+                  return "unknown key"
+              except IndexError:
+                  return "empty list"
+
+          scores = {"asha": [9, 7], "ravi": []}
+          print(describe(scores, "asha"), describe(scores, "ravi"), describe(scores, "meena"))
+        solution: |
+          def describe(table, key):
+              try:
+                  return table[key][0]
+              except KeyError:
+                  return "unknown key"
+              except IndexError:
+                  return "empty list"
+
+          scores = {"asha": [9, 7], "ravi": []}
+          print(describe(scores, "asha"), describe(scores, "ravi"), describe(scores, "meena"))
+        tests: |
+          _t = {"a": [9, 7], "b": []}
+          assert describe(_t, "a") == 9, "For a key with a list, the first item should be returned"
+          assert describe(_t, "b") == "empty list", "A key whose list is empty should give: empty list"
+          assert describe(_t, "c") == "unknown key", "A missing key should give: unknown key"
+          _raised = False
+          try:
+              describe(None, "a")
+          except TypeError:
+              _raised = True
+          assert _raised, "Only the two expected errors should be caught"
+        wrong:
+          - "def describe(table, key):\n    try:\n        return table[key][0]\n    except IndexError:\n        return \"unknown key\"\n    except KeyError:\n        return \"empty list\"\n"
+          - "def describe(table, key):\n    try:\n        return table[key][0]\n    except KeyError:\n        return \"unknown key\"\n    except Exception:\n        return \"empty list\"\n"
+        explanation: |
+          Handlers are tried from the top, and the first that matches is used. An `IndexError` is a `LookupError`, because it inherits from it, so the first handler caught both kinds of failure and the second could never run. Naming the exact class, `KeyError`, in the first handler leaves the `IndexError` for the second. When handlers are related by inheritance, the specific must come before the general, and it is clearer still to name exactly what you mean.
+    - question:
+        id: write-retry
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Some operations fail now and then for reasons that pass, such as a busy network. Write `retry(action, attempts)` that calls the function `action()` with no arguments and returns its result. If the call raises a `ConnectionError`, it tries again, up to `attempts` calls in all. If the last attempt fails as well, that last `ConnectionError` is allowed to pass up to the caller.
+
+          Any other kind of exception must not be retried. It passes up at once.
+
+          `ConnectionError` is a built-in class, and you do not need to define it.
+        starter: |
+          def retry(action, attempts):
+              # Replace the next line with your own.
+              return action()
+
+          calls = []
+
+          def flaky():
+              calls.append(1)
+              if len(calls) < 3:
+                  raise ConnectionError("busy")
+              return "data"
+
+          print(retry(flaky, 5), len(calls))
+        solution: |
+          def retry(action, attempts):
+              for attempt in range(attempts):
+                  try:
+                      return action()
+                  except ConnectionError:
+                      if attempt == attempts - 1:
+                          raise
+
+          calls = []
+
+          def flaky():
+              calls.append(1)
+              if len(calls) < 3:
+                  raise ConnectionError("busy")
+              return "data"
+
+          print(retry(flaky, 5), len(calls))
+        tests: |
+          assert output.strip() == "data 3", "flaky fails twice and then succeeds, so retry should call it three times and return its result"
+          _log = []
+          def _fails_twice():
+              _log.append(1)
+              if len(_log) < 3:
+                  raise ConnectionError("busy")
+              return 42
+          assert retry(_fails_twice, 3) == 42, "With three attempts allowed, a function that fails twice should succeed on the third"
+          assert len(_log) == 3, "The function should have been called exactly three times"
+          _log2 = []
+          def _always_fails():
+              _log2.append(1)
+              raise ConnectionError(f"failure {len(_log2)}")
+          _error = None
+          try:
+              retry(_always_fails, 4)
+          except ConnectionError as _e:
+              _error = _e
+          assert _error is not None, "When every attempt fails, the ConnectionError should pass up to the caller"
+          assert len(_log2) == 4, "With four attempts allowed, the function should be called exactly four times"
+          assert str(_error) == "failure 4", "The exception that passes up should be the one from the last attempt"
+          _log3 = []
+          def _broken():
+              _log3.append(1)
+              raise ValueError("a bug")
+          _raised = False
+          try:
+              retry(_broken, 5)
+          except ValueError:
+              _raised = True
+          assert _raised and len(_log3) == 1, "A ValueError is not a passing fault. It should pass up at once, after one call."
+          _log4 = []
+          def _fine():
+              _log4.append(1)
+              return "ok"
+          assert retry(_fine, 3) == "ok" and len(_log4) == 1, "A function that succeeds should be called once"
+        wrong:
+          - "def retry(action, attempts):\n    for attempt in range(attempts):\n        try:\n            return action()\n        except Exception:\n            if attempt == attempts - 1:\n                raise\n"
+          - "def retry(action, attempts):\n    for attempt in range(attempts):\n        try:\n            return action()\n        except ConnectionError:\n            pass\n"
+          - "def retry(action, attempts):\n    for attempt in range(attempts + 1):\n        try:\n            return action()\n        except ConnectionError:\n            if attempt == attempts:\n                raise\n"
+          - "def retry(action, attempts):\n    try:\n        return action()\n    except ConnectionError:\n        return action()\n"
+        explanation: |
+          The loop makes up to `attempts` calls. A success leaves through `return` straight away. A `ConnectionError` is caught, and on every attempt but the last the handler does nothing, so the loop goes round again. On the last attempt the bare `raise` sends that same exception on up, so the caller sees the real reason for the failure. The handler names one class. A `ValueError` means something is wrong that will not improve with waiting, and retrying it would only hide a bug five times over. This is one of the few places where a handler that does nothing is right, and it is right only because the loop is about to try again.
+    - question:
+        id: numeric-count-lines
+        type: numeric
+        system: s2
+        prompt: |
+          How many lines does this program print?
+
+          ```python
+          def risky(n):
+              print("start", n)
+              if n == 2:
+                  raise ValueError("two")
+              print("end", n)
+
+          try:
+              for n in [1, 2, 3]:
+                  risky(n)
+          except ValueError:
+              print("caught")
+          print("after")
+          ```
+        answer: "5"
+        explanation: For n = 1 both lines print. For n = 2, start prints and then the exception leaves the function and the loop together, because the loop is inside the try block. The handler prints caught, and then after is printed. The call for n = 3 never happens.
+  connections:
+    - text: |
+        The puzzle asked how news of a failure can travel from the function that detects it to the function that can deal with it. An exception is an object that is **raised** at the point of failure. It stops each function in the chain of calls, in turn, until it reaches a `try` statement whose `except` clause names its class, and the functions in between need no code for it at all. If nothing catches it, the program stops with the traceback you have been reading since your first bug.
+
+        You can now make a function refuse honestly, in a way that cannot be overlooked. And you know the rule that keeps this power from doing harm: catch narrowly, only where you can act, and never in silence.
+
+        Three threads continue.
+
+        Almost everything that can go wrong in a real program goes wrong at its edges, where it meets the world outside: a file that is not there, a line that is not in the expected form, a disk that is full. The next lesson, [[s1.files-and-data-formats]], is where your programs first read and write data that outlives them, and every tool of this lesson will be needed at once. The `finally` clause, in particular, is about to earn its keep.
+
+        The hidden tests in this lesson had to check that your functions raise the right exception for bad input. A test of that kind is a small `try` statement that fails if nothing is raised. Writing such tests yourself, for the errors as well as for the answers, is part of [[s1.testing-with-pytest]].
+
+        And the pattern "set something up, use it, and clear it away even if an exception is on its way up" is so common that Python has a statement for it, which replaces the `try` and `finally` by one line. It comes in [[s1.generators-and-context-managers]].

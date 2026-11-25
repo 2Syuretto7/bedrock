@@ -1,0 +1,887 @@
+concept: s1.special-methods
+minutes: 105
+claim: You can explain that every operator and every built-in function such as len is a method call under a special name, give your own classes a printed form, equality, arithmetic, length, indexing and the ability to be called, explain why 2 * v needs a second method, and judge when an operator should be given a meaning and when it should not.
+recalls: [s1.classes-and-objects]
+uses: [s1.comprehensions-and-iterators, s1.modules-and-imports, s0.strings, s0.functions, s0.lists-and-tuples, s0.reading-errors-and-debugging, f0.fractions-decimals-and-percentages, f1.functions-as-machines, f1.composition-and-inverses]
+leads: [s1.exceptions, s1.generators-and-context-managers]
+starter: |
+  # Scratch space. A vector that prints, compares and adds like a built-in type.
+  class Vector:
+      def __init__(self, components):
+          self.components = list(components)
+
+      def __repr__(self):
+          return f"Vector({self.components})"
+
+      def __eq__(self, other):
+          return self.components == other.components
+
+      def __add__(self, other):
+          return Vector([a + b for a, b in zip(self.components, other.components)])
+
+  v = Vector([1, 2])
+  w = Vector([3, 4])
+  print(v + w, v + w == Vector([4, 6]))
+parts:
+  recall:
+    - text: |
+        [[s1.classes-and-objects]] ended with a `Vector` that worked but read badly: `v.plus(w)` where you wanted `v + w`, and `v.same_as(w)` where you wanted `v == w`. It also left you with the one rule that explains everything about classes: `obj.f(a)` is the call `C.f(obj, a)`. Three quick pulls, and then the awkwardness is removed.
+  puzzle:
+    - text: |
+        Here are three lines you have written many times.
+
+        ```python
+        print(3 + 4)              # 7
+        print("ab" + "cd")        # abcd
+        print([1, 2] + [3])       # [1, 2, 3]
+        ```
+
+        One symbol, three different actions: arithmetic, joining text, joining lists. How does `+` know which to do?
+
+        You might guess that somewhere inside Python there is a long list of cases: if both are numbers, add; if both are strings, join; and so on. Now test the guess against `len`. It measures strings, lists, tuples, dictionaries, sets and ranges. It will also measure types that were written last week, by someone else, long after `len` itself was finished. A fixed list of cases cannot know about types that did not exist when the list was drawn up.
+
+        So the knowledge cannot be inside `len`, and it cannot be inside `+`. Then where is it? And once you know where, can you put it into a class of your own, so that for two of your vectors `v + w` simply works?
+  intuition:
+    - text: |
+        Suppose you run a parcel desk and people bring you objects to weigh. You do not need to know anything about what is in each parcel if every parcel has its weight written on a label in an agreed place. Your whole job is to read the label. A new kind of parcel, invented tomorrow, causes you no trouble at all, so long as it carries the label.
+
+        `len` works like that. It knows nothing about lists or strings. It turns to the object and asks for the label. The label is a method with an agreed name, `__len__`, and `len(x)` simply calls it:
+
+        ```python
+        print(len([5, 6, 7]))             # 3
+        print([5, 6, 7].__len__())        # 3, the same call written out
+        ```
+
+        The knowledge of how to measure a list is in the class `list`. The knowledge of how to measure a string is in the class `str`. `len` is only the desk.
+
+        The operators work the same way. `a + b` is not arithmetic. It is a request to the object on the left: *here is `b`, add yourself to it*. In code, `a + b` is the method call `a.__add__(b)`.
+
+        ```python
+        print((3).__add__(4))             # 7
+        print("ab".__add__("cd"))         # abcd
+        ```
+
+        An integer answers that request in its way and a string in its own. The symbol `+` never knew anything.
+
+        These agreed names, with two underscores on each side, are called **special methods**. You have met one already: `__init__`, which Python calls when an object is made. There are several dozen others, one for each piece of syntax. Python promises to translate the syntax into the method call. A class that defines the method receives the syntax. Giving an operator a meaning for a new type is called **operator overloading**. Nothing about it is advanced. It is the rule from the last lesson, `obj.f(a)` is `C.f(obj, a)`, with a fixed choice of the name `f`.
+  derivation:
+    - text: |
+        **A printed form: `__repr__`.** Begin with the vector as the last lesson left it, now holding any number of components in a list.
+
+        ```python
+        class Vector:
+            def __init__(self, components):
+                self.components = list(components)
+
+        v = Vector([1, 2])
+        print(v)          # <__main__.Vector object at 0x7f3a...>
+        ```
+
+        The output is useless. It names the class and gives the object's address in memory. `print` asked the object for a description of itself, the class offered none, and that is the default every class inherits.
+
+        The method that describes an object is `__repr__`, short for representation. It takes only `self` and must return a string.
+
+        ```python
+        class Vector:
+            def __init__(self, components):
+                self.components = list(components)
+
+            def __repr__(self):
+                return f"Vector({self.components})"
+
+        v = Vector([1, 2])
+        print(v)          # Vector([1, 2])
+        print([v, v])     # [Vector([1, 2]), Vector([1, 2])]
+        ```
+
+        The custom is to make the string look like the code that would rebuild the object. Then a value printed while debugging can be pasted straight back into a program. The built-in function `repr(x)` returns this string, by calling `x.__repr__()`.
+
+        There is a second method, `__str__`, for a friendlier form meant for people who are not programmers. `print` and `str` look for `__str__` first and fall back on `__repr__` when it is missing. Write `__repr__` always, and `__str__` only when you need the two to differ.
+
+        Write a `__repr__` first for every class you make. It costs two lines, and every error message and every debugging `print` from then on will tell you what you are looking at.
+    - question:
+        id: predict-repr
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          class Money:
+              def __init__(self, rupees):
+                  self.rupees = rupees
+
+              def __repr__(self):
+                  return f"Money({self.rupees})"
+
+          purse = [Money(5), Money(20)]
+          print(purse, repr(purse[1]))
+        output: "[Money(5), Money(20)] Money(20)"
+        explanation: Printing a list shows the repr of each item. The class supplies that through __repr__, and the built-in function repr calls the same method.
+    - text: |
+        **Equality: `__eq__`.** `a == b` is the call `a.__eq__(b)`. The default, as you saw, answers whether the two are one object. For a vector, equality should mean equal components.
+
+        ```python
+            def __eq__(self, other):
+                if not isinstance(other, Vector):
+                    return NotImplemented
+                return self.components == other.components
+        ```
+
+        The last line hands the question on to the lists, which already know how to compare themselves. The first two lines deal with a comparison against something that is not a vector at all, such as `v == 5`. The method returns a special value, `NotImplemented`, which means "I do not know how to answer this". Python then tries the other operand, and if that does not know either, it settles on `False`. That is better than crashing while trying to read `components` from an integer.
+
+        You do not need to write `!=` separately. Python answers `a != b` by asking `__eq__` and reversing the result.
+    - text: |
+        **Arithmetic: `__add__` and its relatives.** Vectors add component by component. The tools are those of [[s1.comprehensions-and-iterators]]: `zip` to pair the components, a comprehension to add each pair.
+
+        ```python
+            def __add__(self, other):
+                assert len(self.components) == len(other.components), "sizes differ"
+                return Vector([a + b for a, b in zip(self.components, other.components)])
+        ```
+
+        Now `v + w` works. Notice what the method does **not** do: it does not change `self`. It builds a new vector and returns it. This matters a great deal. When you write `c = a + b` with numbers, you do not expect `a` to be altered. An `__add__` that altered `self` would make `c = a + b` quietly damage `a`, and because of aliasing the damage would appear in every part of the program that held a reference to it. **An operator returns a new object and leaves its operands alone.**
+
+        Each operator has its own name.
+
+        | You write | Python calls | | You write | Python calls |
+        | --- | --- | --- | --- | --- |
+        | `a + b` | `a.__add__(b)` | | `a == b` | `a.__eq__(b)` |
+        | `a - b` | `a.__sub__(b)` | | `a < b` | `a.__lt__(b)` |
+        | `a * b` | `a.__mul__(b)` | | `-a` | `a.__neg__()` |
+        | `a / b` | `a.__truediv__(b)` | | `abs(a)` | `a.__abs__()` |
+        | `a @ b` | `a.__matmul__(b)` | | `a ** b` | `a.__pow__(b)` |
+
+        The `@` in the table is new. It is an operator that Python provides and that none of the built-in types use. It was added to the language for mathematics, where there are two different products to tell apart. In the numerical libraries, `*` multiplies matching entries and `@` is the product of linear algebra. For two vectors that product is the dot product, so:
+
+        ```python
+            def __matmul__(self, other):
+                return sum(a * b for a, b in zip(self.components, other.components))
+        ```
+
+        With that, `v @ w` is a number. You will type `@` constantly in machine-learning code.
+    - question:
+        id: predict-add-new
+        type: predict
+        system: s2
+        prompt: What does this print?
+        code: |
+          class Vector:
+              def __init__(self, components):
+                  self.components = list(components)
+
+              def __repr__(self):
+                  return f"Vector({self.components})"
+
+              def __add__(self, other):
+                  return Vector([a + b for a, b in zip(self.components, other.components)])
+
+          a = Vector([1, 1])
+          b = Vector([2, 3])
+          c = a + b + a
+          print(a, c)
+        output: "Vector([1, 1]) Vector([4, 5])"
+        explanation: a + b + a is worked out from the left. a + b makes a new vector [3, 4], and adding a to that makes another new vector, [4, 5]. Neither addition changes a, because the method builds its result afresh.
+    - text: |
+        **The other side: `__rmul__`.** Multiplying a vector by a number should scale every component.
+
+        ```python
+            def __mul__(self, k):
+                return Vector([a * k for a in self.components])
+        ```
+
+        Now `v * 2` works. Try `2 * v` and it fails with a `TypeError`. Why? Follow the rule. `2 * v` is the call `(2).__mul__(v)`. It is the **integer** that is asked, and the integer class was written decades before your vector. It has no idea what a `Vector` is, and it returns `NotImplemented`.
+
+        Python does not give up at once. When the left operand cannot answer, it turns to the right one and asks a reversed question: `v.__rmul__(2)`, which means "you are on the right of a `*`, and the thing on your left is 2". If the class defines that, its answer is used.
+
+        ```python
+            def __rmul__(self, k):
+                return self * k
+        ```
+
+        Since scaling does not care about order, the reflected method simply hands over to the ordinary one. Every arithmetic operator has such a twin: `__radd__`, `__rsub__`, and so on. The full rule for `a * b` is therefore: try `a.__mul__(b)`; if that method is missing or returns `NotImplemented`, try `b.__rmul__(a)`; if that fails too, raise a `TypeError`.
+    - question:
+        id: order-rmul
+        type: order
+        system: s2
+        prompt: |
+          `v` is a `Vector` whose class defines `__mul__` and `__rmul__`. Put in order what Python does to work out `3 * v`.
+        steps:
+          - Ask the left operand by calling the integer's __mul__ with v as the argument.
+          - The integer does not know what a Vector is and returns NotImplemented.
+          - Turn to the right operand and call v.__rmul__(3).
+          - Inside __rmul__, work out self * 3, which calls v.__mul__(3).
+          - Build and return a new Vector with every component multiplied by 3.
+        explanation: The left operand is always asked first. Only when it declines is the right operand asked, through the reflected method, which here passes the work to the ordinary one.
+    - text: |
+        **Behaving like a container.** A vector has a number of components, a first component, a second. Three more special methods let it be measured, indexed and walked like a list.
+
+        ```python
+            def __len__(self):
+                return len(self.components)
+
+            def __getitem__(self, i):
+                return self.components[i]
+
+            def __iter__(self):
+                return iter(self.components)
+        ```
+
+        `len(v)` calls `v.__len__()`. `v[0]` calls `v.__getitem__(0)`. And the `for` loop, which you learnt begins by calling `iter`, gets its iterator from `v.__iter__()`. Everything that walks an iterable now accepts a vector: `for`, `sum`, `max`, `zip`, `list`, comprehensions.
+
+        This is the fact that answers the puzzle. `len` and `for` and `+` are not tied to any type. They are tied to method names. Each is a **protocol**: an agreement that anything offering certain methods will be accepted. Your class joins the protocol by defining the methods, and no one has to be asked for permission.
+
+        The test `x in v` calls `v.__contains__(x)` if that is defined, and otherwise walks the object and compares, so a class with `__iter__` gets `in` for nothing. And the truth of an object in an `if`, as in `if v:`, comes from `__bool__` if it exists, or else from `__len__`, with a length of zero counting as false. That is why an empty list is false.
+
+        This protocol matters far beyond vectors. In the library you will use to train models, a dataset is any object with a `__len__`, saying how many examples it has, and a `__getitem__`, returning example number `i`. That is the entire requirement. You will write such a class below.
+    - question:
+        id: predict-container
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          class Playlist:
+              def __init__(self, songs):
+                  self.songs = songs
+
+              def __len__(self):
+                  return len(self.songs)
+
+              def __getitem__(self, i):
+                  return self.songs[i]
+
+              def __iter__(self):
+                  return iter(self.songs)
+
+          p = Playlist(["raga", "tala", "alap"])
+          print(len(p), p[1], [s.upper() for s in p if "l" in s])
+        output: "3 tala ['TALA', 'ALAP']"
+        explanation: len calls __len__, the square brackets call __getitem__, and the comprehension walks the iterator that __iter__ returns. Two of the three songs contain the letter l.
+    - text: |
+        **Objects that can be called.** A function call `f(x)` is syntax too, and it has its method: `f(x)` is `f.__call__(x)`. A class that defines `__call__` makes objects that can be used as functions.
+
+        Why would you want that, when you already have `def`? Because a plain function has no memory. Think of the linear function $x \mapsto wx + b$ from [[f1.functions-as-machines]]. There is not one such function but a whole family, one for each choice of $w$ and $b$. An object can carry its own $w$ and $b$ as attributes, and still be applied like a function:
+
+        ```python
+        class Linear:
+            def __init__(self, w, b):
+                self.w = w
+                self.b = b
+
+            def __call__(self, x):
+                return self.w * x + self.b
+
+        f = Linear(2, 1)
+        g = Linear(-1, 0)
+        print(f(3), g(3), f(g(3)))        # 7 -3 -5
+        ```
+
+        `f` is a function with adjustable settings. That is exactly what a layer of a neural network is: a function whose settings, called its parameters, are stored inside it and are changed step by step during training. When you later write `model(x)`, you are calling `__call__` on an object that holds millions of numbers.
+
+        **Ordering.** `a < b` is `a.__lt__(b)`. This is the one method that `sorted`, `min` and `max` need, so a class that defines `__lt__` can be sorted.
+
+        **A caution about equality and sets.** Membership in a set or a dictionary depends on a number computed from each object, its hash, and equal objects must have equal hashes. When you define `__eq__`, Python can no longer be sure that the default hash respects your notion of equality, so it removes the hash, and your objects can no longer be put in a set or used as a dictionary key. That is deliberate. The remedy is a method called `__hash__`, and you will not need it in this course for some time.
+    - question:
+        id: predict-call
+        type: predict
+        system: s2
+        concepts: [f1.composition-and-inverses]
+        prompt: What does this print?
+        code: |
+          class Power:
+              def __init__(self, n):
+                  self.n = n
+
+              def __call__(self, x):
+                  return x ** self.n
+
+          square = Power(2)
+          cube = Power(3)
+          print(square(5), cube(2), square(cube(2)), cube.n)
+        output: "25 8 64 3"
+        explanation: Each object remembers its own exponent and applies it when called. square(cube(2)) is a composition. The inner call gives 8, and the outer squares it. The attribute n is still an ordinary attribute.
+    - text: |
+        **What all this buys.** Here is a function written with only numbers in mind.
+
+        ```python
+        def total(items, start):
+            result = start
+            for item in items:
+                result = result + item
+            return result
+
+        print(total([1, 2, 3], 0))                                     # 6
+        print(total([Vector([1, 0]), Vector([0, 1])], Vector([0, 0])))  # Vector([1, 1])
+        ```
+
+        The second call works, and `total` was not changed by a single character. It never asked what kind of things it was adding. It only used `+`, and anything that answers `+` will do. Code written once against a protocol works for every type that will ever join it. This is why the special methods are worth the trouble. They let your types take part in everything that has already been written.
+
+        Mathematics works the same way. Later you will meet theorems proved about "anything that can be added and scaled", with no mention of what the things are, and the theorems will then hold for arrows, for lists of numbers, for functions and for much else.
+
+        **When not to overload.** An operator makes a promise to the reader. `+` should combine two things of a kind into a third of the same kind, without changing either, and usually `a + b` should equal `b + a`. `==` should not change anything. `len` should be cheap and return a whole number. If your method keeps the promise, the operator makes code clearer. If you use `+` to mean "send this message", or `-v` to delete something, every reader will be misled. When there is no obviously right meaning, use a method with a plain name.
+    - question:
+        id: choice-overload-judgement
+        type: choice
+        system: s2
+        prompt: |
+          Which of these is a sound use of operator overloading?
+        options:
+          - "`account + 50` deposits 50 into the account and returns nothing."
+          - "`total = price1 + price2`, for two `Money` objects in the same currency, returns a new `Money` holding the sum."
+          - "`len(database)` deletes old rows and returns how many it removed."
+          - "`user1 == user2` logs both users out and returns True."
+        answer: 1
+        explanation: Adding two amounts of money is real addition. It gives a new thing of the same kind and changes neither operand. The other three use the syntax for actions that change something, which no reader would expect from +, len or ==.
+  formal:
+    - text: |
+        A **special method** is a method whose name Python calls in response to a piece of syntax or a built-in function. A class **overloads** an operator by defining the corresponding special method.
+
+        | Syntax | Call | Should return |
+        | --- | --- | --- |
+        | `C(args)` | `C.__init__(new, args)` | nothing |
+        | `repr(a)`, display in a list | `a.__repr__()` | a string, by custom code that rebuilds `a` |
+        | `str(a)`, `print(a)` | `a.__str__()`, else `a.__repr__()` | a string |
+        | `a == b` | `a.__eq__(b)` | `True`, `False` or `NotImplemented` |
+        | `a < b` | `a.__lt__(b)` | `True` or `False` |
+        | `a + b`, `a - b`, `a * b`, `a @ b` | `a.__add__(b)`, `__sub__`, `__mul__`, `__matmul__` | a new object |
+        | `-a`, `abs(a)` | `a.__neg__()`, `a.__abs__()` | a new object or a number |
+        | `len(a)` | `a.__len__()` | a whole number, not negative |
+        | `a[i]` | `a.__getitem__(i)` | the item |
+        | `x in a` | `a.__contains__(x)`, else by iteration | `True` or `False` |
+        | `iter(a)`, `for x in a` | `a.__iter__()` | an iterator |
+        | `a(args)` | `a.__call__(args)` | anything |
+
+        **Reflected operators.** To evaluate `a * b`, Python calls `a.__mul__(b)`. If that method does not exist or returns `NotImplemented`, it calls `b.__rmul__(a)`. If that does not exist or returns `NotImplemented`, a `TypeError` is raised. The same holds for every binary arithmetic operator, with `__radd__`, `__rsub__` and so on.
+
+        **Defaults.** A class that defines no `__eq__` compares by identity. `a != b` is the negation of `a == b` unless the class says otherwise. The truth value of an object is given by `__bool__` if defined, otherwise by whether `__len__` is non-zero, otherwise it is true.
+
+        **Convention.** Binary operators return a new object and do not modify their operands.
+  drill:
+    - question:
+        id: drill-len-call
+        type: choice
+        system: s1
+        prompt: |
+          What does Python do to work out `len(x)`?
+        options:
+          - It checks a built-in list of known types to find out how to measure x.
+          - It calls the method `x.__len__()`.
+          - It counts the characters in the name x.
+          - It converts x to a list and counts the items.
+        answer: 1
+        explanation: len knows nothing about any type. It asks the object, through the agreed method name.
+    - question:
+        id: drill-long-forms
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          print((7).__sub__(2), "ha".__mul__(3), [4, 5, 6].__getitem__(1), "abc".__contains__("b"))
+        output: "5 hahaha 5 True"
+        explanation: These are 7 - 2, "ha" * 3, [4, 5, 6][1] and "b" in "abc", each written as the method call that the usual syntax stands for.
+    - question:
+        id: drill-which-method
+        type: choice
+        system: s1
+        prompt: |
+          For two objects `a` and `b` of your own class, which method must the class define for `a - b` to work?
+        options:
+          - "`__minus__`"
+          - "`__sub__`"
+          - "`__neg__`"
+          - "`__rsub__` only"
+        answer: 1
+        explanation: The binary minus is __sub__. __neg__ is the minus sign with a single operand, as in -a. The reflected __rsub__ is tried only when the left operand cannot answer.
+    - question:
+        id: drill-eq
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          class Card:
+              def __init__(self, rank):
+                  self.rank = rank
+
+              def __eq__(self, other):
+                  return self.rank == other.rank
+
+          a = Card(7)
+          b = Card(7)
+          print(a == b, a != b, a is b)
+        output: "True False False"
+        explanation: The class defines equality as equal ranks, so the two cards are equal, and != is the reverse of that. They are still two separate objects, so is gives False.
+    - question:
+        id: drill-reflected
+        type: choice
+        system: s1
+        prompt: |
+          A class `Vector` defines `__mul__` but not `__rmul__`. For a vector `v`, which of these fails?
+        options:
+          - "`v * 2`"
+          - "`2 * v`"
+          - Both fail.
+          - Neither fails.
+        answer: 1
+        explanation: In 2 * v the integer is asked first and declines. Python then looks for the reflected method on the vector, and there is none.
+    - question:
+        id: drill-matmul
+        type: numeric
+        system: s1
+        prompt: |
+          With `__matmul__` defined as the dot product, what is `Vector([2, 0, 1]) @ Vector([3, 5, 4])`?
+        answer: "10"
+        explanation: Multiply matching components and add. 6 + 0 + 4.
+    - question:
+        id: drill-truth
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          class Queue:
+              def __init__(self, items):
+                  self.items = items
+
+              def __len__(self):
+                  return len(self.items)
+
+          for q in [Queue([]), Queue([0])]:
+              if q:
+                  print("has items")
+              else:
+                  print("empty")
+        output: |
+          empty
+          has items
+        explanation: The class has no __bool__, so the truth of a queue comes from its length. A length of zero is false. The second queue holds one item, and it does not matter that the item is 0.
+    - question:
+        id: drill-print-fallback
+        type: choice
+        system: s1
+        prompt: |
+          A class defines `__repr__` but not `__str__`. What does `print(obj)` show?
+        options:
+          - The default text with the class name and a memory address.
+          - The string returned by `__repr__`.
+          - Nothing, because print needs `__str__`.
+          - An error.
+        answer: 1
+        explanation: print looks for __str__ first and falls back on __repr__ when there is none.
+  work:
+    - question:
+        id: write-fraction
+        type: code
+        mode: write
+        system: s2
+        concepts: [f0.fractions-decimals-and-percentages, s1.modules-and-imports]
+        prompt: |
+          Write the class `Frac` for exact fractions, so that $\tfrac{1}{2} + \tfrac{1}{3}$ is exactly $\tfrac{5}{6}$ and not `0.8333333333333334`.
+
+          - `Frac(n, d)` stores the fraction in **lowest terms** with a **positive denominator**, as the attributes `n` and `d`. Use `math.gcd`. You may assume `d` is not zero.
+          - `repr` gives the form `Frac(5, 6)`.
+          - `==` compares two fractions by value.
+          - `+` and `*` return new fractions, by the rules of [[f0.fractions-decimals-and-percentages]].
+        starter: |
+          import math
+
+          class Frac:
+              def __init__(self, n, d):
+                  # Replace the next two lines with your own.
+                  self.n = n
+                  self.d = d
+
+              # Add __repr__, __eq__, __add__ and __mul__ here.
+
+          print(Frac(1, 2) + Frac(1, 3))
+          print(Frac(2, 3) * Frac(3, 4))
+        solution: |
+          import math
+
+          class Frac:
+              def __init__(self, n, d):
+                  g = math.gcd(n, d)
+                  if d < 0:
+                      g = -g
+                  self.n = n // g
+                  self.d = d // g
+
+              def __repr__(self):
+                  return f"Frac({self.n}, {self.d})"
+
+              def __eq__(self, other):
+                  return self.n == other.n and self.d == other.d
+
+              def __add__(self, other):
+                  return Frac(self.n * other.d + other.n * self.d, self.d * other.d)
+
+              def __mul__(self, other):
+                  return Frac(self.n * other.n, self.d * other.d)
+
+          print(Frac(1, 2) + Frac(1, 3))
+          print(Frac(2, 3) * Frac(3, 4))
+        tests: |
+          _h = Frac(2, 4)
+          assert (_h.n, _h.d) == (1, 2), "Frac(2, 4) should be stored in lowest terms, as 1 and 2"
+          _m = Frac(3, -6)
+          assert (_m.n, _m.d) == (-1, 2), "The denominator should be stored positive, so Frac(3, -6) is -1 and 2"
+          assert repr(Frac(10, 12)) == "Frac(5, 6)", "repr should give the form Frac(5, 6)"
+          assert Frac(1, 2) == Frac(2, 4), "1/2 and 2/4 are the same fraction"
+          assert not (Frac(1, 2) == Frac(1, 3)), "1/2 and 1/3 are different"
+          _s = Frac(1, 2) + Frac(1, 3)
+          assert isinstance(_s, Frac) and (_s.n, _s.d) == (5, 6), "1/2 + 1/3 is 5/6"
+          _p = Frac(2, 3) * Frac(3, 4)
+          assert isinstance(_p, Frac) and (_p.n, _p.d) == (1, 2), "2/3 times 3/4 is 1/2, in lowest terms"
+          assert Frac(1, 6) + Frac(1, 6) + Frac(1, 6) == Frac(1, 2), "Three sixths make a half, exactly"
+          assert Frac(-1, 2) + Frac(1, 2) == Frac(0, 1), "A fraction plus its negative is zero, stored as 0 and 1"
+          _a = Frac(1, 2)
+          _b = _a + Frac(1, 2)
+          assert (_a.n, _a.d) == (1, 2), "Adding must not change either fraction"
+        wrong:
+          - "import math\n\nclass Frac:\n    def __init__(self, n, d):\n        self.n = n\n        self.d = d\n\n    def __repr__(self):\n        return f\"Frac({self.n}, {self.d})\"\n\n    def __eq__(self, other):\n        return self.n * other.d == other.n * self.d\n\n    def __add__(self, other):\n        return Frac(self.n * other.d + other.n * self.d, self.d * other.d)\n\n    def __mul__(self, other):\n        return Frac(self.n * other.n, self.d * other.d)\n"
+          - "import math\n\nclass Frac:\n    def __init__(self, n, d):\n        g = math.gcd(n, d)\n        if d < 0:\n            g = -g\n        self.n = n // g\n        self.d = d // g\n\n    def __repr__(self):\n        return f\"Frac({self.n}, {self.d})\"\n\n    def __eq__(self, other):\n        return self.n == other.n and self.d == other.d\n\n    def __add__(self, other):\n        return Frac(self.n + other.n, self.d + other.d)\n\n    def __mul__(self, other):\n        return Frac(self.n * other.n, self.d * other.d)\n"
+          - "import math\n\nclass Frac:\n    def __init__(self, n, d):\n        g = math.gcd(n, d)\n        self.n = n // g\n        self.d = d // g\n\n    def __repr__(self):\n        return f\"Frac({self.n}, {self.d})\"\n\n    def __eq__(self, other):\n        return self.n == other.n and self.d == other.d\n\n    def __add__(self, other):\n        return Frac(self.n * other.d + other.n * self.d, self.d * other.d)\n\n    def __mul__(self, other):\n        return Frac(self.n * other.n, self.d * other.d)\n"
+        explanation: |
+          The constructor carries the invariant: every `Frac` that exists is in lowest terms with a positive denominator. Because `__add__` and `__mul__` build their results by calling `Frac(...)`, the results pass through the constructor and are simplified for free. And because every fraction has exactly one stored form, `__eq__` can compare the parts directly. The second wrong answer in the tests adds the tops and adds the bottoms, the classic mistake, which the test $\tfrac12 + \tfrac13 = \tfrac56$ catches. Python's standard library has this class already, under the name `fractions.Fraction`. You have just built its core.
+    - question:
+        id: fix-add-mutates
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The program adds a step to a position and should print `Vector([1, 2]) Vector([4, 6])`: the old position unchanged, and the new one. It prints `Vector([4, 6]) Vector([4, 6])`. Fix the class.
+        starter: |
+          class Vector:
+              def __init__(self, components):
+                  self.components = list(components)
+
+              def __repr__(self):
+                  return f"Vector({self.components})"
+
+              def __add__(self, other):
+                  for i in range(len(self.components)):
+                      self.components[i] += other.components[i]
+                  return self
+
+          position = Vector([1, 2])
+          step = Vector([3, 4])
+          moved = position + step
+          print(position, moved)
+        solution: |
+          class Vector:
+              def __init__(self, components):
+                  self.components = list(components)
+
+              def __repr__(self):
+                  return f"Vector({self.components})"
+
+              def __add__(self, other):
+                  return Vector([a + b for a, b in zip(self.components, other.components)])
+
+          position = Vector([1, 2])
+          step = Vector([3, 4])
+          moved = position + step
+          print(position, moved)
+        tests: |
+          assert output.strip() == "Vector([1, 2]) Vector([4, 6])", "The old position should be unchanged, and the new one should be the sum"
+          _a = Vector([1, 1])
+          _b = Vector([2, 5])
+          _c = _a + _b
+          assert _c.components == [3, 6], "(1, 1) + (2, 5) is (3, 6)"
+          assert _a.components == [1, 1], "Adding must not change the left operand"
+          assert _b.components == [2, 5], "Adding must not change the right operand"
+          assert _c is not _a and _c is not _b, "The sum should be a new object"
+          assert isinstance(_c, Vector), "The sum should be a Vector"
+        wrong:
+          - "class Vector:\n    def __init__(self, components):\n        self.components = list(components)\n\n    def __repr__(self):\n        return f\"Vector({self.components})\"\n\n    def __add__(self, other):\n        for i in range(len(self.components)):\n            other.components[i] += self.components[i]\n        return other\n\nposition = Vector([1, 2])\nstep = Vector([3, 4])\nmoved = position + step\nprint(\"Vector([1, 2]) Vector([4, 6])\")\n"
+          - "class Vector:\n    def __init__(self, components):\n        self.components = list(components)\n\n    def __repr__(self):\n        return f\"Vector({self.components})\"\n\n    def __add__(self, other):\n        return [a + b for a, b in zip(self.components, other.components)]\n\nposition = Vector([1, 2])\nstep = Vector([3, 4])\nmoved = position + step\nprint(\"Vector([1, 2]) Vector([4, 6])\")\n"
+        explanation: |
+          The method changed `self.components` in place and returned `self`. So `moved` and `position` were two names for one object, and that object had been altered. An operator must build a new object from its operands and leave them alone, as addition of numbers does. A second wrong answer in the tests returns a plain list instead of a `Vector`, which would make the next `+` fail, since the result of adding two vectors should be a vector.
+    - question:
+        id: write-vector-ops
+        type: code
+        mode: write
+        system: s2
+        concepts: [s1.modules-and-imports, s1.comprehensions-and-iterators]
+        prompt: |
+          Complete the `Vector` class with five more operations.
+
+          - `v - w` is the vector of differences of matching components.
+          - `v * k` and `k * v`, for a number `k`, scale every component.
+          - `v @ w` is the dot product, a number.
+          - `abs(v)` is the length of the vector, $\sqrt{v \cdot v}$. Use `math.sqrt` and your own `@`.
+
+          No operation may change its operands.
+        starter: |
+          import math
+
+          class Vector:
+              def __init__(self, components):
+                  self.components = list(components)
+
+              def __repr__(self):
+                  return f"Vector({self.components})"
+
+              def __eq__(self, other):
+                  return self.components == other.components
+
+              # Add __sub__, __mul__, __rmul__, __matmul__ and __abs__ here.
+
+          v = Vector([3, 4])
+          w = Vector([1, 1])
+          print(v - w, 2 * v, v @ w, abs(v))
+        solution: |
+          import math
+
+          class Vector:
+              def __init__(self, components):
+                  self.components = list(components)
+
+              def __repr__(self):
+                  return f"Vector({self.components})"
+
+              def __eq__(self, other):
+                  return self.components == other.components
+
+              def __sub__(self, other):
+                  return Vector([a - b for a, b in zip(self.components, other.components)])
+
+              def __mul__(self, k):
+                  return Vector([a * k for a in self.components])
+
+              def __rmul__(self, k):
+                  return self * k
+
+              def __matmul__(self, other):
+                  return sum(a * b for a, b in zip(self.components, other.components))
+
+              def __abs__(self):
+                  return math.sqrt(self @ self)
+
+          v = Vector([3, 4])
+          w = Vector([1, 1])
+          print(v - w, 2 * v, v @ w, abs(v))
+        tests: |
+          _v = Vector([3, 4])
+          _w = Vector([1, 1])
+          assert _v - _w == Vector([2, 3]), "(3, 4) - (1, 1) is (2, 3)"
+          assert _w - _v == Vector([-2, -3]), "Subtraction depends on the order"
+          assert _v * 2 == Vector([6, 8]), "(3, 4) scaled by 2 is (6, 8)"
+          assert 2 * _v == Vector([6, 8]), "2 * v should work as well as v * 2"
+          assert isinstance(0.5 * _v, Vector), "Scaling should return a Vector"
+          assert _v @ _w == 7, "The dot product of (3, 4) and (1, 1) is 7"
+          assert _v @ _v == 25, "The dot product of (3, 4) with itself is 25"
+          assert abs(_v) == 5, "The length of (3, 4) is 5"
+          assert abs(abs(Vector([1, 1, 1, 1])) - 2) < 1e-12, "The length of (1, 1, 1, 1) is 2"
+          assert _v == Vector([3, 4]) and _w == Vector([1, 1]), "No operation may change its operands"
+        wrong:
+          - "import math\n\nclass Vector:\n    def __init__(self, components):\n        self.components = list(components)\n\n    def __repr__(self):\n        return f\"Vector({self.components})\"\n\n    def __eq__(self, other):\n        return self.components == other.components\n\n    def __sub__(self, other):\n        return Vector([a - b for a, b in zip(self.components, other.components)])\n\n    def __mul__(self, k):\n        return Vector([a * k for a in self.components])\n\n    def __matmul__(self, other):\n        return sum(a * b for a, b in zip(self.components, other.components))\n\n    def __abs__(self):\n        return math.sqrt(self @ self)\n"
+          - "import math\n\nclass Vector:\n    def __init__(self, components):\n        self.components = list(components)\n\n    def __repr__(self):\n        return f\"Vector({self.components})\"\n\n    def __eq__(self, other):\n        return self.components == other.components\n\n    def __sub__(self, other):\n        return Vector([b - a for a, b in zip(self.components, other.components)])\n\n    def __mul__(self, k):\n        return Vector([a * k for a in self.components])\n\n    def __rmul__(self, k):\n        return self * k\n\n    def __matmul__(self, other):\n        return sum(a * b for a, b in zip(self.components, other.components))\n\n    def __abs__(self):\n        return math.sqrt(self @ self)\n"
+          - "import math\n\nclass Vector:\n    def __init__(self, components):\n        self.components = list(components)\n\n    def __repr__(self):\n        return f\"Vector({self.components})\"\n\n    def __eq__(self, other):\n        return self.components == other.components\n\n    def __sub__(self, other):\n        return Vector([a - b for a, b in zip(self.components, other.components)])\n\n    def __mul__(self, k):\n        return Vector([a * k for a in self.components])\n\n    def __rmul__(self, k):\n        return self * k\n\n    def __matmul__(self, other):\n        return sum(a * b for a, b in zip(self.components, other.components))\n\n    def __abs__(self):\n        return sum(abs(a) for a in self.components)\n"
+        explanation: |
+          Each method is one line, because the tools were already in place: `zip` and a comprehension for the work on components, and the class itself to wrap the result. `__rmul__` exists only so that the number may stand on the left, and it hands over to `__mul__`. `__abs__` is built from your own `@`: the dot product of a vector with itself is the sum of the squares of its components, and the square root of that is its length, by Pythagoras' theorem. The vector $(3, 4)$ has length 5. These five operations, on lists of hundreds of numbers instead of two, are most of the arithmetic of machine learning.
+    - question:
+        id: fix-rmul
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `Temperature` holds a number of degrees. `t * 2` works, but the program stops at `2 * t` with `TypeError: unsupported operand type(s) for *: 'int' and 'Temperature'`. There is a second fault as well: `t == Temperature(10)` gives `False` even when `t` holds 10 degrees. Fix both, so that the program prints `Temperature(20) Temperature(20) True`.
+        starter: |
+          class Temperature:
+              def __init__(self, degrees):
+                  self.degrees = degrees
+
+              def __repr__(self):
+                  return f"Temperature({self.degrees})"
+
+              def __mul__(self, k):
+                  return Temperature(self.degrees * k)
+
+              def __eq__(self, other):
+                  return self is other
+
+          t = Temperature(10)
+          print(t * 2, 2 * t, t == Temperature(10))
+        solution: |
+          class Temperature:
+              def __init__(self, degrees):
+                  self.degrees = degrees
+
+              def __repr__(self):
+                  return f"Temperature({self.degrees})"
+
+              def __mul__(self, k):
+                  return Temperature(self.degrees * k)
+
+              def __rmul__(self, k):
+                  return self * k
+
+              def __eq__(self, other):
+                  return self.degrees == other.degrees
+
+          t = Temperature(10)
+          print(t * 2, 2 * t, t == Temperature(10))
+        tests: |
+          assert output.strip() == "Temperature(20) Temperature(20) True", "The program should print Temperature(20) Temperature(20) True"
+          _t = Temperature(4)
+          assert (3 * _t).degrees == 12, "3 * t should scale the degrees"
+          assert (_t * 3).degrees == 12, "t * 3 should still work"
+          assert isinstance(3 * _t, Temperature), "3 * t should be a Temperature"
+          assert _t == Temperature(4), "Two temperatures with the same degrees are equal"
+          assert not (_t == Temperature(5)), "Two temperatures with different degrees are not equal"
+          assert _t.degrees == 4, "Multiplying must not change the temperature"
+        wrong:
+          - "class Temperature:\n    def __init__(self, degrees):\n        self.degrees = degrees\n\n    def __repr__(self):\n        return f\"Temperature({self.degrees})\"\n\n    def __mul__(self, k):\n        return Temperature(self.degrees * k)\n\n    def __rmul__(self, k):\n        return self * k\n\n    def __eq__(self, other):\n        return True\n\nt = Temperature(10)\nprint(t * 2, 2 * t, t == Temperature(10))\n"
+          - "class Temperature:\n    def __init__(self, degrees):\n        self.degrees = degrees\n\n    def __repr__(self):\n        return f\"Temperature({self.degrees})\"\n\n    def __mul__(self, k):\n        return Temperature(self.degrees * k)\n\n    def __rmul__(self, k):\n        return self.degrees * k\n\n    def __eq__(self, other):\n        return self.degrees == other.degrees\n\nt = Temperature(10)\nprint(\"Temperature(20) Temperature(20) True\")\n"
+        explanation: |
+          In `2 * t` the integer is asked first, through its own `__mul__`, and it has never heard of `Temperature`. Python then asks the right operand through `__rmul__`, which the class lacked. Adding it, and handing over to `__mul__`, makes the product work from either side. The `__eq__` that was written compared identity, which is what the default does anyway. Equality of values means comparing the attributes that make up the value.
+    - question:
+        id: write-dataset
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          In machine-learning libraries a **dataset** is any object that can say how many examples it holds and can hand over example number `i`. Write the class `PairDataset`.
+
+          - `PairDataset(inputs, targets)` takes two lists of the same length. Check that with an assertion.
+          - `len(ds)` is the number of examples.
+          - `ds[i]` is the tuple `(inputs[i], targets[i])`.
+          - `for pair in ds:` walks the pairs in order.
+          - `x in ds` should work without any further method.
+        starter: |
+          class PairDataset:
+              def __init__(self, inputs, targets):
+                  self.inputs = inputs
+                  self.targets = targets
+
+              # Add __len__, __getitem__ and __iter__ here.
+
+          ds = PairDataset([1.0, 2.0, 3.0], ["a", "b", "c"])
+          print(len(ds), ds[1], [target for x, target in ds])
+        solution: |
+          class PairDataset:
+              def __init__(self, inputs, targets):
+                  assert len(inputs) == len(targets), "inputs and targets must have the same length"
+                  self.inputs = inputs
+                  self.targets = targets
+
+              def __len__(self):
+                  return len(self.inputs)
+
+              def __getitem__(self, i):
+                  return (self.inputs[i], self.targets[i])
+
+              def __iter__(self):
+                  return iter(zip(self.inputs, self.targets))
+
+          ds = PairDataset([1.0, 2.0, 3.0], ["a", "b", "c"])
+          print(len(ds), ds[1], [target for x, target in ds])
+        tests: |
+          _ds = PairDataset([1.0, 2.0, 3.0], ["a", "b", "c"])
+          assert len(_ds) == 3, "There are three examples"
+          assert _ds[0] == (1.0, "a"), "Example 0 is the pair (1.0, 'a')"
+          assert _ds[2] == (3.0, "c"), "Example 2 is the pair (3.0, 'c')"
+          assert _ds[-1] == (3.0, "c"), "A negative index should count from the end, as it does for a list"
+          assert list(_ds) == [(1.0, "a"), (2.0, "b"), (3.0, "c")], "Walking the dataset should give the pairs in order"
+          assert list(_ds) == [(1.0, "a"), (2.0, "b"), (3.0, "c")], "The dataset should be walkable more than once"
+          assert (2.0, "b") in _ds, "The pair (2.0, 'b') is in the dataset"
+          assert (2.0, "c") not in _ds, "The pair (2.0, 'c') is not in the dataset"
+          assert len(PairDataset([], [])) == 0, "An empty dataset has length 0"
+          _stopped = False
+          try:
+              PairDataset([1, 2], [1])
+          except AssertionError:
+              _stopped = True
+          assert _stopped, "Lists of different lengths should be stopped by an assertion in the constructor"
+        wrong:
+          - "class PairDataset:\n    def __init__(self, inputs, targets):\n        self.inputs = inputs\n        self.targets = targets\n\n    def __len__(self):\n        return len(self.inputs)\n\n    def __getitem__(self, i):\n        return (self.inputs[i], self.targets[i])\n\n    def __iter__(self):\n        return iter(zip(self.inputs, self.targets))\n"
+          - "class PairDataset:\n    def __init__(self, inputs, targets):\n        assert len(inputs) == len(targets)\n        self.inputs = inputs\n        self.targets = targets\n        self.pairs = zip(inputs, targets)\n\n    def __len__(self):\n        return len(self.inputs)\n\n    def __getitem__(self, i):\n        return (self.inputs[i], self.targets[i])\n\n    def __iter__(self):\n        return self.pairs\n"
+          - "class PairDataset:\n    def __init__(self, inputs, targets):\n        assert len(inputs) == len(targets)\n        self.inputs = inputs\n        self.targets = targets\n\n    def __len__(self):\n        return len(self.inputs) + len(self.targets)\n\n    def __getitem__(self, i):\n        return (self.inputs[i], self.targets[i])\n\n    def __iter__(self):\n        return iter(zip(self.inputs, self.targets))\n"
+        explanation: |
+          Three short methods, and the object takes part in `len`, in square brackets, in `for`, in comprehensions and in `in`. `__iter__` must return a **fresh** iterator on every call, which is why it builds a new `zip` each time. The second wrong answer in the tests makes one `zip` in the constructor and returns it every time, so the dataset can be walked once and is empty ever after, the mistake from the lesson on iterators. A training loop walks its dataset once per pass, for many passes.
+    - question:
+        id: write-polynomial
+        type: code
+        mode: write
+        system: s2
+        concepts: [f1.functions-as-machines]
+        prompt: |
+          A **polynomial** is a sum of whole-number powers of $x$, each multiplied by a fixed number called its **coefficient**: $c_0 + c_1 x + c_2 x^2 + \dots$, which is $\sum_k c_k x^k$. So $1 + 2x^2$ has the coefficients 1, 0 and 2. A polynomial is fixed by its list of coefficients. Write the class `Poly`.
+
+          - `Poly([c0, c1, c2, ...])` stores the coefficients, lowest power first.
+          - Calling the object, `p(x)`, returns the value of the polynomial at `x`.
+          - `p + q` returns a new polynomial. The two may have different numbers of coefficients. Missing ones count as 0.
+          - `repr` gives the form `Poly([1, 0, 2])`.
+
+          For $p(x) = 1 + 2x^2$, `Poly([1, 0, 2])(3)` is 19.
+        starter: |
+          class Poly:
+              def __init__(self, coefficients):
+                  self.coefficients = list(coefficients)
+
+              def __repr__(self):
+                  return f"Poly({self.coefficients})"
+
+              # Add __call__ and __add__ here.
+
+          p = Poly([1, 0, 2])
+          q = Poly([0, 5])
+          print(p(3), p + q, (p + q)(1))
+        solution: |
+          class Poly:
+              def __init__(self, coefficients):
+                  self.coefficients = list(coefficients)
+
+              def __repr__(self):
+                  return f"Poly({self.coefficients})"
+
+              def __call__(self, x):
+                  return sum(c * x ** k for k, c in enumerate(self.coefficients))
+
+              def __add__(self, other):
+                  size = max(len(self.coefficients), len(other.coefficients))
+                  mine = self.coefficients + [0] * (size - len(self.coefficients))
+                  theirs = other.coefficients + [0] * (size - len(other.coefficients))
+                  return Poly([a + b for a, b in zip(mine, theirs)])
+
+          p = Poly([1, 0, 2])
+          q = Poly([0, 5])
+          print(p(3), p + q, (p + q)(1))
+        tests: |
+          _p = Poly([1, 0, 2])
+          _q = Poly([0, 5])
+          assert _p(3) == 19, "1 + 2 times 9 is 19"
+          assert _p(0) == 1, "At x = 0 only the constant term is left"
+          assert _q(2) == 10, "5x at x = 2 is 10"
+          assert Poly([])(7) == 0, "The polynomial with no terms is zero everywhere"
+          _s = _p + _q
+          assert isinstance(_s, Poly), "The sum should be a Poly"
+          assert _s.coefficients == [1, 5, 2], "(1 + 2x^2) + 5x has the coefficients 1, 5 and 2"
+          assert (_q + _p).coefficients == [1, 5, 2], "The shorter polynomial may be on either side"
+          assert _p.coefficients == [1, 0, 2] and _q.coefficients == [0, 5], "Adding must not change either polynomial"
+          assert all((_p + _q)(x) == _p(x) + _q(x) for x in [-2, 0, 1, 3]), "The sum of two polynomials, as a function, is the sum of their values"
+          assert repr(_s) == "Poly([1, 5, 2])", "repr should give the form Poly([1, 5, 2])"
+        wrong:
+          - "class Poly:\n    def __init__(self, coefficients):\n        self.coefficients = list(coefficients)\n\n    def __repr__(self):\n        return f\"Poly({self.coefficients})\"\n\n    def __call__(self, x):\n        return sum(c * x ** k for k, c in enumerate(self.coefficients))\n\n    def __add__(self, other):\n        return Poly([a + b for a, b in zip(self.coefficients, other.coefficients)])\n"
+          - "class Poly:\n    def __init__(self, coefficients):\n        self.coefficients = list(coefficients)\n\n    def __repr__(self):\n        return f\"Poly({self.coefficients})\"\n\n    def __call__(self, x):\n        return sum(c * x ** (k + 1) for k, c in enumerate(self.coefficients))\n\n    def __add__(self, other):\n        size = max(len(self.coefficients), len(other.coefficients))\n        mine = self.coefficients + [0] * (size - len(self.coefficients))\n        theirs = other.coefficients + [0] * (size - len(other.coefficients))\n        return Poly([a + b for a, b in zip(mine, theirs)])\n"
+          - "class Poly:\n    def __init__(self, coefficients):\n        self.coefficients = list(coefficients)\n\n    def __repr__(self):\n        return f\"Poly({self.coefficients})\"\n\n    def __call__(self, x):\n        return sum(c * x ** k for k, c in enumerate(self.coefficients))\n\n    def __add__(self, other):\n        return Poly(self.coefficients + other.coefficients)\n"
+        explanation: |
+          `__call__` is the sigma notation $\sum_k c_k x^k$ typed out, with `enumerate` supplying each power alongside its coefficient. `__add__` has one trap, and it is the one from the first lesson of this cluster: `zip` stops at the shorter list, so adding $5x$ to $1 + 2x^2$ by a bare `zip` would silently lose the $2x^2$. Padding the shorter list with zeros first puts that right. Building new lists with `+` leaves the originals untouched. The object is a function you can call and also a value you can add, and the last test states the link between the two: $(p + q)(x) = p(x) + q(x)$.
+    - question:
+        id: numeric-calls
+        type: numeric
+        system: s2
+        prompt: |
+          A `Vector` class defines `__add__`, and each call to it prints the word `adding`. How many times is `adding` printed by this line, where `total` is the function from the lesson and `a`, `b`, `c` and `zero` are vectors?
+
+          `total([a, b, c], zero) + a + b`
+        answer: "5"
+        explanation: Inside total there is one addition for each of the three items in the list. The result then has a added to it, and then b, two more. Every one of those is a call of __add__.
+  connections:
+    - text: |
+        The puzzle asked where the knowledge is, when `+` does three different things and `len` measures types that did not exist when it was written. It is in the objects. Every operator and every built-in function of that kind is a method call under an agreed name, and the class of the object supplies the method. `a + b` is `a.__add__(b)`, `len(a)` is `a.__len__()`, and `f(x)` is `f.__call__(x)`. Define the method, and your class receives the syntax, along with everything already written that uses it.
+
+        You have now built, with your own hands, small versions of the two objects that machine learning runs on. A vector that adds, scales and takes dot products is a miniature of the array type in every numerical library. An object with stored numbers and a `__call__` is a miniature of a layer.
+
+        Two threads continue.
+
+        Several times in this lesson a method was given something it could not handle: a vector of the wrong size, a comparison with an integer, an index past the end. You dealt with these by `assert`, or by returning `NotImplemented`, or by not dealing with them. And the tests for your own exercises needed to check that a function *refuses* bad input, which they did with a construction you have not been taught. Errors are objects too, instances of classes, and there is a proper way to raise one, to catch one, and to define your own. That is [[s1.exceptions]], next.
+
+        The `for` loop was the first protocol you met: it calls `__iter__` to obtain an iterator, and then `__next__` on that iterator, again and again. You can now see that those are special methods like the others. Writing an iterator class by hand is laborious, though, and Python offers a far shorter way to make one, along with one more protocol, for setting something up and reliably clearing it away. Both are in [[s1.generators-and-context-managers]].
