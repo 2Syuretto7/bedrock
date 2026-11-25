@@ -1,0 +1,3947 @@
+"use client";
+
+import { useState, type ComponentType, type ReactNode } from "react";
+import type { FigureName } from "@/lib/lessons/figures";
+
+/*
+ * Every figure is drawn here as interactive SVG. None is an image file.
+ * Each has a text description of its current state, so it reads the same to a
+ * screen reader as it looks, and every control is a real button or slider.
+ */
+
+type Props = Record<string, unknown>;
+const num = (value: unknown, fallback: number) => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
+const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
+const group = (n: number) => n.toLocaleString("en-IN");
+
+function Frame({ title, summary, children, controls }: { title: string; summary: string; children: ReactNode; controls: ReactNode }) {
+  return (
+    <figure className="fig">
+      <figcaption className="label">{title}</figcaption>
+      <div className="fig-stage">{children}</div>
+      <p className="fig-summary" aria-live="polite">
+        {summary}
+      </p>
+      <div className="fig-controls">{controls}</div>
+    </figure>
+  );
+}
+
+function Stepper({ label, value, onChange, min, max }: { label: string; value: number; onChange: (v: number) => void; min: number; max: number }) {
+  return (
+    <span className="fig-stepper">
+      <span className="label">{label}</span>
+      <button type="button" className="q-move" aria-label={`Decrease ${label}`} disabled={value <= min} onClick={() => onChange(value - 1)}>
+        −
+      </button>
+      <output className="fig-value">{value}</output>
+      <button type="button" className="q-move" aria-label={`Increase ${label}`} disabled={value >= max} onClick={() => onChange(value + 1)}>
+        +
+      </button>
+    </span>
+  );
+}
+
+function Slider({ label, value, onChange, min, max, step = 1 }: { label: string; value: number; onChange: (v: number) => void; min: number; max: number; step?: number }) {
+  return (
+    <label className="fig-slider">
+      <span className="label">{label}</span>
+      <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+    </label>
+  );
+}
+
+const PLACES = ["ones", "tens", "hundreds", "thousands", "ten thousands", "lakhs"];
+
+/** A number as digits in columns. Each column is worth ten of the column to its right. */
+function PlaceValue(props: Props) {
+  const columns = clamp(num(props.columns, 4), 2, 6);
+  const [value, setValue] = useState(clamp(num(props.start, 207), 0, 10 ** columns - 1));
+  const digits = Array.from({ length: columns }, (_, i) => Math.floor(value / 10 ** (columns - 1 - i)) % 10);
+  const width = 88;
+  const parts = digits.map((d, i) => d * 10 ** (columns - 1 - i)).filter((part) => part > 0);
+  const add = (by: number) => setValue((v) => clamp(v + by, 0, 10 ** columns - 1));
+  return (
+    <Frame
+      title="Place value"
+      summary={`${group(value)} = ${parts.length ? parts.map(group).join(" + ") : "0"}`}
+      controls={
+        <>
+          {[1, 10, 100].map((by) => (
+            <span key={by} className="fig-stepper">
+              <button type="button" className="btn btn-secondary btn-small" onClick={() => add(-by)}>
+                −{by}
+              </button>
+              <button type="button" className="btn btn-secondary btn-small" onClick={() => add(by)}>
+                +{by}
+              </button>
+            </span>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox={`0 0 ${columns * width} 150`} role="img" aria-label={`The digits of ${value} in place-value columns`}>
+        {digits.map((digit, i) => {
+          const place = columns - 1 - i;
+          return (
+            <g key={i} transform={`translate(${i * width} 0)`}>
+              <rect x="4" y="4" width={width - 8} height="142" className="fig-cell" />
+              <text x={width / 2} y="26" className="fig-small" textAnchor="middle">
+                {PLACES[place]}
+              </text>
+              <text x={width / 2} y="88" className="fig-digit" textAnchor="middle">
+                {digit}
+              </text>
+              <text x={width / 2} y="130" className="fig-small" textAnchor="middle">
+                {digit} × {group(10 ** place)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
+/** A point that moves along a number line in equal steps, possibly below zero or between whole numbers. */
+function NumberLine(props: Props) {
+  const min = num(props.min, 0);
+  const max = num(props.max, 10);
+  const parts = clamp(num(props.parts, 1), 1, 12); // steps per unit
+  const [ticks, setTicks] = useState(Math.round(num(props.start, min) * parts));
+  const [from] = useState(ticks);
+  const x = (t: number) => 30 + ((t / parts - min) / (max - min)) * 540;
+  const name = (t: number) => {
+    if (parts === 1 || t % parts === 0) return String(t / parts);
+    return `${t < 0 ? "−" : ""}${Math.abs(t)}/${parts}`;
+  };
+  const moved = ticks - from;
+  return (
+    <Frame
+      title="Number line"
+      summary={
+        moved === 0
+          ? `The point is at ${name(ticks)}.`
+          : `Started at ${name(from)}, moved ${Math.abs(moved)} step${Math.abs(moved) === 1 ? "" : "s"} ${moved > 0 ? "right" : "left"}, now at ${name(ticks)}.`
+      }
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" disabled={ticks <= min * parts} onClick={() => setTicks(ticks - 1)}>
+            Step left
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" disabled={ticks >= max * parts} onClick={() => setTicks(ticks + 1)}>
+            Step right
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 600 90" role="img" aria-label={`Number line from ${min} to ${max} with a point at ${name(ticks)}`}>
+        <line x1="20" y1="45" x2="580" y2="45" className="fig-axis" />
+        {Array.from({ length: (max - min) * parts + 1 }, (_, i) => {
+          const t = min * parts + i;
+          const whole = t % parts === 0;
+          return (
+            <g key={t}>
+              <line x1={x(t)} x2={x(t)} y1={whole ? 35 : 40} y2={whole ? 55 : 50} className="fig-axis" />
+              {whole ? (
+                <text x={x(t)} y="76" textAnchor="middle" className="fig-small">
+                  {String(t / parts).replace("-", "−")}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+        {moved !== 0 ? <line x1={x(from)} x2={x(ticks)} y1="22" y2="22" className="fig-accent-line" /> : null}
+        <circle cx={x(ticks)} cy="45" r="7" className="fig-accent" />
+      </svg>
+    </Frame>
+  );
+}
+
+/** Multiplication as the area of a rectangle, split to show the distributive law. */
+function AreaGrid(props: Props) {
+  const [rows, setRows] = useState(clamp(num(props.rows, 3), 1, 9));
+  const [cols, setCols] = useState(clamp(num(props.columns, 12), 2, 15));
+  const [split, setSplit] = useState(clamp(num(props.split, 10), 1, 14));
+  const cut = Math.min(split, cols - 1);
+  const cell = 28;
+  return (
+    <Frame
+      title="Multiplication as area"
+      summary={`${rows} × ${cols} = ${rows} × ${cut} + ${rows} × ${cols - cut} = ${rows * cut} + ${rows * (cols - cut)} = ${rows * cols}`}
+      controls={
+        <>
+          <Stepper label="rows" value={rows} onChange={setRows} min={1} max={9} />
+          <Stepper label="columns" value={cols} onChange={setCols} min={2} max={15} />
+          <Slider label="split" value={cut} onChange={setSplit} min={1} max={cols - 1} />
+        </>
+      }
+    >
+      <svg viewBox={`0 0 ${15 * cell + 8} ${9 * cell + 8}`} role="img" aria-label={`A grid of ${rows} rows and ${cols} columns, split after column ${cut}`}>
+        {Array.from({ length: rows * cols }, (_, i) => {
+          const [r, c] = [Math.floor(i / cols), i % cols];
+          return <rect key={i} x={4 + c * cell} y={4 + r * cell} width={cell - 3} height={cell - 3} className={c < cut ? "fig-accent" : "fig-fill"} />;
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
+/** A whole cut into equal parts, some shaded, and the same amount cut more finely. */
+function FractionBar(props: Props) {
+  const [den, setDen] = useState(clamp(num(props.denominator, 4), 1, 12));
+  const [n, setN] = useState(clamp(num(props.numerator, 3), 0, 24));
+  const [finer, setFiner] = useState(clamp(num(props.finer, 1), 1, 4));
+  const top = Math.min(n, den * 2);
+  const bar = (y: number, parts: number, shaded: number) =>
+    Array.from({ length: parts * 2 }, (_, i) => (
+      <rect key={`${y}-${i}`} x={10 + (i * 280) / parts} y={y} width={280 / parts - 2} height="34" className={i < shaded ? "fig-accent" : i < parts ? "fig-fill" : "fig-ghost"} />
+    ));
+  return (
+    <Frame
+      title="Fractions"
+      summary={
+        finer === 1
+          ? `${top}/${den}: the whole is cut into ${den} equal parts and ${top} are taken.${top > den ? " That is more than one whole." : ""}`
+          : `${top}/${den} = ${top * finer}/${den * finer}: every part was cut into ${finer}, so there are ${finer} times as many parts and ${finer} times as many taken.`
+      }
+      controls={
+        <>
+          <Stepper label="parts taken" value={top} onChange={setN} min={0} max={den * 2} />
+          <Stepper label="parts in a whole" value={den} onChange={setDen} min={1} max={12} />
+          <Stepper label="cut each part into" value={finer} onChange={setFiner} min={1} max={4} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 580 110" role="img" aria-label={`Two bars, each showing ${top} parts out of ${den}; the lower bar is cut ${finer} times finer`}>
+        {bar(10, den, top)}
+        {bar(62, den * finer, top * finer)}
+        <line x1="290" x2="290" y1="2" y2="104" className="fig-axis" strokeDasharray="4 4" />
+      </svg>
+    </Frame>
+  );
+}
+
+const SCALE: Record<number, string> = {
+  [-9]: "a billionth",
+  [-6]: "a millionth",
+  [-3]: "a thousandth",
+  [-2]: "a hundredth",
+  [-1]: "a tenth",
+  0: "one",
+  1: "ten",
+  2: "a hundred",
+  3: "a thousand",
+  6: "a million",
+  9: "a billion",
+  12: "a trillion",
+};
+
+/** Ten multiplied by itself, or divided away, one step at a time. */
+function PowersOfTen(props: Props) {
+  const [n, setN] = useState(clamp(num(props.start, 3), -9, 12));
+  const written = n >= 0 ? "1" + "0".repeat(n) : "0." + "0".repeat(-n - 1) + "1";
+  const spaced = n >= 0 ? written.replace(/\B(?=(\d{3})+$)/g, " ") : written;
+  return (
+    <Frame
+      title="Powers of ten"
+      summary={`10 to the power ${String(n).replace("-", "−")} is ${spaced}${SCALE[n] ? `, ${SCALE[n]}` : ""}. Each step right multiplies by ten; each step left divides by ten.`}
+      controls={<Slider label="exponent" value={n} onChange={setN} min={-9} max={12} />}
+    >
+      <svg viewBox="0 0 600 110" role="img" aria-label={`10 to the power ${n} written out as ${spaced}`}>
+        <text x="300" y="50" textAnchor="middle" className="fig-digit">
+          10
+          <tspan dy="-18" fontSize="20">
+            {String(n).replace("-", "−")}
+          </tspan>
+        </text>
+        <text x="300" y="92" textAnchor="middle" className="fig-mono">
+          {spaced}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** Two quantities that grow together: multiply one and the other is multiplied by the same number. */
+function RatioTable(props: Props) {
+  const a = clamp(num(props.a, 4), 1, 20);
+  const b = clamp(num(props.b, 1), 1, 20);
+  const [k, setK] = useState(clamp(num(props.start, 1), 1, 12));
+  const names = [String(props.first ?? "first"), String(props.second ?? "second")];
+  const scale = 560 / ((a + b) * 12);
+  return (
+    <Frame
+      title="Ratio"
+      summary={`${a * k} ${names[0]} to ${b * k} ${names[1]}: both are ${k} times the base amounts ${a} and ${b}, so the ratio is still ${a} : ${b}. Total ${(a + b) * k}.`}
+      controls={<Slider label="multiply both by" value={k} onChange={setK} min={1} max={12} />}
+    >
+      <svg viewBox="0 0 600 80" role="img" aria-label={`A bar of ${a * k} ${names[0]} beside ${b * k} ${names[1]}`}>
+        <rect x="20" y="20" width={a * k * scale} height="36" className="fig-accent" />
+        <rect x={20 + a * k * scale + 3} y="20" width={b * k * scale} height="36" className="fig-fill" />
+        <text x="20" y="74" className="fig-small">
+          {a * k} {names[0]}
+        </text>
+        <text x={20 + a * k * scale + 3} y="14" className="fig-small">
+          {b * k} {names[1]}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const fmt = (n: number) => {
+  const text = Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+  return text.replace("-", "−");
+};
+/** Writes c1·name1 + c2·name2 + … as people write it: no "1x", no "+ −", no zero terms. */
+const sumOf = (terms: [number, string][]) => {
+  const kept = terms.filter(([k]) => k !== 0);
+  if (kept.length === 0) return "0";
+  return kept
+    .map(([k, name], i) => {
+      const size = Math.abs(k);
+      const body = name === "" ? fmt(size) : `${size === 1 ? "" : fmt(size)}${name}`;
+      return i === 0 ? `${k < 0 ? "−" : ""}${body}` : `${k < 0 ? "−" : "+"} ${body}`;
+    })
+    .join(" ");
+};
+
+const REACH = 8; // the plane runs from −8 to 8 both ways
+const UNIT = 20;
+const px = (x: number) => 170 + x * UNIT;
+const py = (y: number) => 170 - y * UNIT;
+
+function PlaneGrid({ label, children }: { label: string; children: ReactNode }) {
+  const marks = Array.from({ length: 2 * REACH + 1 }, (_, i) => i - REACH);
+  return (
+    <svg viewBox="0 0 340 340" role="img" aria-label={label}>
+      <defs>
+        <clipPath id="plane-clip">
+          <rect x={px(-REACH)} y={py(REACH)} width={2 * REACH * UNIT} height={2 * REACH * UNIT} />
+        </clipPath>
+      </defs>
+      {marks.map((k) => (
+        <g key={k}>
+          <line x1={px(k)} x2={px(k)} y1={py(-REACH)} y2={py(REACH)} className="fig-grid" />
+          <line y1={py(k)} y2={py(k)} x1={px(-REACH)} x2={px(REACH)} className="fig-grid" />
+          {k !== 0 && k % 2 === 0 ? (
+            <>
+              <text x={px(k)} y={py(0) + 13} textAnchor="middle" className="fig-small">
+                {fmt(k)}
+              </text>
+              <text x={px(0) - 5} y={py(k) + 4} textAnchor="end" className="fig-small">
+                {fmt(k)}
+              </text>
+            </>
+          ) : null}
+        </g>
+      ))}
+      <line x1={px(-REACH)} x2={px(REACH)} y1={py(0)} y2={py(0)} className="fig-axis" />
+      <line y1={py(-REACH)} y2={py(REACH)} x1={px(0)} x2={px(0)} className="fig-axis" />
+      <text x={px(REACH) - 2} y={py(0) - 6} textAnchor="end" className="fig-small">
+        x
+      </text>
+      <text x={px(0) + 6} y={py(REACH) + 10} className="fig-small">
+        y
+      </text>
+      <g clipPath="url(#plane-clip)">{children}</g>
+    </svg>
+  );
+}
+
+/** A point named by two numbers: how far across, then how far up. */
+function PlanePoint(props: Props) {
+  const [x, setX] = useState(clamp(Math.round(num(props.x, 3)), -REACH, REACH));
+  const [y, setY] = useState(clamp(Math.round(num(props.y, 2)), -REACH, REACH));
+  const across = x === 0 ? "neither left nor right" : `${Math.abs(x)} ${x > 0 ? "right" : "left"}`;
+  const up = y === 0 ? "neither up nor down" : `${Math.abs(y)} ${y > 0 ? "up" : "down"}`;
+  const where =
+    x === 0 && y === 0
+      ? "It is the origin."
+      : x === 0
+        ? "It lies on the y-axis."
+        : y === 0
+          ? "It lies on the x-axis."
+          : `It is in quadrant ${x > 0 ? (y > 0 ? "I" : "IV") : y > 0 ? "II" : "III"}.`;
+  const square = x * x + y * y;
+  const root = Math.sqrt(square);
+  return (
+    <Frame
+      title="Coordinates"
+      summary={`The point (${fmt(x)}, ${fmt(y)}): ${across}, ${up}. ${where} Distance from the origin: ${Number.isInteger(root) ? fmt(root) : `√${square} ≈ ${fmt(root)}`}.`}
+      controls={
+        <>
+          <Stepper label="x" value={x} onChange={setX} min={-REACH} max={REACH} />
+          <Stepper label="y" value={y} onChange={setY} min={-REACH} max={REACH} />
+        </>
+      }
+    >
+      <PlaneGrid label={`The coordinate plane with a point at (${x}, ${y})`}>
+        <line x1={px(x)} x2={px(x)} y1={py(0)} y2={py(y)} className="fig-guide" />
+        <line x1={px(0)} x2={px(x)} y1={py(y)} y2={py(y)} className="fig-guide" />
+        <circle cx={px(x)} cy={py(y)} r="6" className="fig-accent" />
+      </PlaneGrid>
+    </Frame>
+  );
+}
+
+const lineName = (m: number, b: number) => `y = ${sumOf([[m, "x"], [b, ""]])}`;
+const drawLine = (m: number, b: number, className: string) => (
+  <line x1={px(-REACH - 1)} y1={py(m * (-REACH - 1) + b)} x2={px(REACH + 1)} y2={py(m * (REACH + 1) + b)} className={className} />
+);
+
+/** A straight line steered by its slope and its intercept, with the slope drawn as a step. */
+function PlaneLine(props: Props) {
+  const [m, setM] = useState(clamp(num(props.slope, 2), -4, 4));
+  const [b, setB] = useState(clamp(num(props.intercept, 1), -6, 6));
+  const rise = m === 0 ? "stays level" : `goes ${m > 0 ? "up" : "down"} ${fmt(Math.abs(m))}`;
+  return (
+    <Frame
+      title="Straight line"
+      summary={`${lineName(m, b)}. It crosses the y-axis at ${fmt(b)}. For each 1 step to the right it ${rise}.`}
+      controls={
+        <>
+          <Slider label="slope" value={m} onChange={setM} min={-4} max={4} step={0.5} />
+          <Slider label="intercept" value={b} onChange={setB} min={-6} max={6} />
+        </>
+      }
+    >
+      <PlaneGrid label={`The line ${lineName(m, b)}`}>
+        {drawLine(m, b, "fig-accent-line")}
+        <line x1={px(0)} x2={px(1)} y1={py(b)} y2={py(b)} className="fig-line" />
+        <line x1={px(1)} x2={px(1)} y1={py(b)} y2={py(b + m)} className="fig-line" />
+        <circle cx={px(0)} cy={py(b)} r="5" className="fig-accent" />
+      </PlaneGrid>
+    </Frame>
+  );
+}
+
+/** Two lines. Where they cross is the one pair of numbers that satisfies both equations. */
+function PlaneLines(props: Props) {
+  const [m, setM] = useState(clamp(num(props.slope, 1), -4, 4));
+  const [b, setB] = useState(clamp(num(props.intercept, 1), -6, 6));
+  const m2 = clamp(num(props.otherSlope, -1), -4, 4);
+  const b2 = clamp(num(props.otherIntercept, 5), -6, 6);
+  const x = m === m2 ? null : (b2 - b) / (m - m2);
+  const meeting =
+    x === null
+      ? b === b2
+        ? "They are the same line, so every point on it satisfies both equations."
+        : "They are parallel and never meet, so no pair satisfies both equations."
+      : `They cross at (${fmt(x)}, ${fmt(m * x + b)}), the only pair that satisfies both equations.`;
+  return (
+    <Frame
+      title="Two lines"
+      summary={`${lineName(m, b)} and ${lineName(m2, b2)}. ${meeting}`}
+      controls={
+        <>
+          <Slider label="slope" value={m} onChange={setM} min={-4} max={4} step={0.5} />
+          <Slider label="intercept" value={b} onChange={setB} min={-6} max={6} />
+        </>
+      }
+    >
+      <PlaneGrid label={`The lines ${lineName(m, b)} and ${lineName(m2, b2)}`}>
+        {drawLine(m2, b2, "fig-line")}
+        {drawLine(m, b, "fig-accent-line")}
+        {x === null ? null : <circle cx={px(x)} cy={py(m * x + b)} r="6" className="fig-accent" />}
+      </PlaneGrid>
+    </Frame>
+  );
+}
+
+/** The curve y = ax² + bx + c, with its turning point and the places it meets the x-axis. */
+function Parabola(props: Props) {
+  const [a, setA] = useState(clamp(num(props.a, 1), -2, 2));
+  const [b, setB] = useState(clamp(num(props.b, -2), -6, 6));
+  const [c, setC] = useState(clamp(num(props.c, -3), -8, 8));
+  const name = `y = ${sumOf([[a, "x²"], [b, "x"], [c, ""]])}`;
+  const f = (x: number) => a * x * x + b * x + c;
+  const points = Array.from({ length: 161 }, (_, i) => -REACH + i / 10)
+    .map((x) => `${px(x).toFixed(1)},${py(clamp(f(x), -3 * REACH, 3 * REACH)).toFixed(1)}`)
+    .join(" ");
+  const disc = b * b - 4 * a * c;
+  let detail: string;
+  let roots: number[] = [];
+  if (a === 0) {
+    detail = "With no x² term this is a straight line, not a parabola.";
+  } else {
+    const h = -b / (2 * a);
+    if (disc > 0) roots = [(-b - Math.sqrt(disc)) / (2 * a), (-b + Math.sqrt(disc)) / (2 * a)].sort((p, q) => p - q);
+    else if (disc === 0) roots = [h];
+    const crossing =
+      roots.length === 2
+        ? `It crosses the x-axis at ${fmt(roots[0])} and ${fmt(roots[1])}.`
+        : roots.length === 1
+          ? `It touches the x-axis at ${fmt(roots[0])}.`
+          : "It never meets the x-axis.";
+    detail = `It opens ${a > 0 ? "upwards" : "downwards"}, with its turning point at (${fmt(h)}, ${fmt(f(h))}). ${crossing} b² − 4ac = ${fmt(disc)}.`;
+  }
+  return (
+    <Frame
+      title="Parabola"
+      summary={`${name}. ${detail}`}
+      controls={
+        <>
+          <Slider label="a" value={a} onChange={setA} min={-2} max={2} step={0.5} />
+          <Slider label="b" value={b} onChange={setB} min={-6} max={6} />
+          <Slider label="c" value={c} onChange={setC} min={-8} max={8} />
+        </>
+      }
+    >
+      <PlaneGrid label={`The curve ${name}`}>
+        <polyline points={points} fill="none" className="fig-accent-line" />
+        {roots.map((r) => (
+          <circle key={r} cx={px(r)} cy={py(0)} r="5" className="fig-accent" />
+        ))}
+      </PlaneGrid>
+    </Frame>
+  );
+}
+
+const listOf = (items: number[]) => (items.length === 0 ? "nothing" : items.map(fmt).join(", "));
+
+/** Two sets of whole numbers drawn as overlapping regions, with their union, intersection and differences. */
+function Venn(props: Props) {
+  const top = 12;
+  const [a, setA] = useState(clamp(Math.round(num(props.a, 2)), 2, 6));
+  const [b, setB] = useState(clamp(Math.round(num(props.b, 3)), 2, 6));
+  const universe = Array.from({ length: top }, (_, i) => i + 1);
+  const onlyA = universe.filter((n) => n % a === 0 && n % b !== 0);
+  const both = universe.filter((n) => n % a === 0 && n % b === 0);
+  const onlyB = universe.filter((n) => n % a !== 0 && n % b === 0);
+  const neither = universe.filter((n) => n % a !== 0 && n % b !== 0);
+  const column = (items: number[], x: number) =>
+    items.map((n, i) => (
+      <text key={n} x={x} y={150 - (items.length - 1) * 11 + i * 22} textAnchor="middle" className="fig-mono">
+        {n}
+      </text>
+    ));
+  return (
+    <Frame
+      title="Two sets"
+      summary={`Among the numbers 1 to ${top}, A is the multiples of ${a} and B is the multiples of ${b}. In both (A ∩ B): ${listOf(both)}. In at least one (A ∪ B): ${listOf(universe.filter((n) => n % a === 0 || n % b === 0))}. In A but not B (A ∖ B): ${listOf(onlyA)}. In neither: ${listOf(neither)}.`}
+      controls={
+        <>
+          <Stepper label="A: multiples of" value={a} onChange={setA} min={2} max={6} />
+          <Stepper label="B: multiples of" value={b} onChange={setB} min={2} max={6} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`Two overlapping regions for the multiples of ${a} and of ${b} among 1 to ${top}`}>
+        <rect x="10" y="10" width="420" height="270" className="fig-ghost" />
+        <circle cx="165" cy="145" r="115" className="fig-ghost" />
+        <circle cx="275" cy="145" r="115" className="fig-ghost" />
+        <text x="80" y="40" className="fig-small">
+          A
+        </text>
+        <text x="352" y="40" className="fig-small">
+          B
+        </text>
+        {column(onlyA, 105)}
+        {column(both, 220)}
+        {column(onlyB, 335)}
+        <text x="20" y="272" className="fig-small">
+          outside both: {listOf(neither)}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const MAP_RULES: { name: string; f: (x: number, m: number) => number }[] = [
+  { name: "x mod m", f: (x, m) => x % m },
+  { name: "(x + 1) mod m", f: (x, m) => (x + 1) % m },
+  { name: "2x mod m", f: (x, m) => (2 * x) % m },
+  { name: "(x // 2) mod m", f: (x, m) => Math.floor(x / 2) % m },
+  { name: "x² mod m", f: (x, m) => (x * x) % m },
+];
+
+/** A function drawn as arrows from each input to its one output, with the two questions asked of any map. */
+function ArrowMap(props: Props) {
+  const [n, setN] = useState(clamp(Math.round(num(props.inputs, 4)), 2, 6));
+  const [m, setM] = useState(clamp(Math.round(num(props.outputs, 4)), 2, 6));
+  const [rule, setRule] = useState(clamp(Math.round(num(props.rule, 1)), 1, MAP_RULES.length));
+  const { name, f } = MAP_RULES[rule - 1];
+  const inputs = Array.from({ length: n }, (_, i) => i);
+  const outputs = Array.from({ length: m }, (_, i) => i);
+  const image = inputs.map((x) => f(x, m));
+  const missed = outputs.filter((y) => !image.includes(y));
+  const clash = inputs.find((x) => image.indexOf(image[x]) !== x);
+  const injective = clash === undefined;
+  const surjective = missed.length === 0;
+  const yIn = (i: number) => 40 + i * 40;
+  const kind = injective && surjective ? "a bijection" : injective ? "injective only" : surjective ? "surjective only" : "neither";
+  const plain = props.plain === true;
+  const head = `f(x) = ${name} with m = ${m}, from {${inputs.join(", ")}} to {${outputs.join(", ")}}. Every input has exactly one arrow.`;
+  const range = `The outputs that are reached, the range, are {${outputs.filter((y) => image.includes(y)).join(", ")}}.`;
+  return (
+    <Frame
+      title="Arrow diagram"
+      summary={
+        plain
+          ? `${head} ${range}`
+          : `${head} Injective: ${injective ? "yes, no output is hit twice" : `no, inputs ${image.indexOf(image[clash!])} and ${clash} share the output ${image[clash!]}`}. Surjective: ${
+              surjective ? "yes, every output is hit" : `no, nothing reaches ${listOf(missed)}`
+            }. This map is ${kind}.`
+      }
+      controls={
+        <>
+          <Stepper label="rule" value={rule} onChange={setRule} min={1} max={MAP_RULES.length} />
+          <Stepper label="inputs" value={n} onChange={setN} min={2} max={6} />
+          <Stepper label="outputs (m)" value={m} onChange={setM} min={2} max={6} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`Arrows from ${n} inputs to ${m} outputs for the rule ${name}`}>
+        <text x="110" y="16" textAnchor="middle" className="fig-small">
+          inputs
+        </text>
+        <text x="330" y="16" textAnchor="middle" className="fig-small">
+          outputs
+        </text>
+        {inputs.map((x) => (
+          <g key={`in-${x}`}>
+            <line x1="128" y1={yIn(x) - 5} x2="312" y2={yIn(image[x]) - 5} className={!plain && (x === clash || (clash !== undefined && x === image.indexOf(image[clash]))) ? "fig-accent-line" : "fig-line"} />
+            <text x="110" y={yIn(x)} textAnchor="middle" className="fig-mono">
+              {x}
+            </text>
+          </g>
+        ))}
+        {outputs.map((y) => (
+          <g key={`out-${y}`}>
+            <circle cx="318" cy={yIn(y) - 5} r="4" className={image.includes(y) ? "fig-accent" : "fig-ghost"} />
+            <text x="340" y={yIn(y)} textAnchor="middle" className="fig-mono">
+              {y}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+/** A line and its inverse: the same line with the roles of x and y exchanged, its mirror image in y = x. */
+function InverseLine(props: Props) {
+  const [m, setM] = useState(clamp(num(props.slope, 2), -4, 4));
+  const [b, setB] = useState(clamp(num(props.intercept, -2), -6, 6));
+  const [x, setX] = useState(clamp(Math.round(num(props.x, 3)), -REACH, REACH));
+  const y = m * x + b;
+  const detail =
+    m === 0
+      ? `With slope 0 every input gives ${fmt(b)}, so the output does not tell you the input and there is no inverse.`
+      : `Its inverse is ${lineName(1 / m, -b / m).replace("y =", "g(x) =")}. f sends ${fmt(x)} to ${fmt(y)}, and g sends ${fmt(y)} back to ${fmt(x)}: the point (${fmt(x)}, ${fmt(y)}) on f is mirrored to (${fmt(y)}, ${fmt(x)}) on g.`;
+  return (
+    <Frame
+      title="A function and its inverse"
+      summary={`${lineName(m, b).replace("y =", "f(x) =")}. ${detail}`}
+      controls={
+        <>
+          <Slider label="slope" value={m} onChange={setM} min={-4} max={4} step={0.5} />
+          <Slider label="intercept" value={b} onChange={setB} min={-6} max={6} />
+          <Stepper label="x" value={x} onChange={setX} min={-REACH} max={REACH} />
+        </>
+      }
+    >
+      <PlaneGrid label={`The line ${lineName(m, b)}, the mirror line y = x, and the inverse`}>
+        <line x1={px(-REACH)} y1={py(-REACH)} x2={px(REACH)} y2={py(REACH)} className="fig-guide" />
+        {m === 0 ? null : drawLine(1 / m, -b / m, "fig-line")}
+        {drawLine(m, b, "fig-accent-line")}
+        <circle cx={px(x)} cy={py(y)} r="5" className="fig-accent" />
+        {m === 0 ? null : <circle cx={px(y)} cy={py(x)} r="5" className="fig-fill" />}
+      </PlaneGrid>
+    </Frame>
+  );
+}
+
+const SPLITS = [1, 2, 4, 12, 52, 365, 8760];
+const SPLIT_NAMES = ["once, at the end of the year", "every half-year", "every quarter", "every month", "every week", "every day", "every hour"];
+
+/** One rupee at 100% a year, with the interest paid in more and more instalments: the staircase closes in on e. */
+function Growth(props: Props) {
+  const [k, setK] = useState(clamp(Math.round(num(props.start, 1)), 1, SPLITS.length));
+  const n = SPLITS[k - 1];
+  const final = (1 + 1 / n) ** n;
+  const gx = (t: number) => 40 + t * 380;
+  const gy = (v: number) => 250 - (v - 1) * 125;
+  const shown = Math.min(n, 365);
+  let stairs = `${gx(0)},${gy(1)}`;
+  for (let i = 1; i <= shown; i++) {
+    const before = (1 + 1 / n) ** Math.round(((i - 1) * n) / shown);
+    const after = (1 + 1 / n) ** Math.round((i * n) / shown);
+    stairs += ` ${gx(i / shown).toFixed(1)},${gy(before).toFixed(1)} ${gx(i / shown).toFixed(1)},${gy(after).toFixed(1)}`;
+  }
+  const curve = Array.from({ length: 101 }, (_, i) => `${gx(i / 100).toFixed(1)},${gy(Math.exp(i / 100)).toFixed(1)}`).join(" ");
+  return (
+    <Frame
+      title="Compound growth"
+      summary={`₹1 at 100% a year, interest added ${SPLIT_NAMES[k - 1]}: ${n} step${n === 1 ? "" : "s"}, each multiplying by (1 + 1/${group(n)}). After one year: ₹${final.toFixed(5)}. The limit of ever finer steps is e ≈ 2.71828.`}
+      controls={<Stepper label="how often" value={k} onChange={setK} min={1} max={SPLITS.length} />}
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`Balance over one year with interest added in ${n} steps, against the smooth curve of continuous growth`}>
+        <line x1={gx(0)} x2={gx(1)} y1={gy(1)} y2={gy(1)} className="fig-axis" />
+        <line x1={gx(0)} x2={gx(0)} y1={gy(1)} y2={gy(2.85)} className="fig-axis" />
+        {[1, 2, Math.E].map((v) => (
+          <g key={v}>
+            <line x1={gx(0)} x2={gx(1)} y1={gy(v)} y2={gy(v)} className="fig-guide" />
+            <text x={gx(0) - 6} y={gy(v) + 4} textAnchor="end" className="fig-small">
+              {v === Math.E ? "e" : v}
+            </text>
+          </g>
+        ))}
+        <text x={gx(1)} y={gy(1) + 16} textAnchor="end" className="fig-small">
+          one year
+        </text>
+        <polyline points={curve} fill="none" className="fig-line" />
+        <polyline points={stairs} fill="none" className="fig-accent-line" />
+      </svg>
+    </Frame>
+  );
+}
+
+const EXACT: Record<number, string> = { 0: "0", 30: "1/2", 45: "√2/2", 60: "√3/2", 90: "1" };
+/** The exact value of the sine of a multiple of 15 degrees where it has a short form, with its decimal. */
+const trig = (degrees: number, value: number) => {
+  const d = ((degrees % 360) + 360) % 360;
+  const reference = d <= 90 ? d : d <= 180 ? 180 - d : d <= 270 ? d - 180 : 360 - d;
+  const exact = EXACT[reference];
+  const decimal = String(Math.round(value * 1000) / 1000 || 0).replace("-", "−");
+  if (exact === undefined || exact === "0" || exact === "1") return decimal;
+  return `${value < 0 ? "−" : ""}${exact} ≈ ${decimal}`;
+};
+
+/** A point travelling round the circle of radius 1: its two coordinates are the cosine and sine of the angle. */
+function UnitCircle(props: Props) {
+  const [turns, setTurns] = useState(clamp(Math.round(num(props.degrees, 30) / 15), -24, 48));
+  const degrees = turns * 15;
+  const radians = (degrees * Math.PI) / 180;
+  const c = Math.cos(radians);
+  const s = Math.sin(radians);
+  const cx = (x: number) => 170 + x * 120;
+  const cy = (y: number) => 150 - y * 120;
+  const piFraction = (() => {
+    const g = (p: number, q: number): number => (q === 0 ? Math.abs(p) : g(q, p % q));
+    const d = g(turns, 12) || 1;
+    const top = turns / d;
+    const bottom = 12 / d;
+    if (top === 0) return "0";
+    const head = Math.abs(top) === 1 ? "π" : `${Math.abs(top)}π`;
+    return `${top < 0 ? "−" : ""}${head}${bottom === 1 ? "" : `/${bottom}`}`;
+  })();
+  const cosine = trig(90 - degrees, c);
+  const sine = trig(degrees, s);
+  return (
+    <Frame
+      title="Unit circle"
+      summary={`Angle ${fmt(degrees)}° = ${piFraction} radians. The point on the circle is (cos, sin) = (${cosine}, ${sine}). Check: cos² + sin² = ${fmt(Math.round((c * c + s * s) * 1000) / 1000)}.`}
+      controls={<Slider label="angle" value={turns} onChange={setTurns} min={-24} max={48} />}
+    >
+      <svg viewBox="0 0 340 300" role="img" aria-label={`The unit circle with a point at an angle of ${degrees} degrees`}>
+        <line x1={cx(-1.3)} x2={cx(1.3)} y1={cy(0)} y2={cy(0)} className="fig-axis" />
+        <line x1={cx(0)} x2={cx(0)} y1={cy(-1.2)} y2={cy(1.2)} className="fig-axis" />
+        <circle cx={cx(0)} cy={cy(0)} r="120" className="fig-ghost" />
+        <text x={cx(1) + 4} y={cy(0) + 13} className="fig-small">
+          1
+        </text>
+        <text x={cx(0) + 5} y={cy(1) - 4} className="fig-small">
+          1
+        </text>
+        <line x1={cx(0)} y1={cy(0)} x2={cx(c)} y2={cy(s)} className="fig-line" />
+        <line x1={cx(0)} y1={cy(0)} x2={cx(c)} y2={cy(0)} className="fig-accent-line" />
+        <line x1={cx(c)} y1={cy(0)} x2={cx(c)} y2={cy(s)} className="fig-accent-line" />
+        <text x={cx(c / 2)} y={cy(0) + (s >= 0 ? 14 : -6)} textAnchor="middle" className="fig-small">
+          cos
+        </text>
+        <text x={cx(c) + (c >= 0 ? 6 : -6)} y={cy(s / 2) + 4} textAnchor={c >= 0 ? "start" : "end"} className="fig-small">
+          sin
+        </text>
+        <circle cx={cx(c)} cy={cy(s)} r="6" className="fig-accent" />
+      </svg>
+    </Frame>
+  );
+}
+
+/** 1 + 2 + … + n as a staircase of squares, and two staircases fitted together into an n by (n + 1) rectangle. */
+function TriangleSum(props: Props) {
+  const [n, setN] = useState(clamp(Math.round(num(props.n, 4)), 1, 10));
+  const size = Math.min(26, 250 / (n + 1));
+  const total = (n * (n + 1)) / 2;
+  const cells: ReactNode[] = [];
+  for (let row = 1; row <= n; row++) {
+    for (let col = 1; col <= n + 1; col++) {
+      cells.push(<rect key={`${row}-${col}`} x={20 + (col - 1) * size} y={15 + (row - 1) * size} width={size - 2} height={size - 2} className={col <= row ? "fig-accent" : "fig-fill"} />);
+    }
+  }
+  return (
+    <Frame
+      title="Sum of the first n whole numbers"
+      summary={`1 + 2 + … + ${n} is the shaded staircase: ${total} squares. A second copy, turned over, completes a rectangle ${n} by ${n + 1} with ${n * (n + 1)} squares, so the staircase is half of it: ${n} × ${n + 1} ÷ 2 = ${total}.`}
+      controls={<Stepper label="n" value={n} onChange={setN} min={1} max={10} />}
+    >
+      <svg viewBox="0 0 340 280" role="img" aria-label={`A staircase of ${total} squares and its copy, forming a rectangle ${n} by ${n + 1}`}>
+        {cells}
+      </svg>
+    </Frame>
+  );
+}
+
+/** The running totals of a + ar + ar² + …: they settle when the ratio is small, and do not when it is not. */
+function PartialSums(props: Props) {
+  const [ratio, setRatio] = useState(clamp(num(props.ratio, 0.5), -1.2, 1.2));
+  const [count, setCount] = useState(clamp(Math.round(num(props.terms, 6)), 1, 16));
+  const sums: number[] = [];
+  let term = 1;
+  let running = 0;
+  for (let i = 0; i < count; i++) {
+    running += term;
+    sums.push(running);
+    term *= ratio;
+  }
+  const converges = Math.abs(ratio) < 1;
+  const limit = converges ? 1 / (1 - ratio) : null;
+  const reach = Math.max(2.2, ...sums.map(Math.abs), limit ?? 0) * 1.1;
+  const low = Math.min(0, ...sums) < 0 ? -reach : 0;
+  const sy = (v: number) => 250 - ((v - low) / (reach - low)) * 230;
+  const width = 380 / 16;
+  return (
+    <Frame
+      title="Partial sums of a geometric series"
+      summary={`1 + r + r² + … with r = ${fmt(ratio)}. The sum of the first ${count} term${count === 1 ? "" : "s"} is ${fmt(Math.round(sums[count - 1] * 10000) / 10000)}. ${
+        limit === null ? "The ratio is not smaller than 1 in size, so the totals never settle: the series diverges." : `The totals close in on 1 ÷ (1 − r) = ${fmt(Math.round(limit * 10000) / 10000)}: the series converges.`
+      }`}
+      controls={
+        <>
+          <Slider label="ratio r" value={ratio} onChange={setRatio} min={-1.2} max={1.2} step={0.1} />
+          <Stepper label="terms" value={count} onChange={setCount} min={1} max={16} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`Bars for the first ${count} partial sums of the geometric series with ratio ${ratio}`}>
+        <line x1="40" x2="430" y1={sy(0)} y2={sy(0)} className="fig-axis" />
+        {limit === null ? null : (
+          <>
+            <line x1="40" x2="430" y1={sy(limit)} y2={sy(limit)} className="fig-guide" />
+            <text x="36" y={sy(limit) + 4} textAnchor="end" className="fig-small">
+              {fmt(Math.round(limit * 100) / 100)}
+            </text>
+          </>
+        )}
+        <text x="36" y={sy(0) + 4} textAnchor="end" className="fig-small">
+          0
+        </text>
+        {sums.map((v, i) => (
+          <rect key={i} x={44 + i * width} y={Math.min(sy(v), sy(0))} width={width - 4} height={Math.max(1, Math.abs(sy(v) - sy(0)))} className={i === count - 1 ? "fig-accent" : "fig-fill"} />
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+const factorialOf = (k: number) => Array.from({ length: k }, (_, i) => i + 1).reduce((a, b) => a * b, 1);
+
+/** The calls of factorial(n) piling up while each waits for the next, then finishing from the top down. */
+function CallStack(props: Props) {
+  const [n, setN] = useState(clamp(Math.round(num(props.n, 3)), 1, 5));
+  const [step, setStep] = useState(0);
+  const last = 2 * n + 1;
+  const at = Math.min(step, last);
+  const returned = Math.max(0, at - n); // how many calls have finished
+  const frames = at <= n ? at + 1 : n + 1 - returned; // calls still on the stack
+  const top = frames - 1;
+  const argOf = (i: number) => n - i;
+  let summary: string;
+  if (at < n) {
+    summary = `Step ${at}: factorial(${argOf(top)}) has been called. ${argOf(top)} is not 0, so it needs factorial(${argOf(top) - 1}) and must wait. ${frames} call${frames === 1 ? " is" : "s are"} on the stack.`;
+  } else if (at === n) {
+    summary = `Step ${at}: factorial(0) has been called. It is the base case and returns 1 without calling anything. ${frames} calls are on the stack, the deepest it gets.`;
+  } else if (at < last) {
+    const k = argOf(top);
+    summary = `Step ${at}: factorial(${k - 1}) returned ${factorialOf(k - 1)}. factorial(${k}) resumes with its own n = ${k} and computes ${k} × ${factorialOf(k - 1)} = ${factorialOf(k)}. ${frames} call${frames === 1 ? " is" : "s are"} on the stack.`;
+  } else {
+    summary = `Step ${at}: factorial(${n}) returned ${factorialOf(n)}. The stack is empty. ${n + 1} calls were made in all.`;
+  }
+  const height = 38;
+  return (
+    <Frame
+      title="The call stack"
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="step" value={at} onChange={setStep} min={0} max={last} />
+          <Stepper
+            label="n"
+            value={n}
+            onChange={(v) => {
+              setN(v);
+              setStep(0);
+            }}
+            min={1}
+            max={5}
+          />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The stack of unfinished calls of factorial(${n}) at step ${at}, holding ${frames} call${frames === 1 ? "" : "s"}`}>
+        <line x1="60" x2="380" y1="262" y2="262" className="fig-axis" />
+        {Array.from({ length: n + 1 }, (_, i) => {
+          const y = 262 - (i + 1) * (height + 4);
+          const live = i < frames;
+          const k = argOf(i);
+          const note = !live ? "" : i < top ? `waiting for factorial(${k - 1})` : at === n ? "base case: returns 1" : at > n ? `${k} × ${factorialOf(k - 1)} = ${factorialOf(k)}` : "running";
+          return (
+            <g key={i}>
+              <rect x="60" y={y} width="320" height={height} className={live ? (i === top ? "fig-accent" : "fig-fill") : "fig-ghost"} />
+              {live ? (
+                <>
+                  <text x="72" y={y + 24} className="fig-mono" style={i === top ? { fill: "var(--bg)" } : undefined}>
+                    factorial({k})
+                  </text>
+                  <text x="368" y={y + 23} textAnchor="end" className="fig-small" style={i === top ? { fill: "var(--bg)" } : undefined}>
+                    {note}
+                  </text>
+                </>
+              ) : null}
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
+const RATES: { name: string; f: (n: number) => number }[] = [
+  { name: "log₂ n", f: (n) => Math.log2(n) },
+  { name: "n", f: (n) => n },
+  { name: "n log₂ n", f: (n) => n * Math.log2(n) },
+  { name: "n²", f: (n) => n * n },
+  { name: "2ⁿ", f: (n) => 2 ** n },
+];
+
+/** How five kinds of running time grow with the size of the input. */
+function GrowthRates(props: Props) {
+  const [n, setN] = useState(clamp(Math.round(num(props.n, 8)), 2, 32));
+  const top = 1100;
+  const gx = (x: number) => 44 + ((x - 1) / 31) * 330;
+  const gy = (v: number) => 250 - (Math.min(v, top) / top) * 230;
+  const whole = (v: number) => group(Math.round(v));
+  return (
+    <Frame
+      title="How running times grow"
+      summary={`For an input of size n = ${n}: log₂ n = ${fmt(Math.round(Math.log2(n) * 10) / 10)} steps, n = ${n}, n log₂ n = ${whole(n * Math.log2(n))}, n² = ${whole(n * n)}, 2ⁿ = ${whole(2 ** n)}. Doubling n adds one step to log₂ n, doubles n, multiplies n² by four, and squares 2ⁿ.`}
+      controls={<Slider label="size n" value={n} onChange={setN} min={2} max={32} />}
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`Curves of log n, n, n log n, n squared and 2 to the n, marked at n = ${n}`}>
+        <line x1={gx(1)} x2={gx(32)} y1={gy(0)} y2={gy(0)} className="fig-axis" />
+        <line x1={gx(1)} x2={gx(1)} y1={gy(0)} y2={gy(top)} className="fig-axis" />
+        {[250, 500, 750, 1000].map((v) => (
+          <g key={v}>
+            <line x1={gx(1)} x2={gx(32)} y1={gy(v)} y2={gy(v)} className="fig-grid" />
+            <text x={gx(1) - 6} y={gy(v) + 4} textAnchor="end" className="fig-small">
+              {v}
+            </text>
+          </g>
+        ))}
+        {[8, 16, 24, 32].map((x) => (
+          <text key={x} x={gx(x)} y={gy(0) + 16} textAnchor="middle" className="fig-small">
+            {x}
+          </text>
+        ))}
+        <line x1={gx(n)} x2={gx(n)} y1={gy(0)} y2={gy(top)} className="fig-guide" />
+        {RATES.map((rate) => {
+          const points: string[] = [];
+          let end = 1;
+          for (let x = 1; x <= 32; x += 0.25) {
+            const v = rate.f(x);
+            if (v > top) break;
+            points.push(`${gx(x).toFixed(1)},${gy(v).toFixed(1)}`);
+            end = x;
+          }
+          const value = rate.f(n);
+          return (
+            <g key={rate.name}>
+              <polyline points={points.join(" ")} className="fig-line" />
+              <text x={Math.min(gx(end) + 5, 392)} y={Math.max(gy(rate.f(end)) + (end >= 32 ? 4 : -4), 14)} className="fig-small">
+                {rate.name}
+              </text>
+              {value <= top ? <circle cx={gx(n)} cy={gy(value)} r="4" className="fig-accent" /> : null}
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
+function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <span className="fig-stepper">
+      <span className="label">{label}</span>
+      <button type="button" className="q-move" aria-label={`Switch ${label}`} aria-pressed={value} onClick={() => onChange(!value)}>
+        {value ? "T" : "F"}
+      </button>
+    </span>
+  );
+}
+
+const CONNECTIVES: { head: string; name: string; f: (p: boolean, q: boolean) => boolean }[] = [
+  { head: "¬P", name: "not P", f: (p) => !p },
+  { head: "P∧Q", name: "P and Q", f: (p, q) => p && q },
+  { head: "P∨Q", name: "P or Q", f: (p, q) => p || q },
+  { head: "P⇒Q", name: "P implies Q", f: (p, q) => !p || q },
+  { head: "P⇔Q", name: "P if and only if Q", f: (p, q) => p === q },
+];
+
+/** The truth table of the five connectives, with the row for the chosen P and Q picked out. */
+function TruthTable(props: Props) {
+  const [p, setP] = useState(props.p !== false);
+  const [q, setQ] = useState(props.q !== false);
+  const word = (v: boolean) => (v ? "true" : "false");
+  const note = !p ? "A false P makes “P implies Q” true whatever Q is: the promise was never put to the test." : q ? "P held and Q followed: the promise was kept." : "This is the only row in which “P implies Q” is false: P held and Q did not, so the promise was broken.";
+  const rows: [boolean, boolean][] = [
+    [true, true],
+    [true, false],
+    [false, true],
+    [false, false],
+  ];
+  const heads = ["P", "Q", ...CONNECTIVES.map((c) => c.head)];
+  return (
+    <Frame
+      title="Truth table"
+      summary={`P is ${word(p)} and Q is ${word(q)}. ${CONNECTIVES.map((c) => `${c.name} is ${word(c.f(p, q))}`).join(". ")}. ${note}`}
+      controls={
+        <>
+          <Toggle label="P" value={p} onChange={setP} />
+          <Toggle label="Q" value={q} onChange={setQ} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`Truth table of not, and, or, implies and if and only if, with the row for P ${word(p)} and Q ${word(q)} marked`}>
+        {heads.map((h, j) => (
+          <text key={h} x={52 + j * 56} y="36" textAnchor="middle" className="fig-small" style={{ fontSize: 13 }}>
+            {h}
+          </text>
+        ))}
+        <line x1="24" x2="416" y1="50" y2="50" className="fig-axis" />
+        {rows.map(([a, b], i) => {
+          const here = a === p && b === q;
+          const cells = [a, b, ...CONNECTIVES.map((c) => c.f(a, b))];
+          return (
+            <g key={i}>
+              {here ? <rect x="24" y={60 + i * 50} width="392" height="40" className="fig-accent" /> : null}
+              {cells.map((v, j) => (
+                <text key={j} x={52 + j * 56} y={86 + i * 50} textAnchor="middle" className="fig-mono" style={here ? { fill: "var(--bg)" } : undefined}>
+                  {v ? "T" : "F"}
+                </text>
+              ))}
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
+/** Induction as a row of dominoes: a first push and a rule that each knocks over the next. */
+function Dominoes(props: Props) {
+  const count = 8;
+  const [base, setBase] = useState(props.base !== false);
+  const [gap, setGap] = useState(clamp(Math.round(num(props.gap, 0)), 0, count - 1));
+  const fallen = !base ? 0 : gap === 0 ? count : gap;
+  const summary = !base
+    ? `The base case P(1) has not been shown. ${gap === 0 ? "Every step from P(k) to P(k + 1) holds, and yet" : "So"} no domino falls: nothing starts the chain.`
+    : gap === 0
+      ? `The base case P(1) holds, and every step from P(k) to P(k + 1) holds. All ${count} dominoes fall, and so would any number of them: P(n) is true for every n.`
+      : `The base case P(1) holds, but the step from P(${gap}) to P(${gap + 1}) fails. ${gap === 1 ? "Domino 1 falls" : `Dominoes 1 to ${gap} fall`} and the rest stand: nothing is proved beyond the gap.`;
+  return (
+    <Frame
+      title="Induction as falling dominoes"
+      summary={summary}
+      controls={
+        <>
+          <Toggle label="base case" value={base} onChange={setBase} />
+          <Stepper label="broken step" value={gap} onChange={setGap} min={0} max={count - 1} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`${count} dominoes in a row, ${fallen} of them fallen`}>
+        <line x1="20" x2="420" y1="230" y2="230" className="fig-axis" />
+        {Array.from({ length: count }, (_, i) => {
+          const x = 40 + i * 48;
+          const down = i < fallen;
+          return (
+            <g key={i}>
+              {down ? <rect x={x} y="216" width="42" height="14" className="fig-accent" /> : <rect x={x} y="120" width="14" height="110" className="fig-fill" />}
+              <text x={x + 7} y="254" textAnchor="middle" className="fig-small">
+                P({i + 1})
+              </text>
+              {base && gap === i + 1 ? (
+                <text x={x + 21} y="208" textAnchor="middle" className="fig-small">
+                  gap
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
+const BIT_LISTS = [
+  ["010101", "111111", "000000", "100100", "001101", "110010"],
+  ["000000", "100000", "010000", "110000", "001000", "101000"],
+  ["101010", "011011", "110110", "000111", "111000", "010010"],
+];
+
+/** Cantor's diagonal argument: flip the diagonal of any list of bit sequences to build one the list missed. */
+function Diagonal(props: Props) {
+  const [list, setList] = useState(clamp(Math.round(num(props.list, 1)), 1, BIT_LISTS.length));
+  const [k, setK] = useState(clamp(Math.round(num(props.k, 1)), 1, 6));
+  const rows = BIT_LISTS[list - 1];
+  const flipped = rows.map((row, i) => (row[i] === "0" ? "1" : "0"));
+  const soFar = flipped.slice(0, k).join("");
+  return (
+    <Frame
+      title="The diagonal argument"
+      summary={`Row ${k} has ${rows[k - 1][k - 1]} in place ${k}, so the new sequence gets ${flipped[k - 1]} there. So far the new sequence starts ${soFar}. It differs from ${k === 1 ? "row 1" : `each of rows 1 to ${k}`} in at least one place${k === 6 ? ", and continuing in the same way it differs from every row of the list, however long the list is. The list has missed it." : "."}`}
+      controls={
+        <>
+          <Stepper label="row" value={k} onChange={setK} min={1} max={6} />
+          <Stepper
+            label="list"
+            value={list}
+            onChange={(v) => {
+              setList(v);
+              setK(1);
+            }}
+            min={1}
+            max={BIT_LISTS.length}
+          />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`A list of six sequences of bits with the first ${k} diagonal entries marked, and a new sequence that starts ${soFar}`}>
+        {rows.map((row, i) => (
+          <g key={i}>
+            <text x="60" y={36 + i * 32} textAnchor="end" className="fig-small">
+              row {i + 1}
+            </text>
+            {row.split("").map((bit, j) => {
+              const marked = i === j && i < k;
+              return (
+                <g key={j}>
+                  {marked ? <rect x={82 + j * 40} y={16 + i * 32} width="28" height="28" className="fig-fill" /> : null}
+                  <text x={96 + j * 40} y={37 + i * 32} textAnchor="middle" className="fig-mono">
+                    {bit}
+                  </text>
+                </g>
+              );
+            })}
+            <text x={96 + 6 * 40} y={37 + i * 32} textAnchor="middle" className="fig-small">
+              …
+            </text>
+          </g>
+        ))}
+        <line x1="20" x2="420" y1="214" y2="214" className="fig-axis" />
+        <text x="60" y="246" textAnchor="end" className="fig-small">
+          new
+        </text>
+        {flipped.map((bit, j) =>
+          j < k ? (
+            <g key={j}>
+              <rect x={82 + j * 40} y="226" width="28" height="28" className="fig-accent" />
+              <text x={96 + j * 40} y="247" textAnchor="middle" className="fig-mono" style={{ fill: "var(--bg)" }}>
+                {bit}
+              </text>
+            </g>
+          ) : null,
+        )}
+      </svg>
+    </Frame>
+  );
+}
+
+/** The terms of a convergent sequence and a band of tolerance about its limit: from some N onwards every term is inside. */
+function EpsilonBand(props: Props) {
+  const [hundredths, setHundredths] = useState(clamp(Math.round(num(props.tolerance, 0.2) * 20) * 5, 5, 50));
+  const eps = hundredths / 100;
+  const outside = Math.floor(100 / hundredths); // terms with 1/n >= eps
+  const from = outside + 1;
+  const gx = (n: number) => 44 + ((n - 1) / 29) * 380;
+  const gy = (v: number) => 250 - (v / 2) * 230;
+  return (
+    <Frame
+      title="A tolerance and the point where the terms stay inside it"
+      summary={`The sequence aₙ = 1 + (−1)ⁿ ÷ n has the limit 1. For the tolerance ε = ${fmt(eps)}, every term from N = ${from} onwards is within ${fmt(eps)} of 1. The first ${outside} term${outside === 1 ? " is" : "s are"} not. A smaller ε needs a larger N, but some N always works.`}
+      controls={<Slider label="tolerance in hundredths" value={hundredths} onChange={setHundredths} min={5} max={50} step={5} />}
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The first 30 terms of a sequence with limit 1, a band of half-width ${fmt(eps)} about 1, and a line at N = ${from}`}>
+        <rect x={gx(1)} y={gy(1 + eps)} width={gx(30) - gx(1)} height={gy(1 - eps) - gy(1 + eps)} className="fig-fill" opacity="0.45" />
+        <line x1={gx(1)} x2={gx(30)} y1={gy(0)} y2={gy(0)} className="fig-axis" />
+        <line x1={gx(1)} x2={gx(30)} y1={gy(1)} y2={gy(1)} className="fig-guide" />
+        <text x={gx(1) - 14} y={gy(1) + 4} textAnchor="end" className="fig-small">
+          1
+        </text>
+        <text x={gx(1) - 14} y={gy(0) + 4} textAnchor="end" className="fig-small">
+          0
+        </text>
+        <text x={gx(1) - 14} y={gy(2) + 4} textAnchor="end" className="fig-small">
+          2
+        </text>
+        {from <= 30 ? (
+          <>
+            <line x1={gx(from)} x2={gx(from)} y1={gy(0)} y2={gy(2)} className="fig-guide" />
+            <text x={gx(from)} y={gy(0) + 16} textAnchor="middle" className="fig-small">
+              N = {from}
+            </text>
+          </>
+        ) : null}
+        {Array.from({ length: 30 }, (_, i) => {
+          const n = i + 1;
+          const v = 1 + (n % 2 === 0 ? 1 : -1) / n;
+          return <circle key={n} cx={gx(n)} cy={gy(v)} r="4" className={n >= from ? "fig-accent" : "fig-line"} />;
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
+/** The whole numbers sorted into classes by their remainder: an equivalence relation seen as a partition. */
+function RemainderClasses(props: Props) {
+  const [m, setM] = useState(clamp(Math.round(num(props.modulus, 3)), 2, 6));
+  const [pick, setPick] = useState(clamp(Math.round(num(props.number, 14)), 0, 17));
+  const r = pick % m;
+  const mates = Array.from({ length: 18 }, (_, k) => k).filter((k) => k % m === r);
+  const width = 380 / m;
+  return (
+    <Frame
+      title="Classes of whole numbers with the same remainder"
+      summary={`Call two numbers related when their difference is a multiple of ${m}. The numbers fall into ${m} classes, one for each remainder, and every number is in exactly one class. ${pick} leaves the remainder ${r}, and its class is shown: ${mates.join(", ")}, and so on.`}
+      controls={
+        <>
+          <Stepper label="modulus" value={m} onChange={setM} min={2} max={6} />
+          <Stepper label="number" value={pick} onChange={setPick} min={0} max={17} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The numbers 0 to 17 in ${m} columns by remainder on division by ${m}, with the class of ${pick} marked`}>
+        {Array.from({ length: m }, (_, c) => (
+          <g key={c}>
+            {c === r ? <rect x={30 + c * width + 4} y="34" width={width - 8} height="240" className="fig-fill" opacity="0.45" /> : <rect x={30 + c * width + 4} y="34" width={width - 8} height="240" className="fig-ghost" />}
+            <text x={30 + c * width + width / 2} y="24" textAnchor="middle" className="fig-small">
+              remainder {c}
+            </text>
+          </g>
+        ))}
+        {Array.from({ length: 18 }, (_, k) => {
+          const x = 30 + (k % m) * width + width / 2;
+          const y = 58 + Math.floor(k / m) * 25;
+          return (
+            <g key={k}>
+              {k === pick ? <rect x={x - 16} y={y - 17} width="32" height="23" className="fig-accent" /> : null}
+              <text x={x} y={y} textAnchor="middle" className="fig-mono" style={k === pick ? { fill: "var(--bg)", fontSize: 15 } : { fontSize: 15 }}>
+                {k}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
+const KEY_PATTERNS: { name: string; opens: (lock: number, key: number) => boolean }[] = [
+  { name: "one key for each lock", opens: (l, k) => l === k },
+  { name: "a master key", opens: (l, k) => l === k || k === 1 },
+  { name: "a lock with no key", opens: (l, k) => l === k && l !== 2 },
+  { name: "no key opens anything", opens: () => false },
+  { name: "every key opens every lock", opens: () => true },
+];
+
+/** A grid of which key opens which lock: "for every … there is" reads along rows, "there is … for every" down a column. */
+function QuantifierGrid(props: Props) {
+  const [pattern, setPattern] = useState(clamp(Math.round(num(props.pattern, 1)), 1, KEY_PATTERNS.length));
+  const { name, opens } = KEY_PATTERNS[pattern - 1];
+  const four = [0, 1, 2, 3];
+  const bareRow = four.find((l) => !four.some((k) => opens(l, k)));
+  const fullColumn = four.find((k) => four.every((l) => opens(l, k)));
+  const each = bareRow === undefined;
+  const master = fullColumn !== undefined;
+  return (
+    <Frame
+      title="Which key opens which lock"
+      summary={`Pattern ${pattern}, ${name}. “For every lock there is a key that opens it” is ${each ? "true: every row has a mark" : `false: the row of lock ${bareRow + 1} has no mark`}. “There is a key that opens every lock” is ${master ? `true: the column of key ${fullColumn + 1} is full` : "false: no column is full"}.`}
+      controls={<Stepper label="pattern" value={pattern} onChange={setPattern} min={1} max={KEY_PATTERNS.length} />}
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`A grid of four locks against four keys for the pattern ${name}`}>
+        {four.map((k) => (
+          <text key={k} x={150 + k * 60} y="34" textAnchor="middle" className="fig-small">
+            key {k + 1}
+          </text>
+        ))}
+        {four.map((l) => (
+          <g key={l}>
+            <text x="104" y={76 + l * 54} textAnchor="end" className="fig-small">
+              lock {l + 1}
+            </text>
+            {four.map((k) => (
+              <g key={k}>
+                <rect x={126 + k * 60} y={48 + l * 54} width="48" height="44" className={opens(l, k) ? (k === fullColumn ? "fig-accent" : "fig-fill") : "fig-ghost"} />
+                {opens(l, k) ? (
+                  <text x={150 + k * 60} y={77 + l * 54} textAnchor="middle" className="fig-mono" style={k === fullColumn ? { fill: "var(--bg)" } : undefined}>
+                    ✓
+                  </text>
+                ) : null}
+              </g>
+            ))}
+          </g>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+/* Calculus figures share one small plotting kit: a window on the plane, mapped to a 440 by 280 drawing. */
+type View = { x0: number; x1: number; y0: number; y1: number };
+const dp = (n: number, places = 4) => {
+  const scale = 10 ** places;
+  const rounded = Math.round(n * scale) / scale;
+  return String(rounded === 0 ? 0 : rounded).replace("-", "−");
+};
+const scales = (v: View) => ({
+  sx: (x: number) => 40 + ((x - v.x0) / (v.x1 - v.x0)) * 380,
+  sy: (y: number) => 260 - ((clamp(y, v.y0 - (v.y1 - v.y0), v.y1 + (v.y1 - v.y0)) - v.y0) / (v.y1 - v.y0)) * 240,
+});
+const curvePoints = (f: (x: number) => number, v: View, from = v.x0, to = v.x1) => {
+  const { sx, sy } = scales(v);
+  return Array.from({ length: 121 }, (_, i) => {
+    const x = from + ((to - from) * i) / 120;
+    return `${sx(x).toFixed(1)},${sy(f(x)).toFixed(1)}`;
+  }).join(" ");
+};
+function Axes({ view }: { view: View }) {
+  const { sx, sy } = scales(view);
+  const ax = clamp(0, view.x0, view.x1);
+  const ay = clamp(0, view.y0, view.y1);
+  return (
+    <>
+      <line x1={sx(view.x0)} x2={sx(view.x1)} y1={sy(ay)} y2={sy(ay)} className="fig-axis" />
+      <line x1={sx(ax)} x2={sx(ax)} y1={sy(view.y0)} y2={sy(view.y1)} className="fig-axis" />
+      <text x={sx(view.x0)} y={sy(ay) + 14} className="fig-small">
+        {fmt(view.x0)}
+      </text>
+      <text x={sx(view.x1)} y={sy(ay) + 14} textAnchor="end" className="fig-small">
+        {fmt(view.x1)}
+      </text>
+      <text x={sx(ax) - 6} y={sy(view.y1) + 10} textAnchor="end" className="fig-small">
+        {fmt(view.y1)}
+      </text>
+    </>
+  );
+}
+
+const APPROACH = [1, 0.5, 0.1, 0.01, 0.001];
+const LIMIT_CASES: Record<string, { name: string; at: number; f: (x: number) => number; view: View; limit: number | null; atPoint: string }> = {
+  hole: {
+    name: "f(x) = (x² − 1) ÷ (x − 1)",
+    at: 1,
+    f: (x) => (x * x - 1) / (x - 1),
+    view: { x0: -1, x1: 3, y0: 0, y1: 4 },
+    limit: 2,
+    atPoint: "At x = 1 itself the formula says 0 ÷ 0 and has no value.",
+  },
+  sinc: {
+    name: "f(x) = sin x ÷ x",
+    at: 0,
+    f: (x) => Math.sin(x) / x,
+    view: { x0: -4, x1: 4, y0: -0.5, y1: 1.5 },
+    limit: 1,
+    atPoint: "At x = 0 itself the formula says 0 ÷ 0 and has no value.",
+  },
+  jump: {
+    name: "f(x) = 1 for x < 2 and 3 for x ≥ 2",
+    at: 2,
+    f: (x) => (x < 2 ? 1 : 3),
+    view: { x0: 0, x1: 4, y0: 0, y1: 4 },
+    limit: null,
+    atPoint: "At x = 2 itself the value is 3.",
+  },
+};
+
+/** Values of a function on both sides of a point, taken closer and closer, with the point itself left out. */
+function LimitApproach(props: Props) {
+  const which = typeof props.fn === "string" && props.fn in LIMIT_CASES ? props.fn : "hole";
+  const c = LIMIT_CASES[which];
+  const [k, setK] = useState(clamp(Math.round(num(props.closeness, 1)), 0, 4));
+  const d = APPROACH[k];
+  const { sx, sy } = scales(c.view);
+  const left = c.f(c.at - d);
+  const right = c.f(c.at + d);
+  return (
+    <Frame
+      title="Approaching a point from both sides"
+      summary={`${c.name}. At x = ${dp(c.at - d)} it is ${dp(left)} and at x = ${dp(c.at + d)} it is ${dp(right)}. ${c.atPoint} ${
+        c.limit === null
+          ? `From the left the values stay at ${dp(left)} and from the right at ${dp(right)}. They do not close in on one number, so there is no limit at ${c.at}.`
+          : `The nearer x is to ${c.at}, the nearer f(x) is to ${c.limit}: the limit is ${c.limit}.`
+      }`}
+      controls={<Stepper label="closeness" value={k} onChange={setK} min={0} max={4} />}
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`Graph of ${c.name} near x = ${c.at}, with points at distance ${d} on each side`}>
+        <Axes view={c.view} />
+        <polyline points={curvePoints(c.f, c.view, c.view.x0, c.at - 0.0001)} className="fig-line" />
+        <polyline points={curvePoints(c.f, c.view, c.at + 0.0001, c.view.x1)} className="fig-line" />
+        <line x1={sx(c.at)} x2={sx(c.at)} y1={sy(c.view.y0)} y2={sy(c.view.y1)} className="fig-guide" />
+        {c.limit === null ? null : <circle cx={sx(c.at)} cy={sy(c.limit)} r="5" className="fig-ghost" style={{ fill: "var(--bg)", stroke: "var(--text-secondary)" }} />}
+        <circle cx={sx(c.at - d)} cy={sy(left)} r="5" className="fig-accent" />
+        <circle cx={sx(c.at + d)} cy={sy(right)} r="5" className="fig-accent" />
+      </svg>
+    </Frame>
+  );
+}
+
+const CURVES: Record<string, { name: string; f: (x: number) => number; d: (x: number) => number; view: View; low: number; high: number }> = {
+  square: { name: "x²", f: (x) => x * x, d: (x) => 2 * x, view: { x0: -3, x1: 3, y0: -1, y1: 9 }, low: -2, high: 2 },
+  cube: { name: "x³", f: (x) => x ** 3, d: (x) => 3 * x * x, view: { x0: -2, x1: 2, y0: -8, y1: 8 }, low: -1.5, high: 1 },
+  recip: { name: "1 ÷ x", f: (x) => 1 / x, d: (x) => -1 / (x * x), view: { x0: 0.2, x1: 4, y0: 0, y1: 5 }, low: 0.5, high: 3 },
+  sin: { name: "sin x", f: Math.sin, d: Math.cos, view: { x0: -1, x1: 7, y0: -1.5, y1: 1.5 }, low: 0, high: 6 },
+  exp: { name: "eˣ", f: Math.exp, d: Math.exp, view: { x0: -2, x1: 2.5, y0: -0.5, y1: 8 }, low: -1.5, high: 1 },
+  ln: { name: "ln x", f: Math.log, d: (x) => 1 / x, view: { x0: 0.2, x1: 6, y0: -2, y1: 2.5 }, low: 0.5, high: 5 },
+};
+
+/** A chord of a curve whose second end slides towards the first, so that its slope closes in on the slope of the tangent. */
+function Secant(props: Props) {
+  const which = typeof props.fn === "string" && props.fn in CURVES ? props.fn : "square";
+  const c = CURVES[which];
+  const [a, setA] = useState(clamp(num(props.at, 1), c.low, c.high));
+  const [k, setK] = useState(clamp(Math.round(num(props.closeness, 0)), 0, 4));
+  const h = APPROACH[k];
+  const rise = c.f(a + h) - c.f(a);
+  const chord = rise / h;
+  const slope = c.d(a);
+  const { sx, sy } = scales(c.view);
+  const through = (m: number) => (x: number) => c.f(a) + m * (x - a);
+  return (
+    <Frame
+      title="From a chord to a tangent"
+      summary={`f(x) = ${c.name}. From x = ${dp(a)} to x = ${dp(a + h)} the curve ${rise >= 0 ? "rises" : "falls"} ${dp(Math.abs(rise))} over a run of ${dp(h)}, so the chord has slope ${dp(chord)}. The tangent at x = ${dp(a)} has slope ${dp(slope)}. Shrinking the run brings the chord's slope as near to that as you like.`}
+      controls={
+        <>
+          <Slider label="point a" value={a} onChange={setA} min={c.low} max={c.high} step={0.25} />
+          <Stepper label="closeness" value={k} onChange={setK} min={0} max={4} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The curve y = ${c.name} with a chord from x = ${dp(a)} to x = ${dp(a + h)} and the tangent at x = ${dp(a)}`}>
+        <Axes view={c.view} />
+        <polyline points={curvePoints(c.f, c.view)} className="fig-line" />
+        <polyline points={curvePoints(through(slope), c.view)} className="fig-guide" fill="none" />
+        <polyline points={curvePoints(through(chord), c.view)} className="fig-accent-line" fill="none" style={{ strokeWidth: 2 }} />
+        <circle cx={sx(a)} cy={sy(c.f(a))} r="5" className="fig-accent" />
+        <circle cx={sx(a + h)} cy={sy(c.f(a + h))} r="5" className="fig-accent" />
+      </svg>
+    </Frame>
+  );
+}
+
+/** Two machines in a row. Each multiplies small changes by its own local rate, and the rates multiply. */
+function ChainRates(props: Props) {
+  const [tenths, setTenths] = useState(clamp(Math.round(num(props.x, 1.2) * 10), 5, 20));
+  const x = tenths / 10;
+  const u = x * x;
+  const y = u ** 3;
+  const inner = 2 * x;
+  const outer = 3 * u * u;
+  const box = (cx: number, label: string, value: string) => (
+    <g>
+      <rect x={cx - 52} y="70" width="104" height="70" className="fig-cell" />
+      <text x={cx} y="98" textAnchor="middle" className="fig-small">
+        {label}
+      </text>
+      <text x={cx} y="124" textAnchor="middle" className="fig-mono">
+        {value}
+      </text>
+    </g>
+  );
+  const arrow = (x1: number, x2: number, yy: number, text: string) => (
+    <g>
+      <line x1={x1} x2={x2} y1={yy} y2={yy} className="fig-accent-line" style={{ strokeWidth: 2 }} />
+      <polygon points={`${x2},${yy} ${x2 - 9},${yy - 5} ${x2 - 9},${yy + 5}`} className="fig-accent" />
+      <text x={(x1 + x2) / 2} y={yy - 9} textAnchor="middle" className="fig-small">
+        {text}
+      </text>
+    </g>
+  );
+  return (
+    <Frame
+      title="Rates multiply along a chain"
+      summary={`u = x² and y = u³. At x = ${dp(x)}: u = ${dp(u)} and y = ${dp(y)}. A small change in x is multiplied by ${dp(inner)} on its way to u, and a small change in u is multiplied by ${dp(outer)} on its way to y. So y changes ${dp(inner)} × ${dp(outer)} = ${dp(inner * outer)} times as fast as x.`}
+      controls={<Slider label="x in tenths" value={tenths} onChange={setTenths} min={5} max={20} />}
+    >
+      <svg viewBox="0 0 440 220" role="img" aria-label={`Three boxes for x, u and y joined by arrows carrying the rates ${dp(inner)} and ${dp(outer)}`}>
+        {box(70, "x", dp(x))}
+        {box(220, "u = x²", dp(u))}
+        {box(370, "y = u³", dp(y))}
+        {arrow(124, 166, 105, `× ${dp(inner, 2)}`)}
+        {arrow(274, 316, 105, `× ${dp(outer, 2)}`)}
+        {arrow(70, 370, 180, `altogether × ${dp(inner * outer, 2)}`)}
+        <line x1="70" x2="70" y1="140" y2="180" className="fig-guide" />
+      </svg>
+    </Frame>
+  );
+}
+
+/** A curve with its tangent, read for height, slope and bending at one point. */
+function Bend(props: Props) {
+  const view: View = { x0: -2.5, x1: 2.5, y0: -5, y1: 5 };
+  const f = (x: number) => x ** 3 - 3 * x;
+  const [a, setA] = useState(clamp(num(props.at, 1), -2, 2));
+  const slope = 3 * a * a - 3;
+  const second = 6 * a;
+  const { sx, sy } = scales(view);
+  const bending =
+    second > 0
+      ? "The slope is increasing, so the curve bends upwards and lies above its tangent near here."
+      : second < 0
+        ? "The slope is decreasing, so the curve bends downwards and lies below its tangent near here."
+        : "The bending changes direction here. This is a point of inflection, and the curve crosses its tangent.";
+  const flat = slope !== 0 ? "" : second > 0 ? " With slope 0 and upward bending, this is a local minimum." : " With slope 0 and downward bending, this is a local maximum.";
+  return (
+    <Frame
+      title="Slope and bending"
+      summary={`f(x) = x³ − 3x at x = ${dp(a)}: height ${dp(f(a))}, slope f′ = ${dp(slope)}, second derivative f″ = ${dp(second)}. ${bending}${flat}`}
+      controls={<Slider label="point a" value={a} onChange={setA} min={-2} max={2} step={0.25} />}
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The curve y = x³ − 3x with its tangent at x = ${dp(a)}`}>
+        <Axes view={view} />
+        <polyline points={curvePoints(f, view)} className="fig-line" />
+        <polyline points={curvePoints((x) => f(a) + slope * (x - a), view, a - 1, a + 1)} className="fig-accent-line" fill="none" style={{ strokeWidth: 2 }} />
+        <circle cx={sx(a)} cy={sy(f(a))} r="5" className="fig-accent" />
+      </svg>
+    </Frame>
+  );
+}
+
+const factorials = [1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880];
+const SERIES: Record<string, { name: string; f: (x: number) => number; coeff: (k: number) => number; view: View; low: number; high: number; note: string }> = {
+  sin: { name: "sin x", f: Math.sin, coeff: (k) => (k % 2 === 0 ? 0 : (k % 4 === 1 ? 1 : -1) / factorials[k]), view: { x0: -7, x1: 7, y0: -2.5, y1: 2.5 }, low: -6, high: 6, note: "" },
+  cos: { name: "cos x", f: Math.cos, coeff: (k) => (k % 2 === 1 ? 0 : (k % 4 === 0 ? 1 : -1) / factorials[k]), view: { x0: -7, x1: 7, y0: -2.5, y1: 2.5 }, low: -6, high: 6, note: "" },
+  exp: { name: "eˣ", f: Math.exp, coeff: (k) => 1 / factorials[k], view: { x0: -3, x1: 3, y0: -1, y1: 10 }, low: -3, high: 3, note: "" },
+  ln: {
+    name: "ln(1 + x)",
+    f: (x) => Math.log(1 + x),
+    coeff: (k) => (k === 0 ? 0 : (k % 2 === 1 ? 1 : -1) / k),
+    view: { x0: -0.9, x1: 2.5, y0: -2.5, y1: 2.5 },
+    low: -0.75,
+    high: 2.25,
+    note: " For this function the polynomials only help between −1 and 1. Beyond 1, raising the degree makes them worse.",
+  },
+};
+
+/** A function and its Taylor polynomial about 0, degree by degree. */
+function Taylor(props: Props) {
+  const which = typeof props.fn === "string" && props.fn in SERIES ? props.fn : "sin";
+  const s = SERIES[which];
+  const [degree, setDegree] = useState(clamp(Math.round(num(props.degree, 1)), 0, 9));
+  const [x, setX] = useState(clamp(num(props.x, 2), s.low, s.high));
+  const poly = (t: number) => {
+    let total = 0;
+    for (let k = degree; k >= 0; k--) total = total * t + s.coeff(k);
+    return total;
+  };
+  const { sx, sy } = scales(s.view);
+  return (
+    <Frame
+      title="Taylor polynomials"
+      summary={`The polynomial of degree ${degree} for ${s.name} about 0. At x = ${dp(x)} it gives ${dp(poly(x))}, and the function itself is ${dp(s.f(x))}: the error is ${dp(Math.abs(poly(x) - s.f(x)))}. Near 0 the two agree closely, and a higher degree keeps them together further out.${s.note}`}
+      controls={
+        <>
+          <Stepper label="degree" value={degree} onChange={setDegree} min={0} max={9} />
+          <Slider label="x" value={x} onChange={setX} min={s.low} max={s.high} step={0.25} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The graph of ${s.name} and its Taylor polynomial of degree ${degree}`}>
+        <Axes view={s.view} />
+        <polyline points={curvePoints(s.f, s.view)} className="fig-line" />
+        <polyline points={curvePoints(poly, s.view)} className="fig-accent-line" fill="none" style={{ strokeWidth: 2 }} />
+        <line x1={sx(x)} x2={sx(x)} y1={sy(s.f(x))} y2={sy(poly(x))} className="fig-guide" />
+        <circle cx={sx(x)} cy={sy(s.f(x))} r="4" className="fig-line" />
+        <circle cx={sx(x)} cy={sy(poly(x))} r="4" className="fig-accent" />
+      </svg>
+    </Frame>
+  );
+}
+
+/** Gradient descent on f(x) = x²: step against the slope, with a step size that helps or ruins it. */
+function Descent(props: Props) {
+  const view: View = { x0: -4, x1: 4, y0: 0, y1: 16 };
+  const [hundredths, setHundredths] = useState(clamp(Math.round(num(props.rate, 0.1) * 20) * 5, 5, 110));
+  const [steps, setSteps] = useState(clamp(Math.round(num(props.steps, 5)), 0, 12));
+  const rate = hundredths / 100;
+  const factor = 1 - 2 * rate;
+  const xs = Array.from({ length: steps + 1 }, (_, i) => 3 * factor ** i);
+  const last = xs[steps];
+  const { sx, sy } = scales(view);
+  const verdict =
+    rate === 0.5
+      ? "The factor is 0, so one step lands exactly on the minimum."
+      : rate === 1
+        ? "The factor is −1, so x jumps between 3 and −3 for ever and never improves."
+        : Math.abs(factor) < 1
+          ? `The distance from the minimum is multiplied by ${dp(Math.abs(factor))} at each step, so the steps close in on 0${factor < 0 ? ", jumping from side to side" : ""}.`
+          : `Each step overshoots and lands further away than it started: the distance is multiplied by ${dp(Math.abs(factor))}. The method diverges.`;
+  return (
+    <Frame
+      title="Stepping downhill"
+      summary={`f(x) = x², starting at x = 3, with step size ${dp(rate)}. Each step replaces x by x − ${dp(rate)} × 2x, which is ${dp(factor)} times x. After ${steps} step${steps === 1 ? "" : "s"}, x = ${dp(last)} and f(x) = ${dp(last * last)}. ${verdict}`}
+      controls={
+        <>
+          <Slider label="step size in hundredths" value={hundredths} onChange={setHundredths} min={5} max={110} step={5} />
+          <Stepper label="steps" value={steps} onChange={setSteps} min={0} max={12} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`A parabola with ${steps + 1} points marking the steps of gradient descent with step size ${dp(rate)}`}>
+        <Axes view={view} />
+        <polyline points={curvePoints((t) => t * t, view)} className="fig-line" />
+        <polyline points={xs.map((t) => `${sx(clamp(t, -4, 4)).toFixed(1)},${sy(Math.min(t * t, 16)).toFixed(1)}`).join(" ")} className="fig-guide" fill="none" />
+        {xs.map((t, i) => (Math.abs(t) <= 4 ? <circle key={i} cx={sx(t)} cy={sy(t * t)} r={i === steps ? 5 : 3} className={i === steps ? "fig-accent" : "fig-line"} /> : null))}
+      </svg>
+    </Frame>
+  );
+}
+
+const AREAS: Record<string, { name: string; f: (x: number) => number; a: number; b: number; bName: string; exact: number; view: View }> = {
+  square: { name: "y = x²", f: (x) => x * x, a: 0, b: 3, bName: "3", exact: 9, view: { x0: 0, x1: 3.2, y0: 0, y1: 9.5 } },
+  line: { name: "y = 2x + 1", f: (x) => 2 * x + 1, a: 0, b: 3, bName: "3", exact: 12, view: { x0: 0, x1: 3.2, y0: 0, y1: 7.5 } },
+  sin: { name: "y = sin x", f: Math.sin, a: 0, b: Math.PI, bName: "π", exact: 2, view: { x0: 0, x1: 3.3, y0: 0, y1: 1.3 } },
+  recip: { name: "y = 1 ÷ x", f: (x) => 1 / x, a: 1, b: Math.E, bName: "e", exact: 1, view: { x0: 0.8, x1: 2.9, y0: 0, y1: 1.2 } },
+};
+const RULES = ["left ends", "midpoints", "right ends"];
+
+/** The area under a curve as a sum of rectangles, which improves as the rectangles are made narrower. */
+function Riemann(props: Props) {
+  const which = typeof props.fn === "string" && props.fn in AREAS ? props.fn : "square";
+  const c = AREAS[which];
+  const [doublings, setDoublings] = useState(clamp(Math.round(num(props.doublings, 2)), 0, 6));
+  const [rule, setRule] = useState(clamp(Math.round(num(props.rule, 0)), 0, 2));
+  const n = 2 ** doublings;
+  const width = (c.b - c.a) / n;
+  const heights = Array.from({ length: n }, (_, i) => c.f(c.a + (i + rule / 2) * width));
+  const total = heights.reduce((sum, hgt) => sum + hgt * width, 0);
+  const { sx, sy } = scales(c.view);
+  return (
+    <Frame
+      title="Area as a sum of rectangles"
+      summary={`${n} rectangle${n === 1 ? "" : "s"} under ${c.name} from ${c.a} to ${c.bName}, with heights taken at the ${RULES[rule]}, total ${dp(total)}. The exact area is ${dp(c.exact)}. The error is ${dp(Math.abs(total - c.exact))}. Doubling the number of rectangles shrinks the error.`}
+      controls={
+        <>
+          <Stepper label="doublings" value={doublings} onChange={setDoublings} min={0} max={6} />
+          <button type="button" className="btn btn-secondary btn-small" aria-label="Change rule" onClick={() => setRule((rule + 1) % 3)}>
+            Heights at {RULES[rule]}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`${n} rectangles under the curve ${c.name}`}>
+        {heights.map((hgt, i) => (
+          <rect key={i} x={sx(c.a + i * width)} y={sy(hgt)} width={Math.max(0.5, sx(c.a + (i + 1) * width) - sx(c.a + i * width) - (n > 16 ? 0 : 1))} height={sy(0) - sy(hgt)} className="fig-fill" />
+        ))}
+        <Axes view={c.view} />
+        <polyline points={curvePoints(c.f, c.view, c.a, c.b)} className="fig-accent-line" fill="none" style={{ strokeWidth: 2 }} />
+      </svg>
+    </Frame>
+  );
+}
+
+/** The area gathered under a rate, and the fact that it grows at exactly that rate. */
+function Accumulation(props: Props) {
+  const rate = (t: number) => 3 - t;
+  const area = (t: number) => 3 * t - (t * t) / 2;
+  const [quarters, setQuarters] = useState(clamp(Math.round(num(props.x, 2) * 4), 0, 20));
+  const x = quarters / 4;
+  const top: View = { x0: 0, x1: 5, y0: -2.5, y1: 3.5 };
+  const sx = (t: number) => 40 + (t / 5) * 380;
+  const syTop = (v: number) => 130 - ((v - top.y0) / (top.y1 - top.y0)) * 120;
+  const syBottom = (v: number) => 270 - (v / 5) * 110;
+  const state =
+    x < 3
+      ? "The rate is positive, so the total is rising."
+      : x === 3
+        ? "The rate is zero, so the total has stopped rising: it is at its greatest, 4.5."
+        : "The rate is negative. Area below the axis is subtracted, so the total is falling.";
+  const line = (pts: [number, number][], sy: (v: number) => number) => pts.map(([t, v]) => `${sx(t).toFixed(1)},${sy(v).toFixed(1)}`).join(" ");
+  return (
+    <Frame
+      title="A total and its rate"
+      summary={`The rate is f(t) = 3 − t. The area gathered from 0 to x = ${dp(x)} is A(x) = ${dp(area(x))}. At this moment A is changing at the rate f(${dp(x)}) = ${dp(rate(x))}. ${state}`}
+      controls={<Slider label="x in quarters" value={quarters} onChange={setQuarters} min={0} max={20} />}
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`Above, the line f(t) = 3 − t with the area from 0 to ${dp(x)} shaded. Below, the graph of the area gathered so far.`}>
+        <polygon points={line(x <= 3 ? [[0, 0], [0, 3], [x, rate(x)], [x, 0]] : [[0, 0], [0, 3], [3, 0]], syTop)} className="fig-fill" />
+        {x > 3 ? <polygon points={line([[3, 0], [x, rate(x)], [x, 0]], syTop)} className="fig-fill" opacity="0.45" /> : null}
+        <line x1={sx(0)} x2={sx(5)} y1={syTop(0)} y2={syTop(0)} className="fig-axis" />
+        <polyline points={line([[0, 3], [5, -2]], syTop)} className="fig-line" />
+        <circle cx={sx(x)} cy={syTop(rate(x))} r="4" className="fig-accent" />
+        <text x={sx(5)} y={syTop(0) - 6} textAnchor="end" className="fig-small">
+          rate f(t)
+        </text>
+        <line x1={sx(0)} x2={sx(5)} y1={syBottom(0)} y2={syBottom(0)} className="fig-axis" />
+        <polyline points={line(Array.from({ length: 41 }, (_, i) => [i / 8, area(i / 8)] as [number, number]), syBottom)} className="fig-line" />
+        <line x1={sx(x)} x2={sx(x)} y1={syTop(top.y1)} y2={syBottom(0)} className="fig-guide" />
+        <circle cx={sx(x)} cy={syBottom(area(x))} r="5" className="fig-accent" />
+        <text x={sx(5)} y={syBottom(0) - 6} textAnchor="end" className="fig-small">
+          total A(x)
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/* Vectors are drawn on a square grid, 40 pixels to the unit in both directions, so that angles and lengths look true. */
+const gx = (x: number) => 230 + 40 * x;
+const gy = (y: number) => 140 - 40 * y;
+type Pair = [number, number];
+const pair = ([x, y]: Pair) => `(${dp(x)}, ${dp(y)})`;
+const dot = (a: Pair, b: Pair) => a[0] * b[0] + a[1] * b[1];
+const signed = (v: number) => (v < 0 ? `− ${dp(-v)}` : `+ ${dp(v)}`);
+
+function Grid() {
+  return (
+    <>
+      <defs>
+        <clipPath id="grid-clip">
+          <rect x={gx(-4.75)} y={gy(3)} width={380} height={240} />
+        </clipPath>
+      </defs>
+      {[-4, -3, -2, -1, 0, 1, 2, 3, 4].map((i) => (
+        <line key={`v${i}`} x1={gx(i)} x2={gx(i)} y1={gy(-3)} y2={gy(3)} className={i === 0 ? "fig-axis" : "fig-grid"} />
+      ))}
+      {[-3, -2, -1, 0, 1, 2, 3].map((i) => (
+        <line key={`h${i}`} x1={gx(-4.75)} x2={gx(4.75)} y1={gy(i)} y2={gy(i)} className={i === 0 ? "fig-axis" : "fig-grid"} />
+      ))}
+    </>
+  );
+}
+
+function Arrow({ from = [0, 0], to, accent = false, dashed = false, name }: { from?: Pair; to: Pair; accent?: boolean; dashed?: boolean; name?: string }) {
+  const [x0, y0, x1, y1] = [gx(from[0]), gy(from[1]), gx(to[0]), gy(to[1])];
+  const length = Math.hypot(x1 - x0, y1 - y0);
+  const stroke = dashed ? "fig-guide" : accent ? "fig-accent-line" : "fig-line";
+  if (length < 1) return <circle cx={x0} cy={y0} r="3" className={accent ? "fig-accent" : "fig-fill"} />;
+  const [ux, uy] = [(x1 - x0) / length, (y1 - y0) / length];
+  const head = `${(x1 - 9 * ux + 5 * uy).toFixed(1)},${(y1 - 9 * uy - 5 * ux).toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)} ${(x1 - 9 * ux - 5 * uy).toFixed(1)},${(y1 - 9 * uy + 5 * ux).toFixed(1)}`;
+  return (
+    <>
+      <line x1={x0} y1={y0} x2={x1} y2={y1} className={stroke} />
+      <polyline points={head} className={stroke} fill="none" />
+      {name ? (
+        <text x={x1 + 8 * ux - 4} y={y1 + 8 * uy + 4} className="fig-small">
+          {name}
+        </text>
+      ) : null}
+    </>
+  );
+}
+
+const TAILS: Pair[] = [
+  [0, 0],
+  [1, 1],
+  [-1, -1],
+  [1.5, -1],
+];
+
+/** A vector as an arrow and as a list of two numbers, and the fact that moving the arrow does not change the vector. */
+function VectorArrow(props: Props) {
+  const [x, setX] = useState(clamp(num(props.x, 3), -3, 3));
+  const [y, setY] = useState(clamp(num(props.y, 2), -2, 2));
+  const [tail, setTail] = useState(0);
+  const from = TAILS[tail];
+  const to: Pair = [from[0] + x, from[1] + y];
+  const across = x === 0 ? "0 across" : `${dp(Math.abs(x))} ${x > 0 ? "right" : "left"}`;
+  const up = y === 0 ? "0 up" : `${dp(Math.abs(y))} ${y > 0 ? "up" : "down"}`;
+  return (
+    <Frame
+      title="An arrow and a list"
+      summary={`The vector ${pair([x, y])}, drawn from ${pair(from)} to ${pair(to)}: ${across} and ${up}. Its length is ${dp(Math.hypot(x, y))}. ${tail === 0 ? "Drawn from the origin, its tip is at the point with the same two numbers." : "It has been moved, and it is still the same vector: the same two numbers, the same length, the same direction."}`}
+      controls={
+        <>
+          <Slider label="across" value={x} onChange={setX} min={-3} max={3} step={0.5} />
+          <Slider label="up" value={y} onChange={setY} min={-2} max={2} step={0.5} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setTail((tail + 1) % TAILS.length)}>
+            Move the arrow
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`An arrow from ${pair(from)} to ${pair(to)}`}>
+        <Grid />
+        <line x1={gx(from[0])} y1={gy(from[1])} x2={gx(to[0])} y2={gy(from[1])} className="fig-guide" />
+        <line x1={gx(to[0])} y1={gy(from[1])} x2={gx(to[0])} y2={gy(to[1])} className="fig-guide" />
+        <Arrow from={from} to={to} accent />
+      </svg>
+    </Frame>
+  );
+}
+
+/** Adding two vectors tip to tail, in either order, with one of them scaled. */
+function VectorSum(props: Props) {
+  const a: Pair = [clamp(num(props.ax, 2), -2, 2), clamp(num(props.ay, 1), -1, 1)];
+  const b: Pair = [clamp(num(props.bx, 1), -1, 1), clamp(num(props.by, 1), -1, 1)];
+  const [halves, setHalves] = useState(clamp(Math.round(num(props.scale, 1) * 2), -4, 4));
+  const [bFirst, setBFirst] = useState(false);
+  const c = halves / 2;
+  const cb: Pair = [c * b[0], c * b[1]];
+  const sum: Pair = [a[0] + cb[0], a[1] + cb[1]];
+  const scaled = c === 1 ? "b" : c === -1 ? "−b" : `${dp(c)}b`;
+  const term = c < 0 ? `(${scaled})` : scaled;
+  const effect = c === 0 ? "Scaling by 0 gives the zero vector, so the sum is a itself." : c < 0 ? `A negative scale turns b round to point the opposite way${c === -1 ? "" : ` and makes it ${dp(Math.abs(c))} times as long`}.` : c === 1 ? "" : `Scaling by ${dp(c)} keeps b's direction and makes it ${dp(c)} times as long.`;
+  return (
+    <Frame
+      title="Adding tip to tail"
+      summary={`a = ${pair(a)} and b = ${pair(b)}${c === 1 ? "" : `, so ${scaled} = ${pair(cb)}`}. ${bFirst ? `Walk along ${scaled}, then along a` : `Walk along a, then along ${scaled}`}: you arrive at a + ${term} = (${dp(a[0])} ${signed(cb[0])}, ${dp(a[1])} ${signed(cb[1])}) = ${pair(sum)}. Either order arrives at the same place. ${effect}`.trim()}
+      controls={
+        <>
+          <Slider label="scale of b in halves" value={halves} onChange={setHalves} min={-4} max={4} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setBFirst(!bFirst)}>
+            Swap the order
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The vectors a and ${scaled} added tip to tail, giving ${pair(sum)}`}>
+        <Grid />
+        <Arrow to={bFirst ? a : cb} dashed />
+        <Arrow from={bFirst ? a : cb} to={sum} dashed />
+        <Arrow to={bFirst ? cb : a} name={bFirst ? scaled : "a"} />
+        <Arrow from={bFirst ? cb : a} to={sum} name={bFirst ? "a" : scaled} />
+        <Arrow to={sum} accent />
+      </svg>
+    </Frame>
+  );
+}
+
+/** Every point two vectors can reach by scaling and adding: the whole plane, or only a line when they point the same way. */
+function Span(props: Props) {
+  const a: Pair = [1.5, 0.5];
+  const [parallel, setParallel] = useState(props.parallel === true);
+  const b: Pair = parallel ? [-0.75, -0.25] : [0.5, 1];
+  const [sq, setSq] = useState(clamp(Math.round(num(props.s, 1) * 4), -8, 8));
+  const [tq, setTq] = useState(clamp(Math.round(num(props.t, 1) * 4), -8, 8));
+  const [s, t] = [sq / 4, tq / 4];
+  const at: Pair = [s * a[0] + t * b[0], s * a[1] + t * b[1]];
+  const reach: Pair[] = [];
+  for (let i = -4; i <= 4; i++) for (let j = -4; j <= 4; j++) reach.push([(i / 2) * a[0] + (j / 2) * b[0], (i / 2) * a[1] + (j / 2) * b[1]]);
+  return (
+    <Frame
+      title="What two vectors can reach"
+      summary={`a = ${pair(a)} and b = ${pair(b)}. The combination ${dp(s)}a + ${dp(t)}b is ${pair(at)}. ${
+        parallel
+          ? "Here b is −0.5 times a, so every combination lies on the one line through a. The two vectors span only a line, and b reaches nothing that a could not reach alone."
+          : "Because a and b point in different directions, some choice of the two numbers reaches any point of the plane. The two vectors span the plane."
+      }`}
+      controls={
+        <>
+          <Slider label="multiple of a in quarters" value={sq} onChange={setSq} min={-8} max={8} />
+          <Slider label="multiple of b in quarters" value={tq} onChange={setTq} min={-8} max={8} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setParallel(!parallel)}>
+            {parallel ? "Turn b away from a" : "Put b along a"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The points reachable from a and b, with ${dp(s)}a + ${dp(t)}b marked at ${pair(at)}`}>
+        <Grid />
+        {reach.map(([px, py], i) => (
+          <circle key={i} cx={gx(px)} cy={gy(py)} r="2" className="fig-fill" />
+        ))}
+        <Arrow to={[s * a[0], s * a[1]]} dashed />
+        <Arrow from={[s * a[0], s * a[1]]} to={at} dashed />
+        <Arrow to={a} name="a" />
+        <Arrow to={b} name="b" />
+        <circle cx={gx(at[0])} cy={gy(at[1])} r="5" className="fig-accent" />
+      </svg>
+    </Frame>
+  );
+}
+
+/** The dot product as one vector's length times the other's shadow on it, changing sign as the angle opens. */
+function DotProduct(props: Props) {
+  const a: Pair = [3, 0];
+  const [angle, setAngle] = useState(clamp(Math.round(num(props.angle, 45) / 15) * 15, 0, 345));
+  const [halves, setHalves] = useState(clamp(Math.round(num(props.length, 2) * 2), 1, 6));
+  const length = halves / 2;
+  const b: Pair = [length * Math.cos((angle * Math.PI) / 180), length * Math.sin((angle * Math.PI) / 180)];
+  const product = dot(a, b);
+  const shadow = b[0];
+  const between = angle > 180 ? 360 - angle : angle;
+  const tidy = (v: number) => (Math.abs(v) < 1e-9 ? 0 : v);
+  const verdict =
+    tidy(product) === 0
+      ? "The dot product is zero: b is at a right angle to a and has no part along it."
+      : product > 0
+        ? "The dot product is positive: b points partly along a."
+        : "The dot product is negative: b points partly against a.";
+  return (
+    <Frame
+      title="The dot product and the shadow"
+      summary={`a = ${pair(a)} and b = ${pair([tidy(b[0]), tidy(b[1])])}, of length ${dp(length)}, with ${between}° between them. a · b = 3 × ${dp(tidy(b[0]))} + 0 × ${dp(tidy(b[1]))} = ${dp(tidy(product))}. The shadow of b on a has length ${dp(tidy(shadow))}, and 3 × ${dp(tidy(shadow))} gives the same number. ${verdict}`}
+      controls={
+        <>
+          <Slider label="angle of b in degrees" value={angle} onChange={setAngle} min={0} max={345} step={15} />
+          <Slider label="length of b in halves" value={halves} onChange={setHalves} min={1} max={6} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The vector b at ${between} degrees to a, with its shadow on a`}>
+        <Grid />
+        <line x1={gx(b[0])} y1={gy(b[1])} x2={gx(b[0])} y2={gy(0)} className="fig-guide" />
+        <Arrow to={a} name="a" />
+        <Arrow to={b} name="b" />
+        <line x1={gx(0)} y1={gy(0)} x2={gx(shadow)} y2={gy(0)} className="fig-accent-line" />
+        <circle cx={gx(shadow)} cy={gy(0)} r="4" className="fig-accent" />
+      </svg>
+    </Frame>
+  );
+}
+
+const NORMS = [
+  { name: "Euclidean", symbol: "‖x‖₂", shape: "a circle", f: (x: number, y: number) => Math.hypot(x, y), how: (x: number, y: number) => `√(${dp(x)}² + ${dp(y)}²)` },
+  { name: "taxicab", symbol: "‖x‖₁", shape: "a diamond", f: (x: number, y: number) => Math.abs(x) + Math.abs(y), how: (x: number, y: number) => `${dp(Math.abs(x))} + ${dp(Math.abs(y))}` },
+  { name: "maximum", symbol: "‖x‖∞", shape: "a square", f: (x: number, y: number) => Math.max(Math.abs(x), Math.abs(y)), how: (x: number, y: number) => `the larger of ${dp(Math.abs(x))} and ${dp(Math.abs(y))}` },
+];
+
+/** Three ways of measuring the length of the same vector, and the shape of "all points at distance 1" under each. */
+function NormBalls(props: Props) {
+  const [xq, setXq] = useState(clamp(Math.round(num(props.x, 1.5) * 4), -12, 12));
+  const [yq, setYq] = useState(clamp(Math.round(num(props.y, 1) * 4), -10, 10));
+  const [which, setWhich] = useState(clamp(Math.round(num(props.norm, 0)), 0, 2));
+  const [x, y] = [xq / 4, yq / 4];
+  const norm = NORMS[which];
+  const size = norm.f(x, y);
+  const ball = (r: number) =>
+    which === 0 ? (
+      <circle cx={gx(0)} cy={gy(0)} r={40 * r} className={r === 1 ? "fig-line" : "fig-ghost"} />
+    ) : which === 1 ? (
+      <polygon points={`${gx(r)},${gy(0)} ${gx(0)},${gy(r)} ${gx(-r)},${gy(0)} ${gx(0)},${gy(-r)}`} className={r === 1 ? "fig-line" : "fig-ghost"} />
+    ) : (
+      <rect x={gx(-r)} y={gy(r)} width={80 * r} height={80 * r} className={r === 1 ? "fig-line" : "fig-ghost"} />
+    );
+  return (
+    <Frame
+      title="Three ways to measure length"
+      summary={`The vector ${pair([x, y])}. Its ${norm.name} norm ${norm.symbol} is ${norm.how(x, y)} = ${dp(size)}. With this norm the points at distance 1 from the origin form ${norm.shape}. All three norms of this vector: Euclidean ${dp(NORMS[0].f(x, y))}, taxicab ${dp(NORMS[1].f(x, y))}, maximum ${dp(NORMS[2].f(x, y))}.`}
+      controls={
+        <>
+          <Slider label="across in quarters" value={xq} onChange={setXq} min={-12} max={12} />
+          <Slider label="up in quarters" value={yq} onChange={setYq} min={-10} max={10} />
+          <button type="button" className="btn btn-secondary btn-small" aria-label="Change norm" onClick={() => setWhich((which + 1) % 3)}>
+            {norm.name} norm
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The vector ${pair([x, y])} with the set of points at ${norm.name} distance 1 and at distance ${dp(size)}`}>
+        <Grid />
+        {size > 0 ? ball(size) : null}
+        {ball(1)}
+        <Arrow to={[x, y]} accent />
+      </svg>
+    </Frame>
+  );
+}
+
+/** The nearest point to b on the line through a, and the leftover that is perpendicular to a. */
+function Projection(props: Props) {
+  const a: Pair = [3, 1];
+  const [bx, setBx] = useState(clamp(Math.round(num(props.bx, 1) * 2) / 2, -4, 4));
+  const [by, setBy] = useState(clamp(Math.round(num(props.by, 2) * 2) / 2, -2.5, 2.5));
+  const b: Pair = [bx, by];
+  const k = dot(a, b) / dot(a, a);
+  const p: Pair = [k * a[0], k * a[1]];
+  const e: Pair = [b[0] - p[0], b[1] - p[1]];
+  return (
+    <Frame
+      title="Projection onto a line"
+      summary={`a = ${pair(a)} and b = ${pair(b)}. a · b = ${dp(dot(a, b))} and a · a = 10, so the projection of b onto a is ${dp(k)} times a, which is p = ${pair(p)}. What is left over, b − p = ${pair(e)}, is at a right angle to a: its dot product with a is 0. No point on the line through a is nearer to b than p, and the distance is ${dp(Math.hypot(e[0], e[1]))}.`}
+      controls={
+        <>
+          <Slider label="b across" value={bx} onChange={setBx} min={-4} max={4} step={0.5} />
+          <Slider label="b up" value={by} onChange={setBy} min={-2.5} max={2.5} step={0.5} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The vector b, its projection ${pair(p)} on the line through a, and the perpendicular from b to the line`}>
+        <Grid />
+        <line x1={gx(-6)} y1={gy(-2)} x2={gx(6)} y2={gy(2)} className="fig-ghost" clipPath="url(#grid-clip)" />
+        <line x1={gx(b[0])} y1={gy(b[1])} x2={gx(p[0])} y2={gy(p[1])} className="fig-guide" />
+        <Arrow to={a} name="a" />
+        <Arrow to={b} name="b" />
+        <Arrow to={p} accent />
+        <circle cx={gx(p[0])} cy={gy(p[1])} r="4" className="fig-accent" />
+      </svg>
+    </Frame>
+  );
+}
+
+/** A line as the set of points where w · x + c is zero, with w at right angles to it and a sign on each side. */
+function Hyperplane(props: Props) {
+  const [w1h, setW1] = useState(clamp(Math.round(num(props.w1, 1) * 2), -4, 4));
+  const [w2h, setW2] = useState(clamp(Math.round(num(props.w2, 2) * 2), -4, 4));
+  const [ch, setC] = useState(clamp(Math.round(num(props.c, -2) * 2), -8, 8));
+  const point: Pair = [clamp(num(props.px, 2), -4, 4), clamp(num(props.py, 1), -2.5, 2.5)];
+  const w: Pair = [w1h / 2, w2h / 2];
+  const c = ch / 2;
+  const size = Math.hypot(w[0], w[1]);
+  const value = dot(w, point) + c;
+  const foot: Pair = size === 0 ? [0, 0] : [(-c * w[0]) / (size * size), (-c * w[1]) / (size * size)];
+  const along: Pair = size === 0 ? [0, 0] : [-w[1] / size, w[0] / size];
+  const side = value === 0 ? "which is zero, so the point is on the line." : `which is ${value > 0 ? "positive" : "negative"}, so the point is on the side that w points ${value > 0 ? "towards" : "away from"}, at a distance of ${dp(Math.abs(value))} ÷ ${dp(size)} = ${dp(Math.abs(value) / size)} from the line.`;
+  return (
+    <Frame
+      title="A line from a vector and a number"
+      summary={
+        size === 0
+          ? `With w = (0, 0) the expression w · x ${signed(c)} is ${dp(c)} at every point, so it describes no line at all.`
+          : `The line ${dp(w[0])}x + ${dp(w[1])}y ${signed(c)} = 0. The vector w = ${pair(w)} is at right angles to it. At the point ${pair(point)} the expression is ${dp(w[0])} × ${dp(point[0])} + ${dp(w[1])} × ${dp(point[1])} ${signed(c)} = ${dp(value)}, ${side}`
+      }
+      controls={
+        <>
+          <Slider label="first weight in halves" value={w1h} onChange={setW1} min={-4} max={4} />
+          <Slider label="second weight in halves" value={w2h} onChange={setW2} min={-4} max={4} />
+          <Slider label="offset in halves" value={ch} onChange={setC} min={-8} max={8} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={size === 0 ? "No line" : `The line with normal vector ${pair(w)} and the point ${pair(point)}`}>
+        <Grid />
+        {size === 0 ? null : (
+          <>
+            <g clipPath="url(#grid-clip)">
+              <line x1={gx(foot[0] - 12 * along[0])} y1={gy(foot[1] - 12 * along[1])} x2={gx(foot[0] + 12 * along[0])} y2={gy(foot[1] + 12 * along[1])} className="fig-accent-line" />
+            </g>
+            <Arrow from={foot} to={[foot[0] + w[0], foot[1] + w[1]]} name="w" />
+          </>
+        )}
+        <circle cx={gx(point[0])} cy={gy(point[1])} r="5" className="fig-accent" />
+      </svg>
+    </Frame>
+  );
+}
+
+/* Figures for data structures and algorithms share three small parts: a row of cells, a node and a link. */
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** A row of boxed values, drawn as the cells of an array. */
+function Cells({
+  values,
+  x = 12,
+  y,
+  w = 44,
+  h = 34,
+  hot = [],
+  faint = [],
+  under,
+}: {
+  values: (string | number)[];
+  x?: number;
+  y: number;
+  w?: number;
+  h?: number;
+  hot?: number[];
+  faint?: number[];
+  under?: (i: number) => string;
+}) {
+  return (
+    <>
+      {values.map((value, i) => {
+        const on = hot.includes(i);
+        const middle = x + i * w + (w - 4) / 2;
+        return (
+          <g key={i}>
+            <rect x={x + i * w} y={y} width={w - 4} height={h} className={on ? "fig-accent" : faint.includes(i) ? "fig-ghost" : "fig-fill"} />
+            <text x={middle} y={y + h / 2 + 6} textAnchor="middle" className="fig-mono" style={on ? { fill: "var(--bg)" } : undefined}>
+              {value}
+            </text>
+            {under ? (
+              <text x={middle} y={y + h + 14} textAnchor="middle" className="fig-small">
+                {under(i)}
+              </text>
+            ) : null}
+          </g>
+        );
+      })}
+    </>
+  );
+}
+
+type Spot = [number, number];
+type Mark = "now" | "done" | "wait";
+
+/** A named node of a graph or a tree. A wide node is a box, for names longer than a letter. */
+function Dot({ at, name, mark, wide = false, note, above = false }: { at: Spot; name: string | number; mark: Mark; wide?: boolean; note?: string; above?: boolean }) {
+  const style = mark === "now" ? "fig-accent" : mark === "done" ? "fig-fill" : "fig-ghost";
+  return (
+    <g>
+      {wide ? <rect x={at[0] - 32} y={at[1] - 14} width="64" height="28" className={style} /> : <circle cx={at[0]} cy={at[1]} r="16" className={style} />}
+      <text x={at[0]} y={at[1] + 4} textAnchor="middle" className="fig-small" style={{ fill: mark === "now" ? "var(--bg)" : "var(--text)" }}>
+        {name}
+      </text>
+      {note ? (
+        <text x={at[0]} y={at[1] + (above ? -22 : 32)} textAnchor="middle" className="fig-small">
+          {note}
+        </text>
+      ) : null}
+    </g>
+  );
+}
+
+/** A line between two nodes, stopping short of each, with an optional arrowhead and label. */
+function Link({ from, to, arrow = false, hot = false, faint = false, gap = 18, label }: { from: Spot; to: Spot; arrow?: boolean; hot?: boolean; faint?: boolean; gap?: number; label?: string | number }) {
+  const length = Math.hypot(to[0] - from[0], to[1] - from[1]) || 1;
+  const [ux, uy] = [(to[0] - from[0]) / length, (to[1] - from[1]) / length];
+  const [x0, y0, x1, y1] = [from[0] + gap * ux, from[1] + gap * uy, to[0] - gap * ux, to[1] - gap * uy];
+  const stroke = hot ? "fig-accent-line" : faint ? "fig-guide" : "fig-axis";
+  const head = `${(x1 - 8 * ux + 4 * uy).toFixed(1)},${(y1 - 8 * uy - 4 * ux).toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)} ${(x1 - 8 * ux - 4 * uy).toFixed(1)},${(y1 - 8 * uy + 4 * ux).toFixed(1)}`;
+  return (
+    <>
+      <line x1={x0} y1={y0} x2={x1} y2={y1} className={stroke} />
+      {arrow ? <polyline points={head} className={stroke} fill="none" /> : null}
+      {label === undefined ? null : (
+        <text x={(x0 + x1) / 2 + 9 * uy} y={(y0 + y1) / 2 - 9 * ux + 4} textAnchor="middle" className="fig-small">
+          {label}
+        </text>
+      )}
+    </>
+  );
+}
+
+const SHELF = [3, 8, 1, 9, 4, 7];
+
+/** The same insertion into an array, where later items must move, and into a linked list, where links must be followed. */
+function ArrayList(props: Props) {
+  const n = SHELF.length;
+  const [at, setAt] = useState(clamp(Math.round(num(props.index, 2)), 0, n));
+  const moved = n - at;
+  const after = [...SHELF.slice(0, at), 5, ...SHELF.slice(at)];
+  const before = Array.from({ length: at }, (_, i) => i);
+  const later = Array.from({ length: moved }, (_, i) => at + 1 + i);
+  const step = 60;
+  const spot = (i: number): Spot => [34 + i * step, 196];
+  return (
+    <Frame
+      title="Inserting into an array and into a linked list"
+      summary={`Inserting 5 at index ${at} of a list of ${n} items. Array: ${
+        moved === 0 ? "the new item goes after the last one, so nothing has to move" : `the ${plural(moved, "item")} from index ${at} onwards each move one place to the right, ${plural(moved, "move")}`
+      }. Linked list: ${at === 0 ? "the place is at the head, so no links are followed" : `${plural(at, "link is", "links are")} followed from the head to reach the place`}, then 2 links are changed and no item moves.`}
+      controls={<Stepper label="index" value={at} onChange={setAt} min={0} max={n} />}
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The value 5 inserted at index ${at} of an array and of a linked list`}>
+        <text x="12" y="22" className="fig-small">
+          array: the filled cells had to move
+        </text>
+        <Cells values={after} y={34} w={60} hot={[at]} faint={before} under={(i) => String(i)} />
+        <text x="12" y="156" className="fig-small">
+          linked list: the filled nodes were walked past
+        </text>
+        {after.map((value, i) => (
+          <g key={i}>
+            {i < after.length - 1 ? <Link from={spot(i)} to={spot(i + 1)} arrow hot={i === at - 1 || i === at} /> : null}
+            <Dot at={spot(i)} name={value} mark={i === at ? "now" : later.includes(i) ? "wait" : "done"} />
+          </g>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+const LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"];
+
+/** One line of items with two rules for who leaves next: the last one in, or the first one in. */
+function StackQueue(props: Props) {
+  const [queue, setQueue] = useState(props.mode === "queue");
+  const start = clamp(Math.round(num(props.items, 3)), 0, 6);
+  const [state, setState] = useState({ items: LETTERS.slice(0, start), next: start, out: [] as string[] });
+  const { items, next, out } = state;
+  const leaving = items.length === 0 ? -1 : queue ? 0 : items.length - 1;
+  const kind = queue ? "queue" : "stack";
+  return (
+    <Frame
+      title="Last in or first in"
+      summary={`A ${kind} holding ${items.length === 0 ? "nothing" : items.join(", ")}${items.length > 1 ? ", in the order they were added" : ""}. ${
+        leaving < 0 ? "There is nothing to remove." : `The next to leave is ${items[leaving]}, the ${queue ? "first" : "last"} one in.`
+      }${out.length > 0 ? ` Removed so far, in order: ${out.join(", ")}.` : ""}`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" disabled={items.length >= 6 || next >= LETTERS.length} onClick={() => setState({ items: [...items, LETTERS[next]], next: next + 1, out })}>
+            Add an item
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            disabled={leaving < 0}
+            onClick={() => setState({ items: queue ? items.slice(1) : items.slice(0, -1), next, out: [...out, items[leaving]] })}
+          >
+            Remove an item
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setQueue(!queue)}>
+            {queue ? "Switch to stack" : "Switch to queue"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 200" role="img" aria-label={`A ${kind} holding ${items.length === 0 ? "nothing" : items.join(", ")}`}>
+        <text x="12" y="40" className="fig-small">
+          {queue ? "queue: leaves from the front, joins at the back" : "stack: joins and leaves at the same end"}
+        </text>
+        <line x1="12" x2="428" y1="148" y2="148" className="fig-axis" />
+        <Cells values={items} x={40} y={78} w={60} h={44} hot={leaving < 0 ? [] : [leaving]} under={(i) => (i === leaving ? "leaves next" : "")} />
+        {out.length > 0 ? (
+          <text x="12" y="180" className="fig-small">
+            removed: {out.join(" ")}
+          </text>
+        ) : null}
+      </svg>
+    </Frame>
+  );
+}
+
+const KEYS = [12, 25, 7, 33, 18, 41, 4, 26];
+
+/** Keys dropped into numbered buckets by their remainder, with the chains that form when two keys share a bucket. */
+function HashTable(props: Props) {
+  const [m, setM] = useState(clamp(Math.round(num(props.buckets, 5)), 2, 11));
+  const [count, setCount] = useState(clamp(Math.round(num(props.keys, 8)), 1, KEYS.length));
+  const keys = KEYS.slice(0, count);
+  const buckets = Array.from({ length: m }, (_, b) => keys.filter((key) => key % m === b));
+  const longest = Math.max(...buckets.map((bucket) => bucket.length));
+  const worst = buckets.findIndex((bucket) => bucket.length === longest);
+  const empty = buckets.filter((bucket) => bucket.length === 0).length;
+  const row = 23;
+  return (
+    <Frame
+      title="Keys in buckets"
+      summary={`${plural(count, "key")} in ${m} buckets, each placed in bucket number key mod ${m}. The load factor is ${count} ÷ ${m} = ${dp(count / m, 2)}. The fullest bucket is number ${worst}, holding ${buckets[worst].join(", ")}, so a lookup compares at most ${plural(longest, "key")}. ${plural(empty, "bucket is", "buckets are")} empty.`}
+      controls={
+        <>
+          <Slider label="number of buckets" value={m} onChange={setM} min={2} max={11} />
+          <Stepper label="keys" value={count} onChange={setCount} min={1} max={KEYS.length} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`${count} keys spread over ${m} buckets, the fullest holding ${longest}`}>
+        {buckets.map((bucket, b) => (
+          <g key={b}>
+            <text x="30" y={24 + b * row} textAnchor="end" className="fig-small">
+              {b}
+            </text>
+            <rect x="40" y={10 + b * row} width="20" height={row - 4} className="fig-ghost" />
+            {bucket.map((key, i) => (
+              <g key={key}>
+                <line x1={60 + i * 56} x2={76 + i * 56} y1={20 + b * row} y2={20 + b * row} className="fig-axis" />
+                <rect x={76 + i * 56} y={10 + b * row} width="40" height={row - 4} className={b === worst ? "fig-accent" : "fig-fill"} />
+                <text x={96 + i * 56} y={24 + b * row} textAnchor="middle" className="fig-small" style={{ fill: b === worst ? "var(--bg)" : "var(--text)" }}>
+                  {key}
+                </text>
+              </g>
+            ))}
+          </g>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+const HEAP_START = [2, 5, 3, 9, 6, 8];
+const HEAP_NEXT = [1, 7, 4, 10];
+
+/** A binary min-heap drawn as a tree and as the list that stores it, with insertion and removal of the smallest. */
+function Heap() {
+  const [state, setState] = useState({ items: HEAP_START, fed: 0, note: "Every parent is no larger than its children." });
+  const { items, fed, note } = state;
+  const insert = () => {
+    const next = [...items, HEAP_NEXT[fed]];
+    let i = next.length - 1;
+    let swaps = 0;
+    while (i > 0 && next[Math.floor((i - 1) / 2)] > next[i]) {
+      const parent = Math.floor((i - 1) / 2);
+      [next[parent], next[i]] = [next[i], next[parent]];
+      i = parent;
+      swaps += 1;
+    }
+    setState({
+      items: next,
+      fed: fed + 1,
+      note: `Inserted ${HEAP_NEXT[fed]} at the end and swapped it with its parent ${plural(swaps, "time")}, ${i === 0 && swaps > 0 ? "which took it to the top" : "until its parent was no larger"}.`,
+    });
+  };
+  const remove = () => {
+    const smallest = items[0];
+    const last = items[items.length - 1];
+    const next = items.slice(0, -1);
+    let swaps = 0;
+    if (next.length > 0) {
+      next[0] = last;
+      let i = 0;
+      for (;;) {
+        const [left, right] = [2 * i + 1, 2 * i + 2];
+        let least = i;
+        if (left < next.length && next[left] < next[least]) least = left;
+        if (right < next.length && next[right] < next[least]) least = right;
+        if (least === i) break;
+        [next[least], next[i]] = [next[i], next[least]];
+        i = least;
+        swaps += 1;
+      }
+    }
+    setState({
+      items: next,
+      fed,
+      note: next.length === 0 ? `Removed the smallest, ${smallest}. The heap is empty.` : `Removed the smallest, ${smallest}. The last item, ${last}, took its place at the top and was swapped with its smaller child ${plural(swaps, "time")}.`,
+    });
+  };
+  const spot = (i: number): Spot => {
+    const level = Math.floor(Math.log2(i + 1));
+    const across = i + 1 - 2 ** level;
+    return [(across + 0.5) * (440 / 2 ** level), 26 + level * 50];
+  };
+  return (
+    <Frame
+      title="A heap as a tree and as a list"
+      summary={`The heap as a list: [${items.join(", ")}]. ${items.length > 0 ? `The smallest item, ${items[0]}, is at index 0. ` : ""}The item at index i has its children at indices 2i + 1 and 2i + 2. ${note}`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" disabled={fed >= HEAP_NEXT.length} onClick={insert}>
+            Insert an item
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" disabled={items.length === 0} onClick={remove}>
+            Remove the smallest
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`A heap of ${plural(items.length, "item")} with ${items.length > 0 ? items[0] : "nothing"} at the top`}>
+        {items.map((value, i) => (
+          <g key={i}>
+            {i > 0 ? <Link from={spot(Math.floor((i - 1) / 2))} to={spot(i)} /> : null}
+            <Dot at={spot(i)} name={value} mark={i === 0 ? "now" : "done"} />
+          </g>
+        ))}
+        <Cells values={items} x={12} y={226} w={42} h={28} hot={items.length > 0 ? [0] : []} under={(i) => String(i)} />
+      </svg>
+    </Frame>
+  );
+}
+
+const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
+const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
+const nextTo = (node: string) =>
+  WALK_EDGES.filter((edge) => edge.includes(node))
+    .map((edge) => edge.replace(node, ""))
+    .sort();
+
+type WalkStep = { order: string[]; waiting: string[] };
+function walkSteps(depth: boolean): WalkStep[] {
+  const steps: WalkStep[] = [{ order: [], waiting: depth ? [] : ["A"] }];
+  const order: string[] = [];
+  if (depth) {
+    const visit = (node: string, path: string[]) => {
+      order.push(node);
+      steps.push({ order: [...order], waiting: [...path, node] });
+      for (const other of nextTo(node)) if (!order.includes(other)) visit(other, [...path, node]);
+    };
+    visit("A", []);
+  } else {
+    const queue = ["A"];
+    const seen = new Set(["A"]);
+    while (queue.length > 0) {
+      const node = queue.shift()!;
+      order.push(node);
+      for (const other of nextTo(node)) {
+        if (!seen.has(other)) {
+          seen.add(other);
+          queue.push(other);
+        }
+      }
+      steps.push({ order: [...order], waiting: [...queue] });
+    }
+  }
+  return steps;
+}
+
+/** One small graph explored two ways: nearest first with a queue, or as deep as possible with a stack. */
+function GraphWalk(props: Props) {
+  const [depth, setDepth] = useState(props.mode === "depth");
+  const steps = walkSteps(depth);
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, steps.length - 1));
+  const { order, waiting } = steps[step];
+  const current = order[order.length - 1];
+  const all = step === steps.length - 1;
+  return (
+    <Frame
+      title="Two ways to explore a graph"
+      summary={
+        depth
+          ? `Depth-first search from A, after ${plural(step, "step")}. Visited in order: ${order.join(", ") || "nothing yet"}. ${
+              step === 0 ? "The stack is empty." : `The path back to the start, held on the stack: ${waiting.join(", ")}.`
+            }${all ? " Every node has been visited, going as deep as possible before turning back." : ""}`
+          : `Breadth-first search from A, after ${plural(step, "step")}. Visited in order: ${order.join(", ") || "nothing yet"}. Waiting in the queue: ${waiting.join(", ") || "nothing"}.${
+              all ? " Every node has been visited, nearest first." : ""
+            }`
+      }
+      controls={
+        <>
+          <Stepper label="step" value={step} onChange={setStep} min={0} max={steps.length - 1} />
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => {
+              setDepth(!depth);
+              setStep(0);
+            }}
+          >
+            {depth ? "Switch to breadth-first" : "Switch to depth-first"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 240" role="img" aria-label={`A graph of seven nodes with ${order.length} visited`}>
+        {WALK_EDGES.map((edge) => (
+          <Link key={edge} from={WALK_NODES[edge[0]]} to={WALK_NODES[edge[1]]} />
+        ))}
+        {Object.entries(WALK_NODES).map(([name, at]) => (
+          <Dot key={name} at={at} name={name} mark={name === current ? "now" : order.includes(name) ? "done" : "wait"} note={order.includes(name) ? String(order.indexOf(name) + 1) : undefined} />
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+const UNSORTED = [5, 2, 8, 1, 9, 3, 7, 4];
+type SortStep = { items: number[]; comparisons: number };
+function insertionSteps(): SortStep[] {
+  const items = [...UNSORTED];
+  let comparisons = 0;
+  const steps: SortStep[] = [{ items: [...items], comparisons }];
+  for (let pass = 1; pass < items.length; pass++) {
+    const key = items[pass];
+    let j = pass;
+    while (j > 0) {
+      comparisons += 1;
+      if (items[j - 1] <= key) break;
+      items[j] = items[j - 1];
+      j -= 1;
+    }
+    items[j] = key;
+    steps.push({ items: [...items], comparisons });
+  }
+  return steps;
+}
+function mergeSteps(): SortStep[] {
+  let items = [...UNSORTED];
+  let comparisons = 0;
+  const steps: SortStep[] = [{ items: [...items], comparisons }];
+  for (let width = 1; width < items.length; width *= 2) {
+    const merged: number[] = [];
+    for (let start = 0; start < items.length; start += 2 * width) {
+      const left = items.slice(start, start + width);
+      const right = items.slice(start + width, start + 2 * width);
+      while (left.length > 0 && right.length > 0) {
+        comparisons += 1;
+        merged.push(left[0] <= right[0] ? left.shift()! : right.shift()!);
+      }
+      merged.push(...left, ...right);
+    }
+    items = merged;
+    steps.push({ items: [...items], comparisons });
+  }
+  return steps;
+}
+
+/** The same eight numbers sorted by insertion, one item at a time, and by merging, one doubling at a time. */
+function SortSteps(props: Props) {
+  const [merge, setMerge] = useState(props.method === "merge");
+  const steps = merge ? mergeSteps() : insertionSteps();
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, steps.length - 1));
+  const { items, comparisons } = steps[step];
+  const last = step === steps.length - 1;
+  const run = 2 ** step;
+  const runs = Array.from({ length: Math.ceil(items.length / run) }, (_, i) => items.slice(i * run, (i + 1) * run));
+  const w = 52;
+  return (
+    <Frame
+      title="Sorting step by step"
+      summary={
+        merge
+          ? `Merge sort, after ${plural(step, "round")} of merging. The list is made of sorted runs of length ${run}: ${runs.map((part) => `[${part.join(", ")}]`).join(" ")}. ${
+              last ? "The list is sorted." : "Next, neighbouring runs are merged in pairs."
+            } Comparisons so far: ${comparisons}.`
+          : `Insertion sort, after ${plural(step, "pass", "passes")}. The first ${plural(step + 1, "item is", "items are")} in order: ${items.slice(0, step + 1).join(", ")}. ${
+              last ? "The list is sorted." : `Next, ${items[step + 1]} is moved left past every larger item.`
+            } Comparisons so far: ${comparisons}.`
+      }
+      controls={
+        <>
+          <Stepper label="step" value={step} onChange={setStep} min={0} max={steps.length - 1} />
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => {
+              setMerge(!merge);
+              setStep(0);
+            }}
+          >
+            {merge ? "Switch to insertion sort" : "Switch to merge sort"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 150" role="img" aria-label={`${merge ? "Merge" : "Insertion"} sort of eight numbers at step ${step}: ${items.join(", ")}`}>
+        <Cells
+          values={items}
+          y={40}
+          w={w}
+          h={44}
+          hot={merge || last ? [] : [step + 1]}
+          faint={merge ? [] : items.map((_, i) => i).filter((i) => i > step + 1)}
+        />
+        {(merge ? runs : [items.slice(0, step + 1)]).map((part, i) => (
+          <line key={i} x1={12 + i * run * w} x2={12 + (i * run + part.length) * w - 4} y1={98} y2={98} className="fig-accent-line" />
+        ))}
+        <text x="12" y="124" className="fig-small">
+          the marked stretches are already in order
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const SORTED = [2, 5, 8, 12, 16, 23, 38, 42, 56, 61, 72, 80, 91, 95, 99];
+type Halving = { low: number; high: number; middle: number; left: number };
+function halvings(target: number): Halving[] {
+  const steps: Halving[] = [];
+  let [low, high] = [0, SORTED.length - 1];
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const step = { low, high, middle, left: 0 };
+    if (SORTED[middle] === target) {
+      steps.push(step);
+      break;
+    }
+    if (target < SORTED[middle]) high = middle - 1;
+    else low = middle + 1;
+    step.left = high - low + 1;
+    steps.push(step);
+  }
+  return steps;
+}
+
+/** Binary search on fifteen sorted numbers: each comparison with the middle rules out half of what remains. */
+function BinarySearch(props: Props) {
+  const [pick, setPick] = useState(clamp(Math.round(num(props.target, 5)), 0, SORTED.length - 1));
+  const [missing, setMissing] = useState(props.missing === true);
+  const target = missing ? 50 : SORTED[pick];
+  const steps = halvings(target);
+  const [at, setAt] = useState(0);
+  const step = Math.min(at, steps.length);
+  const now = step === 0 ? null : steps[step - 1];
+  const value = now ? SORTED[now.middle] : 0;
+  const [low, high] = !now ? [0, SORTED.length - 1] : value === target ? [now.middle, now.middle] : target < value ? [now.low, now.middle - 1] : [now.middle + 1, now.high];
+  let summary = `Looking for ${target} among ${SORTED.length} sorted items. `;
+  if (!now) summary += `Nothing has been compared yet, and all ${SORTED.length} positions are possible.`;
+  else if (value === target) summary += `Step ${step}: the middle of positions ${now.low} to ${now.high} is position ${now.middle}, holding ${value}. That is the target, found after ${plural(step, "comparison")}.`;
+  else {
+    summary += `Step ${step}: the middle of positions ${now.low} to ${now.high} is position ${now.middle}, holding ${value}. ${target} is ${target < value ? "smaller" : "larger"}, so positions ${
+      target < value ? `${now.middle} to ${now.high}` : `${now.low} to ${now.middle}`
+    } are ruled out. ${now.left === 0 ? `No positions remain, so ${target} is not in the list.` : `${plural(now.left, "position remains", "positions remain")}.`}`;
+  }
+  return (
+    <Frame
+      title="Halving the search"
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="step" value={step} onChange={setAt} min={0} max={steps.length} />
+          <Slider
+            label="position of the target"
+            value={pick}
+            onChange={(v) => {
+              setPick(v);
+              setMissing(false);
+              setAt(0);
+            }}
+            min={0}
+            max={SORTED.length - 1}
+          />
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => {
+              setMissing(!missing);
+              setAt(0);
+            }}
+          >
+            {missing ? "Look for an item in the list" : "Look for 50, which is missing"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 130" role="img" aria-label={`Fifteen sorted numbers with positions ${low} to ${high} still possible for ${target}`}>
+        <Cells
+          values={SORTED}
+          x={10}
+          y={36}
+          w={28}
+          h={36}
+          hot={now ? [now.middle] : []}
+          faint={SORTED.map((_, i) => i).filter((i) => (i < low || i > high) && i !== now?.middle)}
+          under={(i) => String(i)}
+        />
+        <text x="10" y="112" className="fig-small">
+          outlined cells are ruled out
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** A table filled cell by cell, each cell from the two already known beside it: the number of routes across a grid. */
+function DpGrid(props: Props) {
+  const rows = clamp(Math.round(num(props.rows, 4)), 2, 4);
+  const cols = clamp(Math.round(num(props.cols, 5)), 2, 6);
+  const total = rows * cols;
+  const [filled, setFilled] = useState(clamp(Math.round(num(props.filled, 0)), 0, total));
+  const routes: number[][] = [];
+  for (let r = 0; r < rows; r++) {
+    routes.push([]);
+    for (let c = 0; c < cols; c++) routes[r].push(r === 0 || c === 0 ? 1 : routes[r - 1][c] + routes[r][c - 1]);
+  }
+  const [r, c] = [Math.floor((filled - 1) / cols), (filled - 1) % cols];
+  let summary = `A grid of ${rows} rows and ${cols} columns. Each cell holds the number of routes to it from the top-left corner, moving only right or down. `;
+  if (filled === 0) summary += "Nothing is filled in yet.";
+  else {
+    summary += `Filled ${filled} of ${total} cells. The cell in row ${r + 1}, column ${c + 1} `;
+    if (r === 0 && c === 0) summary += "is the starting corner, with 1 route, which is to stay put.";
+    else if (r === 0 || c === 0) summary += `is on the ${r === 0 ? "top" : "left"} edge, so there is only 1 route to it.`;
+    else summary += `can be entered from above, ${plural(routes[r - 1][c], "route")}, or from the left, ${plural(routes[r][c - 1], "route")}, so it has ${routes[r - 1][c]} + ${routes[r][c - 1]} = ${routes[r][c]}.`;
+    if (filled === total) summary += ` The far corner has ${routes[rows - 1][cols - 1]} routes.`;
+  }
+  const [w, h] = [64, 52];
+  return (
+    <Frame title="Filling a table of routes" summary={summary} controls={<Stepper label="cells filled" value={filled} onChange={setFilled} min={0} max={total} />}>
+      <svg viewBox={`0 0 440 ${rows * h + 30}`} role="img" aria-label={`A ${rows} by ${cols} table of route counts with ${filled} cells filled`}>
+        {routes.map((line, i) =>
+          line.map((value, j) => {
+            const index = i * cols + j;
+            const on = index === filled - 1;
+            const from = filled > 0 && r > 0 && c > 0 && ((i === r - 1 && j === c) || (i === r && j === c - 1));
+            return (
+              <g key={index}>
+                <rect x={24 + j * w} y={14 + i * h} width={w - 4} height={h - 4} className={on ? "fig-accent" : index < filled ? (from ? "fig-fill" : "fig-cell") : "fig-ghost"} />
+                {index < filled ? (
+                  <text x={24 + j * w + (w - 4) / 2} y={14 + i * h + h / 2 + 4} textAnchor="middle" className="fig-mono" style={on ? { fill: "var(--bg)" } : undefined}>
+                    {value}
+                  </text>
+                ) : null}
+              </g>
+            );
+          }),
+        )}
+      </svg>
+    </Frame>
+  );
+}
+
+/** Appending to a list that doubles its room when full: most appends cost one write, a few cost a whole copy. */
+function DoublingArray(props: Props) {
+  const most = 17;
+  const [n, setN] = useState(clamp(Math.round(num(props.appends, 9)), 1, most));
+  const grew = (i: number) => i > 1 && Number.isInteger(Math.log2(i - 1)); // the i-th append finds the block full
+  const resizes = Array.from({ length: n }, (_, i) => i + 1)
+    .filter(grew)
+    .map((i) => i - 1);
+  const copies = resizes.reduce((sum, size) => sum + size, 0);
+  const room = 2 ** Math.ceil(Math.log2(n));
+  return (
+    <Frame
+      title="The cost of each append"
+      summary={`After ${plural(n, "append")} the list has room for ${room}. ${
+        resizes.length === 0
+          ? "It has not needed to grow yet."
+          : `It ran out of room ${plural(resizes.length, "time")}, and copied ${resizes.length > 1 ? `${resizes.join(" + ")} = ` : ""}${plural(copies, "item")} in all while moving to blocks twice the size.`
+      } Total work: ${plural(n, "write")} + ${plural(copies, "copy", "copies")} = ${n + copies}, which is ${dp((n + copies) / n, 2)} per append.`}
+      controls={<Stepper label="appends" value={n} onChange={setN} min={1} max={most} />}
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`The cost of each of ${n} appends to a list that doubles when full`}>
+        <line x1="20" x2="430" y1="232" y2="232" className="fig-axis" />
+        {Array.from({ length: most }, (_, k) => {
+          const i = k + 1;
+          const cost = grew(i) ? i : 1;
+          return (
+            <g key={i}>
+              <rect x={24 + k * 24} y={232 - cost * 12} width="18" height={cost * 12} className={i > n ? "fig-ghost" : grew(i) ? "fig-accent" : "fig-fill"} />
+              <text x={33 + k * 24} y="248" textAnchor="middle" className="fig-small">
+                {i}
+              </text>
+            </g>
+          );
+        })}
+        <text x="24" y="20" className="fig-small">
+          height: work done by that append
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const TASKS: Record<string, Spot> = { data: [56, 60], clean: [168, 60], split: [280, 60], model: [168, 190], train: [280, 190], test: [388, 125] };
+const NEEDS: [string, string][] = [
+  ["data", "clean"],
+  ["clean", "split"],
+  ["split", "train"],
+  ["model", "train"],
+  ["train", "test"],
+  ["split", "test"],
+];
+const needsOf = (task: string) => NEEDS.filter(([, after]) => after === task).map(([before]) => before);
+
+/** Tasks with prerequisites, put in an order in which nothing comes before what it needs. */
+function TopoOrder(props: Props) {
+  const names = Object.keys(TASKS);
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, names.length));
+  const done: string[] = [];
+  const readyAfter = () =>
+    names
+      .filter((task) => !done.includes(task) && needsOf(task).every((need) => done.includes(need)))
+      .sort();
+  for (let i = 0; i < step; i++) done.push(readyAfter()[0]);
+  const ready = readyAfter();
+  const blocked = names.filter((task) => !done.includes(task) && !ready.includes(task));
+  return (
+    <Frame
+      title="An order that respects every arrow"
+      summary={`After ${plural(step, "step")}. Done, in order: ${done.join(", ") || "nothing yet"}. Ready now, with every prerequisite done: ${ready.join(", ") || "nothing"}. ${
+        blocked.length > 0
+          ? `Still blocked: ${blocked.map((task) => `${task} (needs ${needsOf(task).filter((need) => !done.includes(need)).join(" and ")})`).join(", ")}.`
+          : step === names.length
+            ? "Every task is done, and each came after everything it needs."
+            : "Nothing is blocked."
+      }`}
+      controls={<Stepper label="step" value={step} onChange={setStep} min={0} max={names.length} />}
+    >
+      <svg viewBox="0 0 440 240" role="img" aria-label={`Six tasks joined by arrows, with ${done.length} done and ${ready.length} ready`}>
+        {NEEDS.map(([before, after]) => (
+          <Link key={before + after} from={TASKS[before]} to={TASKS[after]} arrow gap={before === "split" && after === "train" ? 20 : 38} faint={done.includes(before)} />
+        ))}
+        {names.map((task) => (
+          <Dot key={task} at={TASKS[task]} name={task} wide mark={done.includes(task) ? "done" : ready.includes(task) ? "now" : "wait"} note={done.includes(task) ? String(done.indexOf(task) + 1) : undefined} />
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+const TOWNS: Record<string, Spot> = { A: [44, 130], B: [150, 44], C: [150, 216], D: [272, 84], E: [296, 216], F: [400, 130] };
+const ROADS: [string, string, number][] = [
+  ["A", "B", 4],
+  ["A", "C", 1],
+  ["C", "B", 2],
+  ["B", "D", 5],
+  ["C", "D", 8],
+  ["C", "E", 10],
+  ["D", "E", 2],
+  ["D", "F", 6],
+  ["E", "F", 3],
+];
+
+/** Dijkstra's algorithm on six towns: settle the nearest unsettled town, then improve its neighbours. */
+function ShortestPath(props: Props) {
+  const names = Object.keys(TOWNS);
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, names.length));
+  const best: Record<string, number> = Object.fromEntries(names.map((name) => [name, name === "A" ? 0 : Infinity]));
+  const settled: string[] = [];
+  const nearest = () => names.filter((name) => !settled.includes(name)).sort((a, b) => (best[a] === best[b] ? 0 : best[a] < best[b] ? -1 : 1))[0];
+  for (let i = 0; i < step; i++) {
+    const town = nearest();
+    settled.push(town);
+    for (const [a, b, length] of ROADS) {
+      const other = a === town ? b : b === town ? a : null;
+      if (other && !settled.includes(other)) best[other] = Math.min(best[other], best[town] + length);
+    }
+  }
+  const rest = names.filter((name) => !settled.includes(name));
+  const next = rest.length > 0 ? nearest() : null;
+  const shown = (name: string) => (best[name] === Infinity ? "not reached" : String(best[name]));
+  return (
+    <Frame
+      title="Shortest distances from A"
+      summary={`After ${plural(step, "step")}. Settled, with their final distances from A: ${settled.map((name) => `${name} ${best[name]}`).join(", ") || "none yet"}. ${
+        next ? `Best found so far for the rest: ${rest.map((name) => `${name} ${shown(name)}`).join(", ")}. The nearest unsettled town is ${next}, so it is settled next.` : "Every town is settled."
+      }`}
+      controls={<Stepper label="step" value={step} onChange={setStep} min={0} max={names.length} />}
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`Six towns joined by roads with lengths, ${settled.length} of them settled`}>
+        {ROADS.map(([a, b, length]) => (
+          <Link key={a + b} from={TOWNS[a]} to={TOWNS[b]} label={length} hot={settled.includes(a) && settled.includes(b) && Math.abs(best[a] - best[b]) === length} />
+        ))}
+        {names.map((name) => (
+          <Dot key={name} at={TOWNS[name]} name={name} mark={settled.includes(name) ? "done" : name === next ? "now" : "wait"} note={best[name] === Infinity ? "∞" : String(best[name])} above={name === "B" || name === "D"} />
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+const FIRST_WORDS: [string, number][] = [
+  ["the", 0.5],
+  ["a", 0.4],
+  ["one", 0.1],
+];
+const SECOND_WORDS: Record<string, [string, number][]> = {
+  the: [
+    ["cat", 0.4],
+    ["dog", 0.35],
+    ["end", 0.25],
+  ],
+  a: [
+    ["cat", 0.9],
+    ["dog", 0.06],
+    ["end", 0.04],
+  ],
+  one: [
+    ["cat", 0.5],
+    ["dog", 0.3],
+    ["end", 0.2],
+  ],
+};
+
+/** Beam search over two-word sentences: keep only the best few after each word, and see what that can miss. */
+function BeamSearch(props: Props) {
+  const [width, setWidth] = useState(clamp(Math.round(num(props.width, 1)), 1, 3));
+  const kept = FIRST_WORDS.slice(0, width).map(([word]) => word);
+  const all = FIRST_WORDS.flatMap(([first, p]) => SECOND_WORDS[first].map(([second, q]) => ({ first, second, p: p * q })));
+  const candidates = all.filter((sentence) => kept.includes(sentence.first)).sort((a, b) => b.p - a.p);
+  const finals = candidates.slice(0, width);
+  const best = [...all].sort((a, b) => b.p - a.p)[0];
+  const found = finals.some((sentence) => sentence.first === best.first && sentence.second === best.second);
+  const isFinal = (first: string, second: string) => finals.some((sentence) => sentence.first === first && sentence.second === second);
+  return (
+    <Frame
+      title="Keeping only the best few"
+      summary={`Beam width ${width}. After the first word the beam keeps ${FIRST_WORDS.slice(0, width)
+        .map(([word, p]) => `"${word}" (${dp(p, 3)})`)
+        .join(" and ")}. Each is extended by every second word, ${plural(candidates.length, "candidate")}, and the best ${width === 1 ? "one is" : `${width} are`} kept: ${finals
+        .map((sentence) => `"${sentence.first} ${sentence.second}" (${dp(sentence.p, 3)})`)
+        .join(", ")}. The most probable sentence of all is "${best.first} ${best.second}" at ${dp(best.p, 3)}, which this beam ${found ? "found" : `missed, because it dropped "${best.first}" after the first word`}.`}
+      controls={<Stepper label="beam width" value={width} onChange={setWidth} min={1} max={3} />}
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`A tree of two-word sentences searched with beam width ${width}`}>
+        {FIRST_WORDS.map(([first, p], i) => {
+          const at: Spot = [150, 50 + i * 90];
+          const on = kept.includes(first);
+          return (
+            <g key={first}>
+              <Link from={[44, 140]} to={at} gap={36} faint={!on} />
+              {SECOND_WORDS[first].map(([second, q], j) => {
+                const end: Spot = [330, 22 + i * 90 + j * 28];
+                const final = isFinal(first, second);
+                return (
+                  <g key={second}>
+                    <Link from={at} to={end} gap={36} faint={!on} hot={final} />
+                    <text x={end[0] - 26} y={end[1] + 4} className="fig-small" style={on ? { fill: final ? "var(--focus)" : "var(--text)" } : undefined}>
+                      {second} {dp(q, 3)} → {dp(p * q, 3)}
+                    </text>
+                  </g>
+                );
+              })}
+              <Dot at={at} name={`${first} ${dp(p, 3)}`} wide mark={on ? "now" : "wait"} />
+            </g>
+          );
+        })}
+        <Dot at={[44, 140]} name="start" wide mark="done" />
+      </svg>
+    </Frame>
+  );
+}
+
+/* Matrices are drawn on the same grid as vectors. A matrix here is two rows of two numbers. */
+type M2 = [Pair, Pair];
+const mv = (m: M2, [x, y]: Pair): Pair => [m[0][0] * x + m[0][1] * y, m[1][0] * x + m[1][1] * y];
+const mm = (a: M2, b: M2): M2 => [
+  [a[0][0] * b[0][0] + a[0][1] * b[1][0], a[0][0] * b[0][1] + a[0][1] * b[1][1]],
+  [a[1][0] * b[0][0] + a[1][1] * b[1][0], a[1][0] * b[0][1] + a[1][1] * b[1][1]],
+];
+const rowsOf = (m: M2) => `rows (${dp(m[0][0])}, ${dp(m[0][1])}) and (${dp(m[1][0])}, ${dp(m[1][1])})`;
+const IDENTITY: M2 = [
+  [1, 0],
+  [0, 1],
+];
+
+/** The grid lines of the plane after a matrix has moved every point. */
+function Warped({ m }: { m: M2 }) {
+  const lines: [Pair, Pair][] = [];
+  for (let i = -8; i <= 8; i++) {
+    lines.push([mv(m, [i, -8]), mv(m, [i, 8])]);
+    lines.push([mv(m, [-8, i]), mv(m, [8, i])]);
+  }
+  return (
+    <g clipPath="url(#grid-clip)">
+      {lines.map(([p, q], i) => (
+        <line key={i} x1={gx(p[0])} y1={gy(p[1])} x2={gx(q[0])} y2={gy(q[1])} className="fig-guide" />
+      ))}
+    </g>
+  );
+}
+
+/** A filled outline through the given points. */
+function Outline({ points, accent = false }: { points: Pair[]; accent?: boolean }) {
+  return <polygon points={points.map(([x, y]) => `${gx(x).toFixed(1)},${gy(y).toFixed(1)}`).join(" ")} className={accent ? "fig-accent" : "fig-fill"} opacity={accent ? 0.35 : 0.6} />;
+}
+
+const MAPS: { name: string; m: M2; does: string }[] = [
+  { name: "stretch", m: [[2, 0], [0, 1]], does: "Every point moves to twice its distance from the vertical axis." },
+  { name: "shear", m: [[1, 1], [0, 1]], does: "Each point slides sideways by its own height, so the square leans over and keeps its area." },
+  { name: "quarter turn", m: [[0, -1], [1, 0]], does: "The whole plane turns a quarter of the way round, anticlockwise." },
+  { name: "reflection", m: [[1, 0], [0, -1]], does: "The plane is flipped over the horizontal axis." },
+  { name: "squash", m: [[1, 2], [0.5, 1]], does: "The two columns point the same way, so the whole plane is flattened onto one line." },
+];
+
+/** A matrix as a movement of the whole plane, fixed by where it sends the two unit vectors. */
+function LinearMap(props: Props) {
+  const [which, setWhich] = useState(clamp(MAPS.findIndex((map) => map.name === props.map), 0, MAPS.length - 1));
+  const [quarters, setQuarters] = useState(clamp(Math.round(num(props.amount, 1) * 4), 0, 4));
+  const { name, m: full, does } = MAPS[which];
+  const t = quarters / 4;
+  const m: M2 = [
+    [1 + t * (full[0][0] - 1), t * full[0][1]],
+    [t * full[1][0], 1 + t * (full[1][1] - 1)],
+  ];
+  const point: Pair = [2, 1];
+  const image = mv(m, point);
+  return (
+    <Frame
+      title="A matrix moves the plane"
+      summary={`The ${name}, with ${rowsOf(full)}${quarters < 4 ? `, shown ${quarters} quarter${quarters === 1 ? "" : "s"} of the way from doing nothing` : ""}. The unit vector (1, 0) lands on ${pair([m[0][0], m[1][0]])}, the first column. The unit vector (0, 1) lands on ${pair([m[0][1], m[1][1]])}, the second column. The point (2, 1) is 2 of the first and 1 of the second, so it lands on 2 × ${pair([m[0][0], m[1][0]])} + 1 × ${pair([m[0][1], m[1][1]])} = ${pair(image)}.${quarters === 4 ? ` ${does}` : ""}`}
+      controls={
+        <>
+          <Stepper label="quarters of the way" value={quarters} onChange={setQuarters} min={0} max={4} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setWhich((which + 1) % MAPS.length)}>
+            Next matrix
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The plane moved by the ${name}, with the unit square and the point (2, 1)`}>
+        <Grid />
+        <Warped m={m} />
+        <Outline points={[[0, 0], [1, 0], [1, 1], [0, 1]].map((p) => mv(m, p as Pair))} accent />
+        <Arrow to={[m[0][0], m[1][0]]} name="col 1" />
+        <Arrow to={[m[0][1], m[1][1]]} name="col 2" />
+        <circle cx={gx(image[0])} cy={gy(image[1])} r="5" className="fig-accent" />
+      </svg>
+    </Frame>
+  );
+}
+
+const COLUMNS: M2 = [
+  [2, -1],
+  [1, 1],
+];
+
+/** A matrix times a vector, as a combination of the columns and as one dot product for each row. */
+function MatrixVector(props: Props) {
+  const [xh, setX] = useState(clamp(Math.round(num(props.x, 1) * 2), -3, 3));
+  const [yh, setY] = useState(clamp(Math.round(num(props.y, 1) * 2), -3, 3));
+  const x: Pair = [xh / 2, yh / 2];
+  const a: Pair = [COLUMNS[0][0], COLUMNS[1][0]];
+  const b: Pair = [COLUMNS[0][1], COLUMNS[1][1]];
+  const first: Pair = [x[0] * a[0], x[0] * a[1]];
+  const out = mv(COLUMNS, x);
+  return (
+    <Frame
+      title="A matrix times a vector"
+      summary={`The matrix has columns ${pair(a)} and ${pair(b)}, and x = ${pair(x)}. By columns: ${dp(x[0])} × ${pair(a)} + ${dp(x[1])} × ${pair(b)} = ${pair(out)}. By rows: (2, −1) · x = ${dp(out[0])} and (1, 1) · x = ${dp(out[1])}. Both give Ax = ${pair(out)}.`}
+      controls={
+        <>
+          <Stepper label="first entry of x in halves" value={xh} onChange={setX} min={-3} max={3} />
+          <Stepper label="second entry of x in halves" value={yh} onChange={setY} min={-3} max={3} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The columns ${pair(a)} and ${pair(b)} combined with weights ${dp(x[0])} and ${dp(x[1])}, reaching ${pair(out)}`}>
+        <Grid />
+        <Arrow to={first} dashed />
+        <Arrow from={first} to={out} dashed />
+        <Arrow to={a} name="col 1" />
+        <Arrow to={b} name="col 2" />
+        <Arrow to={out} accent name="Ax" />
+      </svg>
+    </Frame>
+  );
+}
+
+const FLAG: Pair[] = [
+  [0, 0],
+  [2, 0],
+  [2, 0.5],
+  [0.5, 0.5],
+  [0.5, 1],
+  [0, 1],
+];
+const TURN: M2 = [
+  [0, -1],
+  [1, 0],
+];
+const LEAN: M2 = [
+  [1, 1],
+  [0, 1],
+];
+const UNLEAN: M2 = [
+  [1, -1],
+  [0, 1],
+];
+
+/** Two matrices applied one after the other, in either order, and the single matrix that does both. */
+function ComposeMaps(props: Props) {
+  const undo = props.pair === "undo";
+  const [swapped, setSwapped] = useState(props.swapped === true);
+  const [stage, setStage] = useState(clamp(Math.round(num(props.stage, 0)), 0, 2));
+  const names = undo ? ["shear", "opposite shear"] : ["shear", "quarter turn"];
+  const maps: M2[] = undo ? [LEAN, UNLEAN] : [LEAN, TURN];
+  const order = swapped ? [1, 0] : [0, 1];
+  const [firstMap, secondMap] = [maps[order[0]], maps[order[1]]];
+  const both = mm(secondMap, firstMap);
+  const now = stage === 0 ? IDENTITY : stage === 1 ? firstMap : both;
+  const corner = mv(now, [2, 0.5]);
+  return (
+    <Frame
+      title="One matrix after another"
+      summary={`First the ${names[order[0]]}, with ${rowsOf(firstMap)}, then the ${names[order[1]]}, with ${rowsOf(secondMap)}. ${
+        stage === 0 ? "Nothing has been applied yet." : stage === 1 ? `The ${names[order[0]]} has been applied.` : `Both have been applied. Together they are the one matrix with ${rowsOf(both)}, the product of the second and the first.`
+      } The corner that began at (2, 0.5) is now at ${pair(corner)}.${
+        stage === 2 ? (undo ? " The second matrix undoes the first, and the product is the identity, which moves nothing." : ` In the other order the product would have ${rowsOf(mm(firstMap, secondMap))}, a different matrix.`) : ""
+      }`}
+      controls={
+        <>
+          <Stepper label="matrices applied" value={stage} onChange={setStage} min={0} max={2} />
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => {
+              setSwapped(!swapped);
+              setStage(0);
+            }}
+          >
+            Swap the order
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`A flag shape after ${stage} of two matrices, its corner at ${pair(corner)}`}>
+        <Grid />
+        <Warped m={now} />
+        <Outline points={FLAG} />
+        <Outline points={FLAG.map((p) => mv(now, p))} accent />
+        <circle cx={gx(corner[0])} cy={gy(corner[1])} r="5" className="fig-accent" />
+      </svg>
+    </Frame>
+  );
+}
+
+const TABLE = [
+  [1, 2, 3],
+  [4, 5, 6],
+];
+
+/** A matrix and its transpose: rows become columns, and the entry in row i, column j moves to row j, column i. */
+function TransposeFlip(props: Props) {
+  const [flipped, setFlipped] = useState(props.flipped === true);
+  const [entry, setEntry] = useState(clamp(Math.round(num(props.entry, 2)), 1, 6));
+  const [r, c] = [Math.floor((entry - 1) / 3), (entry - 1) % 3];
+  const shown = flipped ? [0, 1, 2].map((j) => [TABLE[0][j], TABLE[1][j]]) : TABLE;
+  const [hr, hc] = flipped ? [c, r] : [r, c];
+  const [w, h] = [56, 44];
+  return (
+    <Frame
+      title="Rows become columns"
+      summary={`${flipped ? "The transpose, with 3 rows and 2 columns" : "The matrix, with 2 rows and 3 columns"}. The entry ${TABLE[r][c]} is in row ${r + 1}, column ${c + 1} of the matrix and in row ${c + 1}, column ${r + 1} of the transpose. Row ${r + 1} of the matrix, ${TABLE[r].join(", ")}, is column ${r + 1} of the transpose.`}
+      controls={
+        <>
+          <Stepper label="entry" value={entry} onChange={setEntry} min={1} max={6} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setFlipped(!flipped)}>
+            {flipped ? "Show the matrix" : "Show the transpose"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 190" role="img" aria-label={`${flipped ? "The transpose" : "The matrix"} with the entry ${TABLE[r][c]} marked`}>
+        {shown.map((line, i) => (
+          <Cells key={i} values={line} x={130} y={24 + i * h} w={w} h={h - 6} hot={i === hr ? [hc] : []} />
+        ))}
+        <line x1={130} y1={24} x2={130 + 2 * w} y2={24 + 2 * h} className="fig-guide" />
+        <text x="130" y={flipped ? 176 : 132} className="fig-small">
+          flipped across the dashed diagonal
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const ELIMINATION: { rows: number[][]; changed: number; did: string }[] = [
+  { rows: [[1, 1, 1, 6], [2, 3, 1, 11], [1, -1, 2, 5]], changed: -1, did: "The three equations x + y + z = 6, 2x + 3y + z = 11 and x − y + 2z = 5, written as rows of numbers. Nothing has been done yet." },
+  { rows: [[1, 1, 1, 6], [0, 1, -1, -1], [1, -1, 2, 5]], changed: 1, did: "Row 2 has had 2 times row 1 subtracted from it, which removes x from the second equation." },
+  { rows: [[1, 1, 1, 6], [0, 1, -1, -1], [0, -2, 1, -1]], changed: 2, did: "Row 3 has had row 1 subtracted from it, which removes x from the third equation." },
+  { rows: [[1, 1, 1, 6], [0, 1, -1, -1], [0, 0, -1, -3]], changed: 2, did: "Row 3 has had 2 times row 2 added to it, which removes y. The rows now form a triangle, and the last says −z = −3." },
+  { rows: [[1, 1, 1, 6], [0, 1, -1, -1], [0, 0, 1, 3]], changed: 2, did: "Row 3 has been divided by −1, so z = 3." },
+  { rows: [[1, 1, 1, 6], [0, 1, 0, 2], [0, 0, 1, 3]], changed: 1, did: "Row 3 has been added to row 2, which puts z = 3 into the second equation and leaves y = 2." },
+  { rows: [[1, 0, 0, 1], [0, 1, 0, 2], [0, 0, 1, 3]], changed: 0, did: "Rows 2 and 3 have been subtracted from row 1, leaving x = 1. The solution is x = 1, y = 2, z = 3." },
+];
+
+/** Three equations solved by row operations, one step at a time. */
+function Elimination(props: Props) {
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, ELIMINATION.length - 1));
+  const { rows, changed, did } = ELIMINATION[step];
+  return (
+    <Frame
+      title="Clearing one unknown at a time"
+      summary={`Step ${step} of ${ELIMINATION.length - 1}. ${did} The rows are now ${rows.map((row) => `(${row.slice(0, 3).map((v) => dp(v)).join(", ")} | ${dp(row[3])})`).join(", ")}.`}
+      controls={<Stepper label="step" value={step} onChange={setStep} min={0} max={ELIMINATION.length - 1} />}
+    >
+      <svg viewBox="0 0 440 190" role="img" aria-label={`Three equations as rows of numbers at step ${step} of elimination`}>
+        {["x", "y", "z", "="].map((head, j) => (
+          <text key={head} x={120 + j * 56 + (j === 3 ? 22 : 0) + 26} y="22" textAnchor="middle" className="fig-small">
+            {head}
+          </text>
+        ))}
+        {rows.map((row, i) => (
+          <g key={i}>
+            <text x="110" y={56 + i * 46} textAnchor="end" className="fig-small">
+              row {i + 1}
+            </text>
+            <Cells values={row.slice(0, 3).map((v) => dp(v))} x={120} y={32 + i * 46} w={56} h={38} hot={i === changed ? [0, 1, 2] : []} />
+            <Cells values={[dp(row[3])]} x={310} y={32 + i * 46} w={56} h={38} hot={i === changed ? [0] : []} />
+          </g>
+        ))}
+        <line x1="299" x2="299" y1="30" y2="166" className="fig-axis" />
+      </svg>
+    </Frame>
+  );
+}
+
+const FLAT: M2 = [
+  [1, 2],
+  [0.5, 1],
+];
+const FULL: M2 = [
+  [1, 0.5],
+  [0.5, 1],
+];
+
+/** A matrix of rank 1 flattens the plane onto a line, and a whole line of inputs lands on each output. */
+function NullSpace(props: Props) {
+  const [full, setFull] = useState(props.full === true);
+  const [tq, setT] = useState(clamp(Math.round(num(props.t, 1) * 2), -4, 4));
+  const [sq, setS] = useState(clamp(Math.round(num(props.s, 0) * 2), -4, 4));
+  const [t, s] = [tq / 2, sq / 2];
+  const m = full ? FULL : FLAT;
+  const x: Pair = [0.4 * t + s, 0.8 * t - 0.5 * s];
+  const out = mv(m, x);
+  return (
+    <Frame
+      title="What a matrix reaches and what it loses"
+      summary={
+        full
+          ? `The matrix with ${rowsOf(m)} has columns pointing in different directions, so its rank is 2. The input x = ${pair(x)} goes to Ax = ${pair(out)}. Every point of the plane is reached, and only x = (0, 0) is sent to (0, 0). Moving x always moves Ax.`
+          : `The matrix with ${rowsOf(m)} has a second column that is twice the first, so its rank is 1. The input x = ${pair(x)} goes to Ax = ${pair(out)}, which is on the line through (2, 1): that line is the column space. Sliding x along the direction (2, −1) does not move Ax at all, because the matrix sends (2, −1) to (0, 0): that direction is the null space.`
+      }
+      controls={
+        <>
+          <Stepper label="along (1, 2) in halves" value={tq} onChange={setT} min={-4} max={4} />
+          <Stepper label="along (2, −1) in halves" value={sq} onChange={setS} min={-4} max={4} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setFull(!full)}>
+            {full ? "Make the columns parallel" : "Turn the columns apart"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The input ${pair(x)} and its output ${pair(out)} under a matrix of rank ${full ? 2 : 1}`}>
+        <Grid />
+        {full ? null : (
+          <g clipPath="url(#grid-clip)">
+            <line x1={gx(-12)} y1={gy(-6)} x2={gx(12)} y2={gy(6)} className="fig-accent-line" opacity="0.4" />
+            <line x1={gx(x[0] - 12)} y1={gy(x[1] + 6)} x2={gx(x[0] + 12)} y2={gy(x[1] - 6)} className="fig-guide" />
+          </g>
+        )}
+        <Arrow to={x} name="x" />
+        <Arrow to={out} accent name="Ax" />
+      </svg>
+    </Frame>
+  );
+}
+
+/** One point described by two sets of coordinates: along the usual axes, and along a different pair of basis vectors. */
+function BasisGrid(props: Props) {
+  const [c1h, setC1] = useState(clamp(Math.round(num(props.c1, 1) * 2), -2, 2));
+  const [c2h, setC2] = useState(clamp(Math.round(num(props.c2, 2) * 2), -4, 4));
+  const c: Pair = [c1h / 2, c2h / 2];
+  const b1: Pair = [COLUMNS[0][0], COLUMNS[1][0]];
+  const b2: Pair = [COLUMNS[0][1], COLUMNS[1][1]];
+  const p = mv(COLUMNS, c);
+  const along: Pair = [c[0] * b1[0], c[0] * b1[1]];
+  return (
+    <Frame
+      title="Two descriptions of one point"
+      summary={`The basis vectors are b₁ = ${pair(b1)} and b₂ = ${pair(b2)}, and the dashed lines are their grid. The point is ${dp(c[0])} of b₁ and ${dp(c[1])} of b₂, so its coordinates in this basis are ${pair(c)}. In the usual coordinates the same point is ${dp(c[0])} × ${pair(b1)} + ${dp(c[1])} × ${pair(b2)} = ${pair(p)}. The point has not moved. Only its description has changed.`}
+      controls={
+        <>
+          <Stepper label="amount of b₁ in halves" value={c1h} onChange={setC1} min={-2} max={2} />
+          <Stepper label="amount of b₂ in halves" value={c2h} onChange={setC2} min={-4} max={4} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`A point at ${pair(p)} in the usual coordinates and ${pair(c)} in the basis ${pair(b1)}, ${pair(b2)}`}>
+        <Grid />
+        <Warped m={COLUMNS} />
+        <Arrow to={along} dashed />
+        <Arrow from={along} to={p} dashed />
+        <Arrow to={b1} name="b₁" />
+        <Arrow to={b2} name="b₂" />
+        <circle cx={gx(p[0])} cy={gy(p[1])} r="5" className="fig-accent" />
+      </svg>
+    </Frame>
+  );
+}
+
+/** The determinant as the area of the parallelogram on the two columns, with a sign for their order. */
+function Determinant(props: Props) {
+  const a: Pair = [2, 0];
+  const [angle, setAngle] = useState(clamp(Math.round(num(props.angle, 90) / 30) * 30, 0, 330));
+  const tidy = (v: number) => (Math.abs(v) < 1e-9 ? 0 : Math.round(v * 1e6) / 1e6);
+  const b: Pair = [tidy(1.5 * Math.cos((angle * Math.PI) / 180)), tidy(1.5 * Math.sin((angle * Math.PI) / 180))];
+  const d = tidy(a[0] * b[1] - a[1] * b[0]);
+  const sum: Pair = [a[0] + b[0], a[1] + b[1]];
+  return (
+    <Frame
+      title="The determinant as an area"
+      summary={`The columns are ${pair(a)} and ${pair(b)}, with the second at ${angle}° from the first. The determinant is 2 × ${dp(b[1])} − 0 × ${dp(b[0])} = ${dp(d)}. ${
+        d === 0
+          ? "The columns lie along one line, the parallelogram is squashed flat, and the matrix flattens the plane: it has no inverse."
+          : d > 0
+            ? `The unit square, of area 1, is sent to a parallelogram of area ${dp(d)}. The second column is anticlockwise from the first, as (0, 1) is from (1, 0), so the sign is positive.`
+            : `The unit square, of area 1, is sent to a parallelogram of area ${dp(-d)}. The second column is clockwise from the first, so the plane has been turned over and the sign is negative.`
+      }`}
+      controls={<Stepper label="angle in steps of 30°" value={angle / 30} onChange={(v) => setAngle(v * 30)} min={0} max={11} />}
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`The parallelogram on the columns ${pair(a)} and ${pair(b)}, of signed area ${dp(d)}`}>
+        <Grid />
+        <Outline points={[[0, 0], a, sum, b]} accent={d >= 0} />
+        <Arrow to={a} name="col 1" />
+        <Arrow to={b} name={d === 0 ? undefined : "col 2"} />
+      </svg>
+    </Frame>
+  );
+}
+
+const NET: Record<string, Spot> = { A: [70, 60], B: [190, 60], C: [70, 190], D: [190, 190] };
+const NET_NAMES = ["A", "B", "C", "D"];
+const NET_LINKS: [string, string][] = [
+  ["A", "B"],
+  ["A", "C"],
+  ["B", "C"],
+  ["B", "D"],
+  ["C", "D"],
+  ["D", "A"],
+];
+
+/** A directed graph written as a table of 0s and 1s, and the powers of that table, which count walks. */
+function AdjacencyMatrix(props: Props) {
+  const [steps, setSteps] = useState(clamp(Math.round(num(props.steps, 1)), 1, 3));
+  const [from, setFrom] = useState(clamp(Math.round(num(props.from, 1)), 1, 4) - 1);
+  const one: number[][] = NET_NAMES.map((a) => NET_NAMES.map((b) => (NET_LINKS.some(([p, q]) => p === a && q === b) ? 1 : 0)));
+  let power = one;
+  for (let k = 1; k < steps; k++) power = power.map((row) => NET_NAMES.map((_, j) => row.reduce((sum, value, m) => sum + value * one[m][j], 0)));
+  const start = NET_NAMES[from];
+  return (
+    <Frame
+      title="A graph as a table of numbers"
+      summary={`The entry in row i, column j of the table counts the walks of exactly ${plural(steps, "step")} from node i to node j${steps === 1 ? ", which is 1 where there is an arrow and 0 where there is none" : `, and the table is the first one multiplied by itself ${steps === 2 ? "once" : "twice"}`}. From ${start}: ${NET_NAMES.map((name, j) => `${power[from][j]} to ${name}`).join(", ")}.`}
+      controls={
+        <>
+          <Stepper label="steps" value={steps} onChange={setSteps} min={1} max={3} />
+          <Stepper label="row" value={from + 1} onChange={(v) => setFrom(v - 1)} min={1} max={4} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`A graph of four nodes beside the table counting walks of ${steps} steps, with the row for ${start} marked`}>
+        {NET_LINKS.map(([a, b]) => (
+          <Link key={a + b} from={NET[a]} to={NET[b]} arrow hot={a === start && steps === 1} />
+        ))}
+        {NET_NAMES.map((name) => (
+          <Dot key={name} at={NET[name]} name={name} mark={name === start ? "now" : "done"} />
+        ))}
+        {NET_NAMES.map((name, j) => (
+          <text key={name} x={282 + j * 38 + 17} y="42" textAnchor="middle" className="fig-small">
+            {name}
+          </text>
+        ))}
+        {power.map((row, i) => (
+          <g key={i}>
+            <text x="264" y={72 + i * 38} className="fig-small">
+              {NET_NAMES[i]}
+            </text>
+            <Cells values={row} x={282} y={50 + i * 38} w={38} h={32} hot={i === from ? [0, 1, 2, 3] : []} />
+          </g>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+type TileKind = "hot" | "fill" | "ghost" | "cell";
+
+/** A grid of small boxes with a value in each. kind says how each box is drawn. */
+function Tiles({
+  rows,
+  cols,
+  x,
+  y,
+  w = 34,
+  h = 32,
+  value,
+  kind,
+}: {
+  rows: number;
+  cols: number;
+  x: number;
+  y: number;
+  w?: number;
+  h?: number;
+  value: (r: number, c: number) => string | number;
+  kind?: (r: number, c: number) => TileKind;
+}) {
+  const tiles: ReactNode[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const k = kind?.(r, c) ?? "fill";
+      tiles.push(
+        <g key={`${r}-${c}`}>
+          <rect x={x + c * w} y={y + r * h} width={w - 4} height={h - 4} className={k === "hot" ? "fig-accent" : k === "ghost" ? "fig-ghost" : k === "cell" ? "fig-cell" : "fig-fill"} />
+          <text x={x + c * w + (w - 4) / 2} y={y + r * h + (h - 4) / 2 + 6} textAnchor="middle" className="fig-mono" style={k === "hot" ? { fill: "var(--bg)" } : k === "ghost" ? { fill: "var(--text-faint)" } : undefined}>
+            {value(r, c)}
+          </text>
+        </g>,
+      );
+    }
+  }
+  return <>{tiles}</>;
+}
+
+const tuple = (shape: number[]) => `(${shape.join(", ")}${shape.length === 1 ? "," : ""})`;
+const SHAPES: number[][] = [[12], [2, 6], [3, 4], [4, 3], [6, 2], [2, 3, 2]];
+
+/** Twelve numbers in one block of memory, read with one shape after another. */
+function ArrayShape(props: Props) {
+  const [which, setWhich] = useState(clamp(SHAPES.findIndex((shape) => shape.join("x") === props.shape), 0, SHAPES.length - 1));
+  const [item, setItem] = useState(clamp(Math.round(num(props.item, 6)), 0, 11));
+  const shape = SHAPES[which];
+  const index: number[] = [];
+  let rest = item;
+  for (let axis = 0; axis < shape.length; axis++) {
+    const step = shape.slice(axis + 1).reduce((a, b) => a * b, 1);
+    index.push(Math.floor(rest / step));
+    rest %= step;
+  }
+  const sum = index.map((value, axis) => (axis === shape.length - 1 ? `${value}` : `${value} × ${shape.slice(axis + 1).reduce((a, b) => a * b, 1)}`)).join(" + ");
+  const [rows, cols] = shape.length === 1 ? [1, shape[0]] : shape.length === 2 ? shape : [shape[1], shape[2]];
+  const slabs = shape.length === 3 ? shape[0] : 1;
+  return (
+    <Frame
+      title="One block of numbers, many shapes"
+      summary={`Twelve numbers in one block of memory, read with shape ${tuple(shape)}: ${plural(shape.length, "axis", "axes")}, of length${shape.length === 1 ? "" : "s"} ${shape.join(" and ")}. The number at place ${item} in the block is at index [${index.join(", ")}]${shape.length === 1 ? "" : `, because ${sum} = ${item}`}. The shape is only a way of reading the block. Changing it moves no number.`}
+      controls={
+        <>
+          <Stepper label="place in the block" value={item} onChange={setItem} min={0} max={11} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setWhich((which + 1) % SHAPES.length)}>
+            Next shape
+          </button>
+        </>
+      }
+    >
+      <svg viewBox={`0 0 440 ${112 + rows * 32}`} role="img" aria-label={`A block of 12 numbers read with shape ${tuple(shape)}, with place ${item} marked`}>
+        <text x="16" y="16" className="fig-small">
+          the block in memory
+        </text>
+        <Tiles rows={1} cols={12} x={16} y={24} value={(_, c) => c} kind={(_, c) => (c === item ? "hot" : "fill")} />
+        <text x="16" y="88" className="fig-small">
+          read with shape {tuple(shape)}
+        </text>
+        {Array.from({ length: slabs }, (_, s) => (
+          <Tiles
+            key={s}
+            rows={rows}
+            cols={cols}
+            x={16 + s * (cols * 34 + 28)}
+            y={96}
+            value={(r, c) => s * rows * cols + r * cols + c}
+            kind={(r, c) => (s * rows * cols + r * cols + c === item ? "hot" : "fill")}
+          />
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+/** A slice of a table: which rows and which columns it keeps. */
+function ArraySlice(props: Props) {
+  const [start, setStart] = useState(clamp(Math.round(num(props.start, 1)), 0, 4));
+  const [stop, setStop] = useState(clamp(Math.round(num(props.stop, 3)), 0, 4));
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 2)), 1, 3));
+  const rows = Array.from({ length: Math.max(0, stop - start) }, (_, i) => start + i);
+  const cols = [0, 1, 2, 3, 4, 5].filter((c) => c % step === 0);
+  const code = `a[${start}:${stop}, ::${step}]`;
+  return (
+    <Frame
+      title="Slicing a table"
+      summary={`${code} on a table of 4 rows and 6 columns. ${
+        rows.length === 0 ? `No row is at or after ${start} and before ${stop}, so no rows are taken` : `Rows from ${start} up to but not including ${stop}: ${rows.join(", ")}`
+      }. Every ${step === 1 ? "column" : step === 2 ? "2nd column" : "3rd column"}: ${cols.join(", ")}. The result has shape (${rows.length}, ${cols.length})${
+        rows.length === 0 ? "" : `, with first row ${cols.map((c) => rows[0] * 10 + c).join(", ")}`
+      }. It is a view of the same memory, not a copy.`}
+      controls={
+        <>
+          <Stepper label="row start" value={start} onChange={setStart} min={0} max={4} />
+          <Stepper label="row stop" value={stop} onChange={setStop} min={0} max={4} />
+          <Stepper label="column step" value={step} onChange={setStep} min={1} max={3} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 170" role="img" aria-label={`A 4 by 6 table with the slice ${code} marked`}>
+        {[0, 1, 2, 3, 4, 5].map((c) => (
+          <text key={c} x={72 + c * 52 + 24} y={16} textAnchor="middle" className="fig-small">
+            {c}
+          </text>
+        ))}
+        {[0, 1, 2, 3].map((r) => (
+          <text key={r} x={56} y={24 + r * 36 + 22} textAnchor="middle" className="fig-small">
+            {r}
+          </text>
+        ))}
+        <Tiles rows={4} cols={6} x={72} y={24} w={52} h={36} value={(r, c) => r * 10 + c} kind={(r, c) => (rows.includes(r) && cols.includes(c) ? "hot" : "fill")} />
+      </svg>
+    </Frame>
+  );
+}
+
+const TABLE34 = [
+  [1, 2, 3, 4],
+  [5, 6, 7, 8],
+  [9, 10, 11, 12],
+];
+const BROADCASTS: { left: number[][]; right: number[][]; shapes: [number[], number[]]; why: string }[] = [
+  {
+    left: TABLE34,
+    right: [[10, 20, 30, 40]],
+    shapes: [[3, 4], [4]],
+    why: "Lined up from the right: 4 with 4, then 3 with nothing, and a missing axis counts as length 1. An axis of length 1 is stretched to match, so the one row is used again for each of the 3 rows.",
+  },
+  {
+    left: TABLE34,
+    right: [[10], [20], [30]],
+    shapes: [[3, 4], [3, 1]],
+    why: "Lined up from the right: 4 with 1, then 3 with 3. The axis of length 1 is stretched to match, so the one column is used again for each of the 4 columns.",
+  },
+  {
+    left: [[10], [20], [30]],
+    right: [[1, 2, 3, 4]],
+    shapes: [[3, 1], [4]],
+    why: "Lined up from the right: 1 with 4, then 3 with nothing, which counts as 1. Both arrays are stretched, the column across and the row down, and every pairing of one entry from each appears once.",
+  },
+  {
+    left: TABLE34,
+    right: [[5]],
+    shapes: [[3, 4], []],
+    why: "A single number has no axes at all, so every axis is missing and counts as length 1. It is stretched over the whole table.",
+  },
+  {
+    left: TABLE34,
+    right: [[10, 20, 30]],
+    shapes: [[3, 4], [3]],
+    why: "Lined up from the right: 4 with 3. The lengths differ and neither is 1, so the shapes do not fit and NumPy raises an error. A list of 3 numbers meant as a column must be given the shape (3, 1).",
+  },
+];
+
+/** Two arrays of different shapes added, with the smaller one stretched. */
+function Broadcast(props: Props) {
+  const [which, setWhich] = useState(clamp(Math.round(num(props.pair, 0)), 0, BROADCASTS.length - 1));
+  const { left, right, shapes, why } = BROADCASTS[which];
+  const fits = which !== 4;
+  const pick = (grid: number[][], r: number, c: number) => grid[grid.length === 1 ? 0 : r][grid[0].length === 1 ? 0 : c];
+  const own = (grid: number[][], r: number, c: number) => r < grid.length && c < grid[0].length;
+  const result = [0, 1, 2].map((r) => [0, 1, 2, 3].map((c) => pick(left, r, c) + (fits ? pick(right, r, c) : 0)));
+  const side = (grid: number[][], x: number) => (
+    <Tiles rows={fits ? 3 : grid.length} cols={fits ? 4 : grid[0].length} x={x} y={28} w={32} h={32} value={(r, c) => pick(grid, r, c)} kind={(r, c) => (own(grid, r, c) ? "fill" : "ghost")} />
+  );
+  return (
+    <Frame
+      title="Stretching the smaller array"
+      summary={`Adding arrays of shapes ${tuple(shapes[0])} and ${shapes[1].length === 0 ? "()" : tuple(shapes[1])}. ${why}${
+        fits ? ` The result has shape (3, 4), with first row ${result[0].join(", ")} and last row ${result[2].join(", ")}. Nothing is copied to do the stretching: the faint boxes are the same numbers read again.` : ""
+      }`}
+      controls={
+        <button type="button" className="btn btn-secondary btn-small" onClick={() => setWhich((which + 1) % BROADCASTS.length)}>
+          Next pair of shapes
+        </button>
+      }
+    >
+      <svg viewBox="0 0 440 136" role="img" aria-label={`Arrays of shapes ${tuple(shapes[0])} and ${shapes[1].length === 0 ? "()" : tuple(shapes[1])} ${fits ? "added, with the stretched copies drawn faintly" : "that cannot be added"}`}>
+        <text x="4" y="16" className="fig-small">
+          {tuple(shapes[0])}
+        </text>
+        <text x="156" y="16" className="fig-small">
+          {shapes[1].length === 0 ? "()" : tuple(shapes[1])}
+        </text>
+        <text x="308" y="16" className="fig-small">
+          {fits ? "(3, 4)" : "error"}
+        </text>
+        {side(left, 4)}
+        <text x="140" y="82" textAnchor="middle" className="fig-mono">
+          +
+        </text>
+        {side(right, 156)}
+        <text x="292" y="82" textAnchor="middle" className="fig-mono">
+          =
+        </text>
+        {fits ? <Tiles rows={3} cols={4} x={308} y={28} w={32} h={32} value={(r, c) => result[r][c]} kind={() => "cell"} /> : null}
+      </svg>
+    </Frame>
+  );
+}
+
+const span = (nanoseconds: number) => {
+  const [value, unit] =
+    nanoseconds < 1000 ? [dp(nanoseconds, 0), "nanosecond"] : nanoseconds < 1e6 ? [dp(nanoseconds / 1000, 1), "microsecond"] : nanoseconds < 1e9 ? [dp(nanoseconds / 1e6, 1), "millisecond"] : [dp(nanoseconds / 1e9, 1), "second"];
+  return `${value} ${unit}${value === "1" ? "" : "s"}`;
+};
+
+/** The cost of a Python loop over n numbers beside the cost of one array operation. */
+function LoopVsArray(props: Props) {
+  const [power, setPower] = useState(clamp(Math.round(num(props.power, 6)), 0, 8));
+  const n = 10 ** power;
+  const loop = 60 * n;
+  const array = 2000 + n;
+  const ratio = loop / array;
+  const bar = (time: number) => 20 + (Math.log10(time) / 10) * 380;
+  return (
+    <Frame
+      title="A loop in Python and a loop in the array"
+      summary={`Adding two lists of ${group(n)} ${n === 1 ? "number" : "numbers"}. A Python loop does about 60 nanoseconds of bookkeeping for each item: ${span(loop)} in all. One array operation pays about 2 microseconds once to get started, then about 1 nanosecond for each item: ${span(array)}. ${
+        ratio >= 1.5 ? `The array is about ${dp(ratio, 0)} times faster.` : ratio > 1 / 1.5 ? "The two cost about the same." : `The loop is about ${dp(1 / ratio, 0)} times faster, because for so few numbers the fixed cost is nearly all of it.`
+      } These are typical figures, not measurements of your machine.`}
+      controls={<Stepper label="power of ten" value={power} onChange={setPower} min={0} max={8} />}
+    >
+      <svg viewBox="0 0 440 130" role="img" aria-label={`Bars for the time of a Python loop and of one array operation on ${group(n)} numbers, on a scale where each step is ten times longer`}>
+        <text x="20" y="22" className="fig-small">
+          Python loop: {span(loop)}
+        </text>
+        <rect x="20" y="30" width={bar(loop) - 20} height="20" className="fig-fill" />
+        <text x="20" y="78" className="fig-small">
+          one array operation: {span(array)}
+        </text>
+        <rect x="20" y="86" width={bar(array) - 20} height="20" className="fig-accent" />
+        <text x="20" y="124" className="fig-small">
+          each tenth of the width is ten times longer
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const AXES = ["0", "1", "none"];
+
+/** Adding up a table along one axis, which makes that axis disappear. */
+function AxisReduce(props: Props) {
+  const [which, setWhich] = useState(clamp(AXES.indexOf(String(props.axis ?? 0)), 0, 2));
+  const [keep, setKeep] = useState(props.keepdims === true);
+  const down = [0, 1, 2, 3].map((c) => TABLE34[0][c] + TABLE34[1][c] + TABLE34[2][c]);
+  const across = TABLE34.map((row) => row.reduce((a, b) => a + b, 0));
+  const all = across.reduce((a, b) => a + b, 0);
+  const call = `a.sum(${which === 2 ? "" : `axis=${which}`}${keep ? `${which === 2 ? "" : ", "}keepdims=True` : ""})`;
+  const shape = which === 0 ? (keep ? "(1, 4)" : "(4,)") : which === 1 ? (keep ? "(3, 1)" : "(3,)") : keep ? "(1, 1)" : "()";
+  const said =
+    which === 0
+      ? `adds along axis 0, down the rows, so axis 0 is the one that goes. The result is ${down.join(", ")}, one total for each column`
+      : which === 1
+        ? `adds along axis 1, across the columns, so axis 1 is the one that goes. The result is ${across.join(", ")}, one total for each row`
+        : `adds along every axis, so both go. The result is the single number ${all}`;
+  return (
+    <Frame
+      title="Adding along an axis"
+      summary={`${call} on a table of shape (3, 4) ${said}. Its shape is ${shape}${keep ? ", because keepdims leaves the used-up axis in place with length 1, ready to be stretched against the table" : ""}.`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setWhich((which + 1) % 3)}>
+            Next axis
+          </button>
+          <Toggle label="keepdims" value={keep} onChange={setKeep} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 180" role="img" aria-label={`A 3 by 4 table and its totals from ${call}`}>
+        <Tiles rows={3} cols={4} x={60} y={16} w={52} h={36} value={(r, c) => TABLE34[r][c]} />
+        {which === 0 ? <Tiles rows={1} cols={4} x={60} y={136} w={52} h={36} value={(_, c) => down[c]} kind={() => "hot"} /> : null}
+        {which === 1 ? <Tiles rows={3} cols={1} x={292} y={16} w={52} h={36} value={(r) => across[r]} kind={() => "hot"} /> : null}
+        {which === 2 ? <Tiles rows={1} cols={1} x={292} y={136} w={52} h={36} value={() => all} kind={() => "hot"} /> : null}
+        <text x="60" y="130" className="fig-small">
+          {which === 0 ? "axis 0 runs down ↓" : which === 1 ? "axis 1 runs across →" : "both axes"}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const VIEWS: { code: string; shape: number[]; strides: number[]; offset: number; said: string }[] = [
+  { code: "a", shape: [3, 4], strides: [4, 1], offset: 0, said: "The array as it was made, by a = np.arange(12).reshape(3, 4)." },
+  { code: "a.T", shape: [4, 3], strides: [1, 4], offset: 0, said: "The transpose only exchanges the two strides." },
+  { code: "a[:, ::2]", shape: [3, 2], strides: [4, 2], offset: 0, said: "Taking every 2nd column doubles the stride along axis 1." },
+  { code: "a[::-1]", shape: [3, 4], strides: [-4, 1], offset: 8, said: "Reversing the rows starts at the last row and gives axis 0 a negative stride." },
+  { code: "a[1]", shape: [4], strides: [1], offset: 4, said: "One row is a start place and a single stride." },
+];
+
+/** A view of an array as a start place and one stride for each axis, over an unchanged block of memory. */
+function Strides(props: Props) {
+  const [which, setWhich] = useState(clamp(Math.round(num(props.view, 0)), 0, VIEWS.length - 1));
+  const [wanted, setItem] = useState(clamp(Math.round(num(props.item, 0)), 0, 11));
+  const { code, shape, strides, offset, said } = VIEWS[which];
+  const size = shape.reduce((a, b) => a * b, 1);
+  const item = Math.min(wanted, size - 1);
+  const [rows, cols] = shape.length === 1 ? [1, shape[0]] : shape;
+  const [r, c] = [Math.floor(item / cols), item % cols];
+  const index = shape.length === 1 ? [c] : [r, c];
+  const place = (i: number, j: number) => offset + (shape.length === 1 ? j * strides[0] : i * strides[0] + j * strides[1]);
+  const at = place(r, c);
+  return (
+    <Frame
+      title="A view is a start and a stride"
+      summary={`${code} has shape ${tuple(shape)}, starts at place ${offset} of the block, and has strides ${tuple(strides).replace(/-/g, "−")} counted in items: ${strides
+        .map((s, axis) => `one step along axis ${axis} moves ${s < 0 ? `back ${-s}` : s} ${Math.abs(s) === 1 ? "place" : "places"}`)
+        .join(", ")}. ${said} Its item at [${index.join(", ")}] is at place ${offset} + ${index.map((v, axis) => `${v} × ${strides[axis] < 0 ? `(−${-strides[axis]})` : strides[axis]}`).join(" + ")} = ${at}, which holds ${at}. With numbers of 8 bytes each, NumPy reports the strides as ${tuple(strides.map((s) => s * 8)).replace(/-/g, "−")} bytes. No number was moved to make this view.`}
+      controls={
+        <>
+          <Stepper label="item of the view" value={item} onChange={setItem} min={0} max={size - 1} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setWhich((which + 1) % VIEWS.length)}>
+            Next view
+          </button>
+        </>
+      }
+    >
+      <svg viewBox={`0 0 440 ${112 + rows * 32}`} role="img" aria-label={`The block of 12 numbers and the view ${code}, with the item at [${index.join(", ")}] marked in both`}>
+        <text x="16" y="16" className="fig-small">
+          the block in memory, places 0 to 11
+        </text>
+        <Tiles rows={1} cols={12} x={16} y={24} value={(_, j) => j} kind={(_, j) => (j === at ? "hot" : "fill")} />
+        <text x="16" y="88" className="fig-small">
+          {code}
+        </text>
+        <Tiles rows={rows} cols={cols} x={16} y={96} value={(i, j) => place(i, j)} kind={(i, j) => (i === r && j === c ? "hot" : "fill")} />
+      </svg>
+    </Frame>
+  );
+}
+
+type Nested = number | Nested[];
+const LENGTHS: Record<string, number> = { i: 2, j: 3, k: 2 };
+const EINSUMS: { code: string; inputs: Nested[]; names: string[]; said: string }[] = [
+  { code: "ij,j->i", inputs: [[[1, 2, 3], [4, 5, 6]], [1, 0, 2]], names: ["A", "x"], said: "Entry [i] is the sum over j of A[i, j] × x[j]: the matrix-vector product." },
+  { code: "ij,jk->ik", inputs: [[[1, 2, 3], [4, 5, 6]], [[1, 0], [0, 1], [2, 1]]], names: ["A", "B"], said: "Entry [i, k] is the sum over j of A[i, j] × B[j, k]: the matrix product." },
+  { code: "ij->ji", inputs: [[[1, 2, 3], [4, 5, 6]]], names: ["A"], said: "Entry [j, i] is A[i, j]: the transpose. Nothing is added up." },
+  { code: "ij->i", inputs: [[[1, 2, 3], [4, 5, 6]]], names: ["A"], said: "Entry [i] is the sum over j of A[i, j]: the total of each row, the same as A.sum(axis=1)." },
+  { code: "j,j->", inputs: [[1, 0, 2], [3, 1, 1]], names: ["x", "y"], said: "The sum over j of x[j] × y[j]: the dot product." },
+  { code: "i,j->ij", inputs: [[1, 2], [1, 0, 2]], names: ["u", "x"], said: "Entry [i, j] is u[i] × x[j]: the outer product. Nothing is added up." },
+];
+
+function einsum(code: string, inputs: Nested[]): Nested {
+  const [left, out] = code.split("->");
+  const terms = left.split(",");
+  const letters = [...new Set(left.replace(/,/g, ""))];
+  const read = (value: Nested, path: number[]): number => path.reduce<Nested>((inner, i) => (inner as Nested[])[i], value) as number;
+  const build = (depth: number, fixed: Record<string, number>): Nested => {
+    if (depth < out.length) return Array.from({ length: LENGTHS[out[depth]] }, (_, i) => build(depth + 1, { ...fixed, [out[depth]]: i }));
+    const free = letters.filter((letter) => !out.includes(letter));
+    const total = (at: number, values: Record<string, number>): number =>
+      at === free.length
+        ? terms.reduce((product, term, t) => product * read(inputs[t], [...term].map((letter) => values[letter])), 1)
+        : Array.from({ length: LENGTHS[free[at]] }, (_, i) => total(at + 1, { ...values, [free[at]]: i })).reduce((a, b) => a + b, 0);
+    return total(0, fixed);
+  };
+  return build(0, {});
+}
+
+const written = (value: Nested): string => (Array.isArray(value) ? `[${value.map(written).join(Array.isArray(value[0]) ? ", " : " ")}]` : String(value));
+
+/** A grid for a number, a list or a table. */
+function Shown({ value, x, y }: { value: Nested; x: number; y: number }) {
+  const table: number[][] = !Array.isArray(value) ? [[value]] : Array.isArray(value[0]) ? (value as number[][]) : [value as number[]];
+  return <Tiles rows={table.length} cols={table[0].length} x={x} y={y} w={32} h={32} value={(r, c) => table[r][c]} />;
+}
+
+/** An einsum string read letter by letter: which letters are kept and which are summed away. */
+function Einsum(props: Props) {
+  const [which, setWhich] = useState(clamp(EINSUMS.findIndex((entry) => entry.code === props.code), 0, EINSUMS.length - 1));
+  const { code, inputs, names, said } = EINSUMS[which];
+  const [left, out] = code.split("->");
+  const letters = [...new Set(left.replace(/,/g, ""))];
+  const summed = letters.filter((letter) => !out.includes(letter));
+  const result = einsum(code, inputs);
+  const shape = [...out].map((letter) => LENGTHS[letter]);
+  const widths = inputs.map((value) => (Array.isArray(value) ? (Array.isArray(value[0]) ? (value[0] as number[]).length : value.length) : 1) * 32 + 20);
+  const starts = widths.map((_, t) => 8 + widths.slice(0, t).reduce((a, b) => a + b, 0));
+  const end = 8 + widths.reduce((a, b) => a + b, 0) + 24;
+  return (
+    <Frame
+      title="Naming the axes"
+      summary={`np.einsum("${code}", ${names.join(", ")}), with i of length 2, j of length 3 and k of length 2. ${
+        summed.length === 0 ? "Every letter of the inputs appears in the output, so nothing is summed" : `The letter ${summed.join(" and ")} appears in the inputs and not in the output, so it is summed over`
+      }. ${out.length === 0 ? "No letter is kept, so the result is a single number" : `The ${out.length === 1 ? "letter" : "letters"} ${[...out].join(" and ")} ${out.length === 1 ? "is" : "are"} kept, so the result has shape ${tuple(shape)}`}. ${said} The result is ${written(result)}.`}
+      controls={
+        <button type="button" className="btn btn-secondary btn-small" onClick={() => setWhich((which + 1) % EINSUMS.length)}>
+          Next expression
+        </button>
+      }
+    >
+      <svg viewBox="0 0 440 136" role="img" aria-label={`The inputs and the result of the einsum expression ${code}`}>
+        {inputs.map((value, t) => (
+          <g key={t}>
+            <text x={starts[t]} y="16" className="fig-small">
+              {names[t]}, axes {left.split(",")[t]}
+            </text>
+            <Shown value={value} x={starts[t]} y={28} />
+          </g>
+        ))}
+        <text x={end - 22} y="50" textAnchor="middle" className="fig-mono">
+          →
+        </text>
+        <text x={end} y="16" className="fig-small">
+          result{out.length ? `, axes ${out}` : ""}
+        </text>
+        <Shown value={result} x={end} y={28} />
+      </svg>
+    </Frame>
+  );
+}
+
+/** A small generator of pseudo-random numbers: a fixed rule, started from a seed. */
+function draws(seed: number, count: number, normal: boolean): number[] {
+  let state = (seed + 1) * 0x9e3779b9;
+  const next = () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  return Array.from({ length: count }, () => (normal ? Math.sqrt(-2 * Math.log(1 - next())) * Math.cos(2 * Math.PI * next()) : next()));
+}
+
+/** Draws from a seeded generator, gathered into a histogram. */
+function RandomSamples(props: Props) {
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const [power, setPower] = useState(clamp(Math.round(num(props.power, 2)), 1, 4));
+  const [normal, setNormal] = useState(props.normal === true);
+  const count = 10 ** power;
+  const values = draws(seed, count, normal);
+  const [low, high] = normal ? [-3, 3] : [0, 1];
+  const bins = Array.from({ length: 12 }, () => 0);
+  for (const value of values) if (value >= low && value < high) bins[Math.floor(((value - low) / (high - low)) * 12)]++;
+  const tallest = Math.max(...bins);
+  const mean = values.reduce((a, b) => a + b, 0) / count;
+  return (
+    <Frame
+      title="Random numbers from a seed"
+      summary={`Seed ${seed}, ${group(count)} draws from ${normal ? "the standard normal distribution" : "the uniform distribution between 0 and 1"}. The first three are ${values.slice(0, 3).map((v) => dp(v, 3)).join(", ")}. The mean of all of them is ${dp(mean, 3)}, and the more draws there are, the nearer it comes to ${normal ? "0" : "0.5"}. The same seed gives these same numbers every time, because the generator is a fixed rule and the seed only says where it starts.`}
+      controls={
+        <>
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+          <Stepper label="power of ten" value={power} onChange={setPower} min={1} max={4} />
+          <Toggle label="normal" value={normal} onChange={setNormal} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 180" role="img" aria-label={`A histogram of ${group(count)} draws from ${normal ? "the standard normal distribution" : "the uniform distribution"} with seed ${seed}`}>
+        {bins.map((bin, i) => (
+          <rect key={i} x={28 + i * 32} y={150 - (bin / tallest) * 130} width="28" height={(bin / tallest) * 130} className="fig-accent" />
+        ))}
+        <line x1="24" y1="150" x2="416" y2="150" className="fig-axis" />
+        <text x="28" y="168" className="fig-small">
+          {low}
+        </text>
+        <text x="412" y="168" textAnchor="end" className="fig-small">
+          {high}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const SHIFTS = [0, 100, 700, 1000, -1000];
+const sci = (value: number) => (value === Infinity ? "inf" : value === 0 ? "0" : Math.abs(value) >= 1e5 || Math.abs(value) < 1e-3 ? value.toExponential(2).replace("e+", "e").replace("-", "−") : dp(value, 3));
+
+/** The logarithm of a sum of exponentials, computed directly and after subtracting the largest input. */
+function LogSumExp(props: Props) {
+  const [which, setWhich] = useState(clamp(SHIFTS.indexOf(num(props.shift, 0)), 0, SHIFTS.length - 1));
+  const shift = SHIFTS[which];
+  const xs = [shift, shift + 1, shift + 2];
+  const direct = xs.map(Math.exp);
+  const naive = Math.log(direct.reduce((a, b) => a + b, 0));
+  const top = Math.max(...xs);
+  const moved = xs.map((x) => Math.exp(x - top));
+  const stable = top + Math.log(moved.reduce((a, b) => a + b, 0));
+  const show = (value: number) => (value === Infinity ? "inf" : value === -Infinity ? "−inf" : dp(value, 4));
+  return (
+    <Frame
+      title="Subtract the largest first"
+      summary={`The inputs are ${xs.map((x) => dp(x)).join(", ")}. Directly: their exponentials are ${direct.map(sci).join(", ")}, and the logarithm of the sum comes out as ${show(naive)}${
+        naive === Infinity ? ", because the exponentials are too large for a float and overflow to infinity" : naive === -Infinity ? ", because the exponentials are too small for a float and round to zero" : ""
+      }. After subtracting the largest input, ${dp(top)}: the exponentials are ${moved.map(sci).join(", ")}, none larger than 1, and the answer is ${dp(top)} + ${dp(Math.log(moved.reduce((a, b) => a + b, 0)), 4)} = ${show(stable)}. ${Number.isFinite(naive) ? "Here the two agree." : "The true answer was an ordinary number all along, and only the route through the exponentials failed."}`}
+      controls={
+        <button type="button" className="btn btn-secondary btn-small" onClick={() => setWhich((which + 1) % SHIFTS.length)}>
+          Next inputs
+        </button>
+      }
+    >
+      <svg viewBox="0 0 440 150" role="img" aria-label={`The exponentials of ${xs.join(", ")} computed directly and after subtracting the largest`}>
+        <text x="16" y="18" className="fig-small">
+          exp(x), directly
+        </text>
+        <Tiles rows={1} cols={3} x={16} y={26} w={136} h={40} value={(_, c) => sci(direct[c])} kind={(_, c) => (Number.isFinite(direct[c]) && direct[c] > 0 ? "fill" : "ghost")} />
+        <text x="16" y="90" className="fig-small">
+          exp(x − largest)
+        </text>
+        <Tiles rows={1} cols={3} x={16} y={98} w={136} h={40} value={(_, c) => sci(moved[c])} kind={() => "hot"} />
+      </svg>
+    </Frame>
+  );
+}
+
+/** How far apart neighbouring floating-point numbers are near a given size. */
+function FloatGaps(props: Props) {
+  const [power, setPower] = useState(clamp(Math.round(num(props.power, 8)), 0, 16));
+  const [single, setSingle] = useState(props.single === true);
+  const x = 10 ** power;
+  const exponent = Math.floor(Math.log2(x));
+  const gap = 2 ** (exponent - (single ? 23 : 52));
+  const kind = single ? "float32" : "float64";
+  const tell = (value: number) => (value >= 1 ? group(value) : value.toExponential(1).replace("e-", " × 10^−").replace("e+", " × 10^"));
+  return (
+    <Frame
+      title="The gaps between floats"
+      summary={`Near ${group(x)}, neighbouring ${kind} values are ${tell(gap)} apart. A ${kind} keeps ${single ? 24 : 53} binary digits, about ${single ? 7 : 16} decimal digits, however large or small the number is, so the gap grows with the number. ${
+        gap > 2
+          ? `Adding 1 to ${group(x)} changes nothing: the exact sum falls between two neighbours, nearer the one it started from, and is rounded back to it.`
+          : gap === 2
+            ? `Adding 1 to ${group(x)} lands exactly half-way between two neighbours, and the rule for ties rounds it back to where it started.`
+            : gap === 1
+              ? `Adding 1 to ${group(x)} is exact, since it lands on the next neighbour, but nothing between whole numbers can be stored here.`
+              : `Adding 1 to ${group(x)} is ${gap < 1e-6 ? "accurate to many digits" : "accurate to only a few digits after the point"}: the error is at most half a gap.`
+      }`}
+      controls={
+        <>
+          <Stepper label="power of ten" value={power} onChange={setPower} min={0} max={16} />
+          <Toggle label="float32" value={single} onChange={setSingle} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 110" role="img" aria-label={`A number line near ${group(x)} with marks for neighbouring ${kind} values, ${tell(gap)} apart`}>
+        <line x1="20" y1="56" x2="420" y2="56" className="fig-axis" />
+        {[-3, -2, -1, 0, 1, 2, 3].map((k) => (
+          <line key={k} x1={220 + k * 60} y1={k === 0 ? 38 : 46} x2={220 + k * 60} y2={k === 0 ? 74 : 66} className={k === 0 ? "fig-accent-line" : "fig-line"} />
+        ))}
+        <text x="220" y="28" textAnchor="middle" className="fig-small">
+          {group(x)}
+        </text>
+        <line x1="220" y1="88" x2="280" y2="88" className="fig-line" />
+        <text x="250" y="104" textAnchor="middle" className="fig-small">
+          gap {tell(gap)}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const FIGURES: Record<FigureName, ComponentType<Props>> = {
+  "place-value": PlaceValue,
+  "number-line": NumberLine,
+  "area-grid": AreaGrid,
+  "fraction-bar": FractionBar,
+  "powers-of-ten": PowersOfTen,
+  "ratio-table": RatioTable,
+  "plane-point": PlanePoint,
+  "plane-line": PlaneLine,
+  "plane-lines": PlaneLines,
+  parabola: Parabola,
+  venn: Venn,
+  "arrow-map": ArrowMap,
+  "inverse-line": InverseLine,
+  growth: Growth,
+  "unit-circle": UnitCircle,
+  "triangle-sum": TriangleSum,
+  "partial-sums": PartialSums,
+  "call-stack": CallStack,
+  "growth-rates": GrowthRates,
+  "truth-table": TruthTable,
+  dominoes: Dominoes,
+  diagonal: Diagonal,
+  "epsilon-band": EpsilonBand,
+  "remainder-classes": RemainderClasses,
+  "quantifier-grid": QuantifierGrid,
+  "limit-approach": LimitApproach,
+  secant: Secant,
+  "chain-rates": ChainRates,
+  bend: Bend,
+  taylor: Taylor,
+  descent: Descent,
+  riemann: Riemann,
+  accumulation: Accumulation,
+  "vector-arrow": VectorArrow,
+  "vector-sum": VectorSum,
+  span: Span,
+  "dot-product": DotProduct,
+  "norm-balls": NormBalls,
+  projection: Projection,
+  hyperplane: Hyperplane,
+  "array-list": ArrayList,
+  "stack-queue": StackQueue,
+  "hash-table": HashTable,
+  heap: Heap,
+  "graph-walk": GraphWalk,
+  "sort-steps": SortSteps,
+  "binary-search": BinarySearch,
+  "dp-grid": DpGrid,
+  "doubling-array": DoublingArray,
+  "topo-order": TopoOrder,
+  "shortest-path": ShortestPath,
+  "beam-search": BeamSearch,
+  "linear-map": LinearMap,
+  "matrix-vector": MatrixVector,
+  "compose-maps": ComposeMaps,
+  "transpose-flip": TransposeFlip,
+  elimination: Elimination,
+  "null-space": NullSpace,
+  "basis-grid": BasisGrid,
+  determinant: Determinant,
+  "adjacency-matrix": AdjacencyMatrix,
+  "array-shape": ArrayShape,
+  "array-slice": ArraySlice,
+  broadcast: Broadcast,
+  "loop-vs-array": LoopVsArray,
+  "axis-reduce": AxisReduce,
+  strides: Strides,
+  einsum: Einsum,
+  "random-samples": RandomSamples,
+  "log-sum-exp": LogSumExp,
+  "float-gaps": FloatGaps,
+};
+
+export function Figure({ name, props }: { name: string; props?: Props }) {
+  const Drawn = (FIGURES as Record<string, ComponentType<Props>>)[name];
+  return Drawn ? <Drawn {...(props ?? {})} /> : null;
+}
