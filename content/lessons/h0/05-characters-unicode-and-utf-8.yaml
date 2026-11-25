@@ -1,0 +1,398 @@
+concept: h0.characters-unicode-and-utf-8
+minutes: 90
+claim: You can explain how text becomes bits through Unicode code points and the UTF-8 encoding, predict how many bytes a piece of text takes, encode and decode in Python, and tell bytes, code points and visible letters apart.
+recalls: [h0.bitwise-operations-and-masks]
+uses: [h0.binary-and-hexadecimal, h0.unsigned-integers-and-fixed-widths, s0.strings, s0.loops, s0.functions, s0.lists-and-tuples]
+leads: [h0.floating-point-and-ieee-754]
+starter: |
+  # Scratch space. Every character is a number, and UTF-8 writes the number as bytes.
+  word = "नमस्ते"
+  print(len(word))
+  data = word.encode("utf-8")
+  print(len(data), data.hex(" "))
+  for ch in word:
+      print(ch, ord(ch), hex(ord(ch)))
+parts:
+  recall:
+    - text: |
+        In [[h0.bitwise-operations-and-masks]] you pulled fields out of a number with shifts and masks. Today those tools turn a letter into bytes and back. Two quick pulls first.
+  puzzle:
+    - text: |
+        Type a greeting into a Python program and ask how long it is:
+
+        ```python
+        word = "नमस्ते"
+        print(len(word))
+        ```
+
+        Python says 6. Save the same word to a file and the file is **18** bytes. Look at it on the screen and you see three letters: न, म and स्ते.
+
+        Three answers to "how long is this word?", and each one matters to somebody. A database column declared as 20 bytes will refuse a name that a form, counting 20 characters, happily accepted. An SMS in English holds 160 characters, but switch the keyboard to Hindi and the same message splits after 70. And anyone who has opened a spreadsheet of names exported from one program into another has seen Hindi turn into gibberish like `à¤¨`.
+
+        A computer stores nothing but bits. **How is a letter of any script turned into bits, and why does a Hindi word take three times as many bytes as it has characters?**
+  intuition:
+    - text: |
+        The trick is the same one used for colours and for negative numbers: agree on a meaning for numbers. Make a list of every character anyone writes, and give each one a number. Then text is a sequence of numbers, and you already know how to store numbers.
+
+        That list exists. It is called **Unicode**, and the number it gives a character is the character's **code point**. Capital A is 65. Small a is 97. The rupee sign ₹ is 8377. The Devanagari letter न is 2344. Code points are usually written in hex after `U+`, so ₹ is U+20B9 and न is U+0928. Unicode has room for about 11 lakh code points and has given out about one and a half lakh of them, covering the world's scripts, mathematical symbols and emoji.
+
+        Python will show you the numbers. `ord` gives the code point of a character, and `chr` gives the character for a code point:
+
+        ```python
+        print(ord("A"), ord("₹"), ord("न"))
+        print(chr(97), chr(8377))
+        ```
+
+        This shows `65 8377 2344` and then `a ₹`.
+
+        That leaves one question: how to write the code points as bytes. The obvious answer, a fixed width, wastes space. The largest code point needs 21 bits, so every character would take 3 or 4 bytes, and the plain English text that fills most of the world's files and web pages would take four times the room it needs.
+
+        The answer nearly everyone uses is **UTF-8**, which gives each code point **as few bytes as it needs**: one byte for code points up to 127, which covers English letters, digits and punctuation; two bytes up to 2,047; three bytes up to 65,535, which covers Devanagari and the other Indian scripts; and four bytes beyond that, for emoji and rarer scripts.
+
+        Now the puzzle comes apart. नमस्ते is six code points, and each is a Devanagari code point, so each takes three bytes in UTF-8: $6 \times 3 = 18$. And the three letters on screen? Look at the six code points: न, म, स, ्, त, े. The fourth is a **virama**, which joins स to the following त to make the conjunct स्त, and the sixth is the vowel sign े, which sits on top of it. Several code points can combine into one letter that a reader sees.
+  derivation:
+    - text: |
+        **Three different lengths.** It is worth naming them, because bugs live in the gaps between them.
+
+        | Unit | नमस्ते | `café` | How to count in Python |
+        | --- | --- | --- | --- |
+        | bytes in UTF-8 | 18 | 5 | `len(text.encode("utf-8"))` |
+        | code points | 6 | 4 | `len(text)` |
+        | letters a reader sees | 3 | 4 | not built in |
+
+        A Python string is a sequence of **code points**. That is what `len` counts, what indexing returns and where a slice cuts. So `"नमस्ते"[:4]` is `नमस्`: four code points, ending with the virama, which leaves a half letter dangling. Cutting text to fit a limit must respect what is being cut.
+
+        **Encoding and decoding.** The method `encode` turns a string into **bytes**, a new type: a fixed sequence of whole numbers from 0 to 255. `decode` turns bytes back into a string. Both need to be told the encoding.
+
+        ```python
+        data = "₹".encode("utf-8")
+        print(data)
+        print(len(data), data.hex(" "))
+        print(data.decode("utf-8"))
+        ```
+
+        This shows `b'\xe2\x82\xb9'`, then `3 e2 82 b9`, then `₹`. Python writes a bytes value with a `b` in front and each byte that is not a plain printable character as `\x` and two hex digits. The method `hex` on bytes writes them all as hex, with a separator if you give one. Looping over bytes gives the numbers themselves: `for b in data:` gives 226, 130 and 185.
+
+        **How UTF-8 writes a code point.** The first bits of each byte say what kind of byte it is.
+
+        | Code points | Bytes | Pattern |
+        | --- | --- | --- |
+        | 0 to 127 | 1 | `0xxxxxxx` |
+        | 128 to 2,047 | 2 | `110xxxxx 10xxxxxx` |
+        | 2,048 to 65,535 | 3 | `1110xxxx 10xxxxxx 10xxxxxx` |
+        | 65,536 to 1,114,111 | 4 | `11110xxx 10xxxxxx 10xxxxxx 10xxxxxx` |
+
+        The `x`s hold the code point's bits, the highest bits first. Take न, U+0928. In 16 bits it is `0000 1001 0010 1000`. It needs three bytes, which have room for $4 + 6 + 6 = 16$ bits, so cut it into 4, 6 and 6 bits: `0000`, `100100`, `101000`. Put each behind its marker:
+
+        ```
+        1110 0000    10 100100    10 101000
+           E0           A4           A8
+        ```
+
+        Ask Python, and `"न".encode("utf-8")` is indeed `b'\xe0\xa4\xa8'`. Writing this with the tools of the last lesson, the first byte is `0xE0 | (cp >> 12)`, the second `0x80 | ((cp >> 6) & 0x3F)` and the third `0x80 | (cp & 0x3F)`. `0x3F` is six ones, the mask for one 6-bit field.
+
+        The design has three properties that made it win. **Plain English is unchanged**: a file of English letters in UTF-8 is byte for byte the same as in ASCII, the 7-bit code of the 1960s, so old programs kept working. **A byte never lies about its role**: a byte starting `10` is always a continuation and never the start of a character, so a program dropped into the middle of a file can find the next character's start. And **no character's bytes appear inside another's**, so searching bytes for a word finds only that word.
+    - question:
+        id: predict-encode
+        type: predict
+        system: s2
+        prompt: Work out each count before you check. Which script is each character from, and so how many bytes does it take?
+        code: |
+          print(len("Asha"), len("Asha".encode("utf-8")))
+          print(len("₹500"), len("₹500".encode("utf-8")))
+          print(len(chr(0x1F600).encode("utf-8")))
+          print(ord("a") - ord("A"))
+        output: |
+          4 4
+          4 6
+          4
+          32
+        explanation: |
+          English letters are one byte each. ₹ is U+20B9, which needs three bytes, and the digits one each: $3 + 3 = 6$. U+1F600 is beyond 65,535, so it needs four bytes. Small letters come 32 code points after capitals, which is a single bit, $2^5$.
+    - text: |
+        **Gibberish, explained.** Bytes carry no label saying which encoding wrote them. If a program reads UTF-8 bytes but decodes them as if each byte were one character of an older one-byte encoding, every Devanagari letter turns into three strange characters:
+
+        ```python
+        data = "न".encode("utf-8")
+        print(data.decode("latin-1"))
+        ```
+
+        This shows `à¤¨`: the bytes E0, A4 and A8, each read as a character of the encoding called Latin-1. That is the gibberish in the spreadsheet. The bytes were fine all along. Only the reading was wrong, which makes it the same lesson as two's complement: the same bits, read two ways. The cure is to say the encoding every time text crosses a boundary, into a file, a database or a network message, and to make it UTF-8.
+
+        Decoding can also fail outright. Cut the 18 bytes of नमस्ते after the fourth, and the fourth byte, E0, announces a three-byte character whose other two bytes are missing. `decode("utf-8")` stops with a `UnicodeDecodeError`. A program that shortens text to fit a byte limit must cut between characters, never inside one.
+
+        **The SMS, explained.** One SMS carries 140 bytes. With only the letters of the old GSM alphabet, which includes English, each character takes 7 bits, and $140 \times 8 \div 7 = 160$ characters fit. As soon as a message contains a character outside that alphabet, such as any Devanagari letter, the phone switches to an encoding with 2 bytes for every character, and $140 \div 2 = 70$ fit.
+    - question:
+        id: fix-shorten
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A database stores names in at most `limit` bytes of UTF-8. `shorten(name, limit)` should **return** the longest beginning of `name`, cut between code points, whose UTF-8 encoding fits in `limit` bytes. It works for English names, but `shorten("नमस्ते", 10)` gives a result that is 12 bytes long. Find the bug and fix it.
+        starter: |
+          def shorten(name, limit):
+              return name[:limit]
+
+          print(shorten("Asha", 3))
+          print(shorten("नमस्ते", 10))
+        solution: |
+          def shorten(name, limit):
+              result = name
+              while len(result.encode("utf-8")) > limit:
+                  result = result[:-1]
+              return result
+
+          print(shorten("Asha", 3))
+          print(shorten("नमस्ते", 10))
+        tests: |
+          assert shorten("Asha", 3) == "Ash", "shorten('Asha', 3) should be 'Ash'"
+          assert shorten("Asha", 10) == "Asha", "A name that fits should come back whole"
+          assert len(shorten("नमस्ते", 10).encode("utf-8")) <= 10, "The result must fit in 10 bytes of UTF-8. Does name[:limit] count bytes or code points?"
+          assert shorten("नमस्ते", 10) == "नमस", "Three Devanagari code points take 9 bytes, so shorten('नमस्ते', 10) should be 'नमस'"
+          assert shorten("₹500", 4) == "₹5", "The rupee sign takes 3 bytes, so shorten('₹500', 4) should be '₹5'"
+          assert shorten("न", 2) == "", "If not even one code point fits, the result is empty"
+        wrong:
+          - "def shorten(name, limit):\n    return name[:limit // 3]\n"
+          - "def shorten(name, limit):\n    return name.encode(\"utf-8\")[:limit]\n"
+          - "def shorten(name, limit):\n    result = name\n    while len(result) > limit:\n        result = result[:-1]\n    return result\n"
+        explanation: "`name[:limit]` counts code points, and a Devanagari code point is three bytes. The fix measures the encoded length and drops one code point at a time until it fits, which always cuts between characters. Cutting the bytes instead would split a character in half, and dividing by 3 is only right for some scripts."
+  formal:
+    - text: |
+        **Unicode** assigns each character a **code point**, a whole number from 0 to `0x10FFFF` (1,114,111), written `U+` and at least four hex digits. In Python, `ord(c)` is the code point of the character `c` and `chr(n)` is the character with code point `n`.
+
+        A Python `str` is a sequence of code points. A `bytes` value is a sequence of whole numbers from 0 to 255, written `b'...'`. `s.encode("utf-8")` gives the bytes of `s`, and `b.decode("utf-8")` gives the string back, or raises `UnicodeDecodeError` if the bytes are not valid UTF-8. `b.hex()` writes bytes as hex.
+
+        **UTF-8** writes a code point $c$ in 1 to 4 bytes:
+
+        | Range of $c$ | Bytes |
+        | --- | --- |
+        | $0$ to $127$ | `0xxxxxxx` |
+        | $128$ to $2047$ | `110xxxxx 10xxxxxx` |
+        | $2048$ to $65535$ | `1110xxxx 10xxxxxx 10xxxxxx` |
+        | $65536$ to $1114111$ | `11110xxx 10xxxxxx 10xxxxxx 10xxxxxx` |
+
+        with the bits of $c$ filling the `x`s from the highest down. Bytes beginning `10` are **continuation bytes** and never begin a character. Code points 0 to 127 are the same in UTF-8 as in **ASCII**.
+
+        Text has three lengths: its bytes in a given encoding, its code points, and the **grapheme clusters**, the units a reader sees, each of which may be several code points combined.
+
+        Bytes carry no record of their encoding. Decoding with the wrong encoding gives wrong characters, sometimes called **mojibake**, or an error.
+  drill:
+    - text: Seconds each. Ask which range each code point falls in.
+    - question:
+        id: predict-ord-a
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(ord("A"))
+        output: "65"
+        explanation: Capital A is code point 65, the same as in ASCII.
+    - question:
+        id: predict-chr
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(chr(98))
+        output: "b"
+        explanation: 97 is a, so 98 is b.
+    - question:
+        id: predict-rupee-len
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(len("₹"), len("₹".encode("utf-8")))
+        output: "1 3"
+        explanation: One code point, U+20B9, which needs three bytes.
+    - question:
+        id: devanagari-bytes
+        type: numeric
+        system: s1
+        prompt: How many bytes does one Devanagari code point take in UTF-8?
+        answer: "3"
+        unit: bytes
+        explanation: Devanagari lies between 2,048 and 65,535.
+    - question:
+        id: namaste-bytes
+        type: numeric
+        system: s1
+        prompt: नमस्ते is six code points. How many bytes is it in UTF-8?
+        answer: "18"
+        unit: bytes
+        explanation: Six Devanagari code points at three bytes each.
+    - question:
+        id: continuation-byte
+        type: choice
+        system: s1
+        prompt: A byte in a UTF-8 file begins with the bits `10`. What is it?
+        options: ["The start of a 2-byte character", "A continuation byte inside a character", "An English letter", "The end of the file"]
+        answer: 1
+        explanation: Only continuation bytes begin `10`, so they are never mistaken for the start of a character.
+    - question:
+        id: ascii-bytes
+        type: numeric
+        system: s1
+        prompt: How many bytes is the word `Bengaluru` in UTF-8?
+        answer: "9"
+        unit: bytes
+        explanation: Nine English letters, one byte each.
+  work:
+    - text: Slower now. For each piece of text, say its code points before you count its bytes.
+    - question:
+        id: write-utf8-length
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `utf8_length(cp)`. It takes a code point from 0 to 1,114,111 and **returns** how many bytes UTF-8 uses for it, from 1 to 4. Use the ranges, not `encode`.
+        starter: |
+          def utf8_length(cp):
+              return 1
+
+          print(utf8_length(ord("न")))
+        solution: |
+          def utf8_length(cp):
+              if cp <= 127:
+                  return 1
+              if cp <= 2047:
+                  return 2
+              if cp <= 65535:
+                  return 3
+              return 4
+
+          print(utf8_length(ord("न")))
+        tests: |
+          assert "encode" not in source, "Work it out from the ranges, without encode"
+          assert utf8_length(65) == 1, "A, code point 65, takes 1 byte"
+          assert utf8_length(127) == 1, "127 is the last 1-byte code point"
+          assert utf8_length(128) == 2, "128 is the first 2-byte code point"
+          assert utf8_length(2047) == 2, "2047 is the last 2-byte code point"
+          assert utf8_length(2048) == 3, "2048 is the first 3-byte code point"
+          assert utf8_length(0x928) == 3, "न takes 3 bytes"
+          assert utf8_length(65535) == 3, "65535 is the last 3-byte code point"
+          assert utf8_length(65536) == 4, "65536 is the first 4-byte code point"
+          assert utf8_length(0x1F600) == 4, "U+1F600 takes 4 bytes"
+        wrong:
+          - "def utf8_length(cp):\n    if cp < 127:\n        return 1\n    if cp < 2047:\n        return 2\n    if cp < 65535:\n        return 3\n    return 4\n"
+          - "def utf8_length(cp):\n    if cp <= 255:\n        return 1\n    if cp <= 65535:\n        return 2\n    return 4\n"
+          - "def utf8_length(cp):\n    return (cp.bit_length() + 7) // 8\n"
+        explanation: "The boundaries are where the free `x` bits run out: 7 bits in one byte, 11 in two, 16 in three. Each top value, 127, 2047 and 65535, is the last that fits, so the tests use `<=`. Counting whole bytes of the code point itself forgets that the markers take bits too."
+    - question:
+        id: write-encode-three
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `encode_three(cp)` for a code point from 2,048 to 65,535. It **returns** a list of the three UTF-8 bytes as whole numbers, built with shifts, masks and `|`: the marker `1110` and the top 4 bits, then `10` and the next 6 bits, then `10` and the last 6 bits. So `encode_three(0x928)` is `[0xE0, 0xA4, 0xA8]`. Do not use `encode`.
+        starter: |
+          def encode_three(cp):
+              return [0, 0, 0]
+
+          print(encode_three(0x928))
+        solution: |
+          def encode_three(cp):
+              first = 0xE0 | (cp >> 12)
+              second = 0x80 | ((cp >> 6) & 0x3F)
+              third = 0x80 | (cp & 0x3F)
+              return [first, second, third]
+
+          print(encode_three(0x928))
+        tests: |
+          assert "encode(" not in source, "Build the bytes with shifts and masks, without calling encode"
+          assert encode_three(0x928) == [0xE0, 0xA4, 0xA8], "encode_three(0x928), the letter न, should be [0xE0, 0xA4, 0xA8]"
+          assert encode_three(0x20B9) == [0xE2, 0x82, 0xB9], "encode_three(0x20B9), the rupee sign, should be [0xE2, 0x82, 0xB9]"
+          assert encode_three(0x800) == [0xE0, 0xA0, 0x80], "encode_three(0x800), the first 3-byte code point, should be [0xE0, 0xA0, 0x80]"
+          assert encode_three(0xFFFF) == [0xEF, 0xBF, 0xBF], "encode_three(0xFFFF) should be [0xEF, 0xBF, 0xBF]. Is each 6-bit field masked?"
+        wrong:
+          - "def encode_three(cp):\n    first = 0xE0 | (cp >> 12)\n    second = 0x80 | (cp >> 6)\n    third = 0x80 | cp\n    return [first, second, third]\n"
+          - "def encode_three(cp):\n    first = 0xE0 | (cp >> 12)\n    second = 0x80 | ((cp >> 6) & 0x3F)\n    third = 0x80 | (cp & 0x3F)\n    return [third, second, first]\n"
+          - "def encode_three(cp):\n    first = 0xE0 | (cp >> 16)\n    second = 0x80 | ((cp >> 8) & 0x3F)\n    third = 0x80 | (cp & 0x3F)\n    return [first, second, third]\n"
+        explanation: "The 16 bits of the code point are cut into 4, 6 and 6. Shifting by 12 brings the top 4 to the bottom; shifting by 6 and masking with `0x3F`, six ones, keeps the middle 6; masking alone keeps the last 6. Or with the markers `0xE0` and `0x80` puts the prefix bits in front. Without the masks, higher bits leak into the continuation bytes."
+    - question:
+        id: write-sms-parts
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `sms_parts(text)`. Treat a message as using the plain alphabet if every character's code point is below 128, which allows 160 characters in each SMS, and otherwise as needing 70 characters in each SMS. **Return** how many SMS the message is split into. An empty message still takes 1 SMS. Count the parts with whole-number arithmetic, rounding up.
+        starter: |
+          def sms_parts(text):
+              return 1
+
+          print(sms_parts("Running late, start without me"))
+        solution: |
+          def sms_parts(text):
+              per_part = 160
+              for ch in text:
+                  if ord(ch) >= 128:
+                      per_part = 70
+              if len(text) == 0:
+                  return 1
+              return (len(text) + per_part - 1) // per_part
+
+          print(sms_parts("Running late, start without me"))
+        tests: |
+          assert sms_parts("Running late, start without me") == 1, "A short English message is 1 SMS"
+          assert sms_parts("a" * 160) == 1, "160 plain characters fit in 1 SMS"
+          assert sms_parts("a" * 161) == 2, "161 plain characters need 2 SMS"
+          assert sms_parts("न" * 70) == 1, "70 Devanagari characters fit in 1 SMS"
+          assert sms_parts("न" * 71) == 2, "71 Devanagari characters need 2 SMS"
+          assert sms_parts("a" * 100 + "₹") == 2, "One rupee sign switches the whole message to 70 a part: 101 characters need 2"
+          assert sms_parts("") == 1, "An empty message still takes 1 SMS"
+          assert sms_parts(chr(128) * 71) == 2, "Code point 128 is already outside the plain alphabet"
+        wrong:
+          - "def sms_parts(text):\n    per_part = 160\n    for ch in text:\n        if ord(ch) >= 128:\n            per_part = 70\n    return len(text) // per_part + 1\n"
+          - "def sms_parts(text):\n    per_part = 160\n    for ch in text:\n        if ord(ch) > 128:\n            per_part = 70\n    if len(text) == 0:\n        return 1\n    return (len(text) + per_part - 1) // per_part\n"
+          - "def sms_parts(text):\n    per_part = 160\n    if ord(text[0]) >= 128:\n        per_part = 70\n    return (len(text) + per_part - 1) // per_part\n"
+        explanation: "One character outside the plain alphabet switches the whole message, so the loop must look at every character. Rounding up with whole numbers is `(n + k - 1) // k`. Adding 1 after dividing is wrong exactly when the length is a multiple of the part size."
+    - question:
+        id: predict-slice-code-points
+        type: predict
+        system: s2
+        prompt: Python slices by code point. List the six code points of the word first, then give what this shows.
+        code: |
+          word = "नमस्ते"
+          print(word[:3], len(word[:3].encode("utf-8")))
+          print(len(word[3:]))
+        output: |
+          नमस 9
+          3
+        explanation: |
+          The first three code points are न, म and स, at three bytes each. The rest is the virama, त and the vowel sign, three code points that combine with the स before them on screen.
+    - question:
+        id: predict-bytes-loop
+        type: predict
+        system: s2
+        prompt: Looping over bytes gives whole numbers. What does this show?
+        code: |
+          data = "₹".encode("utf-8")
+          count = 0
+          for b in data:
+              if b >> 6 == 0b10:
+                  count += 1
+          print(count)
+        output: "2"
+        explanation: |
+          The bytes are `11100010`, `10000010` and `10111001`. Shifting right by 6 leaves the top two bits, and two of the three bytes begin `10`: they are the continuation bytes.
+    - question:
+        id: why-utf8
+        type: choice
+        system: s2
+        prompt: Which is a real reason UTF-8 became the encoding of the web?
+        options:
+          - "It stores every character in exactly two bytes, which makes counting easy."
+          - "English text is byte for byte the same as in ASCII, so old programs and files kept working, while every script in Unicode can still be written."
+          - "It is the only encoding that can store Indian scripts."
+          - "It makes text files smaller than any other encoding for every language."
+        answer: 1
+        explanation: Compatibility with ASCII let the world switch gradually. UTF-8 is not the smallest for every script, since Devanagari takes three bytes a code point where a 16-bit encoding takes two, but its other properties won.
+  connections:
+    - text: |
+        The puzzle is solved. नमस्ते is six Unicode code points, which is what Python's `len` counts. In UTF-8 each Devanagari code point takes three bytes, so the file is 18 bytes. And on screen the virama and the vowel sign combine with the letters around them, so a reader sees three.
+
+        This was the cluster's idea once more: a number with an agreed meaning. A code point is an unsigned integer, as in [[h0.unsigned-integers-and-fixed-widths]], and UTF-8 is a set of fields packed with the shifts and masks of [[h0.bitwise-operations-and-masks]]. The string slicing of [[s0.strings]] works on code points, which is now something you can see.
+
+        Every time text leaves a program, into a file, a database, a network request or another program, it becomes bytes, and every time it comes back it must be decoded with the same encoding. Many of the most stubborn bugs in data engineering are this boundary crossed carelessly, and the habit that prevents them is to name the encoding, every time, and to make it UTF-8.
+
+        Text and whole numbers are now both rows of bits. One kind of number is left: numbers with fractions. The expressions lesson showed that `0.1 + 0.2` is not exactly `0.3`. You can now ask the real question: what bits does a float hold, and why can they not hold 0.1 exactly? That is the next lesson, [[h0.floating-point-and-ieee-754]].

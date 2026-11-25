@@ -1095,6 +1095,231 @@ function whoAteTrace(fixed: boolean, first: string): Trace {
 
 const PROGRAMS = ["concession", "deposit", "who-ate"] as const;
 
+/** A fixed row of bits: flip any bit, count up or down with the carry, and read the row in decimal and hex, unsigned or as two's complement. */
+function BinaryCounter(props: Props) {
+  const width = props.width === 4 ? 4 : 8;
+  const top = 2 ** width;
+  const [value, setValue] = useState(clamp(Math.round(num(props.value, 0)), 0, top - 1));
+  const [signed, setSigned] = useState(props.signed === true);
+  const [wrapped, setWrapped] = useState("");
+  const offers = typeof props.signed === "boolean";
+  const bits = Array.from({ length: width }, (_, i) => Math.floor(value / 2 ** (width - 1 - i)) % 2);
+  const worth = (i: number) => (signed && i === 0 ? -1 : 1) * 2 ** (width - 1 - i);
+  const show = (n: number) => (n < 0 ? `−${-n}` : String(n));
+  const grouped = (b: number[]) => b.join("").replace(/(.{4})(?=.)/g, "$1 ");
+  const reading = signed && bits[0] === 1 ? value - top : value;
+  const terms = bits.flatMap((b, i) => (b === 1 ? [worth(i)] : []));
+  const working = terms.length === 0 ? "every bit is 0, so the value is 0" : terms.length === 1 ? `the only 1 is in the ${show(terms[0])} column, so the value is ${show(reading)}` : `${terms.map(show).join(" + ")} = ${show(reading)}`;
+  const hex = value.toString(16).toUpperCase().padStart(width / 4, "0");
+  const ones = grouped(Array(width).fill(1));
+  const zeros = grouped(Array(width).fill(0));
+  const step = (by: 1 | -1) => {
+    const next = value + by;
+    if (next === top) setWrapped(`Adding 1 to ${ones} carried out of the leftmost bit. There is no bit there to hold the carry, so it is lost and the row wraps round to ${zeros}. `);
+    else if (next < 0) setWrapped(`Taking 1 from ${zeros} needs a borrow from beyond the leftmost bit. There is none, so the row wraps round to ${ones}. `);
+    else setWrapped("");
+    setValue((next + top) % top);
+  };
+  const flip = (i: number) => {
+    setWrapped("");
+    setValue(bits[i] === 1 ? value - 2 ** (width - 1 - i) : value + 2 ** (width - 1 - i));
+  };
+  const summary = `${wrapped}Bits ${grouped(bits)}. ${signed ? "Read as two's complement" : "Read as unsigned"}: ${working}. In hexadecimal, ${hex}.`;
+  const cell = 56;
+  const left = 16;
+  const span = width * cell;
+  return (
+    <Frame
+      title={width === 4 ? "Four bits" : "One byte"}
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={() => step(1)}>
+            Add 1
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={() => step(-1)}>
+            Take away 1
+          </button>
+          {offers ? (
+            <button type="button" className="btn btn-secondary" aria-pressed={signed} onClick={() => setSigned(!signed)}>
+              {signed ? "Read as unsigned" : "Read as two's complement"}
+            </button>
+          ) : null}
+          <span className="fig-stepper fig-bits">
+            <span className="label">flip a bit</span>
+            {/* In groups of four, as the hex digits are, so a byte's row can break between them on a phone. */}
+            {Array.from({ length: width / 4 }, (_, g) => (
+              <span key={g} className="fig-nibble">
+                {bits.slice(4 * g, 4 * g + 4).map((b, j) => {
+                  const i = 4 * g + j;
+                  return (
+                    <button key={i} type="button" className="q-move fig-bit-button" aria-label={`Flip the ${show(worth(i))}s bit, which is ${b}`} aria-pressed={b === 1} onClick={() => flip(i)}>
+                      {b}
+                    </button>
+                  );
+                })}
+              </span>
+            ))}
+          </span>
+        </>
+      }
+    >
+      <svg viewBox={`0 0 ${span + 2 * left} 150`} role="img" aria-label={`${width} bits reading ${grouped(bits)}, which is ${show(reading)} ${signed ? "as two's complement" : "unsigned"} and ${hex} in hexadecimal`}>
+        {bits.map((b, i) => {
+          const x = left + i * cell;
+          return (
+            <g key={i}>
+              <text x={x + cell / 2} y={22} textAnchor="middle" className="fig-scale-tick">
+                {show(worth(i))}
+              </text>
+              <rect x={x + 4} y={32} width={cell - 8} height={cell - 8} className={b === 1 ? "fig-accent" : "fig-ghost"} />
+              <text x={x + cell / 2} y={32 + (cell - 8) / 2 + 10} textAnchor="middle" className="fig-bit" style={b === 1 ? { fill: "var(--bg)" } : undefined}>
+                {b}
+              </text>
+            </g>
+          );
+        })}
+        {Array.from({ length: width / 4 }, (_, g) => {
+          const x1 = left + g * 4 * cell + 6;
+          const x2 = left + (g + 1) * 4 * cell - 6;
+          return (
+            <g key={g}>
+              <path d={`M ${x1} 96 L ${x1} 104 L ${x2} 104 L ${x2} 96`} className="fig-line" />
+              <text x={(x1 + x2) / 2} y={134} textAnchor="middle" className="fig-scale-name">
+                {hex[g]}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
+const RECORDS = {
+  "char-int": {
+    title: "A char and an int",
+    fields: [
+      { name: "kind", size: 1 },
+      { name: "balance", size: 4 },
+    ],
+  },
+  tap: {
+    title: "A metro tap record",
+    fields: [
+      { name: "kind", size: 1 },
+      { name: "when", size: 8 },
+      { name: "station", size: 2 },
+      { name: "fare", size: 4 },
+    ],
+  },
+} as const;
+type RecordField = { name: string; size: number };
+
+/** Where each field of a record goes when every field starts at a multiple of its own size, or packed with no gaps. */
+function recordLayout(fields: readonly RecordField[], packed: boolean) {
+  let at = 0;
+  let largest = 1;
+  const placed = fields.map((f) => {
+    const align = packed ? 1 : f.size;
+    const start = Math.ceil(at / align) * align;
+    const gap = start - at;
+    at = start + f.size;
+    largest = Math.max(largest, align);
+    return { ...f, start, gap };
+  });
+  const size = Math.ceil(at / largest) * largest;
+  return { placed, size, tail: size - at };
+}
+
+/** A record's fields laid out byte by byte, eight bytes to a row, with the padding an aligned layout needs drawn as gaps. */
+function StructPadding(props: Props) {
+  const record = RECORDS[props.record === "tap" ? "tap" : "char-int"];
+  const [packed, setPacked] = useState(props.packed === true);
+  const [sorted, setSorted] = useState(props.sorted === true);
+  const fields: RecordField[] = sorted ? [...record.fields].sort((a, b) => b.size - a.size) : [...record.fields];
+  const { placed, size, tail } = recordLayout(fields, packed);
+  const data = fields.reduce((sum, f) => sum + f.size, 0);
+  const bytes = (n: number) => `${n} byte${n === 1 ? "" : "s"}`;
+  const parts = placed.flatMap((f) => [...(f.gap > 0 ? [`${bytes(f.gap)} of padding`] : []), `${f.name} at byte ${f.start}, ${bytes(f.size)}`]);
+  if (tail > 0) parts.push(`${bytes(tail)} of padding at the end, so that the next record in an array starts aligned too`);
+  const split = placed.filter((f) => Math.floor(f.start / 8) !== Math.floor((f.start + f.size - 1) / 8)).map((f) => f.name);
+  const crossing = split.length === 0 ? "" : ` ${split.join(" and ")} ${split.length === 1 ? "crosses" : "cross"} from one 8-byte row into the next, so reading ${split.length === 1 ? "it" : "each"} takes two reads of memory.`;
+  const order = fields.map((f) => f.name).join(", ");
+  const summary = `Fields in the order ${order}, ${packed ? "packed with no gaps" : "each starting at a multiple of its own size"}. ${parts.join(". ")}. Size ${bytes(size)}: ${data} of data and ${size - data} of padding.${crossing}`;
+  // The tallest layout this record can take sets the height, so the figure does not jump as the buttons are pressed.
+  const rows = Math.ceil(Math.max(recordLayout(record.fields, false).size, 8) / 8);
+  const cell = 52;
+  const left = 16;
+  const rowHeight = 84;
+  const owner = Array.from({ length: rows * 8 }, (_, b) => placed.find((f) => b >= f.start && b < f.start + f.size));
+  const segments = placed.flatMap((f) => {
+    const out: { name: string; row: number; from: number; to: number }[] = [];
+    for (let b = f.start; b < f.start + f.size; ) {
+      const row = Math.floor(b / 8);
+      const end = Math.min(f.start + f.size, (row + 1) * 8);
+      out.push({ name: f.name, row, from: b % 8, to: end - row * 8 });
+      b = end;
+    }
+    return out;
+  });
+  return (
+    <Frame
+      title={record.title}
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary" aria-pressed={sorted} onClick={() => setSorted(!sorted)}>
+            {sorted ? "Back to the original order" : "Put the largest fields first"}
+          </button>
+          <button type="button" className="btn btn-secondary" aria-pressed={packed} onClick={() => setPacked(!packed)}>
+            {packed ? "Align the fields" : "Pack the fields with no gaps"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox={`0 0 ${8 * cell + 2 * left} ${rows * rowHeight + 8}`} role="img" aria-label={`${record.title}: ${bytes(size)}, ${data} of data and ${size - data} of padding`}>
+        {owner.map((f, b) => {
+          const row = Math.floor(b / 8);
+          const x = left + (b % 8) * cell;
+          const y = 8 + row * rowHeight;
+          const inside = b < size;
+          return (
+            <g key={b}>
+              {!f && inside ? <rect x={x + 3} y={y + 3} width={cell - 6} height={cell - 10} className="fig-pad" /> : null}
+              {!f && inside ? (
+                <text x={x + cell / 2} y={y + cell / 2 + 3} textAnchor="middle" className="fig-scale-tick">
+                  pad
+                </text>
+              ) : null}
+              {inside ? (
+                <text x={x + cell / 2} y={y + cell + 18} textAnchor="middle" className="fig-scale-tick">
+                  {b}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+        {segments.map((s, i) => {
+          const x = left + s.from * cell + 3;
+          const y = 8 + s.row * rowHeight + 3;
+          const w = (s.to - s.from) * cell - 6;
+          return (
+            <g key={i}>
+              <rect x={x} y={y} width={w} height={cell - 10} className="fig-accent" />
+              {w >= s.name.length * 9.7 + 4 ? (
+                <text x={x + w / 2} y={y + (cell - 10) / 2 + 6} textAnchor="middle" className="fig-step-value" style={{ fill: "var(--bg)" }}>
+                  {s.name}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
 /** A short program run one line at a time, with the line about to finish marked and every name's value beside it. */
 function StepThrough(props: Props) {
   const program = PROGRAMS.find((p) => p === props.program) ?? "deposit";
@@ -3558,6 +3783,8 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   growth: Growth,
   "partial-sums": PartialSums,
   "step-through": StepThrough,
+  "binary-counter": BinaryCounter,
+  "struct-padding": StructPadding,
   "call-stack": CallStack,
   "growth-rates": GrowthRates,
   "truth-table": TruthTable,

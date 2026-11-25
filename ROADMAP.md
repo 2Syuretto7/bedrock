@@ -4,7 +4,7 @@ What is built, what comes next and in what order. The curriculum itself, every c
 
 ## Lessons
 
-Written: F0, number sense for engineers (nine lessons), and S0, first programs (ten lessons), each with its mini-capstone: 19 of 583 lessons in all. Next: H0, bits and data representation.
+Written: F0, number sense for engineers (nine lessons), S0, first programs (ten lessons), and H0, bits and data representation (eight lessons), each with its mini-capstone: 27 of 583 lessons in all. Next: F1, algebra and functions.
 
 Content is written one whole cluster at a time, in the order Learn walks the clusters, each batch with its mini-capstone and any new figures. The lessons written must always be the start of this route, so no cluster is merged before the one it follows.
 
@@ -12,7 +12,7 @@ Content is written one whole cluster at a time, in the order Learn walks the clu
 | --- | --- | --- |
 | 1 | F0 Number sense for engineers | 9, written |
 | 2 | S0 First programs | 10, written |
-| 3 | H0 Bits and data representation | 8 |
+| 3 | H0 Bits and data representation | 8, written |
 | 4 | F1 Algebra and functions | 10 |
 | 5 | S1 Python proper | 10 |
 | 6 | F2 Logic, sets and proof | 10 |
@@ -83,7 +83,7 @@ Each phase ends with a deployed version that can be used from the first lesson t
 | Phase | Engine | Content | State |
 | --- | --- | --- | --- |
 | P0 The engine | Axiom's engine copied and renamed; the 65-cluster graph; four fresh migrations; the copper theme; CI and the production check; server-recorded Start for timed questions; typed figure props; the `log-scale` figure; the preview-only figure gallery, checked at three sizes in CI | F0 | Built; waiting on the live site check |
-| P1 Program and reason | The era 1 figures, starting with `step-through` (a short program run a line at a time, with every name's value and the output so far) | S0, H0, F1, S1, F2, S2, F3, F4, F5, S3 | In progress: S0 written |
+| P1 Program and reason | The era 1 figures, starting with `step-through` (a short program run a line at a time, with every name's value and the output so far) | S0, H0, F1, S1, F2, S2, F3, F4, F5, S3 | In progress: S0 and H0 written, with `binary-counter` and `struct-padding` |
 | P2 SQL and the machine | `sql` and `asm` runtimes; the `bedrock` simulator core (event loop, threads, caches, queues); the Trace tab | Q0, Q1, S4, S5, S6, S7, H1, H2, D0, F6 | Not started |
 | P3 Networks and storage | Network, node and checking simulators; the seed-sweep check; the larger-capstone engine | D1, D2, F7, Q2, Q3, Q4, capstone C1 | Not started |
 | P4 Distributed data | Linearisability checking and fault shrinking at full strength | D3, D4, D5, D6, capstones C2 and C3 | Not started |
@@ -95,7 +95,7 @@ Each phase ends with a deployed version that can be used from the first lesson t
 
 ## Mini-capstones
 
-Built, from Axiom. A mini-capstone closes one cluster. It is one small project in stages that needs several of the cluster's lessons at once, and it teaches nothing new. Learn gives it straight after the lesson that finishes the cluster. Written for F0 (sizing a metro's card system) and S0 (settling up after a Goa trip, in at most one payment fewer than the number of people who owe or are owed); each later cluster ships with its own.
+Built, from Axiom. A mini-capstone closes one cluster. It is one small project in stages that needs several of the cluster's lessons at once, and it teaches nothing new. Learn gives it straight after the lesson that finishes the cluster. Written for F0 (sizing a metro's card system), S0 (settling up after a Goa trip, in at most one payment fewer than the number of people who owe or are owed) and H0 (reading a day of metro taps from a binary file: checking each record's XOR byte, decoding packed little-endian fields, and reporting the busiest station and the day's fares); each later cluster ships with its own.
 
 ## Larger capstones
 

@@ -1,0 +1,423 @@
+concept: h0.bitwise-operations-and-masks
+minutes: 90
+claim: You can combine numbers bit by bit with and, or, exclusive or and not, shift bits left and right, and use masks to test, set, clear and extract chosen bits, including deciding whether two addresses are on the same network.
+recalls: [h0.twos-complement-and-overflow]
+uses: [h0.binary-and-hexadecimal, h0.unsigned-integers-and-fixed-widths, f0.powers-of-two, s0.strings, s0.booleans-and-conditionals, s0.lists-and-tuples, s0.functions]
+leads: [h0.characters-unicode-and-utf-8]
+starter: |
+  # Scratch space. Each operator works column by column.
+  a = 0b1100
+  b = 0b1010
+  print(f"{a & b:04b}", f"{a | b:04b}", f"{a ^ b:04b}")
+  print(1 << 4, 200 >> 3)
+parts:
+  recall:
+    - text: |
+        In [[h0.twos-complement-and-overflow]] the same row of bits could be read as an unsigned number or a signed one. Today a row of bits is read a third way: as separate switches. Two quick pulls first.
+  puzzle:
+    - text: |
+        Open the settings page of a home Wi-Fi router, and somewhere you will find lines like these:
+
+        ```
+        IP address:   192.168.1.7
+        Subnet mask:  255.255.255.0
+        Gateway:      192.168.1.1
+        ```
+
+        Your phone has the address 192.168.1.7. When it sends a photo to the laptop at 192.168.1.23, it sends it straight across the room. When it opens a website at 142.250.183.46, it hands the data to the router, the gateway, to pass on to the internet. The phone makes that choice for every message it sends, thousands of times a minute, and it makes it using that odd line, `255.255.255.0`.
+
+        Every engineer who has set up an office network, a cloud server or a Kubernetes cluster has had to read lines like this, often as `192.168.1.0/24`. **What does the mask mean, and how does the phone use it to tell which addresses are on its own network?**
+  intuition:
+    - text: |
+        First, an IP address is not four numbers. It is one 32-bit unsigned number, the kind you met in [[h0.unsigned-integers-and-fixed-widths]], written as its four bytes in decimal with dots between them so that people can read it. So `192.168.1.7` is the 32 bits
+
+        ```
+        11000000 10101000 00000001 00000111
+        ```
+
+        and the mask `255.255.255.0` is
+
+        ```
+        11111111 11111111 11111111 00000000
+        ```
+
+        Twenty-four ones, then eight zeros. That is what `/24` means: the first 24 bits.
+
+        Now picture the address as a row of 32 switches, and the mask as a stencil laid over it. Where the stencil has a 1, the switch below shows through. Where it has a 0, the switch is covered and reads 0. What shows through is the address's **network part**:
+
+        ```
+        11000000 10101000 00000001 00000111     the phone, 192.168.1.7
+        11111111 11111111 11111111 00000000     the mask
+        11000000 10101000 00000001 00000000     what shows through, 192.168.1.0
+        ```
+
+        Lay the same stencil over the laptop's address, 192.168.1.23, and what shows through is also 192.168.1.0. Same network part, same network: send it straight across. Lay it over 142.250.183.46 and you get 142.250.183.0, which is different. Not on this network: hand it to the gateway.
+
+        Laying a stencil over bits is an operation on numbers, but a new kind. It does not add or multiply. It looks at each **column on its own**, with no carries between columns, and combines the bit above with the bit below. This one is called **and**: the result has a 1 only where the address **and** the mask both have a 1. In Python it is written `&`.
+  derivation:
+    - text: |
+        **The four bitwise operators.** Each works column by column on the binary digits of whole numbers.
+
+        | `a` | `b` | `a & b` (and) | `a \| b` (or) | `a ^ b` (exclusive or) |
+        | --- | --- | --- | --- | --- |
+        | 0 | 0 | 0 | 0 | 0 |
+        | 0 | 1 | 0 | 1 | 1 |
+        | 1 | 0 | 0 | 1 | 1 |
+        | 1 | 1 | 1 | 1 | 0 |
+
+        These are the truth tables of `and` and `or` from the lesson on conditionals, with 1 for True and 0 for False, applied to every column at once. **Exclusive or**, `^`, is 1 when the two bits **differ**: one or the other, but not both. Worked on whole numbers:
+
+        ```
+          1100      12            1100      12            1100      12
+        & 1010      10          | 1010      10          ^ 1010      10
+          ----                    ----                    ----
+          1000       8            1110      14            0110       6
+        ```
+
+        Do not confuse `&` with the word `and`. `12 and 10` asks whether both are true, and since neither is zero it gives back 10 unchanged. `12 & 10` combines their bits and gives 8. Python will happily run either, so mixing them up gives a silent wrong answer.
+
+        The fourth operator, **not**, written `~`, flips every bit. In a fixed width that is the "flip every bit" step of negation from the last lesson. Python's integers have no fixed width, so Python treats a number as if it had infinitely many copies of its sign bit on the left, and `~x` is $-x - 1$: `~5` is $-6$. You will mostly use `~` inside a mask, where that does no harm, as you will see.
+
+        **Shifts.** `x << k` slides every bit of `x` left by `k` columns, filling with zeros on the right. Each column is worth twice the one to its right, so this multiplies by $2^k$. `x >> k` slides the bits right by `k`, and the `k` bits that fall off the right-hand end are lost, so this is `x // 2 ** k`.
+
+        ```python
+        print(1 << 4)
+        print(200 >> 3)
+        print(f"{0b1011 << 2:b}")
+        ```
+
+        This shows 16, then 25, then `101100`. The number `1 << k` is the most useful number in this lesson: a single 1 in column `k`, with columns counted from 0 on the right.
+
+        **Masks.** A **mask** is a number whose bits say which columns you care about. With masks, four jobs cover nearly everything.
+
+        | Job | Code | Why it works |
+        | --- | --- | --- |
+        | Test bit `k` | `(x >> k) & 1` | slide bit `k` to the ones column, then keep only that column |
+        | Set bit `k` | `x \| (1 << k)` | or with 1 forces a 1, or with 0 leaves a bit alone |
+        | Clear bit `k` | `x & ~(1 << k)` | the mask is all ones except column `k`, and and with 0 forces a 0 |
+        | Flip bit `k` | `x ^ (1 << k)` | exclusive or with 1 flips a bit, with 0 leaves it alone |
+
+        **Extracting a field.** Several small numbers are often packed into one larger one. A colour is three bytes in one 24-bit number: `0xFF9933` holds red in its top byte, green in the middle, blue at the bottom. To pull out the green, shift it down to the bottom and keep 8 bits:
+
+        ```python
+        colour = 0xFF9933
+        red = (colour >> 16) & 0xFF
+        green = (colour >> 8) & 0xFF
+        blue = colour & 0xFF
+        print(red, green, blue)
+        ```
+
+        This shows `255 153 51`, the saffron of lesson one, without a single string slice. `0xFF` is eight ones, the mask that keeps exactly one byte. Packing is the reverse: shift each field up into place and combine with or, `(255 << 16) | (153 << 8) | 51`.
+    - question:
+        id: predict-bitwise
+        type: predict
+        system: s2
+        prompt: Write each number in binary, line the columns up, and work each line out before you check.
+        code: |
+          print(12 & 10)
+          print(12 | 10)
+          print(12 ^ 10)
+          print(6 << 2)
+          print(0b1101 & ~0b0100)
+        output: |
+          8
+          14
+          6
+          24
+          9
+        explanation: |
+          `1100` and `1010` share only the 8s column. Or gives every column either has, `1110`. Exclusive or keeps the columns where they differ, `0110`. $6 \times 4 = 24$. The last clears the 4s bit of `1101`, leaving `1001`, which is 9.
+    - text: |
+        **The router, solved.** Write an IP address as one 32-bit number by packing its four bytes, and the phone's whole decision is one line:
+
+        ```python
+        def to_number(ip):
+            a, b, c, d = ip
+            return (a << 24) | (b << 16) | (c << 8) | d
+
+        mask = to_number((255, 255, 255, 0))
+        phone = to_number((192, 168, 1, 7))
+        laptop = to_number((192, 168, 1, 23))
+        website = to_number((142, 250, 183, 46))
+        print(phone & mask == laptop & mask)
+        print(phone & mask == website & mask)
+        ```
+
+        This shows True, then False. In Python the bitwise operators bind more tightly than `==`, so each side is masked before they are compared. That is not true in C and some other languages, where the same line needs brackets, so many programmers write them anyway.
+
+        A mask of `/24` leaves 8 bits for the devices on the network, which is $2^8 = 256$ addresses. Two are reserved: the one with all those bits 0 names the network itself, and the one with all of them 1 means "everyone on this network". So a home network has room for 254 devices. An office that needs more uses a shorter mask: `/20` keeps 20 bits for the network and leaves 12 for devices, $2^{12} - 2 = 4094$ of them, and its mask is written `255.255.240.0`.
+
+        **Flags.** The same tools pack yes-or-no settings into one number, one bit each. A file's permissions on Linux and macOS are such bits. If reading is worth 4, writing 2 and running 1, then a permission of 6 is `110`: read and write, but not run. `perms & 2` is non-zero exactly when writing is allowed.
+    - question:
+        id: fix-same-network
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `same_network(ip1, ip2, mask)` takes two addresses and a mask, each as a 32-bit number, and should **return** whether the two addresses are on the same network. It says True for every pair of addresses, even ones on different networks. Find the bug and fix it.
+        starter: |
+          def same_network(ip1, ip2, mask):
+              return (ip1 and mask) == (ip2 and mask)
+
+          mask = 0xFFFFFF00
+          print(same_network(0xC0A80107, 0xC0A80117, mask))
+          print(same_network(0xC0A80107, 0x8EFAB72E, mask))
+        solution: |
+          def same_network(ip1, ip2, mask):
+              return (ip1 & mask) == (ip2 & mask)
+
+          mask = 0xFFFFFF00
+          print(same_network(0xC0A80107, 0xC0A80117, mask))
+          print(same_network(0xC0A80107, 0x8EFAB72E, mask))
+        tests: |
+          _mask24 = 0xFFFFFF00
+          assert same_network(0xC0A80107, 0xC0A80117, _mask24) == True, "192.168.1.7 and 192.168.1.23 are on the same /24 network"
+          assert same_network(0xC0A80107, 0x8EFAB72E, _mask24) == False, "192.168.1.7 and 142.250.183.46 are on different networks. What does the word and give back?"
+          assert same_network(0xC0A80107, 0xC0A80207, _mask24) == False, "192.168.1.7 and 192.168.2.7 differ in the third byte, which the /24 mask keeps"
+          assert same_network(0xC0A80107, 0xC0A80207, 0xFFFF0000) == True, "With a /16 mask, 192.168.1.7 and 192.168.2.7 are on the same network"
+        wrong:
+          - "def same_network(ip1, ip2, mask):\n    return (ip1 | mask) == (ip2 | mask)\n"
+          - "def same_network(ip1, ip2, mask):\n    return ip1 == ip2\n"
+          - "def same_network(ip1, ip2, mask):\n    return (ip1 ^ mask) == (ip2 & mask)\n"
+        explanation: "The word `and` is a logical operator: `ip1 and mask` gives back `mask` whenever `ip1` is not zero, so both sides were always the mask. The bitwise `&` keeps the bits of the address that lie under the mask's ones. Or with the mask would set those bits instead and compare only the device part, which is the opposite of what is wanted."
+  formal:
+    - text: |
+        For whole numbers $a$ and $b$, the **bitwise operators** act on each binary column independently, with no carries:
+
+        | Operator | Python | Column result |
+        | --- | --- | --- |
+        | and | `a & b` | 1 if both bits are 1 |
+        | or | `a \| b` | 1 if either bit is 1 |
+        | exclusive or | `a ^ b` | 1 if the bits differ |
+        | not | `~a` | every bit flipped; in Python $-a - 1$ |
+
+        The **shifts** are `a << k`, which equals $a \times 2^k$, and `a >> k`, which equals $\lfloor a / 2^k \rfloor$.
+
+        A **mask** is a number whose 1 bits select columns. With `m = 1 << k`: `(x >> k) & 1` is bit $k$ of $x$; `x | m` sets it; `x & ~m` clears it; `x ^ m` flips it. A **field** of $w$ bits starting at column $s$ is `(x >> s) & ((1 << w) - 1)`.
+
+        An **IPv4 address** is a 32-bit unsigned integer, written as four bytes in decimal separated by dots. A **prefix** of length $p$, written `/p`, is the mask of $p$ ones followed by $32 - p$ zeros. Two addresses are on the same network exactly when `ip1 & mask == ip2 & mask`. A `/p` network has $2^{32-p}$ addresses, of which two are reserved.
+
+        In Python, `&`, `|` and `^` bind more tightly than comparisons such as `==` but less tightly than `+`, `-` and the shifts.
+  drill:
+    - text: Seconds each. Line the columns up in your head.
+    - question:
+        id: predict-and-6-3
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(6 & 3)
+        output: "2"
+        explanation: "`110` and `011` share only the 2s column."
+    - question:
+        id: predict-or-6-3
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(6 | 3)
+        output: "7"
+        explanation: Every column is 1 in one or the other, `111`.
+    - question:
+        id: predict-xor-6-3
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(6 ^ 3)
+        output: "5"
+        explanation: "`110` and `011` differ in the 4s and 1s columns, `101`."
+    - question:
+        id: predict-shift-10
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(1 << 10)
+        output: "1024"
+        explanation: A single 1 slid ten columns left is $2^{10}$.
+    - question:
+        id: predict-low-nibble
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(0xF3 & 0x0F)
+        output: "3"
+        explanation: The mask keeps only the low four bits, the digit 3.
+    - question:
+        id: predict-shift-right
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(96 >> 4)
+        output: "6"
+        explanation: $96 \div 16 = 6$. Four bits fell off the right-hand end, all zeros.
+    - question:
+        id: which-clears
+        type: choice
+        system: s1
+        prompt: Which operator, with a mask that has 0 in a column, forces that column to 0?
+        options: ["and, &", "or, |", "exclusive or, ^", "shift left, <<"]
+        answer: 0
+        explanation: And with 0 is always 0. Or and exclusive or with 0 leave a bit alone.
+  work:
+    - text: Slower now. Write the binary out whenever you are unsure.
+    - question:
+        id: write-to-number
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `to_number(ip)`. It takes an IPv4 address as a tuple of four whole numbers from 0 to 255, such as `(192, 168, 1, 7)`, and **returns** it as one 32-bit number, with the first byte in the top eight bits. Use shifts and `|`, not multiplication.
+        starter: |
+          def to_number(ip):
+              return 0
+
+          print(hex(to_number((192, 168, 1, 7))))
+        solution: |
+          def to_number(ip):
+              a, b, c, d = ip
+              return (a << 24) | (b << 16) | (c << 8) | d
+
+          print(hex(to_number((192, 168, 1, 7))))
+        tests: |
+          assert "<<" in source, "Slide each byte into place with <<"
+          assert to_number((192, 168, 1, 7)) == 0xC0A80107, "192.168.1.7 should be 0xC0A80107"
+          assert to_number((0, 0, 0, 1)) == 1, "0.0.0.1 should be 1"
+          assert to_number((1, 0, 0, 0)) == 2 ** 24, "1.0.0.0 should be 2 ** 24. Which byte goes in the top eight bits?"
+          assert to_number((255, 255, 255, 0)) == 0xFFFFFF00, "The mask 255.255.255.0 should be 0xFFFFFF00"
+          assert to_number((255, 255, 255, 255)) == 2 ** 32 - 1, "255.255.255.255 should be the largest 32-bit value"
+        wrong:
+          - "def to_number(ip):\n    a, b, c, d = ip\n    return (d << 24) | (c << 16) | (b << 8) | a\n"
+          - "def to_number(ip):\n    a, b, c, d = ip\n    return (a << 3) | (b << 2) | (c << 1) | d\n"
+          - "def to_number(ip):\n    a, b, c, d = ip\n    return (a << 24) & (b << 16) & (c << 8) & d\n"
+        explanation: "Each byte is slid up by a multiple of eight columns into its own place, so the four never overlap, and or combines them. Shifting by 3, 2 and 1 counts bytes instead of bits, and and would wipe everything out, since no column has a 1 in all four."
+    - question:
+        id: write-prefix-mask
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `prefix_mask(p)` for a whole number `p` from 0 to 32. It **returns** the 32-bit mask with `p` ones on the left followed by `32 - p` zeros, so `prefix_mask(24)` is `0xFFFFFF00` and `prefix_mask(0)` is 0.
+        starter: |
+          def prefix_mask(p):
+              return 0
+
+          print(hex(prefix_mask(24)))
+        solution: |
+          def prefix_mask(p):
+              ones = (1 << p) - 1
+              return ones << (32 - p)
+
+          print(hex(prefix_mask(24)))
+        tests: |
+          assert prefix_mask(24) == 0xFFFFFF00, "prefix_mask(24) should be 0xFFFFFF00, which is 255.255.255.0"
+          assert prefix_mask(16) == 0xFFFF0000, "prefix_mask(16) should be 0xFFFF0000"
+          assert prefix_mask(20) == 0xFFFFF000, "prefix_mask(20) should be 0xFFFFF000, which is 255.255.240.0"
+          assert prefix_mask(32) == 2 ** 32 - 1, "prefix_mask(32) should be all ones"
+          assert prefix_mask(0) == 0, "prefix_mask(0) should be 0"
+          assert prefix_mask(1) == 0x80000000, "prefix_mask(1) should be a single 1 in the top bit"
+        wrong:
+          - "def prefix_mask(p):\n    return (1 << p) - 1\n"
+          - "def prefix_mask(p):\n    ones = (1 << p) - 1\n    return ones << p\n"
+          - "def prefix_mask(p):\n    return (1 << p) << (32 - p)\n"
+        explanation: "`(1 << p) - 1` is `p` ones at the bottom, since $2^p - 1$ is all ones in binary, just as 999 is one less than 1000. Sliding them up by the $32 - p$ columns that remain puts them at the top."
+    - question:
+        id: write-flags
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A file's permissions are bits: `READ = 4`, `WRITE = 2` and `RUN = 1`. Write two functions. `can(perms, flag)` **returns** `True` if the bit `flag` is set in `perms`, and `False` otherwise. `revoke(perms, flag)` **returns** `perms` with that bit cleared and every other bit left as it was.
+        starter: |
+          READ = 4
+          WRITE = 2
+          RUN = 1
+
+          def can(perms, flag):
+              return False
+
+          def revoke(perms, flag):
+              return perms
+
+          print(can(6, WRITE), revoke(7, RUN))
+        solution: |
+          READ = 4
+          WRITE = 2
+          RUN = 1
+
+          def can(perms, flag):
+              return perms & flag != 0
+
+          def revoke(perms, flag):
+              return perms & ~flag
+
+          print(can(6, WRITE), revoke(7, RUN))
+        tests: |
+          assert can(6, WRITE) == True, "6 is 110, which includes writing"
+          assert can(6, RUN) == False, "6 is 110, which does not include running"
+          assert can(7, READ) == True, "7 is 111, which includes reading"
+          assert revoke(7, RUN) == 6, "Revoking running from 111 should leave 110, which is 6"
+          assert revoke(6, RUN) == 6, "Revoking a permission that is not there should change nothing"
+          assert revoke(7, WRITE) == 5, "Revoking writing from 111 should leave 101, which is 5"
+        wrong:
+          - "READ = 4\nWRITE = 2\nRUN = 1\n\ndef can(perms, flag):\n    return perms & flag != 0\n\ndef revoke(perms, flag):\n    return perms - flag\n"
+          - "READ = 4\nWRITE = 2\nRUN = 1\n\ndef can(perms, flag):\n    return perms & flag != 0\n\ndef revoke(perms, flag):\n    return perms ^ flag\n"
+          - "READ = 4\nWRITE = 2\nRUN = 1\n\ndef can(perms, flag):\n    return perms | flag != 0\n\ndef revoke(perms, flag):\n    return perms & ~flag\n"
+        explanation: "And with the flag keeps only that bit, which is non-zero exactly when it is set. Clearing needs and with every bit **except** the flag, which is `~flag`. Subtracting and exclusive or both work when the bit is set, and both do damage when it is not: they turn a bit **on** that should have stayed off, or borrow from the next column."
+    - question:
+        id: predict-field
+        type: predict
+        system: s2
+        prompt: The flag's green, packed as one number. What does this show?
+        code: |
+          colour = 0x138808
+          print((colour >> 16) & 0xFF, (colour >> 8) & 0xFF, colour & 0xFF)
+        output: "19 136 8"
+        explanation: |
+          Shifting by 16 brings the top byte, `13`, to the bottom; by 8 brings `88`. `0xFF` keeps one byte each time. In decimal the three are 19, 136 and 8.
+    - question:
+        id: predict-flip-trace
+        type: predict
+        system: s2
+        prompt: Trace `x` in binary through each line, then give what it shows.
+        code: |
+          x = 0b0110
+          x = x | (1 << 0)
+          x = x & ~(1 << 2)
+          x = x ^ (1 << 3)
+          print(x, (x >> 1) & 1)
+        output: "11 1"
+        explanation: |
+          `0110` with bit 0 set is `0111`. Clearing bit 2 gives `0011`. Flipping bit 3 gives `1011`, which is 11. Bit 1 of `1011` is 1.
+    - question:
+        id: hosts-in-20
+        type: numeric
+        system: s2
+        prompt: How many devices can a `/20` network hold, after the two reserved addresses are taken out?
+        answer: "4094"
+        unit: devices
+        explanation: A `/20` mask leaves $32 - 20 = 12$ bits for devices, which is $2^{12} = 4096$ addresses, less two.
+    - question:
+        id: and-vs-word
+        type: choice
+        system: s2
+        prompt: "What is the difference between `12 & 10` and `12 and 10` in Python?"
+        options:
+          - "None: both give 8."
+          - "`12 & 10` combines the bits column by column and gives 8. `12 and 10` asks whether both are true, and since 12 is not zero it gives back 10."
+          - "`12 and 10` combines the bits, and `12 & 10` is an error."
+          - "Both give True."
+        answer: 1
+        explanation: The word works on truth and returns one of its operands unchanged. The symbol works on bits. Python runs both without complaint, which is what makes the mix-up dangerous.
+  connections:
+    - text: |
+        The puzzle is solved. `255.255.255.0` is a 32-bit mask of 24 ones and 8 zeros. The phone ands its own address with it, ands the destination with it, and compares: equal network parts mean the same network, and anything else goes to the gateway.
+
+        Bitwise operations are the truth tables of [[s0.booleans-and-conditionals]] applied to every column at once, and shifts are the multiplying and dividing by powers of two of [[f0.powers-of-two]]. Extracting a byte with a shift and `0xFF` is the slicing of [[s0.strings]] done on bits.
+
+        From here on you will see masks wherever space is precious or speed matters: in network addresses and firewall rules, in the flags of files and processes, in the headers of every packet, in compression and encryption, and in the hash tables of the algorithms clusters, which use a mask to turn a large number into a slot.
+
+        So far every pattern of bits has been a number. But most of what people type, store and send is text. A letter is not a number, and yet a computer has nothing but bits to store it in. How does `A` become bits, and what happens with the thousands of letters in Indian scripts, or with an emoji? That is the next lesson, [[h0.characters-unicode-and-utf-8]].

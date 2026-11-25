@@ -7,6 +7,9 @@ test.describe.configure({ timeout: FIRST_RUN + 30_000 });
 
 async function openCode(page: Page, project: string) {
   if (project === "phone") await page.getByRole("button", { name: "Code", exact: true }).click();
+  // The editor is mounted once the page has hydrated. A click on Run before then does nothing, and the
+  // longer a lesson's page, the longer hydration takes, so wait for it instead of racing it.
+  await expect(page.locator(".cm-content")).toBeVisible();
 }
 
 async function withCode(page: Page, code: string) {

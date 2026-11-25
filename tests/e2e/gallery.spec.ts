@@ -64,3 +64,42 @@ test("the step-through figure runs a program a line at a time, and shows a bug's
   await deposit.getByRole("button", { name: "Jump to the end" }).click();
   await expect(deposit).toContainText("The deposit first reaches double in year 10.");
 });
+
+test("the binary counter counts, wraps round, and reads the same byte two ways", async ({ page }) => {
+  await page.goto("/gallery");
+  const four = page.locator('.gallery-item[data-figure="binary-counter"]').filter({ hasText: "Four bits" }).getByRole("figure");
+  await expect(four).toContainText("Bits 1101. Read as unsigned: 8 + 4 + 1 = 13. In hexadecimal, D.");
+  await four.getByRole("button", { name: "Add 1" }).click();
+  await four.getByRole("button", { name: "Add 1" }).click();
+  await expect(four).toContainText("Bits 1111. Read as unsigned: 8 + 4 + 2 + 1 = 15. In hexadecimal, F.");
+  await four.getByRole("button", { name: "Add 1" }).click();
+  await expect(four).toContainText("Adding 1 to 1111 carried out of the leftmost bit. There is no bit there to hold the carry, so it is lost and the row wraps round to 0000.");
+  await four.getByRole("button", { name: "Flip the 4s bit" }).click();
+  await expect(four).toContainText("Bits 0100. Read as unsigned: the only 1 is in the 4 column, so the value is 4. In hexadecimal, 4.");
+
+  const signed = page.locator('.gallery-item[data-figure="binary-counter"]').filter({ hasText: "Two's complement and overflow" }).getByRole("figure");
+  await expect(signed).toContainText("Bits 0111 1111. Read as two's complement: 64 + 32 + 16 + 8 + 4 + 2 + 1 = 127. In hexadecimal, 7F.");
+  await signed.getByRole("button", { name: "Add 1" }).click();
+  await expect(signed).toContainText("Bits 1000 0000. Read as two's complement: the only 1 is in the −128 column, so the value is −128. In hexadecimal, 80.");
+  await signed.getByRole("button", { name: "Read as unsigned" }).click();
+  await expect(signed).toContainText("Read as unsigned: the only 1 is in the 128 column, so the value is 128.");
+  await expect(signed.getByRole("button", { name: "Read as two's complement" })).toHaveAttribute("aria-pressed", "false");
+});
+
+test("the struct-padding figure shows where a record's padding goes, and how reordering or packing removes it", async ({ page }) => {
+  await page.goto("/gallery");
+  const pair = page.locator('.gallery-item[data-figure="struct-padding"]').filter({ hasText: "A char and an int" }).getByRole("figure");
+  await expect(pair).toContainText("kind at byte 0, 1 byte. 3 bytes of padding. balance at byte 4, 4 bytes. Size 8 bytes: 5 of data and 3 of padding.");
+  await pair.getByRole("button", { name: "Put the largest fields first" }).click();
+  await expect(pair).toContainText("balance at byte 0, 4 bytes. kind at byte 4, 1 byte. 3 bytes of padding at the end, so that the next record in an array starts aligned too. Size 8 bytes");
+
+  const tap = page.locator('.gallery-item[data-figure="struct-padding"]').filter({ hasText: "A metro tap record" }).getByRole("figure");
+  await expect(tap).toContainText("kind at byte 0, 1 byte. 7 bytes of padding. when at byte 8, 8 bytes. station at byte 16, 2 bytes. 2 bytes of padding. fare at byte 20, 4 bytes. Size 24 bytes: 15 of data and 9 of padding.");
+  await tap.getByRole("button", { name: "Put the largest fields first" }).click();
+  await expect(tap).toContainText("Fields in the order when, fare, station, kind");
+  await expect(tap).toContainText("Size 16 bytes: 15 of data and 1 of padding.");
+  await tap.getByRole("button", { name: "Back to the original order" }).click();
+  await tap.getByRole("button", { name: "Pack the fields with no gaps" }).click();
+  await expect(tap).toContainText("when at byte 1, 8 bytes. station at byte 9, 2 bytes. fare at byte 11, 4 bytes. Size 15 bytes: 15 of data and 0 of padding. when crosses from one 8-byte row into the next, so reading it takes two reads of memory.");
+  await expect(tap.getByRole("button", { name: "Align the fields" })).toHaveAttribute("aria-pressed", "true");
+});
