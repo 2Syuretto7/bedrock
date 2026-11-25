@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { submitAnswer, timeUp } from "@/lib/learning/actions";
+import { startTimed, submitAnswer, timeUp } from "@/lib/learning/actions";
 import { clock, spoken } from "@/lib/lessons/timing";
 import type { QuestionView } from "@/lib/lessons/content";
 import { useWorkspace } from "../workspace/context";
@@ -37,18 +37,27 @@ export function QuestionCard({ view }: { view: QuestionView }) {
   const timed = view.seconds !== undefined && !solved;
   /** A timed question stays hidden until the learner starts its clock. */
   const waiting = timed && !timer.running;
+  // The server records the start and measures every answer from it, so the question appears only once it has.
   const begin = () => {
-    setTimedOut(false);
-    setFeedback(null);
-    timer.begin();
-    // A timed code question is answered in the editor, so starting it opens it there.
-    if (view.type === "code") ws.open({ id: view.id, number: view.number, starter: view.starter ?? "" });
+    start(async () => {
+      try {
+        await startTimed(ws.conceptId, view.id);
+      } catch {
+        setFeedback({ note: "Could not reach Bedrock to start the clock. Check your connection and try again.", offline: true });
+        return;
+      }
+      setTimedOut(false);
+      setFeedback(null);
+      timer.begin();
+      // A timed code question is answered in the editor, so starting it opens it there.
+      if (view.type === "code") ws.open({ id: view.id, number: view.number, starter: view.starter ?? "" });
+    });
   };
 
   const submit = (answer: unknown) => {
     start(async () => {
       try {
-        const result = await submitAnswer(ws.conceptId, view.id, answer, view.seconds === undefined ? 0 : timer.elapsed());
+        const result = await submitAnswer(ws.conceptId, view.id, answer);
         if (result.correct) timer.stop();
         ws.settle(view.id, result);
         setFeedback({ note: result.note, explanationHtml: result.explanationHtml });
@@ -91,8 +100,9 @@ export function QuestionCard({ view }: { view: QuestionView }) {
           <p className="text-ink-secondary">
             This is a quick question: answer from memory. It appears when you start, and you have {spoken(view.seconds!)}.
           </p>
-          <button type="button" className="btn btn-primary btn-small" onClick={begin}>
-            {timedOut ? "Start again" : "Start"}
+          {feedback?.offline ? <p className="text-error">{feedback.note}</p> : null}
+          <button type="button" className="btn btn-primary btn-small" onClick={begin} disabled={pending}>
+            {pending ? "Starting" : timedOut ? "Start again" : "Start"}
           </button>
         </div>
       ) : (

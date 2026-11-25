@@ -4,8 +4,6 @@ const base = {
   id: z.string().regex(/^[a-z0-9-]+$/),
   /** s1: fast retrieval and pattern recognition. s2: slow reasoning. */
   system: z.enum(["s1", "s2"]),
-  /** The time limit of an s1 question in seconds, when the usual one for its type does not suit it. s2 questions are never timed. */
-  seconds: z.number().int().min(10).max(900).optional(),
   prompt: z.string().min(1),
   /** Shown only once the question is solved. */
   explanation: z.string().min(1),

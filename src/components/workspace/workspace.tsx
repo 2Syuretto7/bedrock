@@ -90,7 +90,6 @@ export function Workspace({
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const syncTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const tests = useRef(new Map<string, string>());
-  const openedAt = useRef(0);
   const attending = useRef<string | null>(null);
   const main = useRef<HTMLDivElement>(null);
   const resultRef = useRef<RunResult | null>(null);
@@ -202,7 +201,7 @@ export function Workspace({
         setResult({ ...ran, out: [], error: detail ? `${note}\n\n${detail}` : note });
         outcome = { correct: false, note };
       }
-      const recorded = await reportCode(id, question.id, outcome.correct, submitted, Date.now() - openedAt.current);
+      const recorded = await reportCode(id, question.id, outcome.correct, submitted);
       // A timed question whose time was up is not solved, even if its checks pass.
       if (outcome.correct && !recorded.correct) outcome = { correct: false, note: recorded.note };
       outcome.explanationHtml = recorded.explanationHtml;
@@ -217,7 +216,6 @@ export function Workspace({
 
   const open = useCallback(
     (question: { id: string; number: number; starter: string }) => {
-      openedAt.current = Date.now();
       attending.current = question.id;
       show({ key: `bedrock-code:${id}:${question.id}`, starter: question.starter, question: { id: question.id, number: question.number } });
       setPane("code");

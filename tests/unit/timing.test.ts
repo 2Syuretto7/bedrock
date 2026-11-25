@@ -6,12 +6,11 @@ describe("which questions are timed", () => {
     for (const type of ["choice", "numeric", "predict", "order", "code"] as const) {
       expect(secondsFor({ system: "s1", type })).toBeGreaterThan(0);
       expect(secondsFor({ system: "s2", type })).toBeNull();
-      // Not even a limit written on a System Two question makes it timed. The lesson checks refuse such a question.
-      expect(late({ system: "s2", type, seconds: 10 }, 10 ** 9)).toBe(false);
+      expect(late({ system: "s2", type }, 10 ** 9)).toBe(false);
     }
     expect(secondsFor({ system: "s1", type: "choice" })).toBe(30);
     expect(secondsFor({ system: "s1", type: "numeric" })).toBe(60);
-    expect(secondsFor({ system: "s1", type: "numeric", seconds: 20 })).toBe(20);
+    expect(["predict", "order", "code"].map((type) => secondsFor({ system: "s1", type: type as "predict" }))).toEqual([60, 60, 180]);
   });
 
   it("counts an answer as late only once the limit and a little slack have passed", () => {

@@ -3,9 +3,8 @@
 import { getCurrentUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db";
 import { finishConsolidated, masteryOf } from "../learning/standing";
-import { late } from "../lessons/timing";
 import { optionOrder, type ReviewQuestion } from "./question";
-import { answerReview } from "./service";
+import { answerReview, startReview } from "./service";
 import { orderSeed, reveal, type Revealed } from "./view";
 
 export type RecallResult =
@@ -21,8 +20,22 @@ export type RecallResult =
       mastery?: number;
     });
 
-/** Marks the one answer a fresh recall or consolidation question gets. A recall sets when its idea is next recalled; the last answer of a consolidation set finishes its lesson. */
-export async function submitRecall(questionId: number, answer: unknown, ms: number): Promise<RecallResult> {
+/** Starts a fresh question's clock on the server, once, and says how much of its time is left. */
+export async function startRecall(questionId: number): Promise<{ remainingMs: number }> {
+  const user = await getCurrentUser();
+  if (!user) throw new Error("Signed out");
+  const id = Number(questionId);
+  if (!Number.isSafeInteger(id)) throw new Error("Unknown question");
+  const remainingMs = await startReview(getDb(), user.id, id);
+  if (remainingMs === null) throw new Error("Unknown question");
+  return { remainingMs };
+}
+
+/**
+ * Marks the one answer a fresh recall or consolidation question gets. A recall sets when its idea is next recalled; the last
+ * answer of a consolidation set finishes its lesson. The time is measured on the server; `timedOut` says the browser's clock ran out.
+ */
+export async function submitRecall(questionId: number, answer: unknown, timedOut = false): Promise<RecallResult> {
   const user = await getCurrentUser();
   if (!user) throw new Error("Signed out");
   const id = Number(questionId);
@@ -32,11 +45,9 @@ export async function submitRecall(questionId: number, answer: unknown, ms: numb
   const read = (question: ReviewQuestion) =>
     question.type === "choice" ? (typeof answer === "number" ? optionOrder(question, orderSeed(id))[answer] : undefined) : String(answer ?? "").slice(0, 4000);
 
-  // Recall is fast retrieval (System One), so every fresh recall question is timed.
-  const taken = typeof ms === "number" && Number.isFinite(ms) ? ms : null;
-  const isLate = (question: ReviewQuestion) => late({ system: "s1", type: question.type }, taken ?? Infinity);
+  // Recall is fast retrieval (System One), so every fresh recall question is timed, by the server.
   const now = new Date();
-  const outcome = await answerReview(getDb(), user.id, id, read, taken, now, isLate);
+  const outcome = await answerReview(getDb(), user.id, id, read, now, timedOut === true);
   if (!outcome) throw new Error("Unknown question");
   if (outcome.note) return { note: outcome.note };
   if (outcome.purpose === "consolidation") {

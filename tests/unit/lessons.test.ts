@@ -46,6 +46,24 @@ describe("lesson validation", () => {
     expect(await messages("s0.printing", (l) => (question(l, "fix-sum").starter = "print(9)\n"))).toContain("starter already passes");
   });
 
+  it("refuses a figure that does not exist, a prop it does not take, a prop of the wrong type, and one that cannot be drawn", async () => {
+    const figureAt = (l: Raw, name: string): Raw => (Object.values(l.parts as Record<string, Raw[]>).flat().find((block) => block.figure === name) as Raw);
+    expect(await messages("f0.counting", (l) => (figureAt(l, "venn").figure = "venn-diagram"))).toContain("No figure named venn-diagram");
+    expect(await messages("f0.counting", (l) => (figureAt(l, "venn").props = { a: 2, size: 3 }))).toContain("Figure venn props");
+    expect(await messages("f0.counting", (l) => (figureAt(l, "venn").props = { a: "two" }))).toContain("Figure venn props: a:");
+    expect(await messages("f0.counting", (l) => (figureAt(l, "linear-map").props = { map: "spin" }))).toContain("Figure linear-map props: map:");
+    const broken = await validateLessons({
+      graph,
+      files: files(),
+      features,
+      figures: new Set<string>(FIGURE_NAMES),
+      renderFigure: (name) => (name === "venn" ? "Figure venn does not render: boom" : null),
+      run: runPython,
+      minWords: 0,
+    });
+    expect(broken.map((issue) => issue.message)).toContain("Figure venn does not render: boom");
+  });
+
   it("rejects a predicted output that is not what the code prints", async () => {
     expect(await messages("s0.printing", (l) => (question(l, "predict-fast").output = "11"))).toContain('really prints: "2"');
   });

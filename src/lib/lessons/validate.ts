@@ -1,5 +1,6 @@
 import { ancestors, type Graph } from "../graph/load";
 import { teachingPath } from "../learning/next";
+import { figurePropsProblem } from "./figure-props";
 import { normaliseOutput } from "./grade";
 import { checkProgram, featureProgram } from "./harness";
 import type { LessonFile } from "./load";
@@ -16,6 +17,8 @@ export type ValidateOptions = {
   /** Which concept first teaches which Python feature. */
   features: Map<string, string[]>;
   figures: Set<string>;
+  /** Draws a figure as the browser would, and says what went wrong if it cannot. */
+  renderFigure?: (name: string, props: Record<string, unknown>) => string | null;
   run: RunPython;
   /** Lessons are meant to be long and dense. The shortest prose a lesson may have. */
   minWords: number;
@@ -157,6 +160,10 @@ export async function validateLessons(options: ValidateOptions): Promise<Issue[]
           await checkText(where, block.text);
         } else if ("figure" in block) {
           if (!figures.has(block.figure)) add(where, `No figure named ${block.figure}`);
+          else {
+            const problem = figurePropsProblem(block.figure, block.props) ?? options.renderFigure?.(block.figure, block.props ?? {}) ?? null;
+            if (problem) add(where, problem);
+          }
         } else {
           const q = block.question;
           const at = `${where} ${q.id}`;
@@ -164,7 +171,6 @@ export async function validateLessons(options: ValidateOptions): Promise<Issue[]
           if (seen.has(q.id)) add(at, "Duplicate question id");
           seen.add(q.id);
           if (part === "recall") add(at, "The Recall part holds no written questions: its three questions are written afresh for each learner");
-          if (q.seconds !== undefined && q.system !== "s1") add(at, "Only fast (s1) questions are timed, so only they can set seconds");
           if (part === "drill" && q.system !== "s1") add(at, "Drill questions are fast retrieval (s1)");
           for (const id of q.concepts ?? []) {
             if (!near.has(id)) add(at, `Exercises ${id}, which is not this concept or a listed prerequisite`);

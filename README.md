@@ -35,12 +35,16 @@ npm run dev
 | --- | --- |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | TypeScript |
-| `npm run lessons` | Checks every lesson and mini-capstone: bridges, answers, predicted outputs, reference solutions and hidden tests, run under the same Python the browser uses |
+| `npm run lessons` | Checks every lesson and mini-capstone: bridges, answers, predicted outputs, reference solutions and hidden tests, run under the same Python the browser uses, and every figure's props against its schema, with the figure rendered once |
 | `npm test` | Unit and database tests (Vitest) |
 | `npm run e2e` | Builds the app and runs browser tests at laptop, tablet and phone sizes |
 | `LIVE_URL=... npm run e2e` | Read-only smoke test of the deployed site |
 
 Every pull request gets a Vercel preview with its own Neon database branch. The build applies the migrations to that branch, and on Vercel it fails if `DATABASE_URL` or `ANTHROPIC_API_KEY` is missing, so a preview that deploys successfully has a migrated database and the tutor's key. Previews stay behind Vercel's login; nothing merges unless that deployment and CI both pass. After each deployment to main, `.github/workflows/production.yml` runs the live smoke test against the public site.
+
+## Figures
+
+A lesson draws with `figure:` blocks. Each name is one of the interactive components in `src/components/lesson/figures.tsx`, and each has a strict props schema in `src/lib/lessons/figure-props.ts`. A misspelt prop, a wrong type or a value outside a figure's options fails `npm run lessons`, which also renders every placement on the server and fails if it does not draw.
 
 ## Mini-capstones
 
@@ -66,7 +70,7 @@ These questions do not count towards finishing the lesson they appear in. They n
 
 ## Timed and untimed questions
 
-System One questions (`system: s1`, shown as Quick) are fast retrieval, so they are timed. A timed question is hidden until the learner presses Start, then a countdown runs: 30 seconds for a choice, 60 for a number, a prediction or an ordering, 3 minutes for code, or the question's own `seconds`. If the time runs out the attempt is a miss; a lesson question can be started again, and a fresh recall question, which gets one try, is missed. The limit is enforced on the server.
+System One questions (`system: s1`, shown as Quick) are fast retrieval, so they are timed. A timed question is hidden until the learner presses Start, then a countdown runs: 30 seconds for a choice, 60 for a number, a prediction or an ordering, and 3 minutes for code. No question sets its own limit. Start is recorded on the server (`question_starts` for lesson questions, `review_questions.started_at` for recall), and the answer is timed from that record when it arrives, so the browser never reports how long it took. An answer to a question that was never started is refused. If the time runs out the attempt is a miss; a lesson question can be started again, which restarts its clock. A recall question gets one try and its clock starts only once: opening it again resumes the countdown with the time that is left.
 
 System Two questions (`system: s2`, shown as Think) are slow reasoning. They are never timed, and no time is measured or stored for them.
 

@@ -1,7 +1,8 @@
-import { and, asc, eq, isNotNull, isNull, lte } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { isCapstoneId } from "../capstones/schema";
 import * as schema from "../db/schema";
+import { late, secondsFor } from "../lessons/timing";
 import { gradeReview, reviewQuestion, type ReviewQuestion } from "./question";
 import { afterReview, firstMemory, type Memory } from "./schedule";
 
@@ -154,6 +155,23 @@ export type ReviewOutcome = {
   purpose: "recall" | "consolidation";
 };
 
+const NOT_STARTED = "This question's time has not started. Press Start first.";
+
+/**
+ * Starts a fresh question's clock and returns the milliseconds it has left. It starts only once: leaving the
+ * page and coming back resumes the same clock, so a question cannot be looked at and then started afresh.
+ */
+export async function startReview(db: Db, userId: string, questionId: number, now = new Date()): Promise<number | null> {
+  const [row] = await db
+    .update(reviewQuestions)
+    .set({ startedAt: sql`coalesce(${reviewQuestions.startedAt}, ${now})` })
+    .where(and(eq(reviewQuestions.id, questionId), eq(reviewQuestions.userId, userId), isNull(reviewQuestions.answeredAt)))
+    .returning({ startedAt: reviewQuestions.startedAt, question: reviewQuestions.question });
+  if (!row?.startedAt) return null;
+  const seconds = secondsFor({ system: "s1", type: reviewQuestion.parse(row.question).type })!;
+  return Math.max(0, seconds * 1000 - (now.getTime() - row.startedAt.getTime()));
+}
+
 /**
  * Marks the one answer a review question gets, and moves the lesson's next review.
  * `read` turns what the browser sent into the question's own terms (an option's index, not its place on screen).
@@ -161,10 +179,9 @@ export type ReviewOutcome = {
  */
 export async function answerReview(db: Db, userId: string, questionId: number,
   read: (question: ReviewQuestion) => unknown,
-  ms: number | null,
   now = new Date(),
-  /** Whether the question's time had run out. If so it is a miss, whatever was sent. */
-  isLate: (question: ReviewQuestion) => boolean = () => false,
+  /** The learner's browser says the time ran out. Giving up early can only cost the learner, so it is believed. */
+  gaveUp = false,
 ): Promise<ReviewOutcome | null> {
   return db.transaction(async (tx) => {
     const [row] = await tx
@@ -174,7 +191,10 @@ export async function answerReview(db: Db, userId: string, questionId: number,
       .for("update");
     if (!row) return null;
     const question = reviewQuestion.parse(row.question);
-    const timedOut = isLate(question);
+    // The time is the server's: from when Start was pressed to now. An answer to a question never started is refused.
+    if (!row.startedAt) return { correct: false, note: NOT_STARTED, question, conceptId: row.conceptId, nextDueAt: now, purpose: row.purpose };
+    const ms = now.getTime() - row.startedAt.getTime();
+    const timedOut = gaveUp || late({ system: "s1", type: question.type }, ms);
     const given = timedOut ? { timedOut: true } : read(question);
     const verdict = timedOut ? { correct: false } : gradeReview(question, given);
     // Something that is not an answer at all, such as letters where a number belongs, does not use up the one try.
@@ -186,7 +206,7 @@ export async function answerReview(db: Db, userId: string, questionId: number,
         answeredAt: now,
         correct: verdict.correct,
         answer: given ?? null,
-        ms: ms === null ? null : Math.max(0, Math.min(Math.round(ms), 86_400_000)),
+        ms: Math.max(0, Math.min(Math.round(ms), 86_400_000)),
       })
       .where(eq(reviewQuestions.id, questionId));
 

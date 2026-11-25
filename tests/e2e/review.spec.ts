@@ -167,6 +167,8 @@ test("the next lesson's set is three more questions, none of them seen before", 
 });
 
 test("System One questions are timed and System Two questions are not", async ({ page }) => {
+  // The page's clock is controlled, so a minute's countdown can run out at once. The server keeps its own time.
+  await page.clock.install();
   await page.goto("/learn");
   await expect(page.getByRole("heading", { level: 1, name: "Printing" })).toBeVisible();
   const slow = page.getByRole("region", { name: "Question 1", exact: true });
@@ -182,12 +184,13 @@ test("System One questions are timed and System Two questions are not", async ({
   await expect(slow.getByRole("timer")).toHaveCount(0);
 
   // System One: hidden until started, then a countdown. When it runs out the attempt is a miss and the question hides again.
-  await expect(fast).toContainText("Question 2 · Quick · Timed, 10 s");
+  await expect(fast).toContainText("Question 2 · Quick · Timed, 1 min");
   await expect(fast.locator(".q-prompt")).toHaveCount(0);
   await fast.getByRole("button", { name: "Start" }).click();
   await expect(fast.locator(".q-prompt")).toBeVisible();
-  await expect(fast.getByRole("timer")).toHaveText(/^0:(10|0\d)$/);
-  await expect(fast).toContainText("Time is up.", { timeout: 15_000 });
+  await expect(fast.getByRole("timer")).toHaveText(/^(1:00|0:5\d)$/);
+  await page.clock.fastForward(61_000);
+  await expect(fast).toContainText("Time is up.");
   await expect(fast.locator(".q-prompt")).toHaveCount(0);
   await expect(fast.getByRole("timer")).toHaveCount(0);
   await page.screenshot({ path: "test-results/screens/timed-out-laptop.png" });
@@ -208,9 +211,10 @@ test("System One questions are timed and System Two questions are not", async ({
     ["predict-fast", true],
   ]);
   expect(rows[0].ms).toBeNull();
-  expect(rows[1]).toMatchObject({ ms: 10_000, answer: { timedOut: true } });
+  expect(rows[1]).toMatchObject({ ms: 60_000, answer: { timedOut: true } });
+  // Measured by the server, from the second Start to the answer's arrival.
   expect(rows[2].ms).toBeGreaterThan(0);
-  expect(rows[2].ms).toBeLessThan(10_000);
+  expect(rows[2].ms).toBeLessThan(60_000);
   // Across everything this learner has answered: every System One attempt has a time, and no System Two attempt has one.
   const [timing] = await sql<{ s1_untimed: string; s2_timed: string }>(
     "select count(*) filter (where system = 's1' and ms is null) as s1_untimed, count(*) filter (where system = 's2' and ms is not null) as s2_timed from attempts",

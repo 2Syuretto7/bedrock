@@ -2,19 +2,24 @@
  * Which questions are timed.
  *
  * System One questions (s1) are fast retrieval: the learner should be able to
- * answer from memory, so each has a time limit and a countdown. System Two
- * questions (s2) are slow reasoning: they are never timed, and the time spent
- * on them is not measured or stored.
+ * answer from memory, so each has a time limit and a countdown. The limit
+ * follows from the question's type alone; no question sets its own. System
+ * Two questions (s2) are slow reasoning: they are never timed, and the time
+ * spent on them is not measured or stored.
+ *
+ * The server keeps the time. Pressing Start records the moment on the server,
+ * and every answer is measured from it when it arrives; the browser's clock
+ * only draws the countdown.
  */
-const DEFAULT_SECONDS = { choice: 30, numeric: 60, predict: 60, order: 60, code: 180 } as const;
+const SECONDS = { choice: 30, numeric: 60, predict: 60, order: 60, code: 180 } as const;
 
 /** A little slack for the answer's journey to the server. */
 export const GRACE_MS = 2000;
 
-type Timed = { system: "s1" | "s2"; type: keyof typeof DEFAULT_SECONDS; seconds?: number };
+type Timed = { system: "s1" | "s2"; type: keyof typeof SECONDS };
 
 /** The time limit of a question in seconds, or null if it is not timed. */
-export const secondsFor = (q: Timed): number | null => (q.system === "s1" ? (q.seconds ?? DEFAULT_SECONDS[q.type]) : null);
+export const secondsFor = (q: Timed): number | null => (q.system === "s1" ? SECONDS[q.type] : null);
 
 /** Whether an answer that took `ms` came after the question's time was up. Never true for an untimed question. */
 export function late(q: Timed, ms: number): boolean {

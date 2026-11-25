@@ -1,4 +1,5 @@
 import { ancestors, type Graph } from "../graph/load";
+import { figurePropsProblem } from "../lessons/figure-props";
 import type { LessonFile } from "../lessons/load";
 import type { RunPython } from "../lessons/node-python";
 import { checkQuestion, pythonExamples, textChecks, words, type Issue } from "../lessons/validate";
@@ -12,6 +13,8 @@ export type ValidateCapstonesOptions = {
   /** Which concept first teaches which Python feature. */
   features: Map<string, string[]>;
   figures: Set<string>;
+  /** Draws a figure as the browser would, and says what went wrong if it cannot. */
+  renderFigure?: (name: string, props: Record<string, unknown>) => string | null;
   run: RunPython;
   /** The shortest brief, stage text and review a mini-capstone may have, in words. */
   minWords: number;
@@ -95,6 +98,10 @@ export async function validateCapstones(options: ValidateCapstonesOptions): Prom
           await checkText(where, block.text);
         } else if ("figure" in block) {
           if (!figures.has(block.figure)) add(where, `No figure named ${block.figure}`);
+          else {
+            const problem = figurePropsProblem(block.figure, block.props) ?? options.renderFigure?.(block.figure, block.props ?? {}) ?? null;
+            if (problem) add(where, problem);
+          }
         } else {
           const q = block.question;
           const at = `${where} ${q.id}`;
