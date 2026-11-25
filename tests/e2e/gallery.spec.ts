@@ -36,3 +36,31 @@ test("the logarithmic scale compares two sizes, and the even scale shows why it 
   await expect(figure).toContainText("5 of the 6 quantities are under 1% of the largest, so they sit on top of one another at zero");
   await expect(figure.getByRole("button", { name: "Show the logarithmic scale" })).toHaveAttribute("aria-pressed", "true");
 });
+
+test("the step-through figure runs a program a line at a time, and shows a bug's two faces", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="step-through"]').filter({ hasText: "Stepping through the bill splitter" }).getByRole("figure");
+  await expect(figure).toContainText("Step 1 of 9, line 1: Python binds the name who_ate to the recipe.");
+  await figure.getByRole("button", { name: "Jump to the end" }).click();
+  await expect(figure).toContainText("print shows 0. Nobody is listed, so dividing the bill among them would divide by zero.");
+  await expect(figure.locator('[aria-current="step"]')).toContainText("print(len(people))");
+  await expect(figure.locator(".fig-output")).toHaveText("0");
+
+  await figure.getByRole("button", { name: "Put Asha first" }).click();
+  await expect(figure).toContainText("Step 1 of 10");
+  await figure.getByRole("button", { name: "Jump to the end" }).click();
+  await expect(figure).toContainText("print shows 1. Only Asha is listed, so Asha would pay the whole bill.");
+
+  await figure.getByRole("button", { name: "Move the return out of the loop" }).click();
+  await figure.getByRole("button", { name: "Jump to the end" }).click();
+  await expect(figure).toContainText("print shows 3. The bill would be split 3 ways, as it should be.");
+  await figure.getByRole("button", { name: "Decrease step" }).click();
+  await expect(figure).toContainText("Back in the main program, people is bound to ['Asha', 'Ravi', 'Meera'].");
+
+  const deposit = page.locator('.gallery-item[data-figure="step-through"]').filter({ hasText: "Stepping through the fixed deposit" }).getByRole("figure");
+  await deposit.getByRole("button", { name: "Jump to the end" }).click();
+  await expect(deposit).toContainText("The deposit first reaches double in year 11.");
+  await deposit.getByRole("button", { name: "Increase rate" }).click();
+  await deposit.getByRole("button", { name: "Jump to the end" }).click();
+  await expect(deposit).toContainText("The deposit first reaches double in year 10.");
+});

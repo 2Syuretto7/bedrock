@@ -1,0 +1,657 @@
+concept: s0.reading-errors-and-debugging
+minutes: 95
+claim: You can read an error message from the bottom up, tell a syntax error, a runtime error and a silent wrong answer apart, and find a bug by method, with small cases, traces, halving and assertions.
+recalls: [s0.dictionaries-and-sets]
+uses: [s0.what-a-program-is, s0.values-types-and-variables, s0.expressions, s0.strings, s0.booleans-and-conditionals, s0.loops, s0.functions, s0.lists-and-tuples, f0.the-four-operations-and-order-of-operations, f0.fractions-decimals-and-percentages, f0.powers-and-roots, f0.estimation-and-back-of-the-envelope-reasoning]
+leads: [h0.binary-and-hexadecimal, f1.variables-and-expressions, s1.comprehensions-and-iterators]
+starter: |
+  # Scratch space. This function has a bug. The assertions will find it.
+  def mean(xs):
+      total = 0
+      for x in xs:
+          total += x
+      return total // len(xs)
+
+  assert mean([2, 4]) == 3, "mean of 2 and 4"
+  assert mean([1, 2]) == 1.5, "mean of 1 and 2"
+  print("all checks passed")
+parts:
+  recall:
+    - text: |
+        In [[s0.dictionaries-and-sets]] you met `KeyError`, the complaint Python makes when a key is missing. Today every such complaint is studied properly. Two quick pulls on the last lesson first.
+  puzzle:
+    - text: |
+        Four friends eat at a dhaba, and the bill comes to ₹1,310. They split it with a small program one of them wrote: only those who ordered something pay, in equal shares. Kabir came along and ate nothing.
+
+        ```python
+        def who_ate(orders):
+            diners = []
+            for name, amount in orders.items():
+                if amount > 0:
+                    diners.append(name)
+                return diners
+
+        def split(bill, people):
+            return bill / len(people)
+
+        orders = {"Kabir": 0, "Asha": 420, "Ravi": 380, "Meera": 510}
+        print(split(1310, who_ate(orders)))
+        ```
+
+        Tonight it stopped with this:
+
+        ```
+        Traceback (most recent call last):
+          File "main.py", line 12, in <module>
+            print(split(1310, who_ate(orders)))
+          File "main.py", line 9, in split
+            return bill / len(people)
+        ZeroDivisionError: division by zero
+        ```
+
+        The report points at `split`. But `split` is one line long and plainly right: divide the bill by the number of people. Dividing by the number of people can only fail if there are no people, and three of the four ordered food.
+
+        Then someone remembers last week. The same program ran without a murmur and showed `1310.0`, and Asha paid the whole bill. Nobody checked. The names had been typed in a different order, with Asha first.
+
+        So one program has gone wrong in two ways. Tonight it stopped dead with red text. Last week it ran to the end and handed over a wrong number that looked exactly like a right one. **Which of the two is the worse situation?**
+
+        Most beginners fear the red text. But the run that stopped has told you that something is wrong, where, and roughly what. The run that finished told nobody anything, and a friend paid ₹1,310 instead of about ₹437.
+
+        So there are two skills to learn today. **How do you get the most out of an error message when Python gives you one? And how do you find a bug when it does not?**
+  intuition:
+    - text: |
+        Start by changing how you see the red text. An error message is not a scolding. It is the report of a careful witness. Python was executing your program one line at a time, reached an instruction it could not carry out, and, instead of guessing what you meant, stopped and wrote down exactly what it was doing at that moment. Guessing would have been far worse. A machine that guesses gives you the silent wrong answer.
+
+        Things can go wrong at three different moments, and it helps enormously to know which you are facing.
+
+        1. **Before the program starts.** Python first reads the whole text to check that it is grammatical. If it is not, nothing runs at all, not even the first line. This is a **syntax error**: a missing colon, an unclosed bracket, bad indentation.
+        2. **While the program is running.** The text was grammatical, and lines ran until one asked for something impossible: dividing by zero, a position past the end of a list, a name that was never bound. This is a **runtime error**, also called an **exception**. Everything before that line did happen.
+        3. **Never, as far as Python can tell.** Every line was grammatical and possible, and the answer is still wrong, because the program says something other than what you meant. This is a **logic error**, and Python cannot see it. Only a check against something you know to be true can.
+
+        Last week's run of the bill splitter, which charged Asha for everyone, was the third kind. Tonight's was the second. They are the same bug, met with the names in a different order.
+
+        For the first two kinds Python does half of the work for you. For the third you need a method. And the method is one you already know from school science: observe, guess a cause, predict what you would see if the guess were right, test the prediction, and repeat. **Debugging is experiment, not staring.**
+  derivation:
+    - text: |
+        **The anatomy of an error message.** Run the bill splitter from the puzzle.
+
+        ```python
+        def who_ate(orders):
+            diners = []
+            for name, amount in orders.items():
+                if amount > 0:
+                    diners.append(name)
+                return diners
+
+        def split(bill, people):
+            return bill / len(people)
+
+        orders = {"Kabir": 0, "Asha": 420, "Ravi": 380, "Meera": 510}
+        print(split(1310, who_ate(orders)))
+        ```
+
+        Python stops and reports something like this:
+
+        ```
+        Traceback (most recent call last):
+          File "main.py", line 12, in <module>
+            print(split(1310, who_ate(orders)))
+          File "main.py", line 9, in split
+            return bill / len(people)
+        ZeroDivisionError: division by zero
+        ```
+
+        Read it **from the bottom up**.
+
+        The **last line** is the headline. It has two parts. Before the colon is the **kind** of error, `ZeroDivisionError`. After it is a **message** giving the details. Read both, every time, word by word. A surprising number of bugs are solved by nothing more than reading the last line slowly.
+
+        Just above it is the **place**: line 9, inside the function `split`, and the text of that line. This is the instruction Python could not carry out.
+
+        Above that is how Python **got there**: line 12 of the main program called `split`. This list of calls is the **traceback**, and it is in order of time, with the most recent call last. When functions call functions it can be long, but it always ends at the line that failed.
+
+        Now reason. A division by zero on the line `bill / len(people)` means `len(people)` was 0, so `people` was an empty list. The traceback says the call came from line 12, where `people` was whatever `who_ate(orders)` gave back. Three people ordered food, so `who_ate` should have returned three names, and it returned none. The line that **failed** is line 9, inside `split`. The **cause** is inside `who_ate`, which does not appear in the traceback at all: it had already finished, and as far as Python could tell, it had finished successfully. The place of failure and the cause are not the same, and they often are not. The error message tells you where the program fell over, and you must walk backwards from there to where it tripped.
+
+        **The kinds you have already met.** Each kind points at a particular sort of slip.
+
+        | Kind | What Python is saying | Usual cause |
+        | --- | --- | --- |
+        | `SyntaxError` | I cannot parse this text. | A missing colon, bracket or quote. Often on the line **before** the one reported. |
+        | `IndentationError` | The indentation makes no sense. | A block that is not indented, or lines that do not line up. |
+        | `NameError` | I know no such name. | A misspelling, a variable used before it is bound, or a local name used outside its function. |
+        | `TypeError` | This operation does not fit this type of value. | Adding a string to a number, calling with the wrong number of arguments, or using `None` where a value was expected. |
+        | `ValueError` | The type is right but this particular value is not acceptable. | `int("ten")`. |
+        | `ZeroDivisionError` | You asked me to divide by zero. | An empty list, or a count that was never raised. |
+        | `IndexError` | There is no such position. | Off by one at the end of a list or string. |
+        | `KeyError` | There is no such key. | A key never stored, or spelt differently. |
+        | `AttributeError` | This value has no such method. | Very often `None` again: a function that forgot to return. |
+
+        Notice how many roads lead to `None`. An error that mentions `NoneType` almost always means that a call returned nothing, and the question becomes: which function forgot its `return`, or which method, like `append`, was never meant to give one?
+    - question:
+        id: classify-error
+        type: choice
+        system: s2
+        prompt: |
+          A program stops with this report. What is the most likely cause?
+
+          ```
+          Traceback (most recent call last):
+            File "main.py", line 4, in <module>
+              print(marks[len(marks)])
+          IndexError: list index out of range
+          ```
+        options:
+          - "The name marks was never bound to anything."
+          - "The list marks is not a list of numbers."
+          - "A list of n items has positions 0 to n - 1, so the position len(marks) is one past the end."
+          - "Line 4 has a missing bracket."
+        answer: 2
+        explanation: "The kind is `IndexError`, so a position does not exist. The position asked for is `len(marks)`, and the last valid position is `len(marks) - 1`. A missing name would be a `NameError` and a missing bracket a `SyntaxError`."
+    - text: |
+        **When there is no message: the method.** The bill splitter's crash came with a report. Its silent twin, the run that charged Asha for everyone, came with nothing. Here is a smaller silent bug to learn the method on, a function for the mean of a list.
+
+        ```python
+        def mean(xs):
+            total = 0
+            for x in xs:
+                total += x
+            return total // len(xs)
+
+        print(mean([2, 4, 6]))
+        print(mean([1, 2]))
+        ```
+
+        It shows 4 and then 1. Python raised no complaint. The first answer is right. The second is wrong: the mean of 1 and 2 is 1.5. Here is how a practised programmer goes about it.
+
+        **1. Make it fail on purpose, on the smallest case you can.** You cannot fix what you cannot see fail. Find the smallest input for which the answer is wrong and for which you know the right answer by hand. Here it is `mean([1, 2])`, which should be 1.5. Small cases matter because you can trace them in your head.
+
+        **2. Say exactly what you expected and exactly what you got.** "It doesn't work" is not an observation. "I expected 1.5 and got 1" is. The gap between the two is a clue: the fractional part has vanished, and the result is an int where a float was expected.
+
+        **3. Look inside.** A running program is a closed box. The simplest tool for opening it is `print`. Put one at the point where you want to know the state, and label it so that you can tell your prints apart:
+
+        ```python
+        def mean(xs):
+            total = 0
+            for x in xs:
+                total += x
+            print("total", total, "count", len(xs))
+            return total // len(xs)
+
+        print(mean([1, 2]))
+        ```
+
+        This shows `total 3 count 2` and then 1. Before you ran it, you should have **predicted** what the print would show. Here you predicted a total of 3 and a count of 2, and that is what appeared. So everything up to that line is right, and the fault lies after it. Only one line remains, and on it $3$ divided by $2$ somehow gives 1. Now the `//` is plain to see.
+
+        The habit to build is this: **predict, then look.** If what you see matches the prediction, your understanding of that part is sound, and the bug is elsewhere. If it does not match, you have found the place where the program and your idea of it part company, and that place is the bug or is very near it.
+
+        **4. Halve the search.** In a long program, do not read from the top hoping to spot the fault. Put a print in the **middle**. If the state there is right, the bug is in the second half. If it is wrong, the bug is in the first half. Either way, half the program is cleared by one experiment. Repeat on the half that remains. Halving is powerful for the reason you saw with loops: a thousand lines are reduced to one in about ten steps, because $2^{10}$ is about a thousand.
+
+        **5. Change one thing at a time.** When you have a guess, make one change and run the failing case again. If you change three things and the program works, you do not know which change mattered. If you change three things and it still fails, you may have added two new bugs.
+
+        **6. Mend it, then check more than the case that failed.** After the fix, run the failing case, the cases that used to work, and the awkward ones at the edges.
+
+        Take the prints out when you have finished. They were scaffolding.
+
+        **The bill splitter, solved.** The traceback has already done steps 1 and 2: the smallest failing case is the one in hand, the expected value of `who_ate(orders)` is three names, and the observed value is none. Step 3 is to look inside `who_ate`. Predict first: the loop should visit all four friends, so a print at the top of the loop's block should appear four times.
+
+        ```python
+        def who_ate(orders):
+            diners = []
+            for name, amount in orders.items():
+                print("checking", name, amount)
+                if amount > 0:
+                    diners.append(name)
+                return diners
+
+        print(who_ate({"Kabir": 0, "Asha": 420, "Ravi": 380, "Meera": 510}))
+        ```
+
+        It shows `checking Kabir 0` and then `[]`. One line, not four. The prediction failed, and the place where it failed is the bug: the loop stopped after its first turn. Look at the indentation of `return diners`. It is inside the loop's block, so it runs at the end of the **first** iteration and ends the function there, with whatever `diners` held at that moment. With Kabir first, that was nothing. Last week, with Asha first, it was `['Asha']`, so the bill was divided by one.
+
+        The fix is a single change: move `return diners` four spaces to the left, so that it runs after the loop has finished. Then `who_ate` returns `['Asha', 'Ravi', 'Meera']`, and `split(1310, ...)` gives `436.6666666666667`, about ₹437 each. Step 6 still applies: try the names in the old order, with Asha first, and try a meal where nobody but the first person ordered.
+
+        The figure below runs the bill splitter one line at a time. Watch where the loop stops. Then put Asha first and watch the same bug give last week's silent answer, and finally move the `return` out of the loop.
+    - figure: step-through
+      props: { program: who-ate }
+    - question:
+        id: predict-trace-print
+        type: predict
+        system: s2
+        prompt: |
+          This function is meant to return the largest gap between neighbouring items of a list. A trace print has been added. Predict everything the program shows, one line at a time. Then decide for yourself whether the final answer is the right one.
+        code: |
+          def largest_gap(xs):
+              best = 0
+              for i in range(1, len(xs)):
+                  gap = xs[i] - xs[i - 1]
+                  print("i", i, "gap", gap)
+                  if gap > best:
+                      best = gap
+              return best
+
+          print(largest_gap([5, 2, 9]))
+        output: "i 1 gap -3\ni 2 gap 7\n7"
+        explanation: |
+          For `i = 1` the gap is $2 - 5 = -3$, and for `i = 2` it is $9 - 2 = 7$. The function returns 7, which is right for this list. But the trace has shown something worth knowing: a gap can come out negative. For a list such as `[9, 2, 1]` every gap is negative, nothing beats 0, and the function returns 0. The trace found a bug on a case where the answer happened to be correct.
+    - text: |
+        **Checks that stay in the program: `assert`.** A print asks you to look at a number and judge it. Better still is to write the judgement down, so that Python does the looking. The statement `assert` takes a condition that **ought** to be true.
+
+        ```python
+        def mean(xs):
+            total = 0
+            for x in xs:
+                total += x
+            return total / len(xs)
+
+        assert mean([2, 4, 6]) == 4, "mean of 2, 4, 6"
+        assert mean([1, 2]) == 1.5, "mean of 1 and 2"
+        assert mean([5]) == 5, "mean of a single item"
+        print("all checks passed")
+        ```
+
+        If the condition is true, `assert` does nothing at all and the program carries on. If it is false, Python stops with an `AssertionError` and shows the message after the comma. With the faulty `//` version, the second line would have stopped the program at once:
+
+        ```
+        AssertionError: mean of 1 and 2
+        ```
+
+        An assertion turns a silent wrong answer into a loud one. That is its whole purpose. It converts the third and worst kind of error into the second kind, with a place and a message.
+
+        This should look familiar. Every time you have pressed **Check** in this course, a handful of assertions like these has been run against your program. The messages you have been reading are their messages.
+
+        **Choosing the cases.** Three assertions on well-chosen cases are worth thirty on similar ones. Choose
+
+        - an **ordinary** case, with an answer worked out by hand;
+        - the **edges**: the smallest allowed input, an empty or single-item collection, zero, a negative number, a value exactly on a boundary such as a threshold;
+        - a case that would expose a **likely slip**: for a mean, one whose answer is not a whole number; for a largest item, a list of negatives; for a range, the last value.
+
+        The first mean in this lesson passed on `[2, 4, 6]` because 12 happens to divide by 3 exactly. A test that cannot fail tells you nothing. Pick cases that a wrong program would get wrong.
+
+        **And use your estimates.** You learnt early on to check arithmetic by orders of magnitude. The same habit catches bugs. A mean must lie between the least and the greatest item. A percentage of a part is at most 100. A count cannot be negative. If an answer breaks a rule like that, there is a bug, whatever the tests say.
+    - question:
+        id: fix-largest-gap
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `largest_gap(xs)` should return the largest gap between neighbouring items, where a gap is how far apart two neighbours are, whichever of them is the larger. For `[5, 2, 9]` that is 7, and for `[9, 2, 1]` it is 7 as well, the gap between 9 and 2. The function is right for the first list and returns 0 for the second. Add a trace print if it helps, find the cause, and fix it. You may assume the list has at least two items.
+        starter: |
+          def largest_gap(xs):
+              best = 0
+              for i in range(1, len(xs)):
+                  gap = xs[i] - xs[i - 1]
+                  if gap > best:
+                      best = gap
+              return best
+
+          print(largest_gap([5, 2, 9]))
+          print(largest_gap([9, 2, 1]))
+        solution: |
+          def largest_gap(xs):
+              best = 0
+              for i in range(1, len(xs)):
+                  gap = abs(xs[i] - xs[i - 1])
+                  if gap > best:
+                      best = gap
+              return best
+
+          print(largest_gap([5, 2, 9]))
+          print(largest_gap([9, 2, 1]))
+        tests: |
+          assert largest_gap([5, 2, 9]) == 7, "For [5, 2, 9] the largest gap is 7"
+          assert largest_gap([9, 2, 1]) == 7, "For [9, 2, 1] the largest gap is 7, between 9 and 2. What sign do the gaps have in your trace?"
+          assert largest_gap([1, 10, 2]) == 9, "For [1, 10, 2] the largest gap is 9"
+          assert largest_gap([4, 4]) == 0, "Equal neighbours have a gap of 0"
+          assert largest_gap([-5, 5]) == 10, "From -5 to 5 is a gap of 10"
+          assert largest_gap([3, 1, 2, 10, 9]) == 8, "It should work for any list"
+        wrong:
+          - "def largest_gap(xs):\n    best = 0\n    for i in range(1, len(xs)):\n        gap = xs[i - 1] - xs[i]\n        if gap > best:\n            best = gap\n    return best\n\nprint(largest_gap([9, 2, 1]))\n"
+          - "def largest_gap(xs):\n    return max(xs) - min(xs)\n\nprint(largest_gap([9, 2, 1]))\n"
+          - "def largest_gap(xs):\n    best = 0\n    for i in range(2, len(xs)):\n        gap = abs(xs[i] - xs[i - 1])\n        if gap > best:\n            best = gap\n    return best\n\nprint(largest_gap([9, 2, 1]))\n"
+        explanation: When the list falls, every difference is negative and none can beat the starting value 0. A gap is a distance, and a distance is an absolute value. Subtracting the other way round only moves the bug to rising lists.
+  formal:
+    - text: |
+        A program can be wrong in three ways.
+
+        | Kind | Detected | What ran |
+        | --- | --- | --- |
+        | **Syntax error** | before execution, when the text is parsed | nothing |
+        | **Runtime error** (exception) | during execution, at the instruction that cannot be carried out | everything before that instruction |
+        | **Logic error** | never, by Python | everything, giving a wrong result |
+
+        An **error report** ends with a line of the form `Kind: message`. Above it, the **traceback** lists the calls that were in progress, in order of time, each with its line number and text. The last entry is the line where execution stopped. The **cause** of an error may lie earlier than the line where it is **raised**.
+
+        The statement
+
+        ```
+        assert condition, message
+        ```
+
+        evaluates the condition. If it is true, nothing happens. If it is false, an `AssertionError` carrying the message is raised. The message is optional.
+
+        A **debugging method**:
+
+        1. Reproduce the failure on the smallest input you can, with an answer known by hand.
+        2. State what was expected and what was observed.
+        3. Form a guess about the cause, predict what an observation would show if the guess were right, and make that observation, with a print or an assertion.
+        4. Use the outcome to discard part of the program from suspicion. Where possible, discard half.
+        5. Change one thing, and run the failing case again.
+        6. After the fix, check the failing case, the old cases and the edge cases.
+  drill:
+    - text: Seconds each. Read the kind of error and name the slip.
+    - question:
+        id: kind-name
+        type: choice
+        system: s1
+        prompt: "A program binds `total = 0` and later runs `print(totl)`. Which kind of error is raised?"
+        options: ["SyntaxError", "NameError", "TypeError", "KeyError"]
+        answer: 1
+        explanation: The text is grammatical, so it runs. At that line Python finds no name spelt `totl`.
+    - question:
+        id: kind-type
+        type: choice
+        system: s1
+        prompt: "Which kind of error does `\"3\" + 4` raise?"
+        options: ["ValueError", "NameError", "TypeError", "No error. It gives 7."]
+        answer: 2
+        explanation: A string and an int cannot be added. The operation does not fit the types.
+    - question:
+        id: kind-syntax
+        type: choice
+        system: s1
+        prompt: |
+          The first line of a ten-line program prints "start". Line 6 is `if x > 3` with the colon missing. What appears when the program is run?
+        options:
+          - "start, and then a SyntaxError at line 6."
+          - "Only a SyntaxError. Nothing is printed, because no line runs."
+          - "start, and then the program skips line 6."
+          - "A NameError for x."
+        answer: 1
+        explanation: Python parses the whole text before running any of it. A syntax error anywhere means nothing runs.
+    - question:
+        id: kind-none
+        type: choice
+        system: s1
+        prompt: "A program stops with `AttributeError: 'NoneType' object has no attribute 'append'`. What is the first thing to look for?"
+        options:
+          - "A misspelt method name."
+          - "A name that was bound to the result of a call that returned nothing, such as xs = xs.append(1)."
+          - "A list that is too long."
+          - "A missing import."
+        answer: 1
+        explanation: The message says that the thing being appended to is `None`. Some call that returns nothing has had its result bound to the name.
+    - question:
+        id: read-first
+        type: choice
+        system: s1
+        prompt: Which part of a long error report should you read first?
+        options: ["The first line", "The line numbers, top to bottom", "The last line", "The longest line"]
+        answer: 2
+        explanation: The last line gives the kind of error and its message. The traceback above it tells you where, and how the program got there.
+    - question:
+        id: predict-assert-pass
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          x = 7
+          assert x > 0, "x should be positive"
+          print("ok")
+        output: "ok"
+        explanation: The condition is true, so the assertion does nothing and the program carries on.
+    - question:
+        id: which-kind-silent
+        type: choice
+        system: s1
+        prompt: "A function for the area of a rectangle returns `width + height`. It runs without complaint. Which kind of error is this?"
+        options: ["Syntax error", "Runtime error", "Logic error", "No error"]
+        answer: 2
+        explanation: Every line is grammatical and possible, and the answer is wrong. Only a check against a known area can catch it.
+    - question:
+        id: assert-fails
+        type: choice
+        system: s1
+        prompt: "What happens when Python executes `assert 2 + 2 == 5, \"sum\"`?"
+        options:
+          - "It shows False and carries on."
+          - "It shows sum and carries on."
+          - "It stops with an AssertionError carrying the message sum."
+          - "Nothing. Assertions are ignored."
+        answer: 2
+        explanation: A false condition raises an `AssertionError` with the message after the comma.
+  work:
+    - text: Slower now. For every bug, write down what you expected and what you got before you touch the program. Then make one change at a time.
+    - question:
+        id: fix-two-bugs
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `pass_rate(marks, pass_mark)` should return the percentage of marks that are at least `pass_mark`. For the marks 40, 55, 70 and 35 with a pass mark of 40, three out of four pass, so the answer is 75.0. The program stops with an error. Mend that, run it again, and you will find that it is still not right: there are **two** bugs, of two different kinds. Fix both, one at a time.
+        starter: |
+          def pass_rate(marks, pass_mark):
+              passed = 0
+              for m in marks:
+                  if m > pass_mark:
+                      passed += 1
+              return passed / len(mark) * 100
+
+          print(pass_rate([40, 55, 70, 35], 40))
+        solution: |
+          def pass_rate(marks, pass_mark):
+              passed = 0
+              for m in marks:
+                  if m >= pass_mark:
+                      passed += 1
+              return passed / len(marks) * 100
+
+          print(pass_rate([40, 55, 70, 35], 40))
+        tests: |
+          assert pass_rate([40, 55, 70, 35], 40) == 75.0, "Three of the four marks are at least 40, so the rate should be 75.0. Look at the mark that is exactly on the boundary."
+          assert pass_rate([10, 20], 50) == 0.0, "When nobody passes the rate is 0.0"
+          assert pass_rate([90], 50) == 100.0, "When everybody passes the rate is 100.0"
+          assert pass_rate([50, 49, 51, 50], 50) == 75.0, "A mark equal to the pass mark is a pass"
+        wrong:
+          - "def pass_rate(marks, pass_mark):\n    passed = 0\n    for m in marks:\n        if m > pass_mark:\n            passed += 1\n    return passed / len(marks) * 100\n\nprint(pass_rate([40, 55, 70, 35], 40))\n"
+          - "def pass_rate(marks, pass_mark):\n    passed = 0\n    for m in marks:\n        if m >= pass_mark:\n            passed += 1\n    return passed / 4 * 100\n\nprint(pass_rate([40, 55, 70, 35], 40))\n"
+          - "def pass_rate(marks, pass_mark):\n    passed = 0\n    for m in marks:\n        if m >= pass_mark:\n            passed += 1\n    return passed / len(marks)\n\nprint(pass_rate([40, 55, 70, 35], 40))\n"
+        explanation: The first bug announced itself, a `NameError` for a misspelt name. The second was silent. "At least" includes the boundary, so the comparison must be `>=`, and only a case with a mark exactly on the pass mark could reveal it.
+    - question:
+        id: fix-bill-splitter
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This is the bill splitter from the puzzle. `who_ate(orders)` should return the names of everyone whose order was more than zero, in order, and `split` divides the bill equally among them. It stops with a `ZeroDivisionError`. Read the traceback, work backwards from the line that failed to the cause, and fix the program. Change as little as you can.
+        starter: |
+          def who_ate(orders):
+              diners = []
+              for name, amount in orders.items():
+                  if amount > 0:
+                      diners.append(name)
+                  return diners
+
+          def split(bill, people):
+              return bill / len(people)
+
+          orders = {"Kabir": 0, "Asha": 420, "Ravi": 380, "Meera": 510}
+          print(split(1310, who_ate(orders)))
+        solution: |
+          def who_ate(orders):
+              diners = []
+              for name, amount in orders.items():
+                  if amount > 0:
+                      diners.append(name)
+              return diners
+
+          def split(bill, people):
+              return bill / len(people)
+
+          orders = {"Kabir": 0, "Asha": 420, "Ravi": 380, "Meera": 510}
+          print(split(1310, who_ate(orders)))
+        tests: |
+          assert who_ate(orders) == ["Asha", "Ravi", "Meera"], "who_ate(orders) should give the three people who ordered. Put a print inside its loop: how many times does the loop go round?"
+          assert abs(split(1310, who_ate(orders)) - 436.67) < 0.01, "Each of the three should pay about 436.67"
+          assert who_ate({"Asha": 420, "Kabir": 0, "Ravi": 380}) == ["Asha", "Ravi"], "With Asha first, Kabir should still be left out and Ravi still counted"
+          assert who_ate({"Kabir": 0}) == [], "If nobody ordered, nobody is listed"
+          assert split(900, ["A", "B", "C"]) == 300, "split itself was right. It should still divide the bill equally"
+        wrong:
+          - "def who_ate(orders):\n    diners = []\n    for name, amount in orders.items():\n        if amount > 0:\n            diners.append(name)\n        return diners\n\ndef split(bill, people):\n    return bill / (len(people) + 1)\n\norders = {\"Kabir\": 0, \"Asha\": 420, \"Ravi\": 380, \"Meera\": 510}\nprint(split(1310, who_ate(orders)))\n"
+          - "def who_ate(orders):\n    diners = []\n    for name, amount in orders.items():\n        if amount > 0:\n            diners.append(name)\n            return diners\n\ndef split(bill, people):\n    return bill / len(people)\n\norders = {\"Kabir\": 0, \"Asha\": 420, \"Ravi\": 380, \"Meera\": 510}\nprint(split(1310, who_ate(orders)))\n"
+          - "def who_ate(orders):\n    diners = []\n    for name, amount in orders.items():\n        if amount >= 0:\n            diners.append(name)\n    return diners\n\ndef split(bill, people):\n    return bill / len(people)\n\norders = {\"Kabir\": 0, \"Asha\": 420, \"Ravi\": 380, \"Meera\": 510}\nprint(split(1310, who_ate(orders)))\n"
+        explanation: "The line that failed is in `split`, but the cause is in `who_ate`: its `return` was indented inside the loop, so the function ended after the first friend. Moving the `return` out of the loop lets every friend be checked. Changing `split` to avoid the zero only hides the bug and charges the wrong people."
+    - question:
+        id: fix-median
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The **median** of a list is the middle value once the items are in increasing order. For a list with an odd number of items that is the item at the middle position. `median(xs)` is right for `[1, 5, 9]` and wrong for `[9, 1, 5]`, where it returns 1. Both lists hold the same numbers. Work out what differs between the two cases, and fix the function. You may assume the number of items is odd, and the list passed in must not be changed.
+        starter: |
+          def median(xs):
+              middle = len(xs) // 2
+              return xs[middle]
+
+          print(median([1, 5, 9]))
+          print(median([9, 1, 5]))
+        solution: |
+          def median(xs):
+              ordered = sorted(xs)
+              middle = len(ordered) // 2
+              return ordered[middle]
+
+          print(median([1, 5, 9]))
+          print(median([9, 1, 5]))
+        tests: |
+          assert median([1, 5, 9]) == 5, "The median of 1, 5, 9 is 5"
+          assert median([9, 1, 5]) == 5, "The median of 9, 1, 5 is also 5. The order in which the items arrive should not matter."
+          assert median([7]) == 7, "The median of a single item is that item"
+          assert median([3, 1, 2, 5, 4]) == 3, "The median of 3, 1, 2, 5, 4 is 3"
+          assert median([-1, -3, -2]) == -2, "It should work for negative numbers"
+          assert median([1, 2, 9]) == 2, "The median of 1, 2, 9 is 2. The median is the middle item, which need not be the mean."
+          _xs = [3, 1, 2]
+          median(_xs)
+          assert _xs == [3, 1, 2], "The list passed in should not be changed"
+        wrong:
+          - "def median(xs):\n    ordered = sorted(xs)\n    middle = len(ordered) // 2\n    return xs[middle]\n\nprint(median([9, 1, 5]))\n"
+          - "def median(xs):\n    ordered = sorted(xs)\n    return ordered[1]\n\nprint(median([9, 1, 5]))\n"
+          - "def median(xs):\n    return sum(xs) / len(xs)\n\nprint(median([9, 1, 5]))\n"
+        explanation: The function took the middle **position** without first putting the items in order. It worked on a list that happened to arrive sorted, which is why one passing case proved so little. `sorted` gives a new ordered list and leaves the original alone.
+    - question:
+        id: write-range-with-checks
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write a function `spread(xs)` that returns the difference between the greatest and the least item of a list, and **protect it with assertions of your own**. Below the function, write at least three `assert` statements that call `spread` on cases you choose: an ordinary one, one with a single item, and one with negative numbers. Work out each expected answer by hand. Finish with a line that prints `checked`.
+        starter: |
+          def spread(xs):
+              # Replace the next line with your own.
+              return 0
+
+          # Write your assertions below this line.
+
+          print("checked")
+        solution: |
+          def spread(xs):
+              return max(xs) - min(xs)
+
+          assert spread([3, 9, 5]) == 6, "ordinary case"
+          assert spread([4]) == 0, "single item"
+          assert spread([-5, -1, -9]) == 8, "negative numbers"
+          print("checked")
+        tests: |
+          assert source.count("assert spread(") + source.count("assert (spread(") >= 3, "Write at least three assertions that call spread, each on its own line"
+          assert spread([3, 9, 5]) == 6, "spread([3, 9, 5]) should be 6"
+          assert spread([4]) == 0, "A single item has a spread of 0"
+          assert spread([-5, -1, -9]) == 8, "From -9 to -1 is a spread of 8"
+          assert spread([2, 2, 2]) == 0, "Equal items have a spread of 0"
+          assert output.strip().endswith("checked"), "The program should finish by printing checked"
+        wrong:
+          - "def spread(xs):\n    return max(xs) - min(xs)\n\nassert spread([3, 9, 5]) == 6, \"ordinary case\"\nprint(\"checked\")\n"
+          - "def spread(xs):\n    return xs[-1] - xs[0]\n\nassert spread([3, 5, 9]) == 6, \"a\"\nassert spread([4]) == 0, \"b\"\nassert spread([1, 2]) == 1, \"c\"\nprint(\"checked\")\n"
+          - "def spread(xs):\n    return max(xs)\n\nassert spread([0, 6]) == 6, \"a\"\nassert spread([0]) == 0, \"b\"\nassert spread([0, 1]) == 1, \"c\"\nprint(\"checked\")\n"
+        explanation: The function is one line. The value of the exercise is in the cases. A spread computed as last minus first passes on sorted lists, and one computed as the maximum alone passes whenever the least item is 0. Cases chosen to be awkward are what expose such slips.
+    - question:
+        id: write-validate
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Assertions can also guard the **inputs** of a function, so that a mistake by the caller is reported where it is made and not three steps later. Write a function `proportion(part, whole)` that returns `part / whole`. Before dividing, it must assert that `whole` is greater than 0 and that `part` lies between 0 and `whole`, both included. So `proportion(3, 4)` is 0.75, and `proportion(5, 4)` stops with an `AssertionError`.
+        starter: |
+          def proportion(part, whole):
+              # Replace the next line with your own.
+              return 0
+
+          print(proportion(3, 4))
+        solution: |
+          def proportion(part, whole):
+              assert whole > 0, "whole must be positive"
+              assert part >= 0 and part <= whole, "part must lie between 0 and whole"
+              return part / whole
+
+          print(proportion(3, 4))
+        tests: |
+          assert proportion(3, 4) == 0.75, "proportion(3, 4) should be 0.75"
+          assert proportion(0, 5) == 0.0, "A part of 0 is allowed and gives 0.0"
+          assert proportion(5, 5) == 1.0, "A part equal to the whole is allowed and gives 1.0"
+          def _stops(part, whole):
+              try:
+                  proportion(part, whole)
+              except AssertionError:
+                  return True
+              except Exception:
+                  return False
+              return False
+          assert _stops(5, 4), "proportion(5, 4) should stop with an AssertionError, because the part exceeds the whole"
+          assert _stops(-1, 4), "proportion(-1, 4) should stop with an AssertionError, because the part is negative"
+          assert _stops(0, 0), "proportion(0, 0) should stop with an AssertionError raised by you, before the division is attempted"
+          assert _stops(1, -2), "proportion(1, -2) should stop with an AssertionError, because the whole is not positive"
+        wrong:
+          - "def proportion(part, whole):\n    return part / whole\n\nprint(proportion(3, 4))\n"
+          - "def proportion(part, whole):\n    assert part >= 0 and part <= whole, \"part must lie between 0 and whole\"\n    return part / whole\n\nprint(proportion(3, 4))\n"
+          - "def proportion(part, whole):\n    assert whole > 0, \"whole must be positive\"\n    assert part > 0 and part < whole, \"part must lie between 0 and whole\"\n    return part / whole\n\nprint(proportion(3, 4))\n"
+        explanation: The assertions state what the function relies on. A caller who passes a part larger than the whole is told so at once, by name, instead of receiving a proportion of 1.25 that poisons everything computed from it.
+    - question:
+        id: debugging-order
+        type: order
+        system: s2
+        prompt: A function gives a wrong answer on a large input and no error message. Put the steps of a sound investigation in order.
+        steps:
+          - "Find the smallest input for which the answer is wrong and can be worked out by hand."
+          - "Write down the answer expected and the answer observed."
+          - "Guess a cause, and predict what a print at a chosen line would show if the guess were right."
+          - "Add the print and compare what it shows with the prediction."
+          - "Make one change to the program and run the failing case again."
+          - "Run the earlier cases and the edge cases as well, then remove the prints."
+        explanation: Reproduce small, observe precisely, predict before looking, change one thing, and then check that the fix has not broken anything else.
+    - question:
+        id: halving-steps
+        type: numeric
+        system: s2
+        prompt: |
+          A program has 64 lines that run one after another, and exactly one of them leaves a variable with a wrong value. Each experiment is a print placed between two lines, which tells you whether the value is already wrong at that point. Halving the suspect lines every time, how many experiments are needed to be left with a single line?
+        answer: "6"
+        explanation: "Each experiment halves the suspects: 64, 32, 16, 8, 4, 2, 1. That is six halvings, because $2^6 = 64$. Reading the lines one by one could have taken 63 checks."
+    - question:
+        id: failed-or-caused
+        type: choice
+        system: s2
+        prompt: |
+          A program stops with a `ZeroDivisionError` reported on line 12, which reads `return total / count`, inside a function called from line 30. What can you conclude?
+        options:
+          - "Line 12 is wrong and must be rewritten."
+          - "The value of count was 0 when line 12 ran. The slip may be on line 12, earlier in the function where count is built, or at line 30 where the arguments were chosen."
+          - "Line 30 is wrong, because the traceback mentions it."
+          - "Python has made a mistake, since count is clearly not zero."
+        answer: 1
+        explanation: The report says where execution stopped and why. It does not say where the cause lies. The next step is to find out how `count` came to be 0, working backwards from line 12 through the traceback.
+  connections:
+    - text: |
+        You have reached the end of the first cluster of programming. You can write programs that decide, repeat, name their parts and organise their data, and, as of today, you can find out why one is wrong without guessing.
+
+        That last skill is the one that separates people who can program from people who have learnt some Python. Working engineers and researchers spend more of their time reading error reports and hunting bugs than writing fresh lines, and they are not ashamed of it. In machine learning the silent wrong answer is the usual kind of bug. A training program with a slip in it rarely stops with red text. It runs for hours and produces a model that is a little worse than it should be, and nothing but assertions on shapes and ranges, small cases worked by hand and estimates of what the numbers ought to be will reveal it. The habits of this lesson are the ones that will catch those.
+
+        The method reaches beyond programs. Reproduce the problem on a small case, state the expected and the observed, predict before you look, change one thing at a time: this is how experiments are run and how proofs are checked. You will use it on your own reasoning in mathematics, where an estimate or a small example plays the part of the assertion.
+
+        Three roads open from here, and all of them build directly on what you have done. The next on the route goes downwards, into the machine. Every int you have printed is stored as a pattern of bits, and in [[h0.binary-and-hexadecimal]] you will read and write those patterns, converting between bases with the loops, strings and dictionaries of this cluster, and checking each conversion with an assertion. In mathematics, the names you have been binding to numbers become the letters of algebra: [[f1.variables-and-expressions]] takes the idea of a variable and asks what can be said about an expression **without** knowing the value, and every rule it derives you will be able to test with a few lines of program. In programming, the loops that build lists become single expressions, in [[s1.comprehensions-and-iterators]].
