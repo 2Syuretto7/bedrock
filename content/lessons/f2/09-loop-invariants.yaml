@@ -1,0 +1,680 @@
+concept: f2.loop-invariants
+minutes: 100
+claim: You can say what a loop is for as a precondition and a postcondition, find an invariant that the loop keeps, prove the loop correct in four parts (it starts true, it stays true, it stops, and it leaves the answer behind), use a decreasing whole number to show that a loop ends, and write binary search so that it is right the first time.
+recalls: [f2.induction-and-strong-induction]
+uses: [f2.propositions-and-connectives, f2.quantifiers-and-their-negation, f2.direct-proof, f0.whole-numbers-and-place-value, f1.logarithms, h0.unsigned-integers-and-fixed-widths, s0.booleans-and-conditionals, s0.loops, s0.functions, s0.lists-and-tuples, s0.reading-errors-and-debugging, s1.classes-and-objects, s1.special-methods, s1.testing-with-pytest]
+leads: [f2.equivalence-relations-and-partial-orders, s3.binary-search, s3.sorting]
+starter: |
+  # Scratch space. Binary search on a sorted list, printing the window it keeps after each pass.
+  items = [2, 5, 8, 12, 16, 23, 38, 56, 72, 91]
+  target = 23
+  lo, hi = 0, len(items)
+  while lo < hi:
+      mid = (lo + hi) // 2
+      if items[mid] < target:
+          lo = mid + 1
+      else:
+          hi = mid
+      print(lo, hi, items[lo:hi])
+  print("stopped at", lo)
+parts:
+  recall:
+    - text: |
+        [[f2.induction-and-strong-induction]] proved statements about every natural number from a base case and a step. In passing, it used the same two parts to show that a loop which adds up a list is right for a list of every length. Today that passing remark becomes a method, and the method is how you write a loop that you know is right before you run it. Three quick pulls first.
+  puzzle:
+    - text: |
+        Binary search is the first clever algorithm most programmers meet. To find a name in a sorted list, look at the middle entry. If the name you want comes later, throw away the first half. If it comes earlier, throw away the second half. Each look halves what is left, so a list of ten lakh names needs only about twenty looks, the count of halvings from [[f1.logarithms]].
+
+        It is also famous for being got wrong. The idea was published in 1946, and the first version that worked for every length of list did not appear in print until 1962. In the 1980s Jon Bentley gave professional programmers a couple of hours to write it, and about nine in ten of their programs had a bug. In 2006 Joshua Bloch, who had written the binary search in Java's standard library, announced that it had been wrong for nine years: on a list of more than about a hundred crore items, `lo + hi` overflowed the 32-bit integers of [[h0.unsigned-integers-and-fixed-widths]] and went negative.
+
+        Here is a version that a careful person might write.
+
+        ```python
+        def find(items, target):
+            lo, hi = 0, len(items) - 1
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if items[mid] < target:
+                    lo = mid
+                else:
+                    hi = mid
+            if items[lo] == target:
+                return lo
+            return -1
+        ```
+
+        Try it in your head on `[1, 3, 5, 7]` with the target 5, before reading on.
+
+        At the start `lo` is 0 and `hi` is 3. Then `mid` is 1, and 3 is less than 5, so `lo` becomes 1. Now `mid` is 2, and 5 is not less than 5, so `hi` becomes 2. Now `lo` is 1 and `hi` is 2, so `mid` is 1, and 3 is less than 5, so `lo` becomes 1. Nothing has changed. The next pass will be the same as this one, and so will every pass after it: the program never stops. Do not run it, because it will not come back. On an empty list it fails in a different way, since `items[0]` does not exist.
+
+        Those bugs came to light because somebody happened to try those inputs. Patch them one at a time and you can never be sure that the last one has gone. **Is there a way to write a loop so that you know, before running it, that it stops and gives the right answer for every input?** There is, and it is the induction of the last lesson, applied to the passes of a loop.
+  intuition:
+    - text: |
+        Think of how you find a word in a thick printed dictionary. Put your left thumb in the front cover and your right thumb in the back cover, and keep one promise:
+
+        > The word, if it is in the book at all, lies between my thumbs.
+
+        At the start the promise is true for the dullest of reasons: the whole book lies between your thumbs. Now open the book halfway between your thumbs and look at the word there. If your word comes later in the alphabet, move your left thumb to this page. If it comes earlier, move your right thumb. Either way the promise is still true, and it is true **because the dictionary is in order**. Keep going. The pages between your thumbs get fewer at every look, so you must stop. And when only one page is left between your thumbs, the promise tells you where the word is, or that it is not in the book.
+
+        That promise is a **loop invariant**. Notice what it is not. It is not a description of what happens on the third look. It is one sentence that is true at the start of **every** look, while everything it mentions keeps changing. The thumbs move, and the promise stays.
+
+        Four checks turn a promise like that into certainty.
+
+        | Check | The question | In induction |
+        | --- | --- | --- |
+        | Initialisation | Is the invariant true before the first pass? | the base case |
+        | Maintenance | If it is true at the start of a pass, is it true at the start of the next? | the inductive step |
+        | Termination | Does the loop stop? | you cannot descend for ever |
+        | Exit | When the loop stops, do the invariant and the reason for stopping give the answer? | the conclusion |
+
+        The first two are exactly an induction on the number of passes, so together they show that the invariant holds after any number of passes. The third shows that the number of passes is finite. The fourth turns the invariant into the result. The puzzle's program fails the third check, and you will see in a moment exactly which line is to blame.
+  derivation:
+    - text: |
+        **Saying what a loop is for.** Before you can prove a loop right, you must say what "right" means, and two statements do it. The **precondition** is what must be true before the code runs. For binary search, it is that the list is sorted. The **postcondition** is what will be true when the code finishes, provided the precondition held. For binary search, it is that the returned position holds the target, or else that the target is nowhere in the list. Code is **correct** if, started with its precondition true, it stops with its postcondition true. Robert Floyd in 1967 and Tony Hoare in 1969 turned this into a system for proving programs, and it is still how the software that must not fail, in aircraft or in payment systems, is checked.
+
+        **A first proof.** Here is the loop from the last lesson, with its invariant written in as a comment.
+
+        ```python
+        def total(values):
+            result = 0
+            i = 0
+            # Invariant: result == sum(values[:i]) and 0 <= i <= len(values)
+            while i < len(values):
+                result += values[i]
+                i += 1
+            return result
+        ```
+
+        - **Initialisation.** Before the first pass, `i` is 0 and `result` is 0. The slice `values[:0]` is empty, and its sum is 0.
+        - **Maintenance.** Suppose that `result == sum(values[:i])` at the start of a pass, and that the pass runs, so `i < len(values)`. The pass adds `values[i]` and then increases `i` by one. So the new `result` is the sum of the first `i` values plus the next one, which is the sum of the first `i + 1` values: the invariant, for the new `i`.
+        - **Termination.** The number `len(values) - i` is a whole number, it is never negative while the loop runs, and it drops by 1 on every pass. A whole number cannot drop for ever, so the loop stops.
+        - **Exit.** The loop stops when `i < len(values)` is false. The invariant says `i <= len(values)`, so now `i == len(values)`, and the invariant reads `result == sum(values)`. That is the postcondition.
+
+        The exit step has a shape worth memorising: **the invariant, together with the negation of the loop condition, implies the postcondition**. Every exit argument has that shape.
+
+        **Finding the invariant.** The hard part is the invariant itself. Here is a way of finding one that works surprisingly often. Take the postcondition and replace a constant in it with a variable. The postcondition "`result` is the sum of all $n$ values" becomes "`result` is the sum of the first $i$ values". The loop then has an obvious job: move $i$ from 0 up to $n$ while keeping the invariant true. Put another way, a good invariant describes **the work done so far**.
+
+        An invariant has to be strong enough, as well as true. "$0 \le i \le$ `len(values)`" is true at the start of every pass, so it is an invariant, but it says nothing about `result`, and no exit argument can get the sum out of it. In the other direction, "`result == sum(values)`" is what you want at the end, and it is false at the start. The art is to find the statement in between, true from the beginning and strong enough at the end.
+
+        **The variant.** Termination needs an argument of its own, and the usual tool is a **variant**: a whole number, worked out from the variables, that is never negative while the loop runs and goes down by at least 1 on every pass. Since nobody can descend for ever through the natural numbers, which is the well-ordering of the last lesson, the loop must stop. For a counting loop the variant is the number of passes left. For binary search it is the width of the window, `hi - lo`. In the puzzle's version, when `mid` equals `lo` the line `lo = mid` leaves the width unchanged. That is the line to blame.
+    - question:
+        id: invariant-for-power
+        type: choice
+        system: s2
+        prompt: |
+          This loop computes $a^n$ for a whole number $n \ge 0$.
+
+          ```python
+          def power(a, n):
+              result = 1
+              i = 0
+              while i < n:
+                  result = result * a
+                  i += 1
+              return result
+          ```
+
+          Which statement is the invariant that proves it correct?
+        options: ['`result == a ** n`', '`result == a ** i`', '`i < n`', '`result > 0`']
+        answer: 1
+        explanation: |
+          `result == a ** i` holds before the first pass, since $a^0 = 1$. Each pass multiplies by one more $a$ and adds 1 to `i`, so it stays true. When the loop stops, `i == n`, and it reads `result == a ** n`. The first option is the postcondition, false at the start unless $n = 0$. The third is false on the last check of the loop condition. The fourth fails whenever $a$ is negative or zero.
+    - text: |
+        **Division by a machine that can only subtract.** Here is a loop with a less obvious invariant. It finds the quotient and remainder of $n$ divided by $d$, for $n \ge 0$ and $d \ge 1$, using nothing but subtraction, the way a child shares out sweets by handing them round one at a time.
+
+        ```python
+        def divide(n, d):
+            q, r = 0, n
+            while r >= d:
+                q += 1
+                r -= d
+            return q, r
+        ```
+
+        The postcondition is the division with remainder of [[f2.direct-proof]]: $n = dq + r$ and $0 \le r < d$. Take the invariant to be everything in it except the part that the loop is still working on:
+
+        $$n = dq + r \quad\text{and}\quad r \ge 0.$$
+
+        Initialisation: $d \cdot 0 + n = n$, and $r = n \ge 0$. Maintenance: a pass runs only when $r \ge d$, and afterwards $d(q + 1) + (r - d) = dq + r = n$, while $r - d \ge 0$ precisely because $r \ge d$. Termination: $r$ is a whole number that drops by $d \ge 1$ on every pass and never goes below 0. Exit: the loop stops when $r < d$, and with the invariant that is $n = dq + r$ with $0 \le r < d$, the postcondition.
+
+        Two things are worth noticing. The precondition $d \ge 1$ is used, in the termination step. With $d = 0$ nothing ever decreases, and the loop runs for ever. And the argument you have just read **is** a proof of the existence half of division with remainder: for every $n \ge 0$ and $d \ge 1$ there are $q$ and $r$ with $n = dq + r$ and $0 \le r < d$. A loop that has been proved correct is a constructive proof, one that hands you the witness.
+    - question:
+        id: order-division-proof
+        type: order
+        system: s2
+        prompt: Put the steps of the proof that `divide(n, d)` is correct in order.
+        steps:
+          - "Before the first pass, $q = 0$ and $r = n$, so $dq + r = n$, and $r = n \\ge 0$."
+          - "Suppose $n = dq + r$ and $r \\ge 0$ at the start of a pass, which runs only because $r \\ge d$."
+          - "After the pass, $d(q + 1) + (r - d) = dq + r = n$, and $r - d \\ge 0$ because $r \\ge d$."
+          - "Each pass lowers the whole number $r$ by $d \\ge 1$, so the loop stops."
+          - "When it stops, $r < d$, and together with the invariant this gives $n = dq + r$ with $0 \\le r < d$."
+        explanation: Initialisation, maintenance, termination and exit, in that order. The maintenance step uses the loop condition $r \ge d$ as an extra hypothesis, and the exit step uses its negation, $r < d$.
+    - text: |
+        **Binary search, right the first time.** Now the puzzle can be done properly, and the method is to choose the invariant **before** writing a line. The precondition is that `items` is sorted into increasing order. Picture the list in three parts, with `lo` and `hi` marking the edges of the middle one:
+
+        $$\underbrace{\;\text{less than the target}\;}_{\text{positions before } lo} \qquad \underbrace{\;\text{not yet known}\;}_{lo \text{ up to } hi} \qquad \underbrace{\;\text{at least the target}\;}_{\text{positions from } hi \text{ on}}$$
+
+        The invariant says exactly that: **every item before position `lo` is less than the target, every item from position `hi` on is at least the target, and $0 \le lo \le hi \le$ `len(items)`**. The loop's job is to shrink the unknown middle to nothing.
+
+        ```python
+        def find(items, target):
+            lo, hi = 0, len(items)
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if items[mid] < target:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            if lo < len(items) and items[lo] == target:
+                return lo
+            return -1
+        ```
+
+        - **Initialisation.** With `lo` at 0 and `hi` at the length, there is nothing before `lo` and nothing from `hi` on. Both "every item" claims are about no items at all, so both are vacuously true, exactly as in [[f2.quantifiers-and-their-negation]].
+        - **Maintenance.** While `lo < hi`, the middle position satisfies `lo <= mid < hi`. If `items[mid]` is less than the target, then so is every item before it, because the list is sorted, so everything before `mid + 1` is less than the target, and `lo = mid + 1` keeps the first claim. Otherwise `items[mid]` is at least the target, and so is everything after it, so `hi = mid` keeps the second claim. Each branch leaves the other claim alone.
+        - **Termination.** The variant is `hi - lo`. Because `lo <= mid < hi`, the line `lo = mid + 1` raises `lo` by at least 1, and the line `hi = mid` lowers `hi` by at least 1.
+        - **Exit.** Now `lo == hi`. Everything before `lo` is less than the target and everything from `lo` on is at least the target. So if the target is anywhere, the first place it can be is `lo`. If `lo` is a position in the list and the item there is the target, it has been found. If not, the item there is bigger than the target, or there is no item there, and in either case the target is nowhere in the list.
+
+        Compare the four checks with the puzzle's version. Its `lo = mid` fails **termination**. Bugs in binary search always fail one of the four. Wrong starting values for `lo` and `hi` break initialisation. A careless `hi = mid - 1` breaks maintenance, because it claims something about `items[mid - 1]` that nobody has checked. And forgetting `lo < len(items)` at the end breaks the exit step, on a target larger than everything in the list. As for Bloch's overflow: Python's integers never overflow, but in a language with 32-bit integers the middle should be computed as `lo + (hi - lo) // 2`, which never exceeds `hi`.
+
+        The exit argument gives something extra for free. When the loop stops, `lo` is the number of items less than the target, which is the position at which the target would have to be inserted to keep the list sorted. Python's standard library offers exactly this loop, under the name `bisect_left`.
+    - question:
+        id: fix-binary-search
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This binary search keeps the lesson's invariant in one branch and breaks it in the other. It finds 3 in `[1, 3, 5, 7]`, but reports that 5 is not there. Find the line that breaks the invariant, and fix it.
+        starter: |
+          def find(items, target):
+              lo, hi = 0, len(items)
+              while lo < hi:
+                  mid = (lo + hi) // 2
+                  if items[mid] < target:
+                      lo = mid + 1
+                  else:
+                      hi = mid - 1
+              if lo < len(items) and items[lo] == target:
+                  return lo
+              return -1
+
+          print(find([1, 3, 5, 7], 5))
+        solution: |
+          def find(items, target):
+              lo, hi = 0, len(items)
+              while lo < hi:
+                  mid = (lo + hi) // 2
+                  if items[mid] < target:
+                      lo = mid + 1
+                  else:
+                      hi = mid
+              if lo < len(items) and items[lo] == target:
+                  return lo
+              return -1
+
+          print(find([1, 3, 5, 7], 5))
+        tests: |
+          _items = [1, 3, 5, 7, 9, 11]
+          for _i, _v in enumerate(_items):
+              assert find(_items, _v) == _i, f"{_v} is at position {_i}"
+          assert find(_items, 0) == -1, "0 is smaller than everything in the list"
+          assert find(_items, 4) == -1, "4 falls between 3 and 5"
+          assert find(_items, 12) == -1, "12 is larger than everything in the list"
+          assert find([], 5) == -1, "Nothing is found in an empty list"
+          assert find([5], 5) == 0, "A list of one item"
+          assert find([1, 3, 5, 7], 5) == 2, "5 is at position 2"
+          assert output.strip() == "2", "The program should print 2"
+        wrong:
+          - |
+            def find(items, target):
+                lo, hi = 0, len(items)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if items[mid] < target:
+                        hi = mid
+                    else:
+                        lo = mid + 1
+                if lo < len(items) and items[lo] == target:
+                    return lo
+                return -1
+
+            print(find([1, 3, 5, 7], 5))
+          - |
+            def find(items, target):
+                lo, hi = 0, len(items)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if items[mid] <= target:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+                if lo < len(items) and items[lo] == target:
+                    return lo
+                return -1
+
+            print(find([1, 3, 5, 7], 5))
+          - |
+            def find(items, target):
+                lo, hi = 0, len(items)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if items[mid] < target:
+                        lo = mid + 2
+                    else:
+                        hi = mid
+                if lo < len(items) and items[lo] == target:
+                    return lo
+                return -1
+
+            print(find([1, 3, 5, 7], 5))
+        explanation: |
+          In the `else` branch all that is known is that `items[mid]` is at least the target, so everything from `mid` on is at least the target, and the invariant allows `hi = mid`. The starter's `hi = mid - 1` claims the same of `items[mid - 1]`, which nobody checked. When `items[mid]` **is** the target, that line throws it out of the window. Notice that tests on 3 alone would never have caught the bug, while the maintenance check catches it by reading one line.
+    - text: |
+        **Invariants while you test.** An invariant can be written into the code as an `assert` while you develop it:
+
+        ```python
+        def total(values):
+            result = 0
+            i = 0
+            while i < len(values):
+                assert result == sum(values[:i])
+                result += values[i]
+                i += 1
+            return result
+        ```
+
+        This is slow, since it adds up the list again on every pass, but it reports the very pass on which a loop goes wrong, rather than a wrong answer at the end. When the code is finished, take such checks out. Python itself skips every `assert` when it is started with the `-O` switch, so an `assert` must never be the only thing standing between a program and a bad result.
+
+        **Invariants beyond loops.** The same idea runs through all of programming. A sorted list must still be sorted after every insertion. In a dictionary, every key appears once. A bank account object's balance must equal the sum of its transactions after every method call. Such a promise about a data structure, kept by every operation on it, is called a **representation invariant** or **class invariant**, and the proof that it is kept is the same induction: it holds when the object is made, and each operation preserves it. Every data structure in the next cluster is defined by its invariant.
+  formal:
+    - text: |
+        A **precondition** is a statement assumed true before some code runs, and a **postcondition** is a statement guaranteed true when it finishes. The code is **correct** if, whenever it starts with the precondition true, it stops with the postcondition true.
+
+        A **loop invariant** for a loop `while C: body` is a statement $I$ about the variables such that:
+
+        | Obligation | Statement |
+        | --- | --- |
+        | Initialisation | $I$ holds when the loop is first reached. |
+        | Maintenance | If $I$ and $C$ hold at the start of a pass, $I$ holds at its end. |
+        | Exit | $I$ and $\neg C$ together imply the postcondition. |
+
+        By induction on the number of passes, $I$ holds at the start of every pass and when the loop stops.
+
+        A **variant** is a whole-number expression in the variables that is at least 0 whenever $C$ holds and decreases by at least 1 on every pass. If a loop has a variant, it stops.
+
+        **Binary search.** For a list sorted into increasing order, the invariant "every item before `lo` is less than the target, every item from `hi` on is at least the target, and $0 \le lo \le hi \le n$", with `lo = 0` and `hi = n` at the start, `lo = mid + 1` when `items[mid]` is less than the target and `hi = mid` otherwise, gives a loop with variant `hi - lo` that stops after at most $\lfloor \log_2 n \rfloor + 1$ passes with `lo` equal to the number of items less than the target.
+  drill:
+    - text: Seconds each. For every loop, ask the four questions in order.
+    - question:
+        id: drill-base-case
+        type: choice
+        system: s1
+        prompt: |
+          Which of the four checks on a loop plays the part of the base case of an induction?
+        options: ['Initialisation', 'Maintenance', 'Termination', 'Exit']
+        answer: 0
+        explanation: Initialisation shows the invariant true before any pass, as the base case shows the statement true at the start. Maintenance is the inductive step.
+    - question:
+        id: drill-exit-shape
+        type: choice
+        system: s1
+        prompt: |
+          A loop `while i < n:` keeps the invariant `total == sum(values[:i]) and i <= n`. What do you know when it stops?
+        options: ['`total == sum(values[:n])`', '`total == sum(values[:i - 1])`', '`i < n`', 'Nothing yet: the loop might stop early']
+        answer: 0
+        explanation: It stops when `i < n` is false. With `i <= n` from the invariant, `i == n`, and the invariant becomes the postcondition.
+    - question:
+        id: drill-variant
+        type: choice
+        system: s1
+        prompt: |
+          A binary search runs `while lo < hi:`, and every pass either raises `lo` or lowers `hi`. Which whole number shows that it stops?
+        options: ['`hi - lo`', '`lo`', '`hi`', '`mid`']
+        answer: 0
+        explanation: The width of the window is never negative while the loop runs, and every pass makes it smaller. Neither `lo` nor `hi` alone always decreases.
+    - question:
+        id: drill-empty-start
+        type: choice
+        system: s1
+        prompt: |
+          Binary search starts with `lo = 0`. Why is "every item before position `lo` is less than the target" true at the start?
+        options: ['There are no items before position 0, so it is vacuously true', 'The first item is always the smallest', 'The target is always larger than the first item', 'It is not true at the start, only later']
+        answer: 0
+        explanation: A claim about every member of an empty collection cannot be broken. The same is true of the other half, about the items from position `len(items)` on.
+    - question:
+        id: drill-product-start
+        type: numeric
+        system: s1
+        prompt: |
+          A loop multiplies together the values of a list, keeping the invariant "`product` is the product of the first `i` values". What must `product` be before the first pass, when `i` is 0?
+        answer: "1"
+        explanation: The product of no values is 1, the empty product, so that multiplying in the first value gives that value.
+    - question:
+        id: drill-passes
+        type: numeric
+        system: s1
+        prompt: |
+          At most how many passes does the lesson's binary search make on a sorted list of 1,000 items?
+        answer: "10"
+        explanation: |
+          Each pass leaves a window at most half as wide, rounded down: 1000, 500, 250, 125, 62, 31, 15, 7, 3, 1, 0. That is 10 passes, which is $\lfloor \log_2 1000 \rfloor + 1$.
+    - question:
+        id: predict-passes
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          items = [2, 5, 8, 12, 16, 23, 38]
+          lo, hi = 0, len(items)
+          passes = 0
+          while lo < hi:
+              mid = (lo + hi) // 2
+              if items[mid] < 12:
+                  lo = mid + 1
+              else:
+                  hi = mid
+              passes += 1
+          print(lo, passes)
+        output: "3 3"
+        explanation: |
+          The windows are positions 0 to 7, then 0 to 3 (12 is not less than 12, so `hi` moves to 3), then 2 to 3 (5 is less than 12), then 3 to 3 (8 is less than 12). Three passes, and `lo` stops at 3, the position of 12 and the number of items less than it.
+    - question:
+        id: predict-divide
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          n, d = 17, 5
+          q, r = 0, n
+          while r >= d:
+              q += 1
+              r -= d
+              assert n == d * q + r
+          print(q, r)
+        output: "3 2"
+        explanation: The loop takes 5 away three times, from 17 to 12, 7 and 2, and stops when 2 is less than 5. The `assert` checks the invariant after each pass and never fails, since $17 = 5 \times 3 + 2$.
+  work:
+    - text: Slower now. Write the invariant down before the code, and check all four obligations before you run anything.
+    - question:
+        id: work-reverse
+        type: choice
+        system: s2
+        prompt: |
+          This function reverses a list in place.
+
+          ```python
+          def reverse(items):
+              i, j = 0, len(items) - 1
+              while i < j:
+                  items[i], items[j] = items[j], items[i]
+                  i += 1
+                  j -= 1
+          ```
+
+          Which invariant is strong enough to prove that it works?
+        options:
+          - "`i + j == len(items) - 1`"
+          - "`i < j`"
+          - "The first `i` positions hold the last `i` original items in reverse order, the last `i` positions hold the first `i` original items in reverse order, and the positions in between are untouched."
+          - "`items` is reversed."
+        answer: 2
+        explanation: |
+          The first option is true at the start of every pass, so it is an invariant, but it is too weak: it says nothing about the items, and the exit step cannot get "reversed" out of it. The second is false at the final check of the loop condition. The fourth is the postcondition, false at the start. The third is true at the start, with nothing swapped, and each swap extends both reversed ends by one item. When `i` meets or passes `j`, at most one untouched item remains in the middle, and that item is already in its reversed place.
+    - question:
+        id: work-variant
+        type: choice
+        system: s2
+        prompt: |
+          Which of these loops can run for ever, for some whole-number starting value of `x` or `n`?
+        options:
+          - "`while n > 1: n = n // 2`"
+          - "`while x != 0: x = x - 2`"
+          - "`while x > 0: x = x - 3`"
+          - "`while n < 100: n = n + 1`"
+        answer: 1
+        explanation: |
+          Start the second at an odd number, such as 5: it goes 3, 1, $-1$, $-3$, and never equals 0. Its loop condition does not keep $x$ from going negative, so $x$ is no variant. The others each have one: $n$ in the first, $x$ in the third, and $100 - n$ in the fourth. The practical lesson is to prefer `>` to `!=` in a loop condition, so that overshooting the end stops the loop instead of running past it.
+    - question:
+        id: fix-running-max
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `largest(values)` should return the largest number in a non-empty list. It passed every test its author wrote, all with positive numbers. It returns 0 for the temperatures of a January night in Leh, $-4$, $-2$ and $-9$, though none of them is 0. Its invariant ought to be "`best` is the largest of the values looked at so far". Find which of the four checks fails, and fix it.
+        starter: |
+          def largest(values):
+              best = 0
+              for v in values:
+                  if v > best:
+                      best = v
+              return best
+
+          print(largest([-4, -2, -9]))
+        solution: |
+          def largest(values):
+              best = values[0]
+              for v in values:
+                  if v > best:
+                      best = v
+              return best
+
+          print(largest([-4, -2, -9]))
+        tests: |
+          assert largest([-4, -2, -9]) == -2, "The largest of -4, -2 and -9 is -2"
+          assert largest([3, 7, 5]) == 7, "The largest of 3, 7 and 5 is 7"
+          assert largest([5]) == 5, "A list of one value"
+          assert largest([-1]) == -1, "A list of one negative value"
+          assert largest([0, -1]) == 0, "0 is the largest of 0 and -1"
+          assert largest([-5000, -3000]) == -3000, "Very negative numbers"
+          assert output.strip() == "-2", "The program should print -2"
+        wrong:
+          - |
+            def largest(values):
+                best = -1
+                for v in values:
+                    if v > best:
+                        best = v
+                return best
+
+            print(largest([-4, -2, -9]))
+          - |
+            def largest(values):
+                best = -1000
+                for v in values:
+                    if v > best:
+                        best = v
+                return best
+
+            print(largest([-4, -2, -9]))
+          - |
+            def largest(values):
+                best = values[0]
+                for v in values:
+                    if v < best:
+                        best = v
+                return best
+
+            print(largest([-4, -2, -9]))
+        explanation: |
+          Initialisation fails. Before the first value has been looked at, `best = 0` claims to be the largest of the values seen, and 0 is not one of the values at all. Maintenance is fine: if `best` is the largest so far, comparing with the next value keeps it so. Starting from `values[0]`, which is the largest of the first value, makes the invariant true from the start. Any fixed starting number, however negative, only moves the bug to a list of still smaller numbers.
+    - question:
+        id: write-isqrt
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `isqrt(n)` for a whole number $n \ge 0$. It returns the largest whole number $r$ with $r \cdot r \le n$, using only whole-number arithmetic, by a binary search on $r$ that keeps the invariant `lo * lo <= n < hi * hi`. Start with `lo = 0` and `hi = n + 1`, and stop when `hi - lo` is 1. Do not use `sqrt` or a power of 0.5: for large numbers a float is not exact enough.
+        starter: |
+          def isqrt(n):
+              lo, hi = 0, n + 1
+              # Replace the next line with your own.
+              return lo
+
+          print(isqrt(1000000007))
+        solution: |
+          def isqrt(n):
+              lo, hi = 0, n + 1
+              while hi - lo > 1:
+                  mid = (lo + hi) // 2
+                  if mid * mid <= n:
+                      lo = mid
+                  else:
+                      hi = mid
+              return lo
+
+          print(isqrt(1000000007))
+        tests: |
+          assert "math" not in source and "0.5" not in source and "sqrt" not in source.replace("isqrt", ""), "Use whole-number arithmetic only, with no square root from the math module"
+          assert isqrt(0) == 0, "The square root of 0 is 0"
+          assert isqrt(1) == 1, "The square root of 1 is 1"
+          assert isqrt(2) == 1, "1 squared is at most 2, and 2 squared is not"
+          assert isqrt(4) == 2, "4 is a perfect square"
+          assert isqrt(15) == 3, "3 squared is 9, and 4 squared is 16"
+          assert isqrt(16) == 4, "16 is a perfect square"
+          assert isqrt(17) == 4, "4 squared is 16, and 5 squared is 25"
+          assert isqrt(10 ** 12) == 10 ** 6, "A million squared is ten to the twelfth"
+          assert isqrt(10 ** 12 - 1) == 999999, "Just below a perfect square"
+          assert isqrt((2 ** 80 + 12345) ** 2) == 2 ** 80 + 12345, "A number far beyond the precision of a float"
+          assert isqrt((2 ** 80 + 12345) ** 2 - 1) == 2 ** 80 + 12344, "One less than that perfect square"
+          assert output.strip() == "31622", "The program should print 31622"
+        wrong:
+          - |
+            def isqrt(n):
+                lo, hi = 0, n
+                while hi - lo > 1:
+                    mid = (lo + hi) // 2
+                    if mid * mid <= n:
+                        lo = mid
+                    else:
+                        hi = mid
+                return lo
+
+            print(isqrt(1000000007))
+          - |
+            def isqrt(n):
+                lo, hi = 0, n + 1
+                while hi - lo > 1:
+                    mid = (lo + hi) // 2
+                    if mid * mid < n:
+                        lo = mid
+                    else:
+                        hi = mid
+                return lo
+
+            print(isqrt(1000000007))
+          - |
+            def isqrt(n):
+                lo, hi = 0, n + 1
+                while hi - lo > 1:
+                    mid = (lo + hi) // 2
+                    if mid * mid <= n:
+                        lo = mid
+                    else:
+                        hi = mid
+                return hi
+
+            print(isqrt(1000000007))
+          - |
+            def isqrt(n):
+                return int(n ** (1 / 2))
+
+            print(isqrt(1000000007))
+        explanation: |
+          Initialisation: $0 \cdot 0 \le n$, and $(n + 1)^2 > n$. Maintenance: `mid * mid <= n` is exactly the condition for `lo = mid` to keep the left half of the invariant, and otherwise `hi = mid` keeps the right half. Termination: while `hi - lo` is at least 2, `mid` lies strictly between them, so either move shrinks the window. Here `lo = mid` is safe, unlike in the puzzle, because the loop stops before `mid` could equal `lo`. Exit: `hi == lo + 1`, so `lo * lo <= n < (lo + 1) * (lo + 1)`, which says that `lo` is the answer. The float version fails on the huge test, because a float holds only about 16 significant digits.
+    - question:
+        id: write-last-index
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          `items` is sorted into increasing order and may contain repeats. Write `last_index(items, target)`, which returns the position of the **last** copy of `target`, or `-1` if there is none. Use binary search with the invariant "every item before `lo` is at most the target, and every item from `hi` on is greater than the target". It must look at only a few items, even in a very long list.
+        starter: |
+          def last_index(items, target):
+              # Replace the next line with your own.
+              return -1
+
+          print(last_index([1, 3, 3, 3, 5, 8], 3))
+        solution: |
+          def last_index(items, target):
+              lo, hi = 0, len(items)
+              while lo < hi:
+                  mid = (lo + hi) // 2
+                  if items[mid] <= target:
+                      lo = mid + 1
+                  else:
+                      hi = mid
+              if lo > 0 and items[lo - 1] == target:
+                  return lo - 1
+              return -1
+
+          print(last_index([1, 3, 3, 3, 5, 8], 3))
+        tests: |
+          _items = [1, 3, 3, 3, 5, 8]
+          assert last_index(_items, 3) == 3, "The last 3 is at position 3"
+          assert last_index(_items, 1) == 0, "1 is at position 0"
+          assert last_index(_items, 8) == 5, "8 is at the end"
+          assert last_index(_items, 4) == -1, "4 is not in the list"
+          assert last_index(_items, 0) == -1, "0 is smaller than everything"
+          assert last_index(_items, 9) == -1, "9 is larger than everything"
+          assert last_index([], 3) == -1, "Nothing is in an empty list"
+          assert last_index([7, 7, 7], 7) == 2, "Every item is a copy: the last is at position 2"
+          class _Watched:
+              def __init__(self, n):
+                  self.n = n
+                  self.looks = 0
+              def __len__(self):
+                  return self.n
+              def __getitem__(self, i):
+                  self.looks += 1
+                  return i // 3
+          _w = _Watched(3000000)
+          assert last_index(_w, 500000) == 1500002, "In 0, 0, 0, 1, 1, 1, 2, ... the last 500000 is at position 1500002"
+          assert _w.looks <= 30, "A binary search should look at about 22 items of a list of 30 lakh, not walk through it"
+          assert output.strip() == "3", "The program should print 3"
+        wrong:
+          - |
+            def last_index(items, target):
+                lo, hi = 0, len(items)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if items[mid] < target:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+                if lo > 0 and items[lo - 1] == target:
+                    return lo - 1
+                return -1
+
+            print(last_index([1, 3, 3, 3, 5, 8], 3))
+          - |
+            def last_index(items, target):
+                lo, hi = 0, len(items)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if items[mid] <= target:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+                if lo < len(items) and items[lo] == target:
+                    return lo
+                return -1
+
+            print(last_index([1, 3, 3, 3, 5, 8], 3))
+          - |
+            def last_index(items, target):
+                for i in range(len(items) - 1, -1, -1):
+                    if items[i] == target:
+                        return i
+                return -1
+
+            print(last_index([1, 3, 3, 3, 5, 8], 3))
+        explanation: |
+          The window and the variant are as in the lesson. Only the test that decides which side `mid` falls on has changed, from `<` to `<=`, because the invariant now puts copies of the target on the left. At the exit `lo == hi`, everything before `lo` is at most the target and everything from `lo` on is greater, so the last copy, if there is one, sits just before `lo`, at `lo - 1`. Using `<` keeps the lesson's invariant instead and finds the **first** copy. Walking back from the end gives right answers, but on the long list it looks at fifteen lakh items.
+  connections:
+    - text: |
+        A loop with a proved invariant is a small theorem, and you now have the way to prove it: initialisation, maintenance, termination, exit. It is the same induction as before, aimed at the passes of a loop, with the well-ordering of the natural numbers to guarantee that it ends. Every algorithm in the algorithms cluster will be explained this way. Binary search, in [[s3.binary-search]], is a single invariant about a window. Each of the classic ways of sorting, in [[s3.sorting]], is a different invariant: "the first $i$ items are sorted", or "the first $i$ items are the $i$ smallest, in order", or "every item to the left of the dividing line is smaller than every item to its right".
+
+        Engineers use the same idea well beyond single loops. A database promises that a transfer between two accounts never changes the total amount of money held, and that promise is an invariant of every operation it performs. Engineers at Amazon have written about using tools that check such invariants against the design of a distributed storage system before a line of it is built, and finding bugs that would have taken years to show up in testing. In machine learning, a training loop keeps the invariant that the model's weights are the result of some number of steps from the starting point, and the analysis of why training works is an argument about what each step preserves and what it improves.
+
+        One word has carried more weight than it was given in this lesson: **sorted**. Binary search needs a sorted list, and "sorted" makes sense only when any two items can be compared, as numbers can. Sets cannot always be compared, since neither of $\{1\}$ and $\{2\}$ is inside the other. What exactly does a relation need, to put things in order? And its close cousin: what does a relation need, to divide things cleanly into groups of "the same"? That is the last lesson of this cluster, [[f2.equivalence-relations-and-partial-orders]].

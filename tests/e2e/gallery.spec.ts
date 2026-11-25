@@ -114,3 +114,18 @@ test("the staircase figure adds 1 to n as half of a rectangle", async ({ page })
   await expect(figure.locator("rect")).toHaveCount(30);
   await expect(figure.locator("rect.fig-accent")).toHaveCount(15);
 });
+
+test("the full adder adds three bits into a sum bit and a carry", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="full-adder"]').first().getByRole("figure");
+  await expect(figure).toContainText("a is 1, b is 1 and the carry in is 0. They add to 2, which is 10 in binary: sum bit 0, carry out 1.");
+  await expect(figure).toContainText("a and b are both 1, so they carry on their own.");
+  await figure.getByRole("button", { name: "Switch carry in" }).click();
+  await expect(figure).toContainText("They add to 3, which is 11 in binary: sum bit 1, carry out 1.");
+  await figure.getByRole("button", { name: "Switch a" }).click();
+  await expect(figure).toContainText("a is 0, b is 1 and the carry in is 1. They add to 2, which is 10 in binary: sum bit 0, carry out 1.");
+  await expect(figure).toContainText("a and b differ, so x is 1, and the carry coming in passes through.");
+  await expect(figure.getByRole("button", { name: "Switch a" })).toHaveText("0");
+  await figure.getByRole("button", { name: "Switch b" }).click();
+  await expect(figure).toContainText("They add to 1, which is 01 in binary: sum bit 1, carry out 0.");
+});
