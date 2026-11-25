@@ -1,0 +1,791 @@
+concept: s1.comprehensions-and-iterators
+minutes: 100
+claim: You can read and write list, set and dictionary comprehensions as sigma and set notation that runs, walk sequences with enumerate and zip, and explain what an iterator is, why a for loop works on so many kinds of things, and why a generator expression can be used only once.
+recalls: [f1.summation-notation, s0.reading-errors-and-debugging]
+uses: [f1.functions-as-machines, f1.composition-and-inverses, f1.arithmetic-and-geometric-series, s0.strings, s0.booleans-and-conditionals, s0.loops, s0.functions, s0.lists-and-tuples, s0.dictionaries-and-sets, f1.inequalities]
+leads: [s1.modules-and-imports, s1.generators-and-context-managers]
+bridges:
+  f1.summation-notation: |
+    The last lesson ended by saying that Python has a notation modelled on the sigma. Here it is. $\sum_{n=1}^{1000} \frac{1}{n^2}$ names a term, an index and where the index runs, and never says how to do the adding. A comprehension says the same three things in the same order of importance: the expression for a term, the `for` that gives the index its values, and an optional `if` that says which terms are kept. And a sum that never stops is no problem for an iterator, which hands over one term at a time, just as a partial sum needs only the running total.
+starter: |
+  # Scratch space. The same list built twice: by a loop, and by one line.
+  squares = []
+  for x in range(10):
+      if x % 2 == 0:
+          squares.append(x ** 2)
+  print(squares)
+
+  print([x ** 2 for x in range(10) if x % 2 == 0])
+parts:
+  recall:
+    - text: |
+        [[f1.summation-notation]] ended with a promise: that the notation of sums and sets can be typed into Python almost symbol for symbol. This lesson keeps the promise. It also leans on the habit you formed in [[s0.reading-errors-and-debugging]], of checking a claim about code with a small assertion. Three quick pulls first.
+  puzzle:
+    - text: |
+        In [[f1.functions-as-machines]] you wrote the range of a function in one line, $\{f(x) : x \in A\}$, by saying what belongs in it rather than listing it. Add a condition after a comma, saying which $x$ are kept, and the same notation describes this set:
+
+        $$\{\,x^2 : x \in \{0, 1, \dots, 9\},\ x \text{ is even}\,\}$$
+
+        Read aloud it says: the squares of those $x$, taken from zero to nine, that are even. It does not say how to make the set. There is no first step and no second step. It only says **what** the set is.
+
+        The Python you know says **how**:
+
+        ```python
+        squares = []
+        for x in range(10):
+            if x % 2 == 0:
+                squares.append(x ** 2)
+        ```
+
+        Four lines, and three of them are machinery: make an empty list, walk, attach. The idea itself, $x^2$, is hidden in the innermost corner. Here is the first puzzle. Can Python be made to say *what*, as the mathematics does?
+
+        The second puzzle is about size. Suppose you want the sum
+
+        $$\sum_{n=1}^{1\,000\,000\,000} \frac{1}{n^2}.$$
+
+        If you first build a list of a thousand million terms and then add it up, the list alone needs more memory than most laptops have. Yet when you add up a long column of numbers by hand you never hold more than two numbers in your head: the running total and the next term. The list was never needed. How do you ask Python for the terms one at a time, without the list ever existing?
+
+        Both puzzles have the same answer, and it is hiding inside the `for` loop you have used since [[s0.loops]].
+  intuition:
+    - text: |
+        Take the four-line loop and fold it. Keep the three ideas, drop the machinery, and write the ideas inside one pair of square brackets:
+
+        ```python
+        squares = [x ** 2 for x in range(10) if x % 2 == 0]
+        ```
+
+        This is a **list comprehension**. Put it next to the line of mathematics and read them together.
+
+        | The mathematics | The Python | What it says |
+        | --- | --- | --- |
+        | $x^2$ | `x ** 2` | what each member looks like |
+        | $x \in \{0, \dots, 9\}$ | `for x in range(10)` | where $x$ comes from |
+        | $x$ is even | `if x % 2 == 0` | which $x$ are kept |
+
+        The colon has become the word `for`, and the comma has become the word `if`. Nothing else has changed. A comprehension is the mathematics of collections, made to run.
+
+        Now the second puzzle. Think of a book and a bookmark. The book is the collection: all the values, sitting there. The bookmark is a small object that knows only where you have got to. To read the book you do one thing again and again: ask the bookmark for the next page, and it moves along by one. A `for` loop does exactly this. It asks the collection for a bookmark, then asks the bookmark for the next value until there are none left.
+
+        Here is the step that matters. The loop only ever talks to the bookmark. So there does not need to be a book at all. Anything that can answer the question "what is next?" can be looped over, even if it works out each value at the moment it is asked, and forgets it afterwards. A bookmark with no book behind it is how you add up a thousand million terms with two numbers' worth of memory.
+  derivation:
+    - text: |
+        **Folding a loop, one piece at a time.** A loop that builds a list always has the same skeleton:
+
+        ```python
+        result = []
+        for x in source:
+            if keep(x):
+                result.append(make(x))
+        ```
+
+        Three things can vary: the `source` the values come from, the test `keep` that filters them, and the expression `make` that transforms the ones that pass. The comprehension writes those three things and nothing else, with the expression moved to the front:
+
+        ```python
+        result = [make(x) for x in source if keep(x)]
+        ```
+
+        The order inside the brackets is fixed: **expression, then `for`, then `if`**. The `for` and the `if` appear in the same order as in the loop. Only the expression has moved, from the innermost line to the front, because it is the thing the reader most wants to see.
+
+        The filter is optional. Leave it out and every value is kept, which is a pure transformation. In the language of [[f1.functions-as-machines]] it applies one function to every member of the source:
+
+        ```python
+        doubled = [2 * x for x in [3, 1, 4]]        # [6, 2, 8]
+        ```
+
+        Or keep the filter and make the expression the plain variable, which is a pure selection:
+
+        ```python
+        positives = [x for x in [3, -1, 4, -5] if x > 0]    # [3, 4]
+        ```
+
+        The result of a comprehension is always a **new** list. The source is left untouched.
+    - question:
+        id: predict-basic
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          words = ["sum", "product", "set", "function"]
+          print([len(w) for w in words if len(w) > 3])
+        output: "[7, 8]"
+        explanation: The filter keeps only the words with more than three letters, "product" and "function". The expression then replaces each by its length.
+    - text: |
+        **Choosing a value is not the same as choosing whether to keep it.** Sometimes every value should stay, but be treated in one of two ways. For that Python has a **conditional expression**, an `if` that produces a value:
+
+        ```python
+        size = "big" if n > 100 else "small"
+        ```
+
+        Read it in the order it is written: "big", if `n` exceeds 100, otherwise "small". It always needs its `else`, because an expression must always have a value.
+
+        A conditional expression goes at the **front** of a comprehension, as part of the expression. A filter goes at the **back**. They do different jobs:
+
+        ```python
+        xs = [3, -1, 4, -5]
+        print([x if x > 0 else 0 for x in xs])   # [3, 0, 4, 0]   four in, four out
+        print([x for x in xs if x > 0])          # [3, 4]         four in, two out
+        ```
+
+        The first line is worth remembering. It replaces every negative number by zero and leaves the rest alone. This small function, $\max(0, x)$, is the most used ingredient in modern neural networks, where it goes by the name ReLU. You have just applied it to a whole layer of numbers in one line.
+    - question:
+        id: choice-front-or-back
+        type: choice
+        system: s1
+        prompt: |
+          `marks = [35, 80, 52, 91]`. Which line produces `["fail", "pass", "pass", "pass"]`, with the pass mark at 40?
+        options:
+          - '`["pass" for m in marks if m >= 40]`'
+          - '`["pass" if m >= 40 else "fail" for m in marks]`'
+          - '`[m >= 40 for m in marks]`'
+          - '`["pass" for m in marks if m >= 40 else "fail"]`'
+        answer: 1
+        explanation: Four marks go in and four words come out, so nothing is filtered. The choice between the two words is made by a conditional expression at the front. The first option filters and gives only three words. The last is not valid Python, because a filter has no else.
+    - text: |
+        **Sets and dictionaries.** Change the square brackets to curly ones and the same notation builds a set. As in [[s0.dictionaries-and-sets]], a set holds each member once and has no order:
+
+        ```python
+        remainders = {x % 3 for x in [3, 4, 5, 6, 7]}     # {0, 1, 2}
+        ```
+
+        Five values went in, but only three different remainders exist, so the set has three members. This is the image of a function, computed in one line.
+
+        Put a `key: value` pair at the front and the curly brackets build a dictionary:
+
+        ```python
+        lengths = {w: len(w) for w in ["set", "function"]}   # {'set': 3, 'function': 8}
+        ```
+
+        A dictionary is a function written out as a table, from keys to values. So a dictionary comprehension can do to a function what [[f1.composition-and-inverses]] did on paper. Here is the inverse, made by swapping every pair:
+
+        ```python
+        code = {"a": 1, "b": 2, "c": 3}
+        decode = {v: k for k, v in code.items()}             # {1: 'a', 2: 'b', 3: 'c'}
+        ```
+
+        The `for k, v in` part unpacks each pair into two names, just as `a, b = (1, 2)` does. And the warning from [[f1.composition-and-inverses]] applies in full: a function can be undone only if it never sends two inputs to the same output. If two keys share a value, the swapped table would need one key to have two values, and a dictionary cannot hold that. The later pair silently overwrites the earlier one.
+    - question:
+        id: predict-set-comp
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          names = ["Asha", "Ravi", "Anil", "Rita", "Arun"]
+          initials = {name[0] for name in names}
+          print(len(initials))
+        output: "2"
+        explanation: The five names begin with only two different letters, A and R. A set keeps each member once.
+    - question:
+        id: predict-invert
+        type: predict
+        system: s2
+        concepts: [f1.composition-and-inverses]
+        prompt: What does this print?
+        code: |
+          parity = {1: "odd", 2: "even", 3: "odd", 4: "even"}
+          back = {v: k for k, v in parity.items()}
+          print(len(back), back["odd"])
+        output: "2 3"
+        explanation: The function has no inverse, since two keys map to "odd" and two to "even". The swapped dictionary can hold only one key for each of those words, and each later pair overwrites the earlier one. So "odd" ends up paired with 3, the last odd key.
+    - text: |
+        **Two sources at once.** A comprehension may have more than one `for`. They nest exactly as loops nest, the first `for` being the outer loop:
+
+        ```python
+        pairs = [(a, b) for a in [1, 2] for b in "xy"]
+        # [(1, 'x'), (1, 'y'), (2, 'x'), (2, 'y')]
+        ```
+
+        Every member of the first source meets every member of the second, so the count is the product of the two sizes, $2 \times 2$. Mathematicians call the collection of all such pairs the **Cartesian product** of the two sets, written $A \times B$. A filter can use both variables. The pairs of different numbers from 0 to 3 are
+
+        ```python
+        different = [(a, b) for a in range(4) for b in range(4) if a != b]
+        ```
+
+        and there are $4 \times 4 - 4 = 12$ of them, all sixteen pairs less the four on the diagonal.
+
+        A different kind of nesting puts a whole comprehension in the expression position. The result is then a list of lists:
+
+        ```python
+        table = [[row * col for col in range(1, 4)] for row in range(1, 3)]
+        # [[1, 2, 3], [2, 4, 6]]
+        ```
+
+        Read it from the outside in: for each row, build a complete inner list. This is how a grid of numbers, a matrix, is written in plain Python.
+    - question:
+        id: numeric-pairs
+        type: numeric
+        system: s1
+        concepts: [s0.loops]
+        prompt: |
+          How many items are in the list `[(a, b) for a in range(5) for b in range(3)]`?
+        answer: "15"
+        explanation: Each of the 5 values of `a` is paired with each of the 3 values of `b`. It is the Cartesian product of a set of five with a set of three.
+    - text: |
+        **Walking with an index, and walking two lists together.** Two small tools make most index arithmetic unnecessary.
+
+        `enumerate` hands out each value along with its position, as a pair:
+
+        ```python
+        for i, letter in enumerate("abc"):
+            print(i, letter)          # 0 a, then 1 b, then 2 c
+        ```
+
+        It replaces the clumsier `for i in range(len(s))` followed by `s[i]`.
+
+        `zip` walks two sequences in step, pairing the first with the first, the second with the second, like the two sides of a zip fastener:
+
+        ```python
+        prices = [40, 25, 10]
+        counts = [2, 1, 5]
+        cost = sum([p * c for p, c in zip(prices, counts)])    # 80 + 25 + 50 = 155
+        ```
+
+        Multiply matching entries, add the products. This one line is the **dot product** of two lists of numbers, and it is the single most important calculation in machine learning. Every neuron computes one.
+
+        `zip` stops as soon as the **shorter** sequence runs out. It does not complain about the leftovers. If the two lists were meant to be equally long and are not, the result is quietly wrong, so that is worth an assertion.
+
+        Two string methods are also useful from here on. `"a,b,c".split(",")` cuts a string at every comma and returns the list `['a', 'b', 'c']`, and with no argument, `split()` cuts at spaces. Going the other way, `"-".join(["a", "b", "c"])` glues a list of strings together with the given string between them, giving `'a-b-c'`.
+    - question:
+        id: predict-zip-short
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          xs = [1, 2, 3, 4]
+          ys = [10, 20, 30]
+          print([x + y for x, y in zip(xs, ys)])
+        output: "[11, 22, 33]"
+        explanation: zip stops when the shorter list is used up. The 4 has no partner and is silently left out.
+    - text: |
+        **Dropping the brackets.** Look again at the cost line. It builds a list of three products, hands the list to `sum`, and then throws the list away. The list was only scaffolding. Python lets you leave it out:
+
+        ```python
+        cost = sum(p * c for p, c in zip(prices, counts))
+        ```
+
+        Now put this beside the notation of [[f1.summation-notation]]:
+
+        $$\sum_{n=1}^{1000} \frac{1}{n^2} \qquad\qquad \texttt{sum(1 / n ** 2 for n in range(1, 1001))}$$
+
+        The sigma is `sum`. The term is the expression. The index and its limits are the `for` and the `range`. The only trap is the old one: a range leaves out its upper end, so a sum up to 1000 needs `range(1, 1001)`.
+
+        A comprehension without square brackets is called a **generator expression**. It looks like a list comprehension, but it builds nothing. To understand what it is instead, you need to know what a `for` loop really does.
+    - text: |
+        **What `for` really does.** Python has two built-in functions that are the two halves of every loop. `iter(collection)` asks a collection for a bookmark. The official name for the bookmark is an **iterator**. `next(iterator)` asks the iterator for the next value and moves it along by one.
+
+        ```python
+        it = iter([10, 20, 30])
+        print(next(it))     # 10
+        print(next(it))     # 20
+        print(next(it))     # 30
+        ```
+
+        When the values run out, `next` has nothing to return. It can be given a second argument, a value to hand back in that case:
+
+        ```python
+        print(next(it, "finished"))     # finished
+        ```
+
+        Without that second argument, an exhausted iterator raises a signal called `StopIteration`. That signal is how the end is announced. So the loop `for x in xs:` is shorthand for this:
+
+        1. Call `iter(xs)` once, to get an iterator.
+        2. Call `next` on the iterator, and give the result the name `x`.
+        3. Run the body.
+        4. Go back to step 2, until the iterator signals that it is finished.
+
+        Anything that can hand out an iterator is called **iterable**. Lists, tuples, strings, dictionaries, sets and ranges are all iterable, and that is the whole reason one kind of `for` loop works on all of them. The loop does not know or care what it is walking through. It only ever says "next".
+
+        An iterator moves in one direction only. It cannot go back, it cannot start again, and it does not know how many values are left. A list is a book, and you can ask it for a fresh bookmark as often as you like. An iterator is the bookmark, and when it reaches the end it stays there.
+    - question:
+        id: order-for-loop
+        type: order
+        system: s2
+        prompt: Put in order what Python does when it runs a for loop over a list of two items.
+        steps:
+          - Call iter on the list to get an iterator.
+          - Call next on the iterator and receive the first item.
+          - Run the body of the loop with the first item.
+          - Call next on the iterator and receive the second item.
+          - Run the body of the loop with the second item.
+          - Call next on the iterator, which signals that nothing is left.
+          - Leave the loop and carry on with the line after it.
+        explanation: The iterator is asked for once, at the start. After that the loop alternates between asking for the next item and running the body. The loop cannot know that the list is finished until it asks one more time and is told so.
+    - question:
+        id: predict-shared-iterator
+        type: predict
+        system: s2
+        prompt: What does this print?
+        code: |
+          it = iter([5, 6, 7, 8])
+          first = next(it)
+          rest = [x for x in it]
+          print(first, rest, next(it, "empty"))
+        output: "5 [6, 7, 8] empty"
+        explanation: The iterator is a single bookmark. The first next moved it past the 5, so the comprehension starts at 6 and runs it to the end. After that there is nothing left, and next returns the fallback value.
+    - text: |
+        **A generator expression is an iterator with no book.** Now the bracketless form can be explained. `(1 / n ** 2 for n in range(1, 1001))` does not compute a thousand numbers. It makes an iterator that holds a recipe. Each time `next` is called on it, it takes one more `n` from the range, works out one term, hands it over and forgets it. `sum` calls `next` again and again, adding as it goes. At no moment do two terms exist together. This property is called **laziness**: work is done only when a value is asked for.
+
+        That solves the second puzzle. Summing a thousand million terms this way takes time, but it takes no more memory than summing ten.
+
+        Laziness has a price, and it is the most common mistake people make with iterators. A generator expression is a bookmark, so it can be used **once**:
+
+        ```python
+        squares = (x ** 2 for x in range(4))
+        print(sum(squares))     # 14
+        print(sum(squares))     # 0
+        ```
+
+        The second sum is zero, because the iterator was already at its end, and the sum of no terms is the empty sum. Python raises no error. If you need the values twice, keep them: wrap the generator in `list(...)`, or write the comprehension with square brackets in the first place.
+
+        `enumerate` and `zip` are lazy in the same way. They return iterators, which is why printing `zip(xs, ys)` shows nothing useful, and why `list(zip(xs, ys))` is the way to look at the pairs. A `range` is lazy as well, but it is a book and not a bookmark. It works out each number on demand, and it can still be walked as many times as you like.
+
+        The functions `list`, `tuple`, `set` and `dict` accept any iterable and collect its values. `list("abc")` is `['a', 'b', 'c']`, `tuple([1, 2])` is `(1, 2)`, and `dict(zip(keys, values))` builds a dictionary from two matching lists.
+    - question:
+        id: predict-once-only
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          evens = (n for n in range(10) if n % 2 == 0)
+          print(max(evens))
+          print(list(evens))
+        output: |
+          8
+          []
+        explanation: max walks the generator to its end to find the largest value. The generator is then exhausted, so list has nothing to collect.
+    - text: |
+        **Asking a question of every member.** Two more built-in functions take an iterable of true and false values. `all` answers whether every one is true. `any` answers whether at least one is.
+
+        ```python
+        xs = [3, 8, 5]
+        print(all(x > 0 for x in xs))      # True   every member is positive
+        print(any(x > 7 for x in xs))      # True   at least one exceeds 7
+        print(all(x > 4 for x in xs))      # False  the 3 fails
+        ```
+
+        These are the code for two phrases that mathematics uses constantly: "for every $x$ in the set" and "there is some $x$ in the set". They are also lazy in a useful way. `any` stops at the first true value it meets, and `all` stops at the first false one, since after that the answer cannot change. Fed by a generator, they do no more work than is needed.
+
+        On an empty collection, `all` is `True` and `any` is `False`. That is not arbitrary. To make `all` false you must produce a member that fails, and an empty collection has none to offer. It is the same reasoning that made the empty sum 0 and the empty product 1.
+
+        **When not to fold.** A comprehension is for building a collection from another. If the body of your loop prints, or changes something elsewhere, or needs several statements, keep the loop. And if a comprehension has grown past one clear thought, with three `for` clauses and two conditions, unfold it. The aim was to say *what* plainly. A line that must be decoded has lost that.
+    - question:
+        id: fix-mean-spread
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `spread(values)` should return how far apart the largest and smallest of the squared values are. For `[1, -3, 2]` the squares are 1, 9 and 4, so the answer should be $9 - 1 = 8$. Instead the program stops with an error on the line that calls `min`, complaining that it was given an empty sequence. Fix it without changing what the function is meant to compute.
+        starter: |
+          def spread(values):
+              squares = (v ** 2 for v in values)
+              return max(squares) - min(squares)
+
+          print(spread([1, -3, 2]))
+        solution: |
+          def spread(values):
+              squares = [v ** 2 for v in values]
+              return max(squares) - min(squares)
+
+          print(spread([1, -3, 2]))
+        tests: |
+          assert spread([1, -3, 2]) == 8, "The squares are 1, 9 and 4, so the spread is 8"
+          assert spread([5]) == 0, "With one value the largest and smallest squares are the same"
+          assert spread([-2, 2]) == 0, "-2 and 2 have the same square"
+          assert spread([0, 10, -1]) == 100, "The squares are 0, 100 and 1"
+          assert spread((3, 4)) == 7, "It should work for a tuple as well"
+        wrong:
+          - "def spread(values):\n    squares = [v ** 2 for v in values]\n    return max(values) - min(values)\n\nprint(spread([1, -3, 2]))\n"
+          - "def spread(values):\n    squares = [v ** 2 for v in values]\n    return max(squares)\n\nprint(spread([1, -3, 2]))\n"
+          - "def spread(values):\n    squares = [abs(v) for v in values]\n    return max(squares) - min(squares)\n\nprint(spread([1, -3, 2]))\n"
+        explanation: |
+          `squares` was a generator, a bookmark with no book. `max` walked it to the end, and `min` then received an iterator with nothing left. Square brackets build a real list, which can be walked as often as you like. The rule: if a result is needed more than once, it must be stored.
+  formal:
+    - text: |
+        **Comprehensions.** With `source` any iterable, `test` an optional condition and `expr`, `key`, `value` expressions:
+
+        | Form | Builds | Loop it replaces |
+        | --- | --- | --- |
+        | `[expr for x in source if test]` | a list | append `expr` to an empty list |
+        | `{expr for x in source if test}` | a set | add `expr` to an empty set |
+        | `{key: value for x in source if test}` | a dictionary | set `d[key] = value` in an empty dictionary |
+        | `(expr for x in source if test)` | a generator, which is an iterator | nothing is built; values are produced on demand |
+
+        Several `for` clauses nest from left to right, the leftmost being the outermost loop. A conditional expression `a if test else b` in the expression position chooses a value and never drops an item. An `if` after the `for` drops items and has no `else`. When a generator expression is the only argument of a function call, its own round brackets may be left out, as in `sum(x for x in xs)`.
+
+        **The iteration protocol.** An object is **iterable** if `iter(obj)` returns an iterator. An object is an **iterator** if `next(obj)` returns its next value, or signals `StopIteration` when it has none; `next(obj, default)` returns `default` instead of signalling. An iterator moves forwards only and is exhausted after one pass. Calling `iter` on a list, string, tuple, set, dictionary or range gives a new, independent iterator each time. Calling `iter` on an iterator gives back that same iterator.
+
+        | Function | Takes | Gives |
+        | --- | --- | --- |
+        | `enumerate(xs)` | an iterable | an iterator of pairs `(index, value)`, indices from 0 |
+        | `zip(xs, ys)` | two or more iterables | an iterator of tuples of matching items, ending with the shortest |
+        | `all(bs)` | an iterable | `True` if no item is false; `True` when empty |
+        | `any(bs)` | an iterable | `True` if some item is true; `False` when empty |
+        | `list`, `tuple`, `set`, `dict` | an iterable | a new collection holding its items |
+        | `s.split(sep)` | a string | the list of pieces of `s` between occurrences of `sep` |
+        | `sep.join(strings)` | an iterable of strings | one string, the items joined with `sep` between them |
+
+        **Laziness.** A generator expression, `enumerate`, `zip` and `range` compute each value only when it is requested. The first three are iterators and can be consumed once. A `range` is an iterable and can be walked any number of times.
+  drill:
+    - question:
+        id: drill-map
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          print([n * n for n in range(1, 5)])
+        output: "[1, 4, 9, 16]"
+        explanation: The range gives 1, 2, 3 and 4, and each is replaced by its square.
+    - question:
+        id: drill-filter
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          print([c for c in "comprehension" if c in "aeiou"])
+        output: "['o', 'e', 'e', 'i', 'o']"
+        explanation: A string is iterable, one character at a time. The filter keeps the vowels, in the order they occur, repeats included.
+    - question:
+        id: drill-count-filter
+        type: numeric
+        system: s1
+        prompt: |
+          How many items are in `[n for n in range(20) if n % 3 == 0]`?
+        answer: "7"
+        explanation: The multiples of three below 20 are 0, 3, 6, 9, 12, 15 and 18. Zero counts, since the remainder of 0 on division by 3 is 0.
+    - question:
+        id: drill-enumerate
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          print([i for i, ch in enumerate("banana") if ch == "a"])
+        output: "[1, 3, 5]"
+        explanation: enumerate pairs each character with its position, counted from zero. The filter keeps the positions where the character is an a.
+    - question:
+        id: drill-dict-comp
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          print({n: n ** 3 for n in range(3)})
+        output: "{0: 0, 1: 1, 2: 8}"
+        explanation: A pair with a colon at the front builds a dictionary. Each n is a key, and its cube is the value.
+    - question:
+        id: drill-kind
+        type: choice
+        system: s1
+        prompt: |
+          What kind of object is `(x + 1 for x in [1, 2, 3])`?
+        options:
+          - A tuple holding 2, 3 and 4.
+          - A list holding 2, 3 and 4.
+          - A generator, which works out each value only when asked for it.
+          - A set holding 2, 3 and 4.
+        answer: 2
+        explanation: Round brackets around a comprehension do not make a tuple. They make a generator expression, a lazy iterator. To get a tuple you would write tuple(x + 1 for x in [1, 2, 3]).
+    - question:
+        id: drill-all-any
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          xs = [2, 4, 7]
+          print(all(x % 2 == 0 for x in xs), any(x % 2 == 0 for x in xs), all([]))
+        output: "False True True"
+        explanation: Not every number is even, since 7 is odd. At least one is even. And all of an empty list is True, because there is no member that fails.
+    - question:
+        id: drill-sigma
+        type: choice
+        system: s1
+        concepts: [f1.summation-notation]
+        prompt: |
+          Which line computes $\displaystyle\sum_{k=1}^{50} (2k - 1)$?
+        options:
+          - "`sum(2 * k - 1 for k in range(50))`"
+          - "`sum(2 * k - 1 for k in range(1, 50))`"
+          - "`sum(2 * k - 1 for k in range(1, 51))`"
+          - "`sum(2 * k - 1 for k in range(51))`"
+        answer: 2
+        explanation: The index runs from 1 to 50 with both ends included. A range leaves out its upper end, so it must be given 51. The last option would start at k = 0 and add an extra term, -1.
+    - question:
+        id: drill-split-join
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          parts = "2026-11-24".split("-")
+          print("/".join([parts[2], parts[1], parts[0]]))
+        output: "24/11/2026"
+        explanation: split cuts the string at each hyphen, giving three pieces. join then glues the pieces, in the new order, with a slash between each pair.
+  work:
+    - question:
+        id: write-relu
+        type: code
+        mode: write
+        system: s1
+        prompt: |
+          Write `relu(xs)` that returns a new list in which every negative number of `xs` has been replaced by 0 and every other number is unchanged. Use one comprehension. The original list must not be changed.
+        starter: |
+          def relu(xs):
+              # Replace the next line with your own.
+              return xs
+
+          print(relu([3, -1, 4, -5]))
+        solution: |
+          def relu(xs):
+              return [x if x > 0 else 0 for x in xs]
+
+          print(relu([3, -1, 4, -5]))
+        tests: |
+          assert relu([3, -1, 4, -5]) == [3, 0, 4, 0], "Negative numbers become 0 and the others stay"
+          assert relu([]) == [], "An empty list gives an empty list"
+          assert relu([-2.5, 2.5]) == [0, 2.5], "It should work for decimals"
+          assert relu([0, 0]) == [0, 0], "Zero stays zero"
+          _xs = [-1, 1]
+          _ys = relu(_xs)
+          assert _xs == [-1, 1], "The original list must not be changed"
+          assert len(relu([-1, -2, -3])) == 3, "Nothing is dropped. Three numbers in, three numbers out."
+        wrong:
+          - "def relu(xs):\n    return [x for x in xs if x > 0]\n"
+          - "def relu(xs):\n    return [abs(x) for x in xs]\n"
+          - "def relu(xs):\n    for i in range(len(xs)):\n        if xs[i] < 0:\n            xs[i] = 0\n    return xs\n"
+        explanation: |
+          Every number stays in the list, so there is no filter. The choice of what each number becomes is a conditional expression at the front: `x if x > 0 else 0`. `max(x, 0)` in that position works equally well. This function, applied to a list of numbers, is one layer's worth of the activation used in most neural networks.
+    - question:
+        id: write-dot
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `dot(u, v)` that returns the dot product of two lists of numbers: the sum of the products of matching entries. For `[1, 2, 3]` and `[4, 5, 6]` it is $1 \times 4 + 2 \times 5 + 3 \times 6 = 32$.
+
+          The two lists must have the same length. Begin the function with an assertion that says so, so that a mismatch stops the program instead of giving a quietly wrong answer.
+        starter: |
+          def dot(u, v):
+              # Replace the next line with your own.
+              return 0
+
+          print(dot([1, 2, 3], [4, 5, 6]))
+        solution: |
+          def dot(u, v):
+              assert len(u) == len(v), "the lists must have the same length"
+              return sum(a * b for a, b in zip(u, v))
+
+          print(dot([1, 2, 3], [4, 5, 6]))
+        tests: |
+          assert dot([1, 2, 3], [4, 5, 6]) == 32, "1*4 + 2*5 + 3*6 is 32"
+          assert dot([], []) == 0, "The empty sum is 0"
+          assert dot([2], [-3]) == -6, "With one entry each it is a single product"
+          assert abs(dot([0.5, 0.5], [4, 6]) - 5) < 1e-12, "It should work for decimals"
+          assert dot([1, 0, 0], [0, 1, 0]) == 0, "No matching entries are both non-zero"
+          _stopped = False
+          try:
+              dot([1, 2, 3], [1, 2])
+          except AssertionError:
+              _stopped = True
+          assert _stopped, "Lists of different lengths should be stopped by an assertion"
+        wrong:
+          - "def dot(u, v):\n    return sum(a * b for a, b in zip(u, v))\n"
+          - "def dot(u, v):\n    assert len(u) == len(v)\n    return sum(a + b for a, b in zip(u, v))\n"
+          - "def dot(u, v):\n    assert len(u) == len(v)\n    return sum(a * b for a in u for b in v)\n"
+        explanation: |
+          `zip` pairs matching entries, the expression multiplies each pair, and `sum` adds the products. No list is built, because the generator hands the products to `sum` one at a time. The assertion matters because `zip` stops at the shorter list without a word. The third wrong answer in the tests uses two `for` clauses, which pairs every entry of one list with every entry of the other, the Cartesian product, and that is a different calculation.
+    - question:
+        id: write-inverse
+        type: code
+        mode: write
+        system: s2
+        concepts: [f1.composition-and-inverses, s0.dictionaries-and-sets]
+        prompt: |
+          A dictionary is a function written as a table. Write `inverse(table)` that returns the inverse function as a new dictionary, with every pair swapped, **if** the function has one. If two keys share a value there is no inverse, and the function should return `None`.
+
+          `inverse({"a": 1, "b": 2})` is `{1: "a", 2: "b"}`. `inverse({"a": 1, "b": 1})` is `None`.
+        starter: |
+          def inverse(table):
+              # Replace the next line with your own.
+              return table
+
+          print(inverse({"a": 1, "b": 2}))
+          print(inverse({"a": 1, "b": 1}))
+        solution: |
+          def inverse(table):
+              swapped = {v: k for k, v in table.items()}
+              if len(swapped) != len(table):
+                  return None
+              return swapped
+
+          print(inverse({"a": 1, "b": 2}))
+          print(inverse({"a": 1, "b": 1}))
+        tests: |
+          assert inverse({"a": 1, "b": 2}) == {1: "a", 2: "b"}, "Every pair should be swapped"
+          assert inverse({"a": 1, "b": 1}) is None, "Two keys share the value 1, so there is no inverse"
+          assert inverse({}) == {}, "The empty function is its own inverse"
+          assert inverse({1: 2, 2: 3, 3: 1}) == {2: 1, 3: 2, 1: 3}, "A function from a set to itself"
+          assert inverse({1: "x", 2: "y", 3: "x"}) is None, "1 and 3 both map to x"
+          _t = {"p": "q"}
+          assert inverse(inverse(_t)) == _t, "The inverse of the inverse is the function you began with"
+          assert _t == {"p": "q"}, "The original table must not be changed"
+        wrong:
+          - "def inverse(table):\n    return {v: k for k, v in table.items()}\n"
+          - "def inverse(table):\n    swapped = {k: v for k, v in table.items()}\n    if len(swapped) != len(table):\n        return None\n    return swapped\n"
+          - "def inverse(table):\n    if len(table) > 1:\n        return None\n    return {v: k for k, v in table.items()}\n"
+        explanation: |
+          Swapping the pairs is one dictionary comprehension. The check for an inverse uses a fact about dictionaries: a key can appear only once. If two keys of the table share a value, the swapped dictionary receives that value as a key twice and keeps one, so it comes out smaller than the table. Comparing the two sizes detects exactly the functions that send two inputs to the same output. An equivalent test is `len(set(table.values())) != len(table)`.
+    - question:
+        id: write-transpose
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A table of numbers is stored as a list of rows, each row a list. Write `transpose(rows)` that returns the table with rows and columns exchanged: the first row of the result is the first column of the input, and so on. Every row has the same length, and there is at least one row.
+
+          `transpose([[1, 2, 3], [4, 5, 6]])` is `[[1, 4], [2, 5], [3, 6]]`.
+        starter: |
+          def transpose(rows):
+              # Replace the next line with your own.
+              return rows
+
+          print(transpose([[1, 2, 3], [4, 5, 6]]))
+        solution: |
+          def transpose(rows):
+              width = len(rows[0])
+              return [[row[j] for row in rows] for j in range(width)]
+
+          print(transpose([[1, 2, 3], [4, 5, 6]]))
+        tests: |
+          assert transpose([[1, 2, 3], [4, 5, 6]]) == [[1, 4], [2, 5], [3, 6]], "Two rows of three become three rows of two"
+          assert transpose([[7]]) == [[7]], "A single entry is unchanged"
+          assert transpose([[1, 2]]) == [[1], [2]], "One row becomes one column"
+          assert transpose([[1], [2], [3]]) == [[1, 2, 3]], "One column becomes one row"
+          _m = [[1, 2], [3, 4], [5, 6]]
+          assert transpose(transpose(_m)) == _m, "Transposing twice gives back the original table"
+          assert _m == [[1, 2], [3, 4], [5, 6]], "The original table must not be changed"
+        wrong:
+          - "def transpose(rows):\n    return [[row[j] for j in range(len(rows[0]))] for row in rows]\n"
+          - "def transpose(rows):\n    return [[row[j] for row in rows] for j in range(len(rows))]\n"
+          - "def transpose(rows):\n    return [row[j] for j in range(len(rows[0])) for row in rows]\n"
+        explanation: |
+          Read the solution from the outside in. For each column number `j`, build one new row: the entry at position `j` of every old row. The outer comprehension runs over the columns of the input, because those become the rows of the output. The first wrong answer has the two loops the other way round and simply copies the table. The last has both `for` clauses in one comprehension, which gives a flat list with no rows at all. Since `zip` pairs matching items of any number of lists, the columns can also be had from it, but the nested comprehension shows what is happening.
+    - question:
+        id: fix-first-negative
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `first_negative(xs)` should return the **position** of the first negative number in `xs`, or `None` if there is none. For `[4, 7, -2, 9, -1]` the answer is 2. The function returns `-2` for that list, and for a list with no negative numbers it stops with an error instead of returning `None`. Fix both faults.
+        starter: |
+          def first_negative(xs):
+              found = (x for i, x in enumerate(xs) if x < 0)
+              return next(found)
+
+          print(first_negative([4, 7, -2, 9, -1]))
+        solution: |
+          def first_negative(xs):
+              found = (i for i, x in enumerate(xs) if x < 0)
+              return next(found, None)
+
+          print(first_negative([4, 7, -2, 9, -1]))
+        tests: |
+          assert first_negative([4, 7, -2, 9, -1]) == 2, "The first negative number is at position 2"
+          assert first_negative([1, 2, 3]) is None, "With no negative number the answer is None"
+          assert first_negative([]) is None, "An empty list has no negative number"
+          assert first_negative([-5]) == 0, "Positions are counted from zero"
+          assert first_negative([0, 0, -1]) == 2, "Zero is not negative"
+          assert first_negative([3, -3, -3]) == 1, "The first one, not the last"
+        wrong:
+          - "def first_negative(xs):\n    found = (x for i, x in enumerate(xs) if x < 0)\n    return next(found, None)\n"
+          - "def first_negative(xs):\n    found = [i for i, x in enumerate(xs) if x < 0]\n    return found[-1] if found else None\n"
+          - "def first_negative(xs):\n    found = (i for i, x in enumerate(xs) if x <= 0)\n    return next(found, None)\n"
+        explanation: |
+          The expression at the front decides what is produced. It was `x`, the value, where the position `i` was wanted. And `next` on an iterator with nothing in it signals `StopIteration` unless it is given a fallback as its second argument. Notice how little work the fixed version does: the generator is lazy, so `next` stops at the first negative number and the rest of the list is never examined.
+    - question:
+        id: write-word-lengths
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `longest_words(sentence)` that returns a **set** of the longest words in the sentence. Words are separated by single spaces. Compare the words without regard to capital letters, and return them in lower case. If several words tie for the longest, the set holds all of them. An empty sentence gives the empty set.
+
+          `longest_words("The cat sat on THE mat")` is `{"the", "cat", "sat", "mat"}`.
+        starter: |
+          def longest_words(sentence):
+              # Replace the next line with your own.
+              return set()
+
+          print(longest_words("a list is a book and an iterator is a bookmark"))
+        solution: |
+          def longest_words(sentence):
+              words = [w.lower() for w in sentence.split()]
+              if len(words) == 0:
+                  return set()
+              longest = max(len(w) for w in words)
+              return {w for w in words if len(w) == longest}
+
+          print(longest_words("a list is a book and an iterator is a bookmark"))
+        tests: |
+          assert longest_words("The cat sat on THE mat") == {"the", "cat", "sat", "mat"}, "Four different three-letter words tie, and 'The' and 'THE' are the same word"
+          assert longest_words("a list is a book and an iterator is a bookmark") == {"iterator", "bookmark"}, "Two eight-letter words tie"
+          assert longest_words("") == set(), "An empty sentence gives the empty set"
+          assert longest_words("Hello") == {"hello"}, "One word, returned in lower case"
+          assert longest_words("to be or not") == {"not"}, "One word is longer than the rest"
+          assert type(longest_words("a b")) == set, "The result should be a set"
+        wrong:
+          - "def longest_words(sentence):\n    words = sentence.split()\n    if len(words) == 0:\n        return set()\n    longest = max(len(w) for w in words)\n    return {w for w in words if len(w) == longest}\n"
+          - "def longest_words(sentence):\n    words = [w.lower() for w in sentence.split()]\n    if len(words) == 0:\n        return set()\n    return {max(words)}\n"
+          - "def longest_words(sentence):\n    words = [w.lower() for w in sentence.split()]\n    longest = max([len(w) for w in words] + [0])\n    return {w for w in words if len(w) >= longest - 1 and longest > 0}\n"
+        explanation: |
+          Three comprehensions, each doing one job. A list comprehension puts every word in lower case. A generator inside `max` finds the greatest length without building a list of lengths. A set comprehension keeps the words of that length, and being a set it holds each word once. The empty sentence needs its own line, because `max` of nothing has no answer. Note that `max(words)` would compare the words alphabetically, which is a different question.
+    - question:
+        id: numeric-lazy-count
+        type: numeric
+        system: s2
+        prompt: |
+          A function `is_prime(n)` is slow. The line below is run:
+
+          `any(is_prime(n) for n in [8, 9, 10, 11, 12, 13])`
+
+          How many times is `is_prime` called?
+        answer: "4"
+        explanation: The generator is lazy and any stops at the first true value. is_prime is called for 8, 9 and 10, which are not prime, and then for 11, which is. After that the answer is known, so 12 and 13 are never tested. With square brackets inside any, the whole list of six results would have been built first.
+    - question:
+        id: write-basel
+        type: code
+        mode: write
+        system: s2
+        concepts: [f1.arithmetic-and-geometric-series, f1.summation-notation]
+        prompt: |
+          The series $\displaystyle\sum_{n=1}^{\infty} \frac{1}{n^2}$ converges. Write `basel(terms)` that returns its partial sum, the sum of the first `terms` terms, in one line with `sum` and a generator expression. Then the program prints the partial sum for a million terms. No list of a million numbers should ever be built.
+        starter: |
+          def basel(terms):
+              # Replace the next line with your own.
+              return 0.0
+
+          print(basel(1000000))
+        solution: |
+          def basel(terms):
+              return sum(1 / n ** 2 for n in range(1, terms + 1))
+
+          print(basel(1000000))
+        tests: |
+          assert "[" not in source, "Do not build a list. Leave the square brackets out and let sum take the terms one at a time."
+          assert basel(1) == 1, "The first term is 1"
+          assert abs(basel(2) - 1.25) < 1e-12, "1 + 1/4 is 1.25"
+          assert abs(basel(3) - (1.25 + 1 / 9)) < 1e-12, "1 + 1/4 + 1/9"
+          assert basel(0) == 0, "With no terms the sum is empty"
+          assert abs(basel(100000) - 1.6449240668982262) < 1e-9, "The sum of the first hundred thousand terms"
+        wrong:
+          - "def basel(terms):\n    return sum(1 / n ** 2 for n in range(1, terms))\n"
+          - "def basel(terms):\n    return sum(1 / n * 2 for n in range(1, terms + 1))\n"
+          - "def basel(terms):\n    return sum(1 / 2 ** n for n in range(1, terms + 1))\n"
+        explanation: |
+          The line is the sigma notation typed out: `sum` for the sigma, the term at the front, and the index with its limits in the `for`. The upper limit needs `terms + 1` because a range stops one short. The printed value, about 1.644933, is creeping up on Euler's limit from [[f1.summation-notation]], $\dfrac{\pi^2}{6} \approx 1.644934$. That a sum over whole numbers should know about circles is one of the surprises of mathematics.
+  connections:
+    - text: |
+        You began with two puzzles. The first asked whether Python can say what a collection is, as the notation of mathematics does. It can: a comprehension has an expression, a source and a condition, in the places where the mathematics has them. The second asked how to sum terms without storing them. The answer was already inside every `for` loop: a loop talks only to an iterator, and an iterator may work out its values on demand.
+
+        Hold on to the two words. An **iterable** is anything a loop can walk. An **iterator** is the thing that does the walking, forwards, once. Nearly everything you will write from here on is built on that pair. When you train a model, the data will not fit in memory, and it will arrive as an iterator that produces one batch at a time. The training loop will say `for batch in loader:` and never know the difference.
+
+        Two threads continue directly.
+
+        The tools of this lesson, `enumerate`, `zip`, `sum`, `any`, `all`, are built into Python and always at hand. Most of Python is not. Square roots, random numbers, more ways of combining iterators: these live in separate libraries that must be asked for by name. How that asking works, and what a name such as `math.sqrt` really means, is the subject of [[s1.modules-and-imports]], which comes next.
+
+        A generator expression is a recipe that fits on one line. Some sequences need more: a running state, a loop of their own, a first term and a rule for the next, like the recurrences of [[f1.arithmetic-and-geometric-series]]. Python lets you write a whole function that produces values lazily, pausing between each. That is the generator function, and you will build one in [[s1.generators-and-context-managers]], where an iterator that never ends will turn out to be perfectly usable.

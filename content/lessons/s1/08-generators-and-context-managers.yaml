@@ -1,0 +1,882 @@
+concept: s1.generators-and-context-managers
+minutes: 105
+claim: You can write a function that produces its values one at a time with yield, explain exactly when its body runs and what is kept between values, build sequences that never end and pipelines that never hold their data in memory, walk a nested structure with yield from, and explain what the with statement does and make your own objects work with it, both as a class and as a generator.
+recalls: [s1.recursion]
+uses: [s1.comprehensions-and-iterators, s1.modules-and-imports, s1.classes-and-objects, s1.special-methods, s1.exceptions, s1.files-and-data-formats, s1.recursion, s0.loops, s0.functions, s0.lists-and-tuples, f1.arithmetic-and-geometric-series, f1.functions-as-machines]
+leads: [s1.type-hints-and-dataclasses]
+starter: |
+  # Scratch space. A sequence with no end, taken a few terms at a time.
+  def fibonacci():
+      a, b = 0, 1
+      while True:
+          yield a
+          a, b = b, a + b
+
+  for term in fibonacci():
+      if term > 1000000:
+          print("first term over a million:", term)
+          break
+parts:
+  recall:
+    - text: |
+        [[s1.recursion]] ended with a function that hands out its values one at a time and pauses between them. Every iterator you have used so far, from `range` to an open file, was written by someone else. This lesson is about writing such things yourself. Three quick pulls first.
+  puzzle:
+    - text: |
+        In [[f1.arithmetic-and-geometric-series]] a sequence went on for ever: the Fibonacci numbers 0, 1, 1, 2, 3, 5, 8 and so on have no last term. Now answer a simple question with a program. **What is the first Fibonacci number greater than a million?**
+
+        You could write a function that returns a list of the first `n` terms. But how large should `n` be? You do not know. That is the question. Ask for too few and the answer is not in the list. Ask for a thousand and you compute 970 terms for nothing. A function must return some definite list, and so it must be told where to stop, and the caller does not know where to stop until the terms have been seen.
+
+        What you want is the arrangement you had with `range`: the terms handed over one at a time, for as long as you keep asking, with nobody deciding in advance how many there will be. A generator expression from [[s1.comprehensions-and-iterators]] does that, but it is one line, and each Fibonacci number needs the **two before it**. Something has to be remembered from one term to the next.
+
+        So you need a function that can hand back a value and then **carry on from where it was**, with its variables intact, when it is asked for another. An ordinary function cannot. You saw in [[s1.recursion]] what `return` does: the call is finished, it comes off the stack, and its local variables are destroyed. The next call starts from the top with nothing.
+
+        Here is a second form of the same puzzle. A log file of fifty gigabytes is to be read, each line parsed, the errors kept, and the first ten of them shown. Written as four steps with lists, each step builds a complete list before the next begins, and the first of those lists does not fit in memory. Yet the answer depends on perhaps the first few thousand lines. How can each line pass through **all** the steps before the next line is even read?
+  intuition:
+    - text: |
+        Someone is reading a long story aloud to a child, one page each night. At the end of the page the reader stops, and puts a finger, or a bookmark, on the place. Next night the reading goes on from exactly there. Nothing has been forgotten: who the characters are, what has happened, which page it is.
+
+        An ordinary function is a reader who, having read one page, shuts the book, forgets everything, and next night begins again at page one. That is what `return` does.
+
+        Python has a second word for handing back a value: **`yield`**. It means: *here is a value, and I shall wait right here.* The function is not finished. It is **paused**, in the middle of its body, with every local variable kept exactly as it is. When the next value is asked for, the function wakes up on the line after the `yield` and carries on, as if nothing had happened, until it reaches a `yield` again.
+
+        A function that contains `yield` is called a **generator function**. Think back to the picture of the call stack in the lesson on recursion. A normal call is put on the stack, runs, and is thrown away. A call of a generator function is taken **off** the stack while it waits, and kept to one side, frozen, to be put back on when it is wanted.
+
+        And look at what the frozen thing is, from the outside. It is an object that you can ask, again and again, for the next value, and that goes forwards only. You have had a name for that since the first lesson of this cluster. It is an **iterator**: the bookmark with no book behind it. A generator function is simply the easiest way there is to make one.
+  derivation:
+    - text: |
+        **A first generator.**
+
+        ```python
+        def count_up_to(n):
+            k = 1
+            while k <= n:
+                yield k
+                k += 1
+        ```
+
+        This looks like a function that returns numbers. It behaves quite differently, and the difference begins at the call.
+
+        ```python
+        numbers = count_up_to(3)
+        print(numbers)              # <generator object count_up_to at 0x...>
+        ```
+
+        **Calling a generator function runs none of its body.** Not one line. The call creates the frozen frame, with `n` set to 3, standing at the very top, and hands it back as a **generator object**. The work starts only when a value is asked for, with `next`, which you met in [[s1.comprehensions-and-iterators]].
+
+        ```python
+        print(next(numbers))        # 1
+        print(next(numbers))        # 2
+        print(next(numbers))        # 3
+        ```
+
+        Follow the first `next`. The body starts at the top: `k = 1`, the test `1 <= 3` passes, and `yield k` hands back 1 and pauses. The second `next` resumes after the `yield`: `k += 1` makes `k` 2, the loop goes round, and `yield k` hands back 2. The local variable `k` kept its value across the pause. That is the whole trick.
+
+        After the third value, a fourth `next` resumes, makes `k` 4, finds the loop's test false, and falls off the end of the body. A generator that reaches the end of its body is finished, and it says so in the way every iterator does, by raising `StopIteration`, as you learnt in [[s1.exceptions]]. A `for` loop catches that for you:
+
+        ```python
+        for number in count_up_to(3):
+            print(number)
+        ```
+
+        Since a generator is an iterator, everything that accepts an iterable accepts it: `for`, `sum`, `max`, `list`, `zip`, comprehensions.
+    - question:
+        id: predict-nothing-runs
+        type: predict
+        system: s2
+        prompt: What does this print?
+        code: |
+          def greet():
+              print("started")
+              yield "hello"
+              print("resumed")
+              yield "goodbye"
+
+          g = greet()
+          print("created")
+          print(next(g))
+          print("between")
+          print(next(g))
+        output: |
+          created
+          started
+          hello
+          between
+          resumed
+          goodbye
+        explanation: Calling greet runs nothing, so "created" is printed first. The first next runs the body from the top as far as the first yield, printing "started" and handing back "hello". The body then waits, and "between" is printed by the caller. The second next resumes after the first yield.
+    - text: |
+        **Two pieces of code taking turns.** The last question shows something new. Until now, when one function called another, the caller stopped and waited until the other had completely finished. A generator and the loop that consumes it **alternate**. The loop asks, the generator runs a little and yields, the loop does its work with that value, asks again, and the generator runs a little more. Neither finishes before the other.
+
+        That alternation is the answer to the second puzzle, and you will see it shortly. First, the first puzzle.
+
+        **A sequence that never ends.**
+
+        ```python
+        def fibonacci():
+            a, b = 0, 1
+            while True:
+                yield a
+                a, b = b, a + b
+        ```
+
+        The loop `while True` never ends, and in an ordinary function that would be a bug. Here it is the point. The body runs only as far as the next `yield` each time a value is requested, so an endless loop simply means an endless supply. The two variables `a` and `b` are the "two terms before" that the sequence needs, kept safe across every pause. This is the recurrence $F_{n+1} = F_n + F_{n-1}$ of [[f1.arithmetic-and-geometric-series]], written as a program that follows it one step at a time.
+
+        Now the caller decides when to stop, not the function:
+
+        ```python
+        for term in fibonacci():
+            if term > 1000000:
+                print(term)         # 1346269
+                break
+        ```
+
+        One warning. Never hand an endless generator to something that wants all of it. `list(fibonacci())` and `sum(fibonacci())` will run until the machine's memory is gone.
+
+        A generator may also stop early by its own choice. Inside a generator function, a bare `return` means "I am finished": it ends the generator, exactly as falling off the end of the body does.
+    - question:
+        id: predict-state
+        type: predict
+        system: s1
+        concepts: [f1.arithmetic-and-geometric-series]
+        prompt: What does this print?
+        code: |
+          def doubling(start):
+              value = start
+              while True:
+                  yield value
+                  value = value * 2
+
+          d = doubling(3)
+          first = [next(d), next(d), next(d)]
+          print(first, next(d))
+        output: "[3, 6, 12] 24"
+        explanation: The generator keeps its variable value between requests. Each next yields the current value and, when resumed, doubles it. After three values have been taken, the fourth request continues the same sequence.
+    - text: |
+        **Pipelines.** A generator function can take an iterable as its argument and yield something made from each item. Such generators can be joined end to end, each consuming the one before.
+
+        ```python
+        def read_lines(path):
+            with open(path) as f:
+                for line in f:
+                    yield line.strip()
+
+        def parse(lines):
+            for line in lines:
+                level, message = line.split(":", 1)
+                yield (level, message)
+
+        def only_errors(records):
+            for level, message in records:
+                if level == "ERROR":
+                    yield message
+
+        def take(n, items):
+            count = 0
+            for item in items:
+                if count == n:
+                    return
+                yield item
+                count += 1
+
+        for message in take(10, only_errors(parse(read_lines("server.log")))):
+            print(message)
+        ```
+
+        Read the last line from the inside out: lines, parsed, filtered, the first ten. Now ask what actually happens, and remember that calling a generator function runs nothing. The four calls on the last line create four frozen frames and do no work at all. Then the `for` loop asks `take` for a value. `take` asks `only_errors`, which asks `parse`, which asks `read_lines`, which reads **one line** from the file and yields it. That line travels back up: parsed, tested, and, if it is an error, yielded to the loop and printed. Only then is the second line read.
+
+        So each line passes through every stage before the next is touched. At no moment is more than one line held. The memory used does not grow with the file: it is the same whether the file is fifty lines or fifty gigabytes. And when `take` has yielded its ten and returns, the loop ends and nothing more is ever read: the rest of the file is never opened to view. This is **laziness** carried through a whole program.
+
+        Each stage is a small function with one job, which can be tested alone on a short list. And the stages can be rearranged like pipes. This is how data reach a model in training. A dataset too large for memory flows through generators that read, clean, shuffle within a window, and group into batches, one batch at a time.
+
+        The generator `take` above is so useful that the standard library has it, as `itertools.islice(items, n)`, in a module full of such building blocks.
+    - question:
+        id: order-pipeline
+        type: order
+        system: s2
+        prompt: |
+          A loop runs `for x in squares(evens(numbers())):`, where each of the three is a generator function: `numbers` yields 1, 2, 3 and so on, `evens` passes on the even ones, and `squares` yields the square of each value it receives. Put in order what happens up to the moment the loop body first runs.
+        steps:
+          - The three calls create three paused generators, and none of their bodies runs.
+          - The loop asks squares for a value, squares asks evens, and evens asks numbers.
+          - numbers yields 1, and evens, finding it odd, asks numbers again.
+          - numbers yields 2, and evens, finding it even, yields 2 to squares.
+          - squares yields 4 to the loop.
+          - The loop body runs with x equal to 4.
+        explanation: Creating the generators does no work. The first request travels inwards through the chain, and values travel back out. A value that a stage rejects causes that stage to ask again, and nothing reaches the loop until a value has passed every stage.
+    - text: |
+        **Yielding everything from another iterable.** Sometimes a generator wants to pass on all the values of another iterable. A loop does it:
+
+        ```python
+        def both(first, second):
+            for item in first:
+                yield item
+            for item in second:
+                yield item
+        ```
+
+        and there is a short form, `yield from`:
+
+        ```python
+        def both(first, second):
+            yield from first
+            yield from second
+        ```
+
+        `yield from xs` yields every value of `xs` in turn, and only then moves on. It earns its place when a generator is **recursive**. In [[s1.recursion]] you flattened a nested list by building a new list at every level. A generator can walk the same structure and build nothing:
+
+        ```python
+        def walk(data):
+            for item in data:
+                if isinstance(item, list):
+                    yield from walk(item)
+                else:
+                    yield item
+
+        print(list(walk([1, [2, [3, 4]], [5]])))       # [1, 2, 3, 4, 5]
+        ```
+
+        `walk(item)` makes a new generator for the inner list, and `yield from` relays everything it produces. The shape of the function is the shape of `flatten`, with `yield` where there was `append`. But it is lazy: `next(walk(huge))` finds the first number and stops, however large the structure is.
+
+        **Once only, unless you ask again.** A generator object is an iterator, so it can be walked once. But the generator **function** can be called as often as you like, and each call gives a fresh generator starting from the top. That gives a neat way to make a class walkable, a link back to [[s1.special-methods]]. If a class's `__iter__` is written with `yield`, every `for` loop over the object calls it and gets a new generator:
+
+        ```python
+        class Countdown:
+            def __init__(self, start):
+                self.start = start
+
+            def __iter__(self):
+                k = self.start
+                while k > 0:
+                    yield k
+                    k -= 1
+        ```
+
+        An object of this class is a book and not a bookmark. It can be walked any number of times.
+    - question:
+        id: predict-yield-from
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          def inner():
+              yield "b"
+              yield "c"
+
+          def outer():
+              yield "a"
+              yield from inner()
+              yield "d"
+
+          print(list(outer()))
+        output: "['a', 'b', 'c', 'd']"
+        explanation: outer yields "a" itself, then relays every value that inner produces, and only when inner is exhausted goes on to yield "d".
+    - text: |
+        **What `with` really does.** One piece of the language is still unexplained. Since [[s1.files-and-data-formats]] you have written `with open(path) as f:` as a formula that closes the file whatever happens. Is `with` only about files? It is not. You will meet it starting clocks, holding locks and, in the lesson on testing, checking that code raises the exception it should. What is it about?
+
+        It is about a pattern that occurs everywhere: **set something up, do some work, and put things back, without fail.** Open a file, use it, close it. Start a clock, run some code, stop the clock. Change a setting, run some code, restore the setting. The last step must happen even if the work in the middle raises an exception, which is the job of `try` and `finally`.
+
+        Like every piece of syntax, as you learnt in the lesson on special methods, `with` is a pair of method calls under agreed names. This statement:
+
+        ```python
+        with manager as value:
+            body()
+        ```
+
+        does, in essence, this:
+
+        ```python
+        value = manager.__enter__()
+        try:
+            body()
+        finally:
+            manager.__exit__(None, None, None)
+        ```
+
+        `__enter__` does the setting up, and whatever it returns is given the name after `as`. `__exit__` does the putting back, and is called **however the block ends**. An object with these two methods is called a **context manager**. A file object is one: its `__enter__` returns the file itself, and its `__exit__` closes it.
+
+        The three arguments of `__exit__` describe the exception that ended the block, if there was one: its class, the exception object, and the traceback. They are all `None` when the block ended normally. `__exit__` should usually return `None`, and then any exception carries on up after the tidying is done. If it returns `True`, the exception is swallowed, which a tool for testing does on purpose when it checks that an error was raised, and which you should otherwise never do.
+
+        Here is a context manager of your own, one that a training loop might use. Some parts of a model behave differently while it is being trained and while it is being tested, and a flag says which. To test it, you switch the flag off, run the test, and must not forget to switch it back.
+
+        ```python
+        class Evaluating:
+            def __init__(self, model):
+                self.model = model
+
+            def __enter__(self):
+                self.previous = self.model.training
+                self.model.training = False
+                return self.model
+
+            def __exit__(self, kind, error, trace):
+                self.model.training = self.previous
+        ```
+
+        ```python
+        with Evaluating(model):
+            run_tests(model)
+        # here model.training is whatever it was before, even if run_tests raised
+        ```
+
+        The forgetting has been made impossible. You will type a line of exactly this kind, with a context manager supplied by the library, every time you measure a model.
+    - question:
+        id: predict-with-order
+        type: predict
+        system: s2
+        concepts: [s1.exceptions, s1.special-methods]
+        prompt: What does this print?
+        code: |
+          class Noisy:
+              def __enter__(self):
+                  print("enter")
+                  return "value"
+
+              def __exit__(self, kind, error, trace):
+                  print("exit")
+
+          try:
+              with Noisy() as v:
+                  print("body", v)
+                  raise ValueError("oops")
+                  print("never")
+          except ValueError as error:
+              print("caught", error)
+        output: |
+          enter
+          body value
+          exit
+          caught oops
+        explanation: __enter__ runs first, and what it returns is bound to v. The body prints and then raises. The rest of the body is skipped, but __exit__ is still called before the exception leaves the with statement. It returns None, so the exception carries on and is caught outside.
+    - text: |
+        **A context manager from a generator.** Writing a class with two methods is a lot of ceremony for "do this before, do that after". Look at the shape of the job again: some code, then a pause while the body of the `with` runs, then some more code. A pause in the middle of a function, with its variables kept. That is a generator with one `yield`.
+
+        The module `contextlib` has a decorator, `contextmanager`, that turns such a generator function into a context manager. The code before the `yield` is the setting up. The `yield` is where the body of the `with` runs, and the value yielded, if any, is what `as` receives. The code after the `yield` is the putting back.
+
+        ```python
+        from contextlib import contextmanager
+
+        @contextmanager
+        def evaluating(model):
+            previous = model.training
+            model.training = False
+            try:
+                yield model
+            finally:
+                model.training = previous
+        ```
+
+        ```python
+        with evaluating(model):
+            run_tests(model)
+        ```
+
+        Seven lines instead of a class, and the local variable `previous` does the job of an attribute, because a paused generator keeps its variables.
+
+        The `try` and `finally` around the `yield` are **essential**, and leaving them out is the standard mistake. If the body of the `with` raises, the exception arrives inside the generator **at the `yield`**, as though the `yield` itself had raised it. Without `finally`, the lines after the `yield` are skipped like the rest of any `try`-less function, and nothing is put back, in exactly the case where it matters most.
+
+        So the two halves of this lesson are one idea. A generator is a function that can pause. A loop uses the pauses to take values one at a time. A `with` statement uses a single pause to run your code in the middle of someone else's.
+  formal:
+    - text: |
+        A **generator function** is a function whose body contains `yield`. Calling it executes none of the body and returns a **generator**, which is an iterator.
+
+        | Event | Effect |
+        | --- | --- |
+        | `next(g)`, the first time | the body runs from the top to the first `yield expr`; the value of `expr` is returned |
+        | `next(g)`, later | the body resumes after the `yield` where it paused, with all local variables as they were, and runs to the next `yield` |
+        | the body reaches its end, or a bare `return` | the generator is finished; this and every later `next(g)` raises `StopIteration` |
+
+        `yield from iterable` yields each value of `iterable` in turn. A generator can be iterated once. Each call of the generator function creates a new, independent generator.
+
+        **Laziness.** A chain of generators `c(b(a(source)))` holds one item at a time. Each value requested from `c` causes `b`, `a` and the source to produce only as many items as are needed for it.
+
+        A **context manager** is an object with methods `__enter__(self)` and `__exit__(self, kind, error, trace)`. The statement
+
+        ```text
+        with manager as name:
+            body
+        ```
+
+        calls `manager.__enter__()` and binds the result to `name`; runs `body`; then calls `manager.__exit__`, with three `None` arguments if `body` finished normally, or with the class, object and traceback of the exception if `body` raised. If `__exit__` returns a true value the exception is suppressed; otherwise it propagates after `__exit__` returns.
+
+        **`contextlib.contextmanager`** turns a generator function with exactly one `yield` into a context manager: the code before the `yield` acts as `__enter__`, the yielded value is bound by `as`, and the code after it acts as `__exit__`. An exception from the body is raised inside the generator at the `yield`, so the code after it must be in a `finally` block if it is to run in that case.
+  drill:
+    - question:
+        id: drill-is-generator
+        type: choice
+        system: s1
+        prompt: |
+          What makes a function a generator function?
+        options:
+          - Its name begins with gen.
+          - Its body contains the word yield.
+          - It returns a list.
+          - It contains a while True loop.
+        answer: 1
+        explanation: The presence of yield anywhere in the body changes what calling the function does. It no longer runs the body. It returns a generator.
+    - question:
+        id: drill-call
+        type: choice
+        system: s1
+        prompt: |
+          `def squares(): ...` contains a `yield`. What does the line `s = squares()` do?
+        options:
+          - It runs the body up to the first yield.
+          - It runs the whole body and collects the values in a list.
+          - It creates a paused generator and runs none of the body.
+          - It raises StopIteration.
+        answer: 2
+        explanation: Calling a generator function only creates the generator. The body starts to run at the first request for a value.
+    - question:
+        id: drill-simple
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          def letters():
+              yield "x"
+              yield "y"
+              yield "z"
+
+          print("-".join(letters()), len(list(letters())))
+        output: "x-y-z 3"
+        explanation: Each call of letters makes a fresh generator, which yields three values. join walks the first one and list walks the second.
+    - question:
+        id: drill-once
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          def up_to(n):
+              for k in range(n):
+                  yield k
+
+          g = up_to(4)
+          print(sum(g), sum(g), sum(up_to(4)))
+        output: "6 0 6"
+        explanation: The first sum walks the generator to its end. The second finds it exhausted, and the empty sum is 0. The third calls the function again and gets a fresh generator.
+    - question:
+        id: drill-take-from-endless
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          def naturals():
+              n = 1
+              while True:
+                  yield n
+                  n += 1
+
+          result = []
+          for n in naturals():
+              if n * n > 50:
+                  break
+              result.append(n * n)
+          print(result)
+        output: "[1, 4, 9, 16, 25, 36, 49]"
+        explanation: The generator would go on for ever, but the loop that consumes it stops at the first square over 50. Only eight values are ever produced.
+    - question:
+        id: drill-memory
+        type: choice
+        system: s1
+        prompt: |
+          A file of $n$ lines is passed through three generator stages and the results are added up with `sum`. How does the memory the pipeline uses change as $n$ grows?
+        options:
+          - "It stays the same: one line is in flight at a time."
+          - "It grows in proportion to n: each stage keeps a list of its results."
+          - "It grows three times as fast as n, one list per stage."
+          - "It grows like n squared."
+        answer: 0
+        explanation: Each line passes through every stage before the next is read, and nothing is kept. The time grows with the file, but the memory does not.
+    - question:
+        id: drill-with-methods
+        type: choice
+        system: s1
+        prompt: |
+          Which two methods must an object have to be used in a `with` statement?
+        options:
+          - "`__init__` and `__repr__`"
+          - "`__iter__` and `__next__`"
+          - "`__enter__` and `__exit__`"
+          - "`__open__` and `__close__`"
+        answer: 2
+        explanation: with calls __enter__ before the block and __exit__ after it, however the block ends.
+    - question:
+        id: drill-exit-always
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          log = []
+
+          class Mark:
+              def __enter__(self):
+                  log.append("in")
+
+              def __exit__(self, kind, error, trace):
+                  log.append("out")
+
+          def work():
+              with Mark():
+                  log.append("work")
+                  return "done"
+
+          print(work(), log)
+        output: "done ['in', 'work', 'out']"
+        explanation: The body returns from inside the with block. __exit__ still runs before the function actually hands back its value, just as a finally block would.
+  work:
+    - question:
+        id: write-take
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write the generator function `take(n, items)` that yields the first `n` values of any iterable and then stops. If the iterable has fewer than `n` values it yields them all. It must work on an endless generator, and it must be lazy: it may not draw more than `n` values from `items`.
+        starter: |
+          def take(n, items):
+              # Replace the next line with your own.
+              yield None
+
+          def naturals():
+              k = 1
+              while True:
+                  yield k
+                  k += 1
+
+          print(list(take(5, naturals())))
+        solution: |
+          def take(n, items):
+              count = 0
+              if n <= 0:
+                  return
+              for item in items:
+                  yield item
+                  count += 1
+                  if count == n:
+                      return
+
+          def naturals():
+              k = 1
+              while True:
+                  yield k
+                  k += 1
+
+          print(list(take(5, naturals())))
+        tests: |
+          _drawn = [0]
+          def _source():
+              _k = 1
+              while _k < 1000:
+                  _drawn[0] += 1
+                  yield _k
+                  _k += 1
+          _t = take(3, _source())
+          assert iter(_t) is _t, "take should be a generator function, using yield, so that it hands out its values one at a time"
+          assert _drawn[0] == 0, "Calling take should not draw anything from the source yet"
+          assert next(_t) == 1, "The first value taken should be the first of the source"
+          assert _drawn[0] == 1, "After one value has been asked for, one value should have been drawn from the source"
+          assert list(_t) == [2, 3], "The remaining two values"
+          assert _drawn[0] <= 3, f"take(3, ...) drew {_drawn[0]} values from the source. It may draw at most 3."
+          assert list(take(5, [1, 2])) == [1, 2], "When the iterable is shorter than n, all of it is yielded"
+          assert list(take(0, [1, 2])) == [], "Taking none gives nothing"
+          assert list(take(2, "abc")) == ["a", "b"], "It should work for any iterable"
+          _drawn[0] = 0
+          assert list(take(0, _source())) == [] and _drawn[0] == 0, "Taking none should draw nothing from the source"
+        wrong:
+          - "def take(n, items):\n    return list(items)[:n]\n"
+          - "def take(n, items):\n    result = []\n    for item in items:\n        if len(result) == n:\n            break\n        result.append(item)\n    return result\n"
+          - "def take(n, items):\n    count = 0\n    for item in items:\n        if count > n:\n            return\n        yield item\n        count += 1\n"
+          - "def take(n, items):\n    for k, item in enumerate(items):\n        yield item\n"
+        explanation: |
+          The generator yields an item, counts it, and returns as soon as the count reaches `n`, before the loop can draw another. A bare `return` in a generator ends it. The check comes **after** the `yield` so that the item after the last one wanted is never requested. That matters when drawing a value is costly, or changes something. The first two wrong answers in the tests are not generators at all. One of them calls `list` on the source, which on an endless generator would never return.
+    - question:
+        id: write-running-mean
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write the generator function `running_mean(values)` that takes any iterable of numbers and yields, after each one, the mean of all the numbers seen so far. It must hold only a total and a count, never a list, and it must work on an endless source.
+
+          `list(running_mean([4, 2, 6]))` is `[4.0, 3.0, 4.0]`.
+        starter: |
+          def running_mean(values):
+              # Replace the next line with your own.
+              yield 0.0
+
+          print(list(running_mean([4, 2, 6])))
+        solution: |
+          def running_mean(values):
+              total = 0
+              count = 0
+              for value in values:
+                  total += value
+                  count += 1
+                  yield total / count
+
+          print(list(running_mean([4, 2, 6])))
+        tests: |
+          import itertools as _it
+          assert "append" not in source, "Do not keep a list of the values. A total and a count are enough."
+          assert list(running_mean([4, 2, 6])) == [4.0, 3.0, 4.0], "After 4 the mean is 4, after 4 and 2 it is 3, after 4, 2 and 6 it is 4"
+          assert list(running_mean([])) == [], "No values in, no means out"
+          assert list(running_mean([5])) == [5.0], "The mean of one value is that value"
+          _g = running_mean(_it.count(1))
+          assert iter(_g) is _g, "running_mean should be a generator function"
+          assert [next(_g) for _k in range(4)] == [1.0, 1.5, 2.0, 2.5], "It should work on an endless source: the running means of 1, 2, 3, 4 are 1, 1.5, 2, 2.5"
+          _drawn = [0]
+          def _source():
+              for _v in [10, 20, 30]:
+                  _drawn[0] += 1
+                  yield _v
+          _h = running_mean(_source())
+          next(_h)
+          assert _drawn[0] == 1, "After one mean has been asked for, only one value should have been drawn from the source"
+        wrong:
+          - "def running_mean(values):\n    total = 0\n    count = 0\n    for value in values:\n        total += value\n        count += 1\n    yield total / count\n"
+          - "def running_mean(values):\n    total = 0\n    count = 0\n    for value in values:\n        count += 1\n        yield total / count\n        total += value\n"
+          - "def running_mean(values):\n    total = 0\n    count = 0\n    for value in values:\n        total = value\n        count += 1\n        yield total / count\n"
+        explanation: |
+          The generator's two local variables carry everything it needs from one value to the next, and they survive each pause. The `yield` is **inside** the loop, after the update, so there is one mean for each value. This is the `Meter` class of an earlier lesson rewritten as a generator: the attributes have become local variables, and the method calls have become requests for the next value. Put a generator like this in a pipeline after a stream of losses and you have the smoothed curve that every training run plots.
+    - question:
+        id: fix-batched
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `batched(items, size)` is a lazy version of the `batches` function you have written and tested before. It takes any iterable and yields lists of `size` consecutive items, so that a huge stream of examples can be fed to a model a batch at a time. The last batch may be shorter. But the short last batch is being lost: `list(batched([1, 2, 3, 4, 5], 2))` gives `[[1, 2], [3, 4]]`. Fix it, without introducing an empty batch when the items divide evenly.
+        starter: |
+          def batched(items, size):
+              batch = []
+              for item in items:
+                  batch.append(item)
+                  if len(batch) == size:
+                      yield batch
+                      batch = []
+
+          print(list(batched([1, 2, 3, 4, 5], 2)))
+        solution: |
+          def batched(items, size):
+              batch = []
+              for item in items:
+                  batch.append(item)
+                  if len(batch) == size:
+                      yield batch
+                      batch = []
+              if len(batch) > 0:
+                  yield batch
+
+          print(list(batched([1, 2, 3, 4, 5], 2)))
+        tests: |
+          import itertools as _it
+          assert list(batched([1, 2, 3, 4, 5], 2)) == [[1, 2], [3, 4], [5]], "Five items in twos: two full batches and one short one"
+          assert list(batched([1, 2, 3, 4], 2)) == [[1, 2], [3, 4]], "When the size divides the number of items there is no empty batch at the end"
+          assert list(batched([], 3)) == [], "No items, no batches"
+          assert list(batched([7], 5)) == [[7]], "One short batch"
+          assert list(batched((k for k in "abc"), 2)) == [["a", "b"], ["c"]], "It should accept a generator"
+          _g = batched(_it.count(1), 3)
+          assert next(_g) == [1, 2, 3] and next(_g) == [4, 5, 6], "It should work on an endless source, one batch at a time"
+        wrong:
+          - "def batched(items, size):\n    batch = []\n    for item in items:\n        batch.append(item)\n        if len(batch) == size:\n            yield batch\n            batch = []\n    yield batch\n\nprint(list(batched([1, 2, 3, 4, 5], 2)))\n"
+          - "def batched(items, size):\n    items = list(items)\n    for i in range(0, len(items), size):\n        yield items[i:i + size]\n\nprint(list(batched([1, 2, 3, 4, 5], 2)))\n"
+        explanation: |
+          When the source runs out, the loop ends with whatever part-filled batch is in hand, and the starter simply dropped it. The leftover must be yielded after the loop, but only if there is one, or an exact division would end with an empty batch. These are the same two boundary cases that `batches` had to handle in the lesson on modules: a remainder, and no remainder. The second wrong answer in the tests gives right answers on small inputs by turning the whole source into a list first, which defeats the purpose and never returns on an endless stream.
+    - question:
+        id: write-walk
+        type: code
+        mode: write
+        system: s2
+        concepts: [s1.recursion]
+        prompt: |
+          Write the recursive generator function `leaves(data)` that walks a nested structure and yields its numbers one at a time, in reading order. The structure is made of lists **and dictionaries**: an item may be a number, a list of items, or a dictionary whose values are items. For a dictionary, walk its values in order. Use `yield from`. Do not build a list.
+
+          `list(leaves([1, {"a": 2, "b": [3, 4]}, [5]]))` is `[1, 2, 3, 4, 5]`.
+        starter: |
+          def leaves(data):
+              # Replace the next line with your own.
+              yield data
+
+          print(list(leaves([1, {"a": 2, "b": [3, 4]}, [5]])))
+        solution: |
+          def leaves(data):
+              if isinstance(data, dict):
+                  for value in data.values():
+                      yield from leaves(value)
+              elif isinstance(data, list):
+                  for item in data:
+                      yield from leaves(item)
+              else:
+                  yield data
+
+          print(list(leaves([1, {"a": 2, "b": [3, 4]}, [5]])))
+        tests: |
+          assert "append" not in source, "Do not build a list. Yield each number as it is found."
+          assert list(leaves([1, {"a": 2, "b": [3, 4]}, [5]])) == [1, 2, 3, 4, 5], "Every number, in reading order"
+          assert list(leaves(7)) == [7], "A number on its own is its only leaf"
+          assert list(leaves([])) == [], "An empty list has no leaves"
+          assert list(leaves({})) == [], "An empty dictionary has no leaves"
+          assert list(leaves({"x": {"y": {"z": 9}}})) == [9], "One number inside three dictionaries"
+          assert list(leaves([[1, 2], {"k": [3]}, 4])) == [1, 2, 3, 4], "Lists and dictionaries mixed"
+          assert sum(leaves({"w": [0.5, 0.5], "b": 1})) == 2, "The leaves can be summed without ever being collected"
+          _g = leaves([1, [2, 3]])
+          assert iter(_g) is _g and next(_g) == 1, "leaves should be a generator, giving the first number on the first request"
+        wrong:
+          - "def leaves(data):\n    if isinstance(data, list):\n        for item in data:\n            yield from leaves(item)\n    else:\n        yield data\n"
+          - "def leaves(data):\n    if isinstance(data, dict):\n        for value in data.values():\n            yield leaves(value)\n    elif isinstance(data, list):\n        for item in data:\n            yield leaves(item)\n    else:\n        yield data\n"
+          - "def leaves(data):\n    if isinstance(data, dict):\n        for key in data:\n            yield from leaves(key)\n    elif isinstance(data, list):\n        for item in data:\n            yield from leaves(item)\n    else:\n        yield data\n"
+        explanation: |
+          The description of the data has three cases, and the function has the same three. A number is the base case, and is yielded. A list or a dictionary is walked, and for each part the function calls itself, trusting that call to produce the leaves of the part, and relays them with `yield from`. The second wrong answer in the tests writes plain `yield` there, which hands back the inner **generator object** as a single value instead of the values it would produce. A model's parameters are stored in just such a nested structure of names and lists of numbers, and counting them, or saving them, is a walk like this one.
+    - question:
+        id: write-evaluating-class
+        type: code
+        mode: write
+        system: s2
+        concepts: [s1.special-methods, s1.exceptions]
+        prompt: |
+          Write the context manager class `Evaluating`. It is given an object that has an attribute `training`, which may be `True` or `False`.
+
+          - On entering the `with` block it remembers the current value of `training`, sets it to `False`, and makes the object available through `as`.
+          - On leaving the block, **however the block ends**, it restores the value that `training` had before, whatever that was.
+          - It must not swallow an exception raised inside the block.
+        starter: |
+          class Model:
+              def __init__(self):
+                  self.training = True
+
+          class Evaluating:
+              def __init__(self, model):
+                  self.model = model
+
+              # Add __enter__ and __exit__ here.
+
+          net = Model()
+          with Evaluating(net) as m:
+              print(m is net, net.training)
+          print(net.training)
+        solution: |
+          class Model:
+              def __init__(self):
+                  self.training = True
+
+          class Evaluating:
+              def __init__(self, model):
+                  self.model = model
+
+              def __enter__(self):
+                  self.previous = self.model.training
+                  self.model.training = False
+                  return self.model
+
+              def __exit__(self, kind, error, trace):
+                  self.model.training = self.previous
+
+          net = Model()
+          with Evaluating(net) as m:
+              print(m is net, net.training)
+          print(net.training)
+        tests: |
+          assert output.split() == ["True", "False", "True"], "Inside the block the object should be available through as, with training False. After the block training should be True again."
+          _n = Model()
+          with Evaluating(_n) as _m:
+              assert _m is _n, "The object should be available through as"
+              assert _n.training is False, "Inside the block, training should be False"
+          assert _n.training is True, "After the block, training should be restored to True"
+          _n.training = False
+          with Evaluating(_n):
+              assert _n.training is False
+          assert _n.training is False, "If training was False before the block, it should be False after it, not True"
+          _n.training = True
+          _raised = False
+          try:
+              with Evaluating(_n):
+                  raise ValueError("inside the block")
+          except ValueError:
+              _raised = True
+          assert _raised, "An exception raised inside the block must not be swallowed"
+          assert _n.training is True, "training must be restored even when the block raises"
+        wrong:
+          - "class Model:\n    def __init__(self):\n        self.training = True\n\nclass Evaluating:\n    def __init__(self, model):\n        self.model = model\n\n    def __enter__(self):\n        self.model.training = False\n        return self.model\n\n    def __exit__(self, kind, error, trace):\n        self.model.training = True\n\nnet = Model()\nwith Evaluating(net) as m:\n    print(m is net, net.training)\nprint(net.training)\n"
+          - "class Model:\n    def __init__(self):\n        self.training = True\n\nclass Evaluating:\n    def __init__(self, model):\n        self.model = model\n\n    def __enter__(self):\n        self.previous = self.model.training\n        self.model.training = False\n        return self.model\n\n    def __exit__(self, kind, error, trace):\n        self.model.training = self.previous\n        return True\n\nnet = Model()\nwith Evaluating(net) as m:\n    print(m is net, net.training)\nprint(net.training)\n"
+          - "class Model:\n    def __init__(self):\n        self.training = True\n\nclass Evaluating:\n    def __init__(self, model):\n        self.model = model\n\n    def __enter__(self):\n        self.previous = self.model.training\n        self.model.training = False\n\n    def __exit__(self, kind, error, trace):\n        self.model.training = self.previous\n\nnet = Model()\nwith Evaluating(net) as m:\n    print(m is net, net.training)\nprint(net.training)\n"
+        explanation: |
+          `__enter__` saves the old value on `self`, makes the change, and returns the model, which is what `as` receives. `__exit__` puts the saved value back. Python calls `__exit__` however the block ends, so no `try` is needed inside the class: the `with` statement is the `try` and `finally`. Two details matter. Restore what was there before, not `True`: if the model was already not training, it must stay so. And return nothing from `__exit__`. The second wrong answer in the tests returns `True`, which tells Python to swallow whatever exception the block raised, and a failed evaluation would then pass in silence.
+    - question:
+        id: fix-contextmanager-finally
+        type: code
+        mode: find-bug
+        system: s2
+        concepts: [s1.exceptions]
+        prompt: |
+          `temporarily(settings, key, value)` changes one entry of a dictionary of settings for the length of a `with` block and then puts the old value back. It works when the block finishes normally. When the block raises an exception, the old value is **not** restored: the program below prints `debug` where it should print `quiet`. Fix it.
+        starter: |
+          from contextlib import contextmanager
+
+          @contextmanager
+          def temporarily(settings, key, value):
+              old = settings[key]
+              settings[key] = value
+              yield settings
+              settings[key] = old
+
+          options = {"mode": "quiet"}
+          try:
+              with temporarily(options, "mode", "debug"):
+                  raise ValueError("something failed")
+          except ValueError:
+              pass
+          print(options["mode"])
+        solution: |
+          from contextlib import contextmanager
+
+          @contextmanager
+          def temporarily(settings, key, value):
+              old = settings[key]
+              settings[key] = value
+              try:
+                  yield settings
+              finally:
+                  settings[key] = old
+
+          options = {"mode": "quiet"}
+          try:
+              with temporarily(options, "mode", "debug"):
+                  raise ValueError("something failed")
+          except ValueError:
+              pass
+          print(options["mode"])
+        tests: |
+          assert output.strip() == "quiet", "After the block has raised, the old value should have been restored"
+          _s = {"rate": 1, "mode": "a"}
+          with temporarily(_s, "rate", 5) as _inside:
+              assert _inside is _s, "The settings should be available through as"
+              assert _s["rate"] == 5, "Inside the block the entry should have the temporary value"
+          assert _s == {"rate": 1, "mode": "a"}, "After a normal block the old value should be restored"
+          _raised = False
+          try:
+              with temporarily(_s, "mode", "b"):
+                  assert _s["mode"] == "b"
+                  raise KeyError("inside")
+          except KeyError:
+              _raised = True
+          assert _raised, "The exception from the block must still reach the caller"
+          assert _s == {"rate": 1, "mode": "a"}, "After a block that raised, the old value should be restored"
+        wrong:
+          - "from contextlib import contextmanager\n\n@contextmanager\ndef temporarily(settings, key, value):\n    old = settings[key]\n    settings[key] = value\n    try:\n        yield settings\n    except Exception:\n        settings[key] = old\n\noptions = {\"mode\": \"quiet\"}\nprint(\"quiet\")\n"
+          - "from contextlib import contextmanager\n\n@contextmanager\ndef temporarily(settings, key, value):\n    old = settings[key]\n    try:\n        yield settings\n    finally:\n        settings[key] = old\n\noptions = {\"mode\": \"quiet\"}\nprint(\"quiet\")\n"
+        explanation: |
+          When the body of the `with` raises, the exception arrives inside the generator at the `yield`, as though that line had raised it. Without a `try`, the generator is abandoned there and the restoring line is never reached. `try` and `finally` around the `yield` make the restoring run on every way out. Note the first wrong answer in the tests, which uses `except` in place of `finally`. It restores on failure but not on success, and it also swallows the exception, since a handler that does not raise again ends the matter. The clean-up belongs in `finally`, which runs in both cases and hides nothing.
+    - question:
+        id: numeric-lazy-reads
+        type: numeric
+        system: s2
+        prompt: |
+          A file has 1,000,000 lines. Lines 3, 8 and 20 contain the word ERROR, as do many later ones. The pipeline below is run, where each of the four names is a generator function as in the lesson.
+
+          `list(take(2, only_errors(parse(read_lines(path)))))`
+
+          `take` returns as soon as it has yielded its second value, without asking for a third. How many lines of the file are read?
+        answer: "8"
+        explanation: Lines are read one at a time, only when asked for. The first error is line 3, and the second is line 8. Once take has yielded the second, it stops and asks for nothing more, so line 9 and everything after it is never read.
+  connections:
+    - text: |
+        The puzzle asked for a function that could hand back a value and then carry on from where it was. `yield` does that. A generator function, when called, runs nothing and returns a paused generator. Each request for a value runs the body to the next `yield`, and the local variables survive the pause. So a sequence may be endless, since only the terms asked for are ever computed, and a chain of generators passes one item at a time through every stage, in constant memory, reading no more than is needed. The same pause, used once, lets `with` run your code between a setting-up and a putting-back that cannot be skipped.
+
+        The functions you have written in this cluster accept and return many kinds of thing: numbers, strings, lists, dictionaries, objects of your own classes, and now generators. Which kind each one expects has lived only in your head and in the sentence above it. When a function says it wants "anything a `for` loop can walk", a generator is welcome, but nothing in the code says so. The next lesson, [[s1.type-hints-and-dataclasses]], writes that knowledge into the code itself, where people and tools can read it, and lets Python write the routine methods of a class from a list of its fields.

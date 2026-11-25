@@ -1,0 +1,682 @@
+concept: s1.recursion
+minutes: 105
+claim: You can write a function that calls itself, with a base case and a step that moves towards it, trace its calls as they pile up and unwind, argue that it stops, use it on data of unknown depth and on problems that split in half, explain why the obvious Fibonacci function is hopelessly slow, and repair it by remembering answers.
+recalls: [s1.files-and-data-formats]
+uses: [s1.exceptions, s1.classes-and-objects, s1.modules-and-imports, s1.comprehensions-and-iterators, s0.strings, s0.booleans-and-conditionals, s0.loops, s0.functions, s0.lists-and-tuples, s0.dictionaries-and-sets, f1.exponents-and-exponential-growth, f1.logarithms, f1.summation-notation, f1.arithmetic-and-geometric-series, f1.exponents-and-exponential-growth]
+leads: [s1.generators-and-context-managers]
+starter: |
+  # Scratch space. A function that asks itself a smaller question.
+  def nested_sum(data):
+      total = 0
+      for item in data:
+          if isinstance(item, list):
+              total += nested_sum(item)
+          else:
+              total += item
+      return total
+
+  print(nested_sum([1, [2, [3, 4]], [5]]))
+parts:
+  recall:
+    - text: |
+        [[s1.files-and-data-formats]] ended with a question it could not answer. A JSON value may be a list that contains lists that contain lists, to any depth, and no fixed number of loops can add up the numbers in it. This lesson answers the question. Three quick pulls first.
+  puzzle:
+    - text: |
+        Here is a value of the kind that JSON files are full of.
+
+        ```python
+        data = [1, [2, [3, 4]], [5]]
+        ```
+
+        Add up every number in it. The answer is 15, and you can see that at a glance. Now write the function.
+
+        A loop over `data` meets three items: the number 1, the list `[2, [3, 4]]`, and the list `[5]`. Two of them are not numbers, so a second loop is needed inside the first to open them. But inside `[2, [3, 4]]` there is another list, so a third loop is needed inside the second. This particular value needs three loops. The next file may nest to a depth of four, or forty. **The number of loops you must write depends on the data, and you have to write the program before you see the data.**
+
+        No fixed program made of nested loops can do it. Yet the task is plainly simple, and you did it in your head without counting levels. What were you doing?
+  intuition:
+    - text: |
+        Stand in a long queue, and suppose you want to know your position in it. You cannot see the front. You could leave the queue and count, but there is a lazier way. Tap the person in front of you and ask: *what is your position?* Whatever they answer, yours is one more.
+
+        They do not know either. So they do the same thing: they ask the person in front of them, and wait. The question travels forward, one person at a time, each of them now waiting for an answer. At last it reaches the person at the very front, who needs to ask nobody. They are first, and they say so: *one*.
+
+        Now the answers travel back. The second person hears "one" and says "two". The third hears "two" and says "three". Eventually the person in front of you turns round and gives you a number, and you add one.
+
+        Look at what each person did. Nobody counted the queue. Each did one tiny piece of work, adding one, and handed the rest of the problem, **the same problem but smaller**, to someone else. And one person, at the front, had a problem so small that the answer was known outright.
+
+        That is how you added up the nested list. You did not think "three levels". You thought: the total of a list is the sum of its items, and where an item is itself a list, *its* contribution is *its* total, which is the same question asked of a smaller thing.
+
+        A function that solves a problem by handing a smaller version of the same problem to itself is called **recursive**. It needs exactly the two things the queue had. There must be a case so small that it is answered directly, the person at the front. And every other case must hand on something strictly **smaller**, so that the front is certain to be reached.
+  derivation:
+    - text: |
+        **From a recurrence to a function.** You have seen a definition that refers to itself before. In [[f1.arithmetic-and-geometric-series]] a sequence could be given by a **recurrence**, each term in terms of the one before, together with a starting value. The factorial is the standard example:
+
+        $$0! = 1, \qquad n! = n \times (n - 1)! \quad \text{for } n \ge 1.$$
+
+        The second equation defines the factorial in terms of the factorial. That is not circular, because the factorial on the right is of a *smaller* number, and the first equation stops the descent. Python lets you type the recurrence in almost as it stands.
+
+        ```python
+        def factorial(n):
+            if n == 0:
+                return 1
+            return n * factorial(n - 1)
+        ```
+
+        The function calls itself. Nothing new in the language is needed for this. A call is a call, and it makes no difference that the function being called has the same name as the one that is running.
+
+        To see that it works, follow `factorial(3)`. It is not 0, so it must compute `3 * factorial(2)`, and it cannot multiply until it knows `factorial(2)`. So it **waits**, and a new call begins. That call needs `factorial(1)`, and waits. That one needs `factorial(0)`, and waits. Now there are four calls in existence at once, three of them waiting. `factorial(0)` is the person at the front of the queue: it returns 1 at once. Then the answers come back. The call with `n = 1` wakes, computes $1 \times 1 = 1$ and returns. The call with `n = 2` wakes, computes $2 \times 1 = 2$. The call with `n = 3` wakes, computes $3 \times 2 = 6$.
+
+        Step through it below. The pile of waiting calls is called the **call stack**. It grows as the questions go down, and shrinks as the answers come up.
+    - figure: call-stack
+      props:
+        n: 4
+    - text: |
+        The thing to notice in the picture is that there are several values of `n` alive at the same time. That is possible because of something you learnt in [[s0.functions]] and again in the lesson on modules: **each call of a function has its own table of local names**. The four calls do not share one `n`. Each has its own, and when a call wakes up, its own `n` is exactly as it left it.
+
+        **The two parts.** Every recursive function has the same anatomy.
+
+        - A **base case**: an input small enough to be answered without a further call. Here it is `n == 0`.
+        - A **recursive case**: for any other input, do a little work and call the function on an input that is closer to the base case. Here it is `n * factorial(n - 1)`.
+
+        Leave out the base case, or step away from it instead of towards it, and the calls go down for ever. Each waiting call occupies memory, so Python does not allow that. It keeps count of the depth of the stack, and when the depth passes a limit, about a thousand, it raises `RecursionError: maximum recursion depth exceeded`. When you see that message, look for a base case that is missing or is never reached.
+    - question:
+        id: predict-down-up
+        type: predict
+        system: s2
+        prompt: What does this print?
+        code: |
+          def visit(n):
+              if n == 0:
+                  print("base")
+                  return
+              print("down", n)
+              visit(n - 1)
+              print("up", n)
+
+          visit(2)
+        output: |
+          down 2
+          down 1
+          base
+          up 1
+          up 2
+        explanation: Each call prints its down line and then waits for the call below it. Only when the base case has been reached do the waiting calls resume, innermost first, each printing its up line with its own value of n.
+    - question:
+        id: choice-base-case
+        type: choice
+        system: s1
+        prompt: |
+          What happens when this function is called as `countdown(3)`?
+
+          ```python
+          def countdown(n):
+              print(n)
+              countdown(n - 1)
+          ```
+        options:
+          - It prints 3, 2, 1, 0 and stops.
+          - It prints 3 and stops.
+          - It prints 3, 2, 1, 0, -1, -2 and so on, until Python stops it with a RecursionError.
+          - It prints nothing, because a function may not call itself.
+        answer: 2
+        explanation: There is no base case. Nothing ever tells the function to stop calling itself, so the calls pile up until the stack reaches Python's limit.
+    - text: |
+        **Why it must stop, and why it must be right.** How can you be sure that a recursive function finishes? Find a quantity, call it the **measure**, with two properties: it is a whole number that is never negative, and it gets **strictly smaller** with every recursive call. A whole number that keeps decreasing and may not go below zero cannot decrease for ever. So the chain of calls is finite. For `factorial` the measure is `n` itself. For a function on lists it is usually the length of the list.
+
+        And how do you know the answer is right, without tracing every call? You do not trace. You reason in two steps.
+
+        1. Check the base case by hand.
+        2. For the recursive case, **assume** the recursive call returns the right answer for its smaller input, and check that your line then produces the right answer for this one.
+
+        The second step feels like cheating: you are assuming that the function works in order to show that it works. It is not cheating, because you assume it only for **smaller** inputs. The smallest input is right by step 1. The next smallest is then right by step 2, since it relies only on the smallest. The next is right because it relies only on those, and so on up, as far as you like. This way of reasoning has a name, **induction**, and it is one of the main methods of proof in mathematics. For now, use it as a working habit: **write the recursive case as though the function were already finished, and trust it on anything smaller.**
+    - text: |
+        **Solving the puzzle.** Describe the data first, and the function will follow. What is a nested list?
+
+        > A nested list is a list in which each item is either a number or a nested list.
+
+        The description mentions itself, and it has two cases. The function has the same shape exactly.
+
+        ```python
+        def nested_sum(data):
+            total = 0
+            for item in data:
+                if isinstance(item, list):
+                    total += nested_sum(item)
+                else:
+                    total += item
+            return total
+        ```
+
+        Read the recursive line with trust: *`nested_sum(item)` is the total of that inner list.* Then the loop is obviously right, since it adds each number and each inner total.
+
+        Where is the base case? It is the list with no lists in it. Such a list never reaches the recursive line, so no further call is made. The measure is the depth of nesting, which drops by at least one with each call.
+
+        One loop, written once, now handles any depth at all, because the function is entered afresh at every level. **When data are defined in terms of themselves, the function that processes them calls itself in the same places.** Folders that contain folders, a web page of elements inside elements, a sentence made of phrases made of phrases, the expression $2 \times (3 + (4 \times 5))$: all of them are handled this way.
+    - question:
+        id: predict-nested
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          def count_numbers(data):
+              count = 0
+              for item in data:
+                  if isinstance(item, list):
+                      count += count_numbers(item)
+                  else:
+                      count += 1
+              return count
+
+          print(count_numbers([7, [8, [], [9, 9]], [[1]]]))
+        output: "5"
+        explanation: The function counts the items that are not lists, at every depth. They are 7, 8, 9, 9 and 1. The empty list contributes nothing, since the loop over it never runs.
+    - text: |
+        **Peeling a sequence.** A plain list or string can be seen recursively too: it is either empty, or it is a first item followed by a smaller sequence. So, for instance,
+
+        ```python
+        def total(xs):
+            if len(xs) == 0:
+                return 0
+            return xs[0] + total(xs[1:])
+        ```
+
+        The base case is the empty list, whose total is the empty sum, 0. The recursive case takes off the first item and trusts the call on the rest. The measure is the length. This is the sigma notation of [[f1.summation-notation]] in its recursive form: $\sum_{i=1}^{n} a_i = a_1 + \sum_{i=2}^{n} a_i$.
+
+        You would not write `total` this way in practice, since a loop does the job and has no limit on depth. But it shows the pattern at its barest, and the same pattern solves problems where a loop is awkward. Is a word a palindrome, the same forwards and backwards? A string of length 0 or 1 is. A longer one is, if its first and last characters agree **and** what lies between them is a palindrome.
+
+        ```python
+        def is_palindrome(s):
+            if len(s) <= 1:
+                return True
+            return s[0] == s[-1] and is_palindrome(s[1:-1])
+        ```
+    - text: |
+        **Halving.** A recursive call need not shrink the problem by one. It can cut it in half, and then something remarkable happens to the number of calls.
+
+        Take the power $x^n$ for a whole number $n \ge 0$. The obvious recurrence is $x^n = x \times x^{n-1}$, which takes $n$ multiplications. But the exponent laws of [[f1.exponents-and-exponential-growth]] offer another: $x^{2k} = (x^k)^2$. To get $x^{16}$ you can square $x^8$, which is the square of $x^4$, which is the square of $x^2$, which is the square of $x$. Four multiplications instead of fifteen. For an odd exponent, take one factor out first: $x^{2k+1} = x \times (x^k)^2$.
+
+        ```python
+        def power(x, n):
+            if n == 0:
+                return 1
+            half = power(x, n // 2)
+            if n % 2 == 0:
+                return half * half
+            return x * half * half
+        ```
+
+        How many calls does `power(x, n)` make? Each call halves $n$. The number of times you can halve $n$ before reaching 1 is $\log_2 n$, by the very definition of the logarithm in [[f1.logarithms]]. So $x^{1\,000\,000}$ needs about 20 calls and at most 40 multiplications, where the obvious method needs a million. Note that the result of the recursive call is stored in `half` and used twice. Writing `power(x, n // 2) * power(x, n // 2)` would make two calls where one will do, and would throw the whole gain away.
+
+        The same halving gives **binary search**. To find a name in a sorted list, look at the middle one. If it is too late in the alphabet, the name you want is in the first half, otherwise in the second, and that half is searched in the same way. A list of a million names is settled in about twenty looks. A problem that can be halved at each step can be solved in a number of steps that is the logarithm of its size, and that is the most valuable trick in the whole of computing.
+    - question:
+        id: numeric-halving
+        type: numeric
+        system: s1
+        concepts: [f1.logarithms]
+        prompt: |
+          `power(x, n)` above calls itself with `n // 2` until `n` is 0. How many calls are made in all for `power(2, 8)`, counting the first?
+        answer: "5"
+        explanation: The values of n are 8, 4, 2, 1 and 0. Halving 8 three times reaches 1, since 8 is two to the third power, and one further call reaches the base case.
+    - text: |
+        **When recursion explodes.** The Fibonacci sequence is given by a recurrence with *two* earlier terms:
+
+        $$F_0 = 0, \quad F_1 = 1, \quad F_n = F_{n-1} + F_{n-2}.$$
+
+        It begins 0, 1, 1, 2, 3, 5, 8, 13, 21. Typed in directly:
+
+        ```python
+        def fib(n):
+            if n < 2:
+                return n
+            return fib(n - 1) + fib(n - 2)
+        ```
+
+        This is correct, and it is catastrophically slow. `fib(30)` takes a noticeable pause. `fib(50)` would not finish in a day. Why?
+
+        Each call makes **two** calls, and each of those makes two. `fib(5)` calls `fib(4)` and `fib(3)`. But `fib(4)` also calls `fib(3)`, so `fib(3)` is worked out twice, from scratch. `fib(2)` is worked out three times, and `fib(1)` five times. The calls form a tree that roughly doubles in width at each level. The number of calls needed for `fib(n)` grows like the Fibonacci numbers themselves, multiplying by about 1.6 each time $n$ goes up by one. That is exponential growth, the kind you studied in [[f1.exponents-and-exponential-growth]]. `fib(30)` makes about 2.7 million calls, and `fib(50)` about forty thousand million.
+
+        Yet there are only 51 different questions being asked: `fib(0)` up to `fib(50)`. All the waste is in answering the same ones again and again. The cure is to **remember** each answer the first time it is found.
+
+        ```python
+        known = {}
+
+        def fib(n):
+            if n < 2:
+                return n
+            if n not in known:
+                known[n] = fib(n - 1) + fib(n - 2)
+            return known[n]
+        ```
+
+        The dictionary `known` maps each $n$ already solved to its answer. A question asked for the second time is answered by a look-up, with no further calls. Now each of the 51 values is computed once, and `fib(50)` returns instantly. This technique is called **memoisation**, from memo, a note to oneself. Whenever a recursion asks the same question many times, write the answers down.
+    - question:
+        id: numeric-fib-calls
+        type: numeric
+        system: s2
+        concepts: [f1.arithmetic-and-geometric-series]
+        prompt: |
+          The first, slow `fib` makes one call for `fib(0)` and one for `fib(1)`. For larger `n`, the number of calls $C_n$ obeys the recurrence $C_n = C_{n-1} + C_{n-2} + 1$, the two sub-problems and the call itself. How many calls does `fib(6)` make in all?
+        answer: "25"
+        explanation: C(0) = 1 and C(1) = 1. Then C(2) = 3, C(3) = 5, C(4) = 9, C(5) = 15 and C(6) = 25. The count nearly doubles every two steps.
+    - text: |
+        **Recursion or a loop?** Anything a loop can do, recursion can do, and the reverse is true as well. So which should you choose?
+
+        Use a **loop** when you are walking along something flat: a list, a range, the lines of a file. A loop uses no stack, and Python's depth limit of about a thousand makes deep recursion on long lists impractical.
+
+        Use **recursion** when the problem has the shape of a tree: when the data are nested, or when the problem splits into smaller copies of itself, as in halving. Then the recursive function is short and plainly correct, and the equivalent loop is long and delicate, because it must manage by hand the pile of unfinished work that the call stack manages for you.
+
+        There is a deeper reason to learn it well. A recurrence, a recursive function and a proof by induction are one idea wearing three sets of clothes: *settle the smallest case, and reduce every other case to a smaller one*. You will use the idea to define things, to compute them, and to prove facts about them.
+  formal:
+    - text: |
+        A function is **recursive** if its body contains a call to itself. A correct recursive function has:
+
+        - one or more **base cases**, inputs for which the result is returned without a recursive call;
+        - one or more **recursive cases**, in which the function calls itself on inputs that are smaller according to some measure.
+
+        **Termination.** Suppose there is a measure $m$ assigning to every input a whole number $m \ge 0$, such that every recursive call is made on an input with a strictly smaller measure, and every input of measure 0 is a base case. Then every call finishes, after at most $m$ nested calls.
+
+        **Correctness.** If the base cases return correct results, and each recursive case returns a correct result whenever its recursive calls do, then the function is correct for every input.
+
+        **The call stack.** Each call that has started and not yet returned holds its own local names. These pending calls form a stack: the most recent is the first to return. Python raises `RecursionError` when the stack grows past a fixed limit, about 1000 calls.
+
+        | Pattern | Recursive call on | Depth of stack for size $n$ | Example |
+        | --- | --- | --- | --- |
+        | Reduce by one | $n - 1$, or the list without its first item | $n$ | factorial, total of a list |
+        | Halve | $\lfloor n / 2 \rfloor$, or half the list | about $\log_2 n$ | fast power, binary search |
+        | Structural | each nested part | the depth of nesting | sum of a nested list |
+        | Branching | two or more smaller inputs | $n$, but the number of calls may be exponential | naive Fibonacci |
+
+        **Memoisation.** Storing each result in a dictionary keyed by the input, and returning the stored result when the same input recurs, reduces the number of computed calls to the number of distinct inputs.
+
+        A recurrence $a_n = f(a_{n-1})$ with $a_0$ given corresponds to the function with base case `n == 0` and recursive case `f(a(n - 1))`.
+  drill:
+    - question:
+        id: drill-trace
+        type: numeric
+        system: s1
+        prompt: |
+          For the function `factorial` of this lesson, what does `factorial(5)` return?
+        answer: "120"
+        explanation: 5 × 4 × 3 × 2 × 1 × 1, the last 1 being the base case for 0.
+    - question:
+        id: drill-identify
+        type: choice
+        system: s1
+        prompt: |
+          In this function, which line is the base case?
+
+          ```python
+          def length(xs):
+              if xs == []:
+                  return 0
+              return 1 + length(xs[1:])
+          ```
+        options:
+          - "`def length(xs):`"
+          - "`return 0`, reached when the list is empty"
+          - "`return 1 + length(xs[1:])`"
+          - There is none.
+        answer: 1
+        explanation: The base case is the input that is answered without a further call. For the empty list the function returns 0 directly.
+    - question:
+        id: drill-stack-depth
+        type: numeric
+        system: s1
+        prompt: |
+          At the moment when `factorial(0)` is running, having been reached from `factorial(6)`, how many calls of `factorial` are on the stack, counting the one that is running?
+        answer: "7"
+        explanation: The calls for n = 6, 5, 4, 3, 2 and 1 are all waiting, and the call for n = 0 is running.
+    - question:
+        id: drill-string
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          def stars(n):
+              if n == 0:
+                  return ""
+              return "*" + stars(n - 1) + "-"
+
+          print(stars(3))
+        output: "***---"
+        explanation: Each call wraps the result of the call below it with a star in front and a dash behind. The base case gives the empty string, and three wrappings give three stars and three dashes.
+    - question:
+        id: drill-measure
+        type: choice
+        system: s1
+        prompt: |
+          Which of these functions is certain to stop for every whole number `n >= 0`?
+        options:
+          - "`def f(n): return 0 if n == 0 else f(n - 2)`"
+          - "`def f(n): return 0 if n == 0 else f(n + 1)`"
+          - "`def f(n): return 0 if n <= 0 else f(n - 2)`"
+          - "`def f(n): return f(n - 1)`"
+        answer: 2
+        explanation: With the test n <= 0, stepping down by two always reaches the base case. The first option steps over zero when n is odd, going from 1 to -1 and on down for ever. The second moves away from the base case, and the last has none.
+    - question:
+        id: drill-halving
+        type: numeric
+        system: s1
+        concepts: [f1.logarithms]
+        prompt: |
+          A sorted list has 1024 names. Binary search halves the part still to be searched at each look. After how many looks is that part down to a single name?
+        answer: "10"
+        explanation: 1024 is two to the tenth power, so ten halvings bring it down to 1. This is the logarithm to base 2 of 1024.
+    - question:
+        id: drill-memo
+        type: choice
+        system: s1
+        prompt: |
+          Why does remembering answers in a dictionary make the Fibonacci function fast?
+        options:
+          - Dictionaries do arithmetic faster than functions.
+          - Each different question is then worked out only once, and there are few different questions.
+          - It removes the base case.
+          - It makes the stack deeper.
+        answer: 1
+        explanation: The slow version answers the same small questions millions of times. There are only n + 1 different questions, and with the answers stored each is computed once and afterwards looked up.
+    - question:
+        id: drill-fib-predict
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          def fib(n):
+              if n < 2:
+                  return n
+              return fib(n - 1) + fib(n - 2)
+
+          print([fib(n) for n in range(8)])
+        output: "[0, 1, 1, 2, 3, 5, 8, 13]"
+        explanation: The first two terms are the base cases, 0 and 1. Each later term is the sum of the two before it.
+  work:
+    - question:
+        id: write-depth
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `depth(data)` that returns how deeply a value is nested. A number has depth 0. A list has depth one more than the deepest of its items, and the empty list has depth 1.
+
+          `depth(7)` is 0, `depth([1, 2])` is 1, and `depth([1, [2, [3, 4]], [5]])` is 3.
+        starter: |
+          def depth(data):
+              # Replace the next line with your own.
+              return 0
+
+          print(depth([1, [2, [3, 4]], [5]]))
+        solution: |
+          def depth(data):
+              if not isinstance(data, list):
+                  return 0
+              deepest = 0
+              for item in data:
+                  deepest = max(deepest, depth(item))
+              return 1 + deepest
+
+          print(depth([1, [2, [3, 4]], [5]]))
+        tests: |
+          assert depth(7) == 0, "A number has depth 0"
+          assert depth([]) == 1, "The empty list has depth 1"
+          assert depth([1, 2, 3]) == 1, "A flat list has depth 1"
+          assert depth([1, [2, [3, 4]], [5]]) == 3, "The deepest number is inside three lists"
+          assert depth([[[[]]]]) == 4, "Four lists, one inside another"
+          assert depth([[1], 2, [[3]], 4]) == 3, "The deepest item decides, wherever it is in the list"
+          assert depth([[[1]], [2]]) == 3, "The deepest item may come first"
+        wrong:
+          - "def depth(data):\n    if not isinstance(data, list):\n        return 0\n    deepest = 0\n    for item in data:\n        deepest = depth(item)\n    return 1 + deepest\n"
+          - "def depth(data):\n    if not isinstance(data, list):\n        return 0\n    total = 0\n    for item in data:\n        total += depth(item)\n    return 1 + total\n"
+          - "def depth(data):\n    if not isinstance(data, list):\n        return 0\n    if len(data) == 0:\n        return 1\n    return 1 + depth(data[0])\n"
+        explanation: |
+          The definition has two cases, and so has the function. A value that is not a list is the base case. For a list, trust `depth(item)` to be right for each item, since each is smaller, take the greatest of those, and add one for the list itself. For the empty list the loop never runs, the greatest stays at 0, and the answer is 1, as required. The wrong answers in the tests each mishandle the items: one keeps only the last item's depth, one adds the depths together, and one looks only at the first item.
+    - question:
+        id: fix-reverse
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `reverse(s)` should return the string `s` written backwards, by recursion: the reverse of a string is the reverse of everything after its first character, followed by that first character. It returns the string unchanged. Fix it.
+        starter: |
+          def reverse(s):
+              if s == "":
+                  return ""
+              return s[0] + reverse(s[1:])
+
+          print(reverse("recursion"))
+        solution: |
+          def reverse(s):
+              if s == "":
+                  return ""
+              return reverse(s[1:]) + s[0]
+
+          print(reverse("recursion"))
+        tests: |
+          assert reverse("recursion") == "noisrucer", "recursion backwards is noisrucer"
+          assert reverse("") == "", "The empty string is its own reverse"
+          assert reverse("a") == "a", "A single character is its own reverse"
+          assert reverse("ab") == "ba", "Two characters change places"
+          assert reverse(reverse("stack")) == "stack", "Reversing twice gives back the original"
+          assert "[::-1]" not in source and "reversed" not in source, "Use recursion, as the function is written, not a slice with a step or a built-in function"
+        wrong:
+          - "def reverse(s):\n    if s == \"\":\n        return \"\"\n    return s[-1] + reverse(s[1:])\n\nprint(reverse(\"recursion\"))\n"
+          - "def reverse(s):\n    if s == \"\":\n        return \"\"\n    return reverse(s[1:]) + s[-1]\n\nprint(reverse(\"recursion\"))\n"
+        explanation: |
+          Use the two-step check. The base case is right. For the recursive case, assume `reverse(s[1:])` really is the rest of the string backwards. For `"abc"` that is `"cb"`. The starter put `s[0]` in front of it, giving `"acb"`, and in fact, since every level does the same, it rebuilds the string in its original order. The first character of the string must come **last** in its reverse, so it goes after the recursive result. Assuming the recursive call is correct and checking only one level is all that was needed to find the fault.
+    - question:
+        id: write-flatten
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `flatten(data)` that takes a nested list of numbers and returns a new flat list of all the numbers, in the order in which they appear when the nested list is read from left to right.
+
+          `flatten([1, [2, [3, 4]], [5]])` is `[1, 2, 3, 4, 5]`.
+        starter: |
+          def flatten(data):
+              # Replace the next line with your own.
+              return data
+
+          print(flatten([1, [2, [3, 4]], [5]]))
+        solution: |
+          def flatten(data):
+              flat = []
+              for item in data:
+                  if isinstance(item, list):
+                      flat = flat + flatten(item)
+                  else:
+                      flat.append(item)
+              return flat
+
+          print(flatten([1, [2, [3, 4]], [5]]))
+        tests: |
+          assert flatten([1, [2, [3, 4]], [5]]) == [1, 2, 3, 4, 5], "Every number, in reading order"
+          assert flatten([]) == [], "The empty list flattens to the empty list"
+          assert flatten([1, 2, 3]) == [1, 2, 3], "A flat list is unchanged"
+          assert flatten([[], [[]], [[], []]]) == [], "Lists with no numbers in them flatten to the empty list"
+          assert flatten([[[[7]]]]) == [7], "One number, deeply nested"
+          assert flatten([[3, 1], 2, [[1]]]) == [3, 1, 2, 1], "Order and repeats must be kept"
+          _d = [1, [2, 3]]
+          flatten(_d)
+          assert _d == [1, [2, 3]], "The original data must not be changed"
+        wrong:
+          - "def flatten(data):\n    flat = []\n    for item in data:\n        if isinstance(item, list):\n            flat = flat + item\n        else:\n            flat.append(item)\n    return flat\n"
+          - "def flatten(data):\n    flat = []\n    for item in data:\n        if isinstance(item, list):\n            flat.append(flatten(item))\n        else:\n            flat.append(item)\n    return flat\n"
+          - "def flatten(data):\n    flat = []\n    for item in data:\n        if isinstance(item, list):\n            flat = flatten(item) + flat\n        else:\n            flat.append(item)\n    return flat\n"
+        explanation: |
+          The shape is that of `nested_sum`, with joining lists in place of adding numbers. Trust `flatten(item)` to be the flat list of whatever is inside `item`, and join it on to the end of what has been collected so far. The first wrong answer in the tests does not recurse, and so removes only one level. The second uses `append`, which adds the returned list as a single item and so rebuilds the nesting it was meant to remove. `+` joins two lists end to end.
+    - question:
+        id: write-power
+        type: code
+        mode: write
+        system: s2
+        concepts: [f1.exponents-and-exponential-growth, f1.logarithms]
+        prompt: |
+          Write `power(x, n)` that returns $x^n$ for a whole number $n \ge 0$ by repeated squaring, so that the number of multiplications grows like $\log_2 n$ and not like $n$. Do not use `**` or `pow`.
+
+          The tests count your multiplications. For $n = 1000$ you are allowed 30.
+        starter: |
+          def power(x, n):
+              # Replace the next line with your own.
+              return x
+
+          print(power(3, 13))
+        solution: |
+          def power(x, n):
+              if n == 0:
+                  return 1
+              half = power(x, n // 2)
+              if n % 2 == 0:
+                  return half * half
+              return x * half * half
+
+          print(power(3, 13))
+        tests: |
+          assert "**" not in source and "pow(" not in source, "Do not use ** or pow"
+          assert power(3, 13) == 1594323, "3 to the 13th power is 1594323"
+          assert power(2, 0) == 1, "Anything to the power 0 is 1"
+          assert power(5, 1) == 5, "Anything to the power 1 is itself"
+          assert power(2, 10) == 1024, "2 to the 10th power is 1024"
+          assert abs(power(1.5, 4) - 5.0625) < 1e-12, "It should work for decimals"
+          assert power(-2, 5) == -32, "A negative base with an odd power"
+          class _Counted:
+              count = 0
+              def __init__(self, value):
+                  self.value = value
+              def __mul__(self, other):
+                  _Counted.count += 1
+                  _o = other.value if isinstance(other, _Counted) else other
+                  return _Counted(self.value * _o)
+              def __rmul__(self, other):
+                  _Counted.count += 1
+                  return _Counted(other * self.value)
+          _r = power(_Counted(1), 1000)
+          assert _Counted.count <= 30, f"For n = 1000 you used {_Counted.count} multiplications. Repeated squaring needs fewer than 30. Make one recursive call on half the exponent, keep its result, and use it twice."
+        wrong:
+          - "def power(x, n):\n    if n == 0:\n        return 1\n    return x * power(x, n - 1)\n"
+          - "def power(x, n):\n    if n == 0:\n        return 1\n    if n % 2 == 0:\n        return power(x, n // 2) * power(x, n // 2)\n    return x * power(x, n // 2) * power(x, n // 2)\n"
+          - "def power(x, n):\n    if n == 0:\n        return 1\n    half = power(x, n // 2)\n    return half * half\n"
+        explanation: |
+          Halving the exponent uses the law $x^{2k} = (x^k)^2$, with one extra factor of $x$ when the exponent is odd. The result of the single recursive call is kept in `half` and used twice. That is the whole point. The second wrong answer in the tests makes two calls at each level, each of which makes two more, and ends up doing about as many multiplications as the plain method: it halves the depth of the recursion and doubles its width. The measure here is $n$, which at least halves each time, so the depth is about $\log_2 n$, ten levels for a thousand.
+    - question:
+        id: fix-memo
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This Fibonacci function is meant to remember its answers in the dictionary `known`, so that each value is worked out only once. It returns correct answers, but it is as slow as the plain version: the counter shows that `fib(20)` makes 21891 calls. Fix it so that `fib(20)` makes fewer than 100.
+        starter: |
+          known = {}
+          calls = [0]
+
+          def fib(n):
+              calls[0] += 1
+              if n < 2:
+                  return n
+              if n in known:
+                  return known[n]
+              answer = fib(n - 1) + fib(n - 2)
+              return answer
+
+          print(fib(20), calls[0])
+        solution: |
+          known = {}
+          calls = [0]
+
+          def fib(n):
+              calls[0] += 1
+              if n < 2:
+                  return n
+              if n in known:
+                  return known[n]
+              answer = fib(n - 1) + fib(n - 2)
+              known[n] = answer
+              return answer
+
+          print(fib(20), calls[0])
+        tests: |
+          assert output.split()[0] == "6765", "fib(20) is 6765"
+          assert int(output.split()[1]) < 100, "fib(20) should make fewer than 100 calls once the answers are remembered"
+          assert [fib(n) for n in range(10)] == [0, 1, 1, 2, 3, 5, 8, 13, 21, 34], "The first ten Fibonacci numbers"
+          calls[0] = 0
+          assert fib(60) == 1548008755920, "fib(60) is 1548008755920"
+          assert calls[0] < 200, "fib(60) should make fewer than 200 calls"
+        wrong:
+          - "known = {}\ncalls = [0]\n\ndef fib(n):\n    calls[0] += 1\n    if n < 2:\n        return n\n    if n in known:\n        return known[n]\n    answer = fib(n - 1) + fib(n - 2)\n    known[n] = n\n    return answer\n\nprint(fib(20), calls[0])\n"
+          - "known = {}\ncalls = [0]\n\ndef fib(n):\n    calls[0] += 1\n    if n < 2:\n        return n\n    if n in known:\n        return known[n]\n    answer = fib(n - 1) + fib(n - 1)\n    known[n] = answer\n    return answer\n\nprint(fib(20), calls[0])\n"
+        explanation: |
+          The function looked answers up in `known` but never put any in, so the dictionary stayed empty and every look-up failed. One line, `known[n] = answer`, stores each result as it is found. After that, each value from 2 to 20 is computed once, and every later request for it is answered by the look-up at the top. The number of calls falls from tens of thousands to a few dozen. A memo that is read but never written is an easy mistake to make, because the answers stay correct and only the speed gives it away.
+    - question:
+        id: write-hanoi
+        type: code
+        mode: write
+        system: s2
+        concepts: [f1.arithmetic-and-geometric-series]
+        prompt: |
+          The Tower of Hanoi has three pegs and a pile of discs of different sizes on one of them, largest at the bottom. The pile is to be moved to another peg, one disc at a time, never putting a larger disc on a smaller.
+
+          Write `hanoi(n, source, target, spare)` that returns the list of moves for `n` discs, each move a tuple `(from_peg, to_peg)`. The idea: to move `n` discs from the source to the target, first move the top `n - 1` out of the way on to the spare peg, then move the largest disc, then move the `n - 1` from the spare peg on to it.
+
+          `hanoi(2, "A", "C", "B")` is `[("A", "B"), ("A", "C"), ("B", "C")]`.
+        starter: |
+          def hanoi(n, source, target, spare):
+              # Replace the next line with your own.
+              return []
+
+          moves = hanoi(3, "A", "C", "B")
+          print(len(moves), moves[:3])
+        solution: |
+          def hanoi(n, source, target, spare):
+              if n == 0:
+                  return []
+              before = hanoi(n - 1, source, spare, target)
+              after = hanoi(n - 1, spare, target, source)
+              return before + [(source, target)] + after
+
+          moves = hanoi(3, "A", "C", "B")
+          print(len(moves), moves[:3])
+        tests: |
+          assert hanoi(0, "A", "C", "B") == [], "No discs, no moves"
+          assert hanoi(1, "A", "C", "B") == [("A", "C")], "One disc moves straight to the target"
+          assert hanoi(2, "A", "C", "B") == [("A", "B"), ("A", "C"), ("B", "C")], "Two discs take three moves"
+          def _play(n, moves):
+              pegs = {"A": list(range(n, 0, -1)), "B": [], "C": []}
+              for a, b in moves:
+                  assert len(pegs[a]) > 0, f"A move takes a disc from peg {a}, which is empty at that point"
+                  disc = pegs[a].pop()
+                  assert len(pegs[b]) == 0 or pegs[b][-1] > disc, f"A move puts a larger disc on a smaller one on peg {b}"
+                  pegs[b].append(disc)
+              return pegs
+          for _n in range(1, 8):
+              _moves = hanoi(_n, "A", "C", "B")
+              _end = _play(_n, _moves)
+              assert _end["C"] == list(range(_n, 0, -1)) and _end["A"] == [] and _end["B"] == [], f"After the moves for {_n} discs, the whole pile should be on the target peg"
+              assert len(_moves) == 2 ** _n - 1, f"{_n} discs should take exactly {2 ** _n - 1} moves"
+        wrong:
+          - "def hanoi(n, source, target, spare):\n    if n == 0:\n        return []\n    before = hanoi(n - 1, source, target, spare)\n    after = hanoi(n - 1, source, target, spare)\n    return before + [(source, target)] + after\n"
+          - "def hanoi(n, source, target, spare):\n    if n == 0:\n        return []\n    before = hanoi(n - 1, source, spare, target)\n    after = hanoi(n - 1, spare, target, source)\n    return [(source, target)] + before + after\n"
+          - "def hanoi(n, source, target, spare):\n    return [(source, target) for k in range(2 ** n - 1)]\n"
+        explanation: |
+          The whole solution is the sentence in the prompt, typed in. Trust the function to move $n - 1$ discs correctly between any two pegs, and the three steps are plainly legal: the largest disc moves when everything smaller is out of its way on the spare peg. The only care needed is in the roles of the pegs, which change in each recursive call. In the first, the *spare* is the destination. In the second, it is the starting point. The number of moves obeys $T_n = 2T_{n-1} + 1$ with $T_0 = 0$, which gives $T_n = 2^n - 1$. That is the sum of the geometric series $1 + 2 + 4 + \dots + 2^{n-1}$ from [[f1.arithmetic-and-geometric-series]]. Each extra disc doubles the work, so sixty-four discs, at a move a second, would take far longer than the age of the universe.
+    - question:
+        id: order-stack
+        type: order
+        system: s2
+        prompt: |
+          Put in order the events when `total([4, 6])` runs, where `total` returns 0 for an empty list and otherwise `xs[0] + total(xs[1:])`.
+        steps:
+          - total([4, 6]) starts and needs total([6]) before it can add.
+          - total([6]) starts and needs total([]) before it can add.
+          - total([]) starts, and being the base case returns 0.
+          - total([6]) resumes, computes 6 + 0 and returns 6.
+          - total([4, 6]) resumes, computes 4 + 6 and returns 10.
+        explanation: The calls begin from the outermost inwards, each waiting for the next. The base case returns first, and then the waiting calls finish from the innermost outwards.
+  connections:
+    - text: |
+        The puzzle was a list nested to an unknown depth, which no fixed pile of loops could add up. A recursive function did it in six lines, by asking itself for the total of each inner list. Two things made that sound: a base case that is answered outright, and a step that always hands on something smaller, so that the base case must be reached. To write one, you trust the function on smaller inputs. To read one, you check the base case and one level.
+
+        You saw four shapes of recursion. Reducing by one is a recurrence typed in. Following the structure of the data handles anything nested. Halving reaches the answer in a logarithm of the size. And branching can explode, unless the answers are remembered.
+
+        Two threads continue.
+
+        In this lesson you began to count. `power` by squaring makes about 20 calls where the plain method makes a million. The plain `fib` makes 2.7 million calls where the memoised one makes 59. These were not small improvements of the kind that a faster computer could match. They were differences in how the work **grows** as the input grows, and that turns out to be the right way to compare any two methods. A later cluster makes the counting systematic, with a notation for growth that ignores everything except what matters at scale.
+
+        Much later, you will use the reasoning you practised here, base case and then step, as a method of proof. And there is one more way for a function to deal with a sequence of unbounded length: to hand its values out one at a time and pause between them. That is the generator, in [[s1.generators-and-context-managers]], the next lesson, and a recursive generator will walk a nested structure without ever building a list of it.

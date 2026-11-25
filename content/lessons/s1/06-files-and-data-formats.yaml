@@ -1,0 +1,896 @@
+concept: s1.files-and-data-formats
+minutes: 105
+claim: You can write and read text files safely with the with statement, explain why everything stored in a file must be turned into text and back, walk a large file one line at a time, store tables as CSV and nested data as JSON, say what each format can and cannot hold, and deal with the missing files and malformed lines that real data always contain.
+recalls: [s1.exceptions]
+uses: [s1.comprehensions-and-iterators, s1.modules-and-imports, s1.classes-and-objects, s0.values-types-and-variables, s0.strings, s0.loops, s0.functions, s0.lists-and-tuples, s0.dictionaries-and-sets, s0.reading-errors-and-debugging, f1.functions-as-machines, f1.composition-and-inverses]
+leads: [s1.recursion, s1.generators-and-context-managers]
+starter: |
+  # Scratch space. Data that outlives the variable that held it.
+  import json
+
+  record = {"step": 100, "loss": 0.25, "tags": ["first", "run"]}
+
+  with open("record.json", "w") as f:
+      json.dump(record, f)
+
+  with open("record.json") as f:
+      print(f.read())
+
+  with open("record.json") as f:
+      again = json.load(f)
+  print(again == record)
+parts:
+  recall:
+    - text: |
+        [[s1.exceptions]] ended by saying that programs fail mostly at their edges, where they meet the world outside, and that the `finally` clause exists for giving back what was borrowed. This lesson is about the most important edge of all, the file. Three quick pulls first.
+  puzzle:
+    - text: |
+        A program trains a model for an hour. At the end it holds, in its variables, the things the hour was spent on: a list of a thousand error measurements and a dictionary of the settings that were used.
+
+        ```python
+        losses = [2.31, 1.87, 1.52, 1.44]          # and 996 more
+        settings = {"rate": 0.01, "layers": [64, 64], "name": "first try"}
+        ```
+
+        Then the program ends, and all of it is gone. Variables live in the computer's working memory, which belongs to the running program and is wiped the moment it stops. An hour of work has left nothing behind.
+
+        The computer has a second kind of memory, the disk, which keeps its contents when programs stop and when the power goes off. Data are kept there in **files**. But a file is a very simple thing. It is one long row of characters, with a name. It has no idea what a list is, or a float, or a dictionary.
+
+        So here is the puzzle. How do you put a dictionary that holds a list of numbers into a row of characters? And it must be done in such a way that a different program, perhaps written in a different language, perhaps run by you a year from now, can read that row of characters and rebuild **exactly** the dictionary you started with. Writing something down is easy. `str(settings)` gives a row of characters at once. Getting it back is the hard direction: when you read that row from the file, you receive a single string of sixty characters, and `"[64, 64]"` is eight characters, not a list of two numbers.
+  intuition:
+    - text: |
+        You already have the right idea for this, from [[f1.composition-and-inverses]]. Writing a value down is a function: it takes a value and gives a string. Reading it back is another function, from strings to values. What you need is for the second to **undo** the first, so that writing and then reading returns the value you began with. In symbols, with $\text{encode}$ for writing and $\text{decode}$ for reading,
+
+        $$\text{decode}(\text{encode}(x)) = x \quad \text{for every value } x \text{ you care about}.$$
+
+        The reading function has to be the inverse of the writing function. A pair of functions like that, agreed between the writer and the reader, is called a **data format**. That is the whole idea, and the rest of this lesson is detail.
+
+        It also tells you what can go wrong. A function has an inverse only if it never sends two inputs to the same output: two different values must never be written down as the same string. If the list `[1, 2]` and the string `"[1, 2]"` both become the same eight characters, no reader can tell which was meant, and no amount of cleverness will recover it.
+
+        Think of a recipe. A cake cannot be sent by post, but a recipe can: a row of characters from which anyone, anywhere, can rebuild the cake. The recipe works only because writer and reader agree on what "200 g" and "bake" mean. A format is that agreement.
+
+        So there are two layers, and they should be kept apart in your mind. Below is the **file**: a named row of characters on the disk, which you can replace or read. Above is the **format**: a convention for arranging the characters so that they can be decoded. Python's `open` deals with the first. Modules such as `csv` and `json` deal with the second.
+  derivation:
+    - text: |
+        **Writing and reading a file.** The built-in function `open` connects your program to a file and returns a **file object**, through which the characters go.
+
+        ```python
+        f = open("notes.txt", "w")
+        f.write("first line\n")
+        f.write("second line\n")
+        f.close()
+        ```
+
+        The first argument is the file's name. The second is the **mode**, which says what you intend to do.
+
+        | Mode | Meaning | If the file exists | If it does not |
+        | --- | --- | --- | --- |
+        | `"r"` | read (the default) | it is read from the start | `FileNotFoundError` |
+        | `"w"` | write | **it is emptied at once** | it is created |
+        | `"a"` | append | new text is added at the end | it is created |
+
+        Take note of the middle row. Opening a file with `"w"` destroys what was in it, immediately, before a single character is written, and there is no undo. This is the easiest way there is to lose a day's results.
+
+        `write` takes a string and nothing else. It also adds nothing. `print` ends every line for you, and `write` does not, so the `"\n"`, the character that ends a line, must be written out.
+
+        `close` is not a formality. For speed, the text you write is first collected in memory and sent to the disk in large pieces. Closing the file sends the last piece. A program that stops before closing may leave a file that is incomplete or empty.
+
+        Reading is the reverse.
+
+        ```python
+        f = open("notes.txt")
+        text = f.read()
+        f.close()
+        print(text)
+        ```
+
+        `read` returns the whole content of the file as one string, with the line-ending characters in it.
+    - text: |
+        **Closing without fail: `with`.** There is a weakness in the code above. Suppose something between the `open` and the `close` raises an exception. The exception leaves the function at once, the `close` is never reached, and the file is left open with its last piece unwritten. The last lesson gave you the tool for that:
+
+        ```python
+        f = open("notes.txt", "w")
+        try:
+            f.write("first line\n")
+        finally:
+            f.close()
+        ```
+
+        This is correct, and it is so common that Python has a shorter statement which does exactly the same thing.
+
+        ```python
+        with open("notes.txt", "w") as f:
+            f.write("first line\n")
+            f.write("second line\n")
+        ```
+
+        The `with` statement opens the file, gives it the name after `as`, and runs the indented block. When the block ends, **in any way at all**, whether it finishes, returns or raises, the file is closed. You cannot forget, and an exception cannot prevent it.
+
+        From here on, always open files with `with`. A bare `open` with a separate `close` is a bug that has not happened yet. How `with` works underneath, and how to make your own objects usable with it, comes at the end of this cluster.
+    - question:
+        id: predict-write-read
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          with open("a.txt", "w") as f:
+              f.write("one")
+              f.write("two\n")
+              f.write("three\n")
+
+          with open("a.txt") as f:
+              text = f.read()
+
+          print(len(text.splitlines()), text.splitlines()[0])
+        output: "2 onetwo"
+        explanation: write adds nothing of its own. The first two calls put "one" and "two" on the same line, because no line-ending character was written between them. So the file has two lines, and the first is "onetwo".
+    - text: |
+        **Only text goes in, and only text comes out.** A file holds characters. So a number must be turned into text before it is written, and turned back after it is read. You have had the two functions for this since [[s0.values-types-and-variables]]: `str` and `int`, or `float`.
+
+        ```python
+        scores = [90, 72, 85]
+
+        with open("scores.txt", "w") as f:
+            for score in scores:
+                f.write(str(score) + "\n")
+
+        with open("scores.txt") as f:
+            again = [int(line) for line in f.read().splitlines()]
+
+        print(again == scores)          # True
+        ```
+
+        This is a complete data format, the simplest that is of any use: **one value on each line**. Check it against the requirement. Encoding turns each number into its digits and ends the line. Decoding cuts the text at the line endings and reads each piece as a number. The second undoes the first, and the last line confirms it.
+
+        The method `splitlines` cuts a string at its line endings and returns the list of lines without them. It is safer than `split("\n")`, which leaves an empty string at the end when the text finishes with a line ending.
+
+        Forget either conversion and Python tells you. `f.write(90)` is a `TypeError`. And if you forget to convert back, you have a list of strings, `["90", "72", "85"]`, which will fail later, or will not fail and will do something absurd: `"90" + "72"` is `"9072"`.
+    - question:
+        id: fix-glued
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `save(path, numbers)` should write one number on each line, and `load(path)` should read them back as a list of whole numbers, so that loading what was saved returns the original list. There are two faults, one in each function. With them the program stops with an error. Fix both, so that it prints `[3, 14, 15]`.
+        starter: |
+          def save(path, numbers):
+              with open(path, "w") as f:
+                  for n in numbers:
+                      f.write(str(n))
+
+          def load(path):
+              with open(path) as f:
+                  return [line for line in f.read().splitlines()]
+
+          save("pi.txt", [3, 14, 15])
+          print(load("pi.txt"))
+        solution: |
+          def save(path, numbers):
+              with open(path, "w") as f:
+                  for n in numbers:
+                      f.write(str(n) + "\n")
+
+          def load(path):
+              with open(path) as f:
+                  return [int(line) for line in f.read().splitlines()]
+
+          save("pi.txt", [3, 14, 15])
+          print(load("pi.txt"))
+        tests: |
+          assert output.strip() == "[3, 14, 15]", "The program should print [3, 14, 15]"
+          save("_t1.txt", [7, -2, 100])
+          with open("_t1.txt") as _f:
+              _text = _f.read()
+          assert _text.splitlines() == ["7", "-2", "100"], "Each number should be on a line of its own"
+          assert load("_t1.txt") == [7, -2, 100], "Loading what was saved should give back the same whole numbers"
+          save("_t1.txt", [])
+          assert load("_t1.txt") == [], "An empty list should be saved as an empty file and loaded as an empty list"
+          with open("_t2.txt", "w") as _f:
+              _f.write("1\n22\n333\n")
+          assert load("_t2.txt") == [1, 22, 333], "load should read a file with one number on each line"
+        wrong:
+          - "def save(path, numbers):\n    with open(path, \"w\") as f:\n        for n in numbers:\n            f.write(str(n) + \"\\n\")\n\ndef load(path):\n    with open(path) as f:\n        return [line for line in f.read().splitlines()]\n\nprint([3, 14, 15])\n"
+          - "def save(path, numbers):\n    with open(path, \"w\") as f:\n        for n in numbers:\n            f.write(str(n))\n\ndef load(path):\n    with open(path) as f:\n        return [int(c) for c in f.read()]\n\nprint([3, 14, 15])\n"
+          - "def save(path, numbers):\n    with open(path, \"w\") as f:\n        f.write(str(numbers))\n\ndef load(path):\n    with open(path) as f:\n        return [3, 14, 15]\n\nprint([3, 14, 15])\n"
+        explanation: |
+          `save` wrote the digits with nothing between them, so the file held `31415`. That encoding sends different values to the same output: `[3, 14, 15]`, `[31, 415]` and `[31415]` all produce the same five characters, and no reader could tell them apart. The line ending is the separator that makes decoding possible. `load` then returned the lines as they were, which are strings. A format is a pair of functions, and each half must do its conversion: `str` and a separator on the way out, a split and `int` on the way in.
+    - text: |
+        **One line at a time.** `f.read()` brings the whole file into memory as one string. For a small file that is fine. A dataset can be far larger than the memory of the machine, and then it is impossible.
+
+        You met the answer in [[s1.comprehensions-and-iterators]]. A file object is an **iterator over its lines**. A `for` loop over it receives one line at a time, and each line is forgotten when the next is fetched.
+
+        ```python
+        total = 0
+        with open("scores.txt") as f:
+            for line in f:
+                total += int(line)
+        print(total)
+        ```
+
+        The loop holds one line and one running total, however long the file is. This is the laziness you learnt, applied to the disk, and it is how every large dataset is read.
+
+        Two details. Each line arrives **with its line ending**, as `"90\n"`. `int` and `float` ignore spaces and line endings around a number, so `int("90\n")` is 90. When the line is to be used as text, remove the ending first with `line.strip()`.
+
+        And a file object is an iterator, with everything that implies. It moves forwards only and can be walked **once**. A second loop over the same open file finds it already at the end and receives nothing, with no error. To read a file again, open it again.
+    - question:
+        id: predict-file-once
+        type: predict
+        system: s2
+        concepts: [s1.comprehensions-and-iterators]
+        prompt: What does this print?
+        code: |
+          with open("b.txt", "w") as f:
+              f.write("3\n4\n5\n")
+
+          with open("b.txt") as f:
+              count = sum(1 for line in f)
+              total = sum(int(line) for line in f)
+
+          print(count, total)
+        output: "3 0"
+        explanation: A file object is an iterator over its lines. The first generator walks it to the end, counting three lines. The second then finds nothing left, and the empty sum is 0. No error is raised. To get 12, the file would have to be opened a second time, or the lines kept in a list.
+    - text: |
+        **Tables: comma-separated values.** Most data are tables: rows of records, each with the same columns. The oldest and commonest format for a table puts one row on each line and separates the cells with commas. It is called **CSV**. The first line usually holds the names of the columns, and is called the **header**.
+
+        ```text
+        name,city,score
+        Asha,Pune,91
+        Ravi,Delhi,78
+        ```
+
+        You could decode this by hand: split the text into lines, and each line at its commas with `line.split(",")`. Encoding is `",".join(cells)`. Try it, and it works, until the day a cell contains a comma itself:
+
+        ```text
+        name,city,score
+        "Sharma, Asha",Pune,91
+        ```
+
+        A split at the commas now finds four cells in a row of three, and every column after the first is shifted. The format has a rule for this: a cell that contains a comma is wrapped in double quotes. It has further rules for a cell that contains a double quote, and for one that contains a line ending. Getting them all right by hand is harder than it looks, and somebody has already done it. The module `csv` knows the rules.
+
+        ```python
+        import csv
+
+        with open("people.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["name", "city", "score"])
+            writer.writerow(["Sharma, Asha", "Pune", 91])
+
+        with open("people.csv") as f:
+            for row in csv.reader(f):
+                print(row)
+        # ['name', 'city', 'score']
+        # ['Sharma, Asha', 'Pune', '91']
+        ```
+
+        `csv.writer(f)` wraps a file and gives an object whose `writerow` method writes one list as one line, adding quotes where they are needed. `csv.reader(f)` wraps a file and gives an iterator of rows, each a list of cells. The extra argument `newline=""` when opening for writing lets the module manage the line endings itself, and should always be given.
+
+        Look hard at the last line of output. The score was written as the number 91 and came back as the string `'91'`. **CSV has no types.** Every cell is text, and nothing in the file says which columns are meant to be numbers. The reader of the file must know, and must convert. In that sense CSV is only half a format, and the other half is in your code.
+
+        When there is a header, `csv.DictReader` is usually more convenient. It reads the first row as the column names, and then gives each later row as a dictionary from column name to cell.
+
+        ```python
+        with open("people.csv") as f:
+            for row in csv.DictReader(f):
+                print(row["name"], int(row["score"]))
+        ```
+
+        Code written this way does not break when someone adds a column or changes their order.
+    - question:
+        id: predict-csv-strings
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          import csv
+
+          with open("c.csv", "w", newline="") as f:
+              writer = csv.writer(f)
+              writer.writerow(["x", "y"])
+              writer.writerow([2, 3])
+              writer.writerow([10, 20])
+
+          with open("c.csv") as f:
+              rows = [row for row in csv.DictReader(f)]
+
+          print(len(rows), rows[0]["x"] + rows[0]["y"], int(rows[1]["x"]) + int(rows[1]["y"]))
+        output: "2 23 30"
+        explanation: The header row gives the column names and is not counted as data, so there are two rows. Every cell comes back as a string, so adding the cells of the first row joins "2" and "3" into "23". Converting the cells of the second row to whole numbers first gives a real sum.
+    - text: |
+        **Nested data: JSON.** A table is flat. The `settings` dictionary of the puzzle is not: it holds a list inside a dictionary, and real configurations nest much deeper. For data of any shape, the usual format is **JSON**.
+
+        The idea of JSON is simple. Write the value down the way you would type it into a program. A list is written with square brackets, a dictionary with curly brackets, a string in double quotes, a number as its digits.
+
+        ```python
+        import json
+
+        settings = {"rate": 0.01, "layers": [64, 64], "name": "first try", "resume": False, "notes": None}
+        text = json.dumps(settings)
+        print(text)
+        # {"rate": 0.01, "layers": [64, 64], "name": "first try", "resume": false, "notes": null}
+
+        again = json.loads(text)
+        print(again == settings)          # True
+        print(type(again["layers"]))      # <class 'list'>
+        ```
+
+        `json.dumps` is the encoder: value to string. `json.loads` is the decoder: string to value. The `s` at the end of each stands for string. And unlike CSV, the types survive. The list came back as a list, the float as a float, because the notation itself distinguishes them: `64` is a number and `"64"` is a string. The puzzle is solved by these two functions.
+
+        The format is not Python, although it resembles it. It writes `true`, `false` and `null` where Python has `True`, `False` and `None`, and its strings always use double quotes. This is because JSON is shared by nearly every programming language, which is its great strength: a file written by your Python program can be read by anything.
+
+        To go straight to and from a file, there are `json.dump(value, f)` and `json.load(f)`, without the `s`.
+
+        ```python
+        with open("settings.json", "w") as f:
+            json.dump(settings, f, indent=2)
+
+        with open("settings.json") as f:
+            again = json.load(f)
+        ```
+
+        The `indent=2` argument spreads the text over many indented lines so that a person can read it.
+    - text: |
+        **What JSON cannot hold.** JSON has six kinds of value: dictionaries, lists, strings, numbers, the two truth values, and null. Anything else must be bent to fit, and it is essential to know how, because the bending is where the inverse breaks.
+
+        | Python value | What happens | After decoding |
+        | --- | --- | --- |
+        | a tuple `(1, 2)` | written as a list | the list `[1, 2]` |
+        | a dictionary key that is a number, `{1: "a"}` | written as a string | `{"1": "a"}` |
+        | a set `{1, 2}` | `TypeError` | |
+        | an object of your own class | `TypeError` | |
+
+        The first two rows are quiet changes: encoding followed by decoding gives back something that is **not equal** to what you put in. A tuple and a list with the same items become the same text, so the encoder sends two values to one output there, and the decoder has to pick one. If your program later looks up `table[1]` in a dictionary that has been through JSON, it will find nothing, for the key is now `"1"`.
+
+        For an object of your own class, you decide the encoding yourself: write a method that turns the object into a dictionary of plain values, and a function that builds an object back from such a dictionary.
+
+        When the text is not valid JSON, `json.loads` raises `json.JSONDecodeError`. That class is a subclass of `ValueError`, so `except ValueError` catches it.
+
+        **JSON Lines.** One more format combines two ideas of this lesson, and you will meet it everywhere in machine learning. Put one JSON value on each line of a file.
+
+        ```text
+        {"step": 1, "loss": 2.31}
+        {"step": 2, "loss": 1.87}
+        ```
+
+        A file like this can be **appended to** one record at a time, which a single large JSON value cannot. It can also be read one line at a time, however large it grows. Logs of training runs and datasets of text are stored like this. Reading it is a loop over the lines with `json.loads` on each.
+
+        **Which format?** Use CSV for a plain table that may be opened in a spreadsheet. Use JSON for settings, results and anything nested. Use JSON Lines for a long sequence of records. Later you will meet formats that store numbers as raw bytes instead of digits, which are far more compact, and the same principle will govern them: an encoder, and a decoder that is its inverse.
+    - question:
+        id: predict-json-roundtrip
+        type: predict
+        system: s2
+        concepts: [f1.composition-and-inverses]
+        prompt: What does this print?
+        code: |
+          import json
+
+          before = {"point": (3, 4), 7: "seven"}
+          after = json.loads(json.dumps(before))
+          print(after == before, after["point"], "7" in after, 7 in after)
+        output: "False [3, 4] True False"
+        explanation: Encoding and then decoding is not the identity for this value. The tuple was written as a list and came back as a list. The number 7 used as a key was written as a string and came back as the string "7". So the result is not equal to what went in.
+    - text: |
+        **The edge is where things go wrong.** Inside your program you control the data. A file was written by someone else, or by an older version of your code, or was half written when the power failed. Three failures are routine.
+
+        The file is not there. `open` raises `FileNotFoundError`. Whether to catch it depends, as always, on whether you can do something sensible. A missing settings file may have a sensible fallback: use the defaults. A missing dataset has none, and the error should stop the program.
+
+        ```python
+        try:
+            with open("settings.json") as f:
+                settings = json.load(f)
+        except FileNotFoundError:
+            settings = {"rate": 0.01}
+        ```
+
+        A line is malformed. The conversion raises `ValueError`. In a file of a million lines the error message should say **which** line, and `enumerate` supplies the number:
+
+        ```python
+        with open("scores.txt") as f:
+            for number, line in enumerate(f):
+                try:
+                    score = int(line)
+                except ValueError:
+                    raise ValueError(f"line {number + 1} of scores.txt is not a number: {line.strip()}")
+        ```
+
+        The handler here does not hide the error. It catches a vague one and raises a precise one in its place.
+
+        The file is well formed and the content is wrong: a negative age, a missing column. No library can know that. Only your own checks, at the moment of reading, can. **Check data where it enters the program**, and the rest of the program may trust it.
+  formal:
+    - text: |
+        A **file** is a named sequence of characters kept on disk. A **file object**, returned by `open(path, mode)`, reads or writes it.
+
+        | Operation | Effect |
+        | --- | --- |
+        | `with open(path, mode) as f:` | opens the file, runs the block, and closes the file however the block ends |
+        | `f.write(s)` | appends the string `s` to what is written; adds no line ending |
+        | `f.read()` | returns the rest of the file as one string |
+        | `for line in f:` | walks the lines lazily, each with its line ending; one pass only |
+        | `s.splitlines()` | the list of lines of the string `s`, without line endings |
+        | `s.strip()` | `s` without spaces and line endings at its two ends |
+
+        Modes: `"r"` reads and requires the file to exist; `"w"` empties or creates the file and writes; `"a"` creates the file if need be and writes at its end.
+
+        A **data format** is a pair of functions, $\text{encode}$ from values to strings and $\text{decode}$ from strings to values, with $\text{decode}(\text{encode}(x)) = x$ for every value $x$ the format supports. This requires $\text{encode}$ never to send two different values to the same string.
+
+        | Format | Encode | Decode | Holds | Types kept |
+        | --- | --- | --- | --- | --- |
+        | One value per line | `str(x) + "\n"` | `int(line)` or `float(line)` | a list of numbers | by agreement only |
+        | CSV | `csv.writer(f).writerow(cells)` | `csv.reader(f)`, `csv.DictReader(f)` | a table | none; every cell is a string |
+        | JSON | `json.dumps(x)`, `json.dump(x, f)` | `json.loads(s)`, `json.load(f)` | nested dictionaries and lists | dictionary, list, string, number, truth value, null |
+        | JSON Lines | `json.dumps(x) + "\n"` for each record | `json.loads(line)` for each line | a sequence of records | as JSON |
+
+        In JSON, dictionary keys are strings, tuples are encoded as lists, and sets and instances of user-defined classes are not supported. Python's `True`, `False` and `None` are written `true`, `false` and `null`.
+
+        Exceptions at this boundary: `FileNotFoundError` for a missing file opened for reading; `ValueError` for text that is not a number, and its subclass `json.JSONDecodeError` for text that is not JSON; `TypeError` from `write` given something other than a string, and from `json.dumps` given an unsupported type.
+  drill:
+    - question:
+        id: drill-mode-w
+        type: choice
+        system: s1
+        prompt: |
+          A file `results.txt` holds yesterday's results. A program runs `with open("results.txt", "w") as f:` and then stops with an error on the very next line, before writing anything. What does the file hold now?
+        options:
+          - Yesterday's results, untouched.
+          - Nothing. Opening with "w" emptied it at once.
+          - Yesterday's results, followed by an error message.
+          - The file no longer exists.
+        answer: 1
+        explanation: Mode "w" empties the file at the moment it is opened, before any write. The old content is gone. Mode "a" would have kept it.
+    - question:
+        id: drill-append
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          with open("d.txt", "w") as f:
+              f.write("a\n")
+          with open("d.txt", "a") as f:
+              f.write("b\n")
+          with open("d.txt", "w") as f:
+              f.write("c\n")
+          with open("d.txt", "a") as f:
+              f.write("d\n")
+          with open("d.txt") as f:
+              print(f.read().splitlines())
+        output: "['c', 'd']"
+        explanation: The first two openings leave the file holding a and b. The third opens with "w", which empties it, and writes c. The fourth appends d.
+    - question:
+        id: drill-line-ending
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          with open("e.txt", "w") as f:
+              f.write("alpha\nbeta\n")
+          with open("e.txt") as f:
+              lines = [line for line in f]
+          print(len(lines[0]), len(lines[0].strip()), int("42\n") + 1)
+        output: "6 5 43"
+        explanation: Walking a file gives each line with its line-ending character, so the first line is six characters long. strip removes the ending, leaving five. int ignores a line ending around the digits.
+    - question:
+        id: drill-write-type
+        type: choice
+        system: s1
+        prompt: |
+          What happens at `f.write(3.5)`, where `f` is a file opened for writing?
+        options:
+          - The text 3.5 is written.
+          - A TypeError is raised, because write accepts only strings.
+          - The number is rounded and 4 is written.
+          - Nothing is written and no error is raised.
+        answer: 1
+        explanation: A file holds characters, and write will not convert for you. Write str(3.5) instead.
+    - question:
+        id: drill-dumps
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          import json
+          print(json.dumps({"ok": True, "n": None, "xs": [1, 2.5]}))
+        output: '{"ok": true, "n": null, "xs": [1, 2.5]}'
+        explanation: JSON writes the truth values in lower case and writes None as null. Strings and keys are always in double quotes. Lists and numbers look as they do in Python.
+    - question:
+        id: drill-loads-type
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          import json
+          value = json.loads('{"a": [1, "2", 3.0]}')
+          print(type(value["a"][1]) == str, value["a"][0] + value["a"][2])
+        output: "True 4.0"
+        explanation: JSON keeps types. The middle item was written in quotes and is a string. The first and last are numbers, a whole number and a float, and their sum is a float.
+    - question:
+        id: drill-format-choice
+        type: choice
+        system: s1
+        prompt: |
+          A training run should record, after every step, a small dictionary such as `{"step": 12, "loss": 0.8}`, adding to the same file for hours, so that the file is usable even if the run crashes. Which format fits best?
+        options:
+          - One large JSON list, rewritten in full after every step.
+          - JSON Lines, appending one line for each step.
+          - A text file made with str(record), all on one line.
+          - Keeping the records in a list and saving nothing until the end.
+        answer: 1
+        explanation: JSON Lines can be appended to one record at a time, each line is complete in itself, and the file can be read back line by line. A single JSON list has to be rewritten whole, and saving only at the end loses everything in a crash.
+    - question:
+        id: drill-csv-cell
+        type: choice
+        system: s1
+        prompt: |
+          A CSV file was written with a column of whole numbers. It is read back with `csv.reader`. What is the type of each cell in that column?
+        options:
+          - int
+          - float
+          - str
+          - It depends on the number.
+        answer: 2
+        explanation: CSV has no types. Every cell is text, and the program that reads the file must convert the columns it knows to be numbers.
+  work:
+    - question:
+        id: write-column-mean
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `column_mean(path, column)` that opens a CSV file with a header row and returns the mean of the numbers in the named column, as a float. Use `csv.DictReader`. Remember what type every cell has.
+
+          If the file has a header but no rows of data, raise a `ValueError` with the message `no rows`.
+
+          For a file holding the lines `name,score`, `asha,91` and `ravi,78`, `column_mean(path, "score")` is `84.5`.
+        starter: |
+          import csv
+
+          def column_mean(path, column):
+              # Replace the next line with your own.
+              return 0.0
+
+          with open("marks.csv", "w", newline="") as f:
+              f.write("name,score\nasha,91\nravi,78\n")
+
+          print(column_mean("marks.csv", "score"))
+        solution: |
+          import csv
+
+          def column_mean(path, column):
+              with open(path) as f:
+                  values = [float(row[column]) for row in csv.DictReader(f)]
+              if len(values) == 0:
+                  raise ValueError("no rows")
+              return sum(values) / len(values)
+
+          with open("marks.csv", "w", newline="") as f:
+              f.write("name,score\nasha,91\nravi,78\n")
+
+          print(column_mean("marks.csv", "score"))
+        tests: |
+          import csv as _csv
+          assert output.strip() == "84.5", "The mean of 91 and 78 is 84.5"
+          with open("_m1.csv", "w", newline="") as _f:
+              _w = _csv.writer(_f)
+              _w.writerow(["city", "temp", "rain"])
+              _w.writerow(["Pune, MH", 30.5, 2])
+              _w.writerow(["Delhi", 41.5, 0])
+              _w.writerow(["Kochi", 30, 10])
+          assert abs(column_mean("_m1.csv", "temp") - 34.0) < 1e-9, "The mean of 30.5, 41.5 and 30 is 34.0. A cell with a comma inside quotes must not shift the columns."
+          assert abs(column_mean("_m1.csv", "rain") - 4.0) < 1e-9, "The mean of the rain column, 2, 0 and 10, is 4.0"
+          with open("_m2.csv", "w", newline="") as _f:
+              _f.write("a,b\n")
+          _error = None
+          try:
+              column_mean("_m2.csv", "a")
+          except ValueError as _e:
+              _error = _e
+          assert _error is not None and str(_error) == "no rows", "A file with only a header should raise ValueError with the message: no rows"
+          _raised = False
+          try:
+              column_mean("_no_such_file.csv", "a")
+          except FileNotFoundError:
+              _raised = True
+          assert _raised, "A missing file should be left to raise FileNotFoundError"
+        wrong:
+          - "import csv\n\ndef column_mean(path, column):\n    with open(path) as f:\n        lines = f.read().splitlines()\n    header = lines[0].split(\",\")\n    k = header.index(column)\n    values = [float(line.split(\",\")[k]) for line in lines[1:]]\n    if len(values) == 0:\n        raise ValueError(\"no rows\")\n    return sum(values) / len(values)\n\nprint(84.5)\n"
+          - "import csv\n\ndef column_mean(path, column):\n    with open(path) as f:\n        values = [float(row[column]) for row in csv.DictReader(f)]\n    if len(values) == 0:\n        return 0.0\n    return sum(values) / len(values)\n\nprint(84.5)\n"
+          - "import csv\n\ndef column_mean(path, column):\n    with open(path) as f:\n        values = [float(row[column]) for row in csv.reader(f)]\n    if len(values) == 0:\n        raise ValueError(\"no rows\")\n    return sum(values) / len(values)\n\nprint(84.5)\n"
+        explanation: |
+          `csv.DictReader` reads the header and then gives each row as a dictionary, so `row[column]` picks the cell by its column's name. Every cell is a string, so each goes through `float` before any arithmetic. The comprehension is finished inside the `with` block, because once the block ends the file is closed and can no longer be read. The first wrong answer in the tests splits the lines at commas by hand, and it is defeated by the city written as `"Pune, MH"`, which is one cell containing a comma.
+    - question:
+        id: fix-log-overwrite
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `log_step(path, step, loss)` should add one line to a log file each time it is called, in the JSON Lines format. `read_log(path)` should return the list of all the records. After three calls the log should hold three records, but `read_log` returns only the last. Fix it. A log file that does not exist yet should be created by the first call.
+        starter: |
+          import json
+
+          def log_step(path, step, loss):
+              with open(path, "w") as f:
+                  f.write(json.dumps({"step": step, "loss": loss}) + "\n")
+
+          def read_log(path):
+              with open(path) as f:
+                  return [json.loads(line) for line in f]
+
+          for step, loss in enumerate([2.5, 1.5, 1.0]):
+              log_step("run.jsonl", step, loss)
+          print(len(read_log("run.jsonl")))
+        solution: |
+          import json
+
+          def log_step(path, step, loss):
+              with open(path, "a") as f:
+                  f.write(json.dumps({"step": step, "loss": loss}) + "\n")
+
+          def read_log(path):
+              with open(path) as f:
+                  return [json.loads(line) for line in f]
+
+          with open("run.jsonl", "w") as f:
+              pass
+          for step, loss in enumerate([2.5, 1.5, 1.0]):
+              log_step("run.jsonl", step, loss)
+          print(len(read_log("run.jsonl")))
+        tests: |
+          with open("_log1.jsonl", "w") as _f:
+              pass
+          log_step("_log1.jsonl", 0, 2.5)
+          log_step("_log1.jsonl", 1, 1.5)
+          log_step("_log1.jsonl", 2, 1.0)
+          assert read_log("_log1.jsonl") == [{"step": 0, "loss": 2.5}, {"step": 1, "loss": 1.5}, {"step": 2, "loss": 1.0}], "After three calls the log should hold three records, in order"
+          with open("_log1.jsonl") as _f:
+              assert len(_f.read().splitlines()) == 3, "Each record should be on a line of its own"
+          with open("_log2.jsonl", "w") as _f:
+              _f.write('{"step": 9, "loss": 0.5}\n')
+          log_step("_log2.jsonl", 10, 0.25)
+          assert read_log("_log2.jsonl") == [{"step": 9, "loss": 0.5}, {"step": 10, "loss": 0.25}], "A call should add to what is already in the file, not replace it"
+        wrong:
+          - "import json\n\ndef log_step(path, step, loss):\n    with open(path, \"a\") as f:\n        f.write(json.dumps({\"step\": step, \"loss\": loss}))\n\ndef read_log(path):\n    with open(path) as f:\n        return [json.loads(line) for line in f]\n\nprint(3)\n"
+          - "import json\n\ndef log_step(path, step, loss):\n    with open(path, \"a\") as f:\n        f.write(str({\"step\": step, \"loss\": loss}) + \"\\n\")\n\ndef read_log(path):\n    with open(path) as f:\n        return [json.loads(line) for line in f]\n\nprint(3)\n"
+        explanation: |
+          Each call opened the file with `"w"`, which emptied it before writing, so every record destroyed the ones before. Mode `"a"` adds at the end and creates the file if it is missing. In the solution, the file is emptied once, deliberately, before the run begins, so that an old log from a previous run is not carried along. Note the two other ways to get this wrong, both in the tests. Without the line ending, the records run together on one line and cannot be decoded. And `str` of a dictionary writes single quotes, which is Python's notation and not JSON.
+    - question:
+        id: write-load-settings
+        type: code
+        mode: write
+        system: s2
+        concepts: [s1.exceptions]
+        prompt: |
+          Write `load_settings(path, defaults)` that returns the settings for a program as a **new** dictionary.
+
+          - Start from a copy of `defaults`.
+          - If the file at `path` exists, it holds a JSON dictionary. Every key in it overrides or adds to the defaults.
+          - If the file does not exist, the defaults alone are returned. This is the only error that may be caught.
+          - If the file holds JSON that is not a dictionary, raise a `ValueError` with the message `settings must be a dictionary`.
+
+          The dictionary `defaults` itself must never be changed.
+        starter: |
+          import json
+
+          def load_settings(path, defaults):
+              # Replace the next line with your own.
+              return defaults
+
+          with open("settings.json", "w") as f:
+              json.dump({"rate": 0.5, "name": "second"}, f)
+
+          print(load_settings("settings.json", {"rate": 0.01, "steps": 100}))
+          print(load_settings("missing.json", {"rate": 0.01, "steps": 100}))
+        solution: |
+          import json
+
+          def load_settings(path, defaults):
+              settings = dict(defaults)
+              try:
+                  with open(path) as f:
+                      loaded = json.load(f)
+              except FileNotFoundError:
+                  return settings
+              if not isinstance(loaded, dict):
+                  raise ValueError("settings must be a dictionary")
+              for key, value in loaded.items():
+                  settings[key] = value
+              return settings
+
+          with open("settings.json", "w") as f:
+              json.dump({"rate": 0.5, "name": "second"}, f)
+
+          print(load_settings("settings.json", {"rate": 0.01, "steps": 100}))
+          print(load_settings("missing.json", {"rate": 0.01, "steps": 100}))
+        tests: |
+          import json as _json
+          _d = {"rate": 0.01, "steps": 100}
+          with open("_s1.json", "w") as _f:
+              _json.dump({"rate": 0.5, "name": "second"}, _f)
+          _got = load_settings("_s1.json", _d)
+          assert _got == {"rate": 0.5, "steps": 100, "name": "second"}, "The file should override rate, keep steps from the defaults, and add name"
+          assert _d == {"rate": 0.01, "steps": 100}, "The defaults dictionary must not be changed"
+          assert _got is not _d, "The result should be a new dictionary"
+          _alone = load_settings("_no_such_settings.json", _d)
+          assert _alone == _d, "With no file, the defaults alone should be returned"
+          assert _alone is not _d, "Even with no file, the result should be a new dictionary, not the defaults themselves"
+          with open("_s2.json", "w") as _f:
+              _f.write("[1, 2, 3]")
+          _error = None
+          try:
+              load_settings("_s2.json", _d)
+          except ValueError as _e:
+              _error = _e
+          assert _error is not None and str(_error) == "settings must be a dictionary", "JSON that is not a dictionary should raise ValueError with the message: settings must be a dictionary"
+          with open("_s3.json", "w") as _f:
+              _f.write("{not json")
+          _raised = False
+          try:
+              load_settings("_s3.json", _d)
+          except ValueError:
+              _raised = True
+          assert _raised, "A file that is not valid JSON must not be hidden. The error from json.load should pass up."
+        wrong:
+          - "import json\n\ndef load_settings(path, defaults):\n    try:\n        with open(path) as f:\n            loaded = json.load(f)\n    except FileNotFoundError:\n        return defaults\n    if not isinstance(loaded, dict):\n        raise ValueError(\"settings must be a dictionary\")\n    for key, value in loaded.items():\n        defaults[key] = value\n    return defaults\n"
+          - "import json\n\ndef load_settings(path, defaults):\n    settings = dict(defaults)\n    try:\n        with open(path) as f:\n            loaded = json.load(f)\n        for key, value in loaded.items():\n            settings[key] = value\n    except Exception:\n        return dict(defaults)\n    return settings\n"
+          - "import json\n\ndef load_settings(path, defaults):\n    try:\n        with open(path) as f:\n            loaded = json.load(f)\n    except FileNotFoundError:\n        return dict(defaults)\n    if not isinstance(loaded, dict):\n        raise ValueError(\"settings must be a dictionary\")\n    return loaded\n"
+        explanation: |
+          `dict(defaults)` makes a copy, so the caller's dictionary is safe from the changes that follow. The `try` is wrapped around the reading only and names one class, `FileNotFoundError`, the one failure for which there is a sensible fallback. A file that exists but is corrupt is a different matter. It means something is wrong that a person should look at, and the second wrong answer in the tests, which catches everything and falls back to the defaults, would let a program run for hours with the wrong settings and say nothing. The check with `isinstance` is validation at the point of entry: once this function has returned, the rest of the program can rely on having a dictionary.
+    - question:
+        id: write-point-roundtrip
+        type: code
+        mode: write
+        system: s2
+        concepts: [s1.classes-and-objects, f1.composition-and-inverses]
+        prompt: |
+          JSON cannot hold objects of your own classes, so you must supply the encoding. The class `Point` is given. Write two functions.
+
+          - `encode(points)` takes a list of `Point` objects and returns a JSON **string**.
+          - `decode(text)` takes such a string and returns a list of `Point` objects.
+
+          They must be inverses: `decode(encode(points))` must be a list of points equal to the original, in the same order. Choose any JSON representation you like for a point.
+        starter: |
+          import json
+
+          class Point:
+              def __init__(self, x, y):
+                  self.x = x
+                  self.y = y
+
+              def __eq__(self, other):
+                  return isinstance(other, Point) and self.x == other.x and self.y == other.y
+
+              def __repr__(self):
+                  return f"Point({self.x}, {self.y})"
+
+          def encode(points):
+              # Replace the next line with your own.
+              return ""
+
+          def decode(text):
+              # Replace the next line with your own.
+              return []
+
+          path = [Point(0, 0), Point(1.5, -2)]
+          print(decode(encode(path)))
+        solution: |
+          import json
+
+          class Point:
+              def __init__(self, x, y):
+                  self.x = x
+                  self.y = y
+
+              def __eq__(self, other):
+                  return isinstance(other, Point) and self.x == other.x and self.y == other.y
+
+              def __repr__(self):
+                  return f"Point({self.x}, {self.y})"
+
+          def encode(points):
+              return json.dumps([{"x": p.x, "y": p.y} for p in points])
+
+          def decode(text):
+              return [Point(d["x"], d["y"]) for d in json.loads(text)]
+
+          path = [Point(0, 0), Point(1.5, -2)]
+          print(decode(encode(path)))
+        tests: |
+          import json as _json
+          _pts = [Point(0, 0), Point(1.5, -2), Point(3, 3)]
+          _text = encode(_pts)
+          assert type(_text) == str, "encode should return a string"
+          _json.loads(_text)
+          _back = decode(_text)
+          assert type(_back) == list and len(_back) == 3, "decode should return a list of three points"
+          assert all(isinstance(p, Point) for p in _back), "decode should return Point objects, not dictionaries or lists"
+          assert _back == _pts, "decode(encode(points)) should equal the original list, in the same order"
+          assert decode(encode([])) == [], "The empty list should survive the round trip"
+          assert decode(encode([Point(1, 2)])) != [Point(2, 1)], "x and y must not be swapped on the way"
+          assert encode(decode(_text)) == _text, "Encoding what was decoded should give back the same text"
+          assert all(_a is not _b for _a, _b in zip(_pts, _back)), "decode should build new objects"
+        wrong:
+          - "import json\n\nclass Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n\n    def __eq__(self, other):\n        return isinstance(other, Point) and self.x == other.x and self.y == other.y\n\ndef encode(points):\n    return json.dumps([{\"x\": p.x, \"y\": p.y} for p in points])\n\ndef decode(text):\n    return json.loads(text)\n"
+          - "import json\n\nclass Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n\n    def __eq__(self, other):\n        return isinstance(other, Point) and self.x == other.x and self.y == other.y\n\ndef encode(points):\n    return json.dumps([[p.x, p.y] for p in points])\n\ndef decode(text):\n    return [Point(y, x) for x, y in json.loads(text)]\n"
+          - "import json\n\nclass Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n\n    def __eq__(self, other):\n        return isinstance(other, Point) and self.x == other.x and self.y == other.y\n\ndef encode(points):\n    return str([(p.x, p.y) for p in points])\n\ndef decode(text):\n    return [Point(x, y) for x, y in json.loads(text)]\n"
+        explanation: |
+          The encoder first turns each point into something JSON can hold, a dictionary of two numbers, and lets `json.dumps` do the rest. The decoder runs the two steps backwards in the opposite order: `json.loads` to get the plain values, then the class to rebuild each object. That is the rule for the inverse of a composition from [[f1.composition-and-inverses]]: undo the last step first. A pair `[x, y]` would serve as well as a dictionary. What matters is that the two functions agree. The first wrong answer in the tests stops half-way and returns dictionaries, which look like the data but are not points and have none of their methods.
+    - question:
+        id: write-clean-lines
+        type: code
+        mode: write
+        system: s2
+        concepts: [s1.exceptions, s1.comprehensions-and-iterators]
+        prompt: |
+          A file has one measurement on each line, but it was typed by hand. Some lines are blank, and some are not numbers. Write `read_measurements(path)` that walks the file **one line at a time** and returns a tuple `(values, problems)`.
+
+          - `values` is the list of the numbers, as floats, in order.
+          - `problems` is the list of the **line numbers**, counted from 1, of the lines that are not blank and are not numbers.
+          - Blank lines, including lines of spaces only, are skipped without being counted as problems.
+
+          Do not call `read`. Loop over the file object.
+        starter: |
+          def read_measurements(path):
+              # Replace the next line with your own.
+              return ([], [])
+
+          with open("lab.txt", "w") as f:
+              f.write("2.5\n\nabc\n4\n   \n1e2\n7,5\n")
+
+          print(read_measurements("lab.txt"))
+        solution: |
+          def read_measurements(path):
+              values = []
+              problems = []
+              with open(path) as f:
+                  for number, line in enumerate(f):
+                      text = line.strip()
+                      if text == "":
+                          pass
+                      else:
+                          try:
+                              values.append(float(text))
+                          except ValueError:
+                              problems.append(number + 1)
+              return (values, problems)
+
+          with open("lab.txt", "w") as f:
+              f.write("2.5\n\nabc\n4\n   \n1e2\n7,5\n")
+
+          print(read_measurements("lab.txt"))
+        tests: |
+          assert ".read(" not in source, "Do not call read. Loop over the file object, one line at a time."
+          with open("_lab1.txt", "w") as _f:
+              _f.write("2.5\n\nabc\n4\n   \n1e2\n7,5\n")
+          assert read_measurements("_lab1.txt") == ([2.5, 4.0, 100.0], [3, 7]), "Lines 3 and 7 are not numbers. Lines 2 and 5 are blank and are skipped."
+          with open("_lab2.txt", "w") as _f:
+              _f.write("1\n2\n3\n")
+          assert read_measurements("_lab2.txt") == ([1.0, 2.0, 3.0], []), "A clean file has no problems"
+          with open("_lab3.txt", "w") as _f:
+              pass
+          assert read_measurements("_lab3.txt") == ([], []), "An empty file gives two empty lists"
+          with open("_lab4.txt", "w") as _f:
+              _f.write("x\n\n\ny\n5")
+          assert read_measurements("_lab4.txt") == ([5.0], [1, 4]), "Line numbers count every line of the file, blank ones included. The last line may have no line ending."
+        wrong:
+          - "def read_measurements(path):\n    values = []\n    problems = []\n    with open(path) as f:\n        for number, line in enumerate(f):\n            try:\n                values.append(float(line))\n            except ValueError:\n                problems.append(number + 1)\n    return (values, problems)\n"
+          - "def read_measurements(path):\n    values = []\n    problems = []\n    with open(path) as f:\n        for number, line in enumerate(f):\n            text = line.strip()\n            if text != \"\":\n                try:\n                    values.append(float(text))\n                except ValueError:\n                    problems.append(number)\n    return (values, problems)\n"
+          - "def read_measurements(path):\n    values = []\n    problems = []\n    with open(path) as f:\n        lines = [line.strip() for line in f if line.strip() != \"\"]\n    for number, text in enumerate(lines):\n        try:\n            values.append(float(text))\n        except ValueError:\n            problems.append(number + 1)\n    return (values, problems)\n"
+        explanation: |
+          The loop walks the file object, so only one line is held at a time. `enumerate` counts every line, blank or not, from zero, and one is added because people count lines from one. `strip` removes the line ending and any spaces, which makes the test for a blank line simple. The `try` is around the single conversion, so one bad line costs only itself. The third wrong answer in the tests removes the blank lines first and numbers what is left, so its line numbers no longer point at the right lines of the file, and a person told to look at line 2 would find nothing wrong there.
+    - question:
+        id: numeric-shared-encoding
+        type: numeric
+        system: s2
+        concepts: [f1.composition-and-inverses]
+        prompt: |
+          A careless encoder writes a list of whole numbers from 0 to 99 by putting their digits one after another with nothing between, so that `[3, 14]` becomes `314`. How many different lists of such numbers, each written without leading zeros, are encoded as the three characters `123`?
+        answer: "3"
+        explanation: The lists are [1, 2, 3], [12, 3] and [1, 23]. The single number 123 is not allowed, since it is over 99. Three different values share one encoding, so the encoder has no inverse and no decoder can exist. A separator between the numbers cures it.
+  connections:
+    - text: |
+        The puzzle asked how a dictionary that holds a list can be put into a row of characters and rebuilt exactly. The answer was a pair of functions that undo each other, an encoder and a decoder, and you now know three such pairs. One value on each line serves a list of numbers. CSV serves a table, and keeps no types. JSON serves nested data, keeps the basic types, and is read by every language.
+
+        Underneath them is the file itself: opened with `with`, so that it is always closed; emptied by `"w"` and extended by `"a"`; and walked one line at a time, because a file object is an iterator. At this edge of the program, where data arrive from outside, the exceptions of the last lesson became everyday tools.
+
+        Two threads continue.
+
+        Look again at what JSON can hold. A list may contain numbers, or lists, which may contain lists, to any depth. A JSON value is defined in terms of **itself**: a value is a number, or a string, or a list of *values*. Now try to write a function that adds up every number in such a structure. A loop handles a list. A loop inside a loop handles a list of lists. But how many loops must you write when the depth is not known in advance? No fixed number will do. The way out is for a function to call itself, which is [[s1.recursion]], next.
+
+        The `with` statement was used in this lesson as a formula: open, use, and the closing happens by itself. It is not special to files. Any object can take part, by way of two special methods, and the same statement will guard locks, timers and connections. You will see how in [[s1.generators-and-context-managers]].

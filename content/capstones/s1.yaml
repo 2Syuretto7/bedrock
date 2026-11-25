@@ -1,0 +1,938 @@
+cluster: S1
+title: A bank statement reader
+minutes: 90
+claim: You will have built a program that reads a bank's raw transaction lines, survives the bad ones, and prints a statement with a running balance, out of a data class, an exception, a class with operators, a generator and tests you wrote yourself.
+brief: |
+  The first cluster ended with a program made of functions. This one ends with a program made of the larger pieces you now have: classes, exceptions, generators, comprehensions and tests.
+
+  **The project.** A bank exports your transactions as lines of text, one transaction to a line:
+
+  ```
+  2024-03-01, Salary ,5200000
+  2024-03-02,groceries,-45050
+  ```
+
+  Each line holds a date, a category and an amount. The amount is a whole number of **paise**, a hundred to the rupee, because money is counted and whole numbers do not suffer the small errors that floats do. Money coming in is positive and money going out is negative.
+
+  Real exports are untidy. Categories have stray spaces and capitals, some lines are blank, and now and then a line is simply broken. Your program must read what it can, set aside what it cannot, and print a statement.
+
+  As before, you build it in stages and join the stages at the end, so **keep each finished piece**: later stages ask you to paste earlier ones. Nothing here is new. What is new is the size, and the way to manage size is the one you already know: pieces that each do one job, checked one at a time.
+starter: |
+  # Scratch space for the statement reader.
+  text = "2024-03-01, Salary ,5200000\n2024-03-02,groceries,-45050\n"
+  for line in text.splitlines():
+      print(line.split(","))
+stages:
+  - title: One line, or a clear refusal
+    blocks:
+      - text: |
+          A transaction is a small bundle of three named values, which is what a data class is for. It is given to you in the starter.
+
+          `parse(line)` turns one line of text into a `Transaction`. The date and the category have the spaces around them removed, the category is put in lower case, and the amount becomes an `int`.
+
+          A line that cannot be read must not slip through, and it must not crash the program with whatever error happened to occur first. It must be refused in one consistent way: a `ValueError` whose message contains the offending line, so that whoever sees the message can find the line.
+      - question:
+          id: parse
+          type: code
+          mode: write
+          system: s2
+          concepts: [s1.exceptions, s1.type-hints-and-dataclasses, s1.files-and-data-formats]
+          prompt: |
+            Write `parse(line)`. A good line has exactly three fields separated by commas, and its third field is a whole number. For any other line, raise a `ValueError` whose message contains the line.
+          starter: |
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Transaction:
+                date: str
+                category: str
+                paise: int
+
+
+            def parse(line):
+                return None
+          solution: |
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Transaction:
+                date: str
+                category: str
+                paise: int
+
+            def parse(line):
+                parts = line.split(",")
+                if len(parts) != 3:
+                    raise ValueError(f"bad line: {line}")
+                try:
+                    paise = int(parts[2])
+                except ValueError:
+                    raise ValueError(f"bad line: {line}")
+                return Transaction(parts[0].strip(), parts[1].strip().lower(), paise)
+          tests: |
+            _t = parse("2024-03-02, Groceries ,-45050")
+            assert _t is not None, "parse must return a Transaction"
+            assert isinstance(_t, Transaction), "parse must return a Transaction, built from the three fields"
+            assert _t.date == "2024-03-02", "the date is the first field"
+            assert _t.category == "groceries", "the category should lose its spaces and its capitals"
+            assert _t.paise == -45050 and isinstance(_t.paise, int), "the amount should be an int, with its sign"
+            assert parse(" 2024-03-01 ,salary,5200000").date == "2024-03-01", "the date should lose the spaces around it"
+            for _bad in ["2024-03-03,rent", "2024-03-03,rent,-1500000,extra", "2024-03-03,rent,fifteen thousand", "nonsense"]:
+                try:
+                    parse(_bad)
+                except ValueError as _error:
+                    assert _bad in str(_error), "the message of the ValueError should contain the offending line"
+                except Exception as _error:
+                    assert False, "a bad line should raise ValueError, not " + type(_error).__name__
+                else:
+                    assert False, "a line that cannot be read was accepted: " + _bad
+          wrong:
+            - |
+                from dataclasses import dataclass
+
+
+                @dataclass
+                class Transaction:
+                    date: str
+                    category: str
+                    paise: int
+
+                def parse(line):
+                    parts = line.split(",")
+                    return Transaction(parts[0].strip(), parts[1].strip().lower(), int(parts[2]))
+            - |
+                from dataclasses import dataclass
+
+
+                @dataclass
+                class Transaction:
+                    date: str
+                    category: str
+                    paise: int
+
+                def parse(line):
+                    parts = line.split(",")
+                    if len(parts) != 3:
+                        raise ValueError(f"bad line: {line}")
+                    return Transaction(parts[0].strip(), parts[1].strip().lower(), parts[2])
+            - |
+                from dataclasses import dataclass
+
+
+                @dataclass
+                class Transaction:
+                    date: str
+                    category: str
+                    paise: int
+
+                def parse(line):
+                    parts = line.split(",")
+                    if len(parts) != 3:
+                        raise ValueError(f"bad line: {line}")
+                    try:
+                        paise = int(parts[2])
+                    except ValueError:
+                        raise ValueError(f"bad line: {line}")
+                    return Transaction(parts[0], parts[1], paise)
+            - |
+                from dataclasses import dataclass
+
+
+                @dataclass
+                class Transaction:
+                    date: str
+                    category: str
+                    paise: int
+
+                def parse(line):
+                    parts = line.split(",")
+                    if len(parts) != 3:
+                        return None
+                    try:
+                        paise = int(parts[2])
+                    except ValueError:
+                        return None
+                    return Transaction(parts[0].strip(), parts[1].strip().lower(), paise)
+          explanation: |
+            There are two ways for a line to be bad, and they are caught differently. The wrong number of fields is something you check for and raise yourself. An amount that is not a number makes `int` raise its own `ValueError`, whose message is about the number and not about the line, so it is caught and replaced by one that names the line. Either way, the caller sees one kind of error with one kind of message. Returning `None` instead would only move the problem to wherever the `None` is first used.
+  - title: A whole export, bad lines and all
+    blocks:
+      - text: |
+          `load(text)` takes the whole export as one string and returns two lists: the transactions it could read, in order, and the lines it could not, exactly as they were. Blank lines are neither. They are ignored.
+
+          This is where the refusal from stage 1 is handled. `parse` cannot know what to do about a bad line, so it raises. `load` does know: set the line aside and carry on.
+      - question:
+          id: load
+          type: code
+          mode: write
+          system: s2
+          concepts: [s1.exceptions, s1.files-and-data-formats]
+          prompt: |
+            Paste your `parse` where the comment says. Then write `load(text)`, which returns the pair `(good, bad)`.
+          starter: |
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Transaction:
+                date: str
+                category: str
+                paise: int
+
+
+            # Paste your parse function from stage 1 here.
+
+
+            def load(text):
+                return [], []
+          solution: |
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Transaction:
+                date: str
+                category: str
+                paise: int
+
+            def parse(line):
+                parts = line.split(",")
+                if len(parts) != 3:
+                    raise ValueError(f"bad line: {line}")
+                try:
+                    paise = int(parts[2])
+                except ValueError:
+                    raise ValueError(f"bad line: {line}")
+                return Transaction(parts[0].strip(), parts[1].strip().lower(), paise)
+
+            def load(text):
+                good = []
+                bad = []
+                for line in text.splitlines():
+                    if line.strip():
+                        try:
+                            good.append(parse(line))
+                        except ValueError:
+                            bad.append(line)
+                return good, bad
+          tests: |
+            assert "parse" in globals(), "paste your parse function above load"
+            _text = "2024-03-01, Salary ,5200000\n\n2024-03-02,groceries,-45050\nthis line is broken\n   \n2024-03-03,rent,many\n2024-03-04,chai,-2000\n"
+            _result = load(_text)
+            assert _result is not None and len(_result) == 2, "load returns a pair: the good transactions and the bad lines"
+            _good, _bad = _result
+            assert [t.paise for t in _good] == [5200000, -45050, -2000], "every readable line should become a transaction, in order, and reading should carry on after a bad line"
+            assert _bad == ["this line is broken", "2024-03-03,rent,many"], "the bad lines should be kept exactly as they were, and blank lines are not bad lines"
+            assert load("") == ([], []), "an empty export gives two empty lists"
+          wrong:
+            - |
+                from dataclasses import dataclass
+
+
+                @dataclass
+                class Transaction:
+                    date: str
+                    category: str
+                    paise: int
+
+                def parse(line):
+                    parts = line.split(",")
+                    if len(parts) != 3:
+                        raise ValueError(f"bad line: {line}")
+                    try:
+                        paise = int(parts[2])
+                    except ValueError:
+                        raise ValueError(f"bad line: {line}")
+                    return Transaction(parts[0].strip(), parts[1].strip().lower(), paise)
+
+                def load(text):
+                    good = []
+                    bad = []
+                    for line in text.splitlines():
+                        try:
+                            good.append(parse(line))
+                        except ValueError:
+                            bad.append(line)
+                    return good, bad
+            - |
+                from dataclasses import dataclass
+
+
+                @dataclass
+                class Transaction:
+                    date: str
+                    category: str
+                    paise: int
+
+                def parse(line):
+                    parts = line.split(",")
+                    if len(parts) != 3:
+                        raise ValueError(f"bad line: {line}")
+                    try:
+                        paise = int(parts[2])
+                    except ValueError:
+                        raise ValueError(f"bad line: {line}")
+                    return Transaction(parts[0].strip(), parts[1].strip().lower(), paise)
+
+                def load(text):
+                    good = []
+                    bad = []
+                    for line in text.splitlines():
+                        if line.strip():
+                            good.append(parse(line))
+                    return good, bad
+            - |
+                from dataclasses import dataclass
+
+
+                @dataclass
+                class Transaction:
+                    date: str
+                    category: str
+                    paise: int
+
+                def parse(line):
+                    parts = line.split(",")
+                    if len(parts) != 3:
+                        raise ValueError(f"bad line: {line}")
+                    try:
+                        paise = int(parts[2])
+                    except ValueError:
+                        raise ValueError(f"bad line: {line}")
+                    return Transaction(parts[0].strip(), parts[1].strip().lower(), paise)
+
+                def load(text):
+                    good = []
+                    bad = []
+                    try:
+                        for line in text.splitlines():
+                            if line.strip():
+                                good.append(parse(line))
+                    except ValueError:
+                        bad.append(line)
+                    return good, bad
+          explanation: |
+            The `try` sits inside the loop and wraps one line's worth of work. That placement is the whole design: an error in one line is caught, the line is set aside, and the loop goes on to the next. A `try` around the whole loop would stop reading at the first bad line. Only `ValueError` is caught, because that is the one failure `load` knows how to deal with. Anything else is a bug and should be seen.
+  - title: A ledger you can add to another
+    blocks:
+      - text: |
+          A list of transactions is useful, but a `Ledger` that knows its own total, can be counted with `len`, walked with `for` and joined to another with `+` reads better wherever it is used. Each of those is one special method.
+      - question:
+          id: ledger
+          type: code
+          mode: write
+          system: s2
+          concepts: [s1.classes-and-objects, s1.special-methods, s1.comprehensions-and-iterators]
+          prompt: |
+            Complete the class `Ledger`.
+
+            - `Ledger(transactions)` keeps its own list of the transactions it is given.
+            - `len(ledger)` is the number of transactions, and `for t in ledger` walks them in order.
+            - `a + b` is a **new** ledger holding the transactions of `a` followed by those of `b`. Neither `a` nor `b` changes.
+            - `ledger.total()` is the sum of the amounts.
+            - `ledger.by_category()` is a dictionary from each category to the sum of its amounts.
+          starter: |
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Transaction:
+                date: str
+                category: str
+                paise: int
+
+
+            class Ledger:
+                def __init__(self, transactions):
+                    pass
+          solution: |
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Transaction:
+                date: str
+                category: str
+                paise: int
+
+            class Ledger:
+                def __init__(self, transactions):
+                    self.transactions = list(transactions)
+
+                def __len__(self):
+                    return len(self.transactions)
+
+                def __iter__(self):
+                    return iter(self.transactions)
+
+                def __add__(self, other):
+                    return Ledger(self.transactions + other.transactions)
+
+                def total(self):
+                    return sum(t.paise for t in self)
+
+                def by_category(self):
+                    totals = {}
+                    for t in self:
+                        totals[t.category] = totals.get(t.category, 0) + t.paise
+                    return totals
+          tests: |
+            _a = Ledger([Transaction("d1", "salary", 5200000), Transaction("d2", "groceries", -45050)])
+            _b = Ledger([Transaction("d3", "groceries", -30000), Transaction("d4", "chai", -2000), Transaction("d5", "chai", -1500)])
+            assert len(_a) == 2 and len(_b) == 3, "len should count the transactions"
+            assert [t.date for t in _b] == ["d3", "d4", "d5"], "a for loop over a ledger should walk its transactions in order"
+            assert _a.total() == 5154950, "total is the sum of the amounts"
+            assert _b.by_category() == {"groceries": -30000, "chai": -3500}, "by_category sums the amounts of each category"
+            _c = _a + _b
+            assert isinstance(_c, Ledger), "adding two ledgers should give a Ledger"
+            assert [t.date for t in _c] == ["d1", "d2", "d3", "d4", "d5"], "the sum holds the left ledger's transactions and then the right one's"
+            assert len(_a) == 2 and len(_b) == 3, "adding must not change either of the two ledgers"
+            _source = [Transaction("d6", "rent", -1)]
+            _d = Ledger(_source)
+            _source.append(Transaction("d7", "rent", -1))
+            assert len(_d) == 1, "a ledger should keep its own list, so that later changes to the list it was built from do not reach it"
+            assert Ledger([]).total() == 0 and Ledger([]).by_category() == {}, "an empty ledger has a total of zero and no categories"
+          wrong:
+            - |
+                from dataclasses import dataclass
+
+
+                @dataclass
+                class Transaction:
+                    date: str
+                    category: str
+                    paise: int
+
+                class Ledger:
+                    def __init__(self, transactions):
+                        self.transactions = list(transactions)
+
+                    def __len__(self):
+                        return len(self.transactions)
+
+                    def __iter__(self):
+                        return iter(self.transactions)
+
+                    def __add__(self, other):
+                        self.transactions += other.transactions
+                        return self
+
+                    def total(self):
+                        return sum(t.paise for t in self)
+
+                    def by_category(self):
+                        totals = {}
+                        for t in self:
+                            totals[t.category] = totals.get(t.category, 0) + t.paise
+                        return totals
+            - |
+                from dataclasses import dataclass
+
+
+                @dataclass
+                class Transaction:
+                    date: str
+                    category: str
+                    paise: int
+
+                class Ledger:
+                    def __init__(self, transactions):
+                        self.transactions = list(transactions)
+
+                    def __len__(self):
+                        return len(self.transactions)
+
+                    def __iter__(self):
+                        return iter(self.transactions)
+
+                    def __add__(self, other):
+                        return Ledger(self.transactions + other.transactions)
+
+                    def total(self):
+                        return sum(t.paise for t in self)
+
+                    def by_category(self):
+                        totals = {}
+                        for t in self:
+                            totals[t.category] = totals.get(t.category, 0) + 1
+                        return totals
+            - |
+                from dataclasses import dataclass
+
+
+                @dataclass
+                class Transaction:
+                    date: str
+                    category: str
+                    paise: int
+
+                class Ledger:
+                    def __init__(self, transactions):
+                        self.transactions = transactions
+
+                    def __len__(self):
+                        return len(self.transactions)
+
+                    def __add__(self, other):
+                        return Ledger(self.transactions + other.transactions)
+
+                    def total(self):
+                        return sum(t.paise for t in self)
+
+                    def by_category(self):
+                        totals = {}
+                        for t in self:
+                            totals[t.category] = totals.get(t.category, 0) + t.paise
+                        return totals
+          explanation: |
+            `len(x)`, `for t in x` and `a + b` are each a method call under a special name: `__len__`, `__iter__` and `__add__`. `__add__` builds a new `Ledger`, because nobody expects `a + b` to change `a`. The constructor copies the list it is given with `list(...)`, so that the ledger and its caller are not two names for one list. `total` is a generator expression handed to `sum`, and `by_category` is the counting pattern with amounts in place of ones.
+  - title: A balance after every line
+    blocks:
+      - text: |
+          A statement shows the balance after each transaction. `running(transactions, opening)` produces those balances one at a time, starting from the opening balance.
+
+          It must be a generator. A statement may be long, and whoever asks for the balances may want only the first few, so no balance should be worked out before it is asked for.
+      - question:
+          id: running
+          type: code
+          mode: write
+          system: s2
+          concepts: [s1.generators-and-context-managers, s1.comprehensions-and-iterators]
+          prompt: |
+            Write the generator `running(transactions, opening)`. It yields the balance after the first transaction, then after the second, and so on. `transactions` may be any iterable of transactions, not only a list.
+          starter: |
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Transaction:
+                date: str
+                category: str
+                paise: int
+
+
+            def running(transactions, opening):
+                return []
+          solution: |
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Transaction:
+                date: str
+                category: str
+                paise: int
+
+            def running(transactions, opening):
+                balance = opening
+                for t in transactions:
+                    balance += t.paise
+                    yield balance
+          tests: |
+            class _T:
+                def __init__(self, paise):
+                    self.paise = paise
+            _seen = []
+            def _feed():
+                for _p in [500, -200, -350, 1000]:
+                    _seen.append(_p)
+                    yield _T(_p)
+            _it = running(_feed(), 1000)
+            assert iter(_it) is _it, "running should be a generator, not a list of balances"
+            assert _seen == [], "nothing should be worked out before the first balance is asked for"
+            assert next(_it) == 1500, "the first balance is the opening balance changed by the first transaction"
+            assert _seen == [500], "only one transaction should have been read to produce one balance"
+            assert list(_it) == [1300, 950, 1950], "each balance builds on the one before it"
+            assert list(running([], 700)) == [], "no transactions, no balances"
+          wrong:
+            - |
+                def running(transactions, opening):
+                    balances = []
+                    balance = opening
+                    for t in transactions:
+                        balance += t.paise
+                        balances.append(balance)
+                    return balances
+            - |
+                def running(transactions, opening):
+                    balance = opening
+                    for t in transactions:
+                        yield balance
+                        balance += t.paise
+            - |
+                def running(transactions, opening):
+                    for t in transactions:
+                        yield opening + t.paise
+          explanation: |
+            The body does not run when `running` is called. It runs up to the first `yield` when the first balance is asked for, pauses there with `balance` kept, and resumes from that point for the next. That is why the tests could see that only one transaction had been read after one balance was produced. The opening balance itself is not yielded, because a statement shows the balance after each line.
+  - title: Tests that would catch a bug
+    blocks:
+      - text: |
+          Amounts are stored in paise but must be shown in rupees. `rupees(paise)` does that, and this time it is given to you, already correct: `rupees(12345)` is `"₹123.45"`.
+
+          Your job is the other half of the craft. Somebody will change this function one day. Write the test that will tell them if they break it.
+
+          A test is only as good as the cases it tries. One ordinary case, as in the starter, passes for the correct function and also for most broken ones. Bugs live at the boundaries, so ask where this function's boundaries are. What kinds of amount are there?
+      - question:
+          id: test-rupees
+          type: code
+          mode: write
+          system: s2
+          concepts: [s1.testing-with-pytest]
+          prompt: |
+            Extend `test_rupees()` so that it passes for the `rupees` given here and **fails** for broken versions of it. It will be run against the correct function and against three broken ones, each wrong for a different kind of amount.
+          starter: |
+            def rupees(paise):
+                sign = "-" if paise < 0 else ""
+                paise = abs(paise)
+                return f"{sign}₹{paise // 100}.{paise % 100:02d}"
+
+            def test_rupees():
+                assert rupees(12345) == "₹123.45"
+          solution: |
+            def rupees(paise):
+                sign = "-" if paise < 0 else ""
+                paise = abs(paise)
+                return f"{sign}₹{paise // 100}.{paise % 100:02d}"
+
+            def test_rupees():
+                assert rupees(12345) == "₹123.45"
+                assert rupees(-45050) == "-₹450.50"
+                assert rupees(105) == "₹1.05"
+                assert rupees(12000) == "₹120.00"
+                assert rupees(0) == "₹0.00"
+          tests: |
+            assert "test_rupees" in globals() and callable(test_rupees), "keep the function named test_rupees"
+            def _correct(paise):
+                sign = "-" if paise < 0 else ""
+                paise = abs(paise)
+                return f"{sign}₹{paise // 100}.{paise % 100:02d}"
+            def _no_sign(paise):
+                paise = abs(paise)
+                return f"₹{paise // 100}.{paise % 100:02d}"
+            def _no_padding(paise):
+                sign = "-" if paise < 0 else ""
+                paise = abs(paise)
+                return f"{sign}₹{paise // 100}.{paise % 100}"
+            def _drops_zero_paise(paise):
+                sign = "-" if paise < 0 else ""
+                paise = abs(paise)
+                if paise % 100 == 0:
+                    return f"{sign}₹{paise // 100}"
+                return f"{sign}₹{paise // 100}.{paise % 100:02d}"
+            def _caught(version):
+                global rupees
+                rupees = version
+                try:
+                    test_rupees()
+                except AssertionError:
+                    return True
+                return False
+            assert not _caught(_correct), "your test fails for the correct function, so one of its expected values is wrong"
+            assert _caught(_no_sign), "a version that gets one kind of amount wrong slipped past your test: think about which way money can flow"
+            assert _caught(_no_padding), "a version that gets one kind of amount wrong slipped past your test: think about small numbers of paise"
+            assert _caught(_drops_zero_paise), "a version that gets one kind of amount wrong slipped past your test: think about amounts with no paise at all"
+          wrong:
+            - |
+                def rupees(paise):
+                    sign = "-" if paise < 0 else ""
+                    paise = abs(paise)
+                    return f"{sign}₹{paise // 100}.{paise % 100:02d}"
+
+                def test_rupees():
+                    assert rupees(12345) == "₹123.45"
+                    assert rupees(99999) == "₹999.99"
+                    assert rupees(-45050) == "-₹450.50"
+            - |
+                def rupees(paise):
+                    sign = "-" if paise < 0 else ""
+                    paise = abs(paise)
+                    return f"{sign}₹{paise // 100}.{paise % 100:02d}"
+
+                def test_rupees():
+                    assert rupees(12345) == "₹123.45"
+                    assert rupees(105) == "₹1.05"
+                    assert rupees(12000) == "₹120.00"
+            - |
+                def rupees(paise):
+                    sign = "-" if paise < 0 else ""
+                    paise = abs(paise)
+                    return f"{sign}₹{paise // 100}.{paise % 100:02d}"
+
+                def test_rupees():
+                    assert rupees(-45050) == "-₹450.50"
+                    assert rupees(105) == "₹1.50"
+          explanation: |
+            The boundaries of this function are the sign of the amount, a paise part below ten, which needs its leading zero, and a paise part of exactly zero. A test with one case from each catches all three broken versions. Notice what your passing test establishes: that the function is right for the cases you tried. It establishes nothing about the cases you did not try, which is why choosing them is the skill.
+      - question:
+          id: duplicates-cost
+          type: choice
+          system: s1
+          concepts: [s1.files-and-data-formats, s0.dictionaries-and-sets]
+          prompt: |
+            Banks sometimes export a transaction twice. To find repeats, a colleague keeps the lines seen so far in a **list** and, for each new line, asks whether it is `in` that list. For an export of $n$ lines with no repeats, about how many comparisons does that make, and what is the smallest change that fixes it?
+          options:
+            - About $\dfrac{n^2}{2}$, because each membership test walks the lines seen so far. Keeping the lines seen in a set fixes it, since a set goes straight to the answer, so the work grows only in proportion to $n$.
+            - About $n$, because there is only one loop. Nothing needs fixing.
+            - About $\dfrac{n^2}{2}$, and nothing can be done, because every line must be compared with every other.
+            - About $n$, because `in` stops at the first match. Sorting the list first would make it faster still.
+          answer: 0
+          explanation: |
+            `in` on a list is a hidden loop: it compares the new line with the lines seen so far, one by one. Line $k$ is compared with $k - 1$ others, so the total is $0 + 1 + \dots + (n - 1) = \dfrac{n(n - 1)}{2}$, Gauss's sum. A set finds a member without searching, as you saw when sets were introduced, so the same loop over a set does one look-up per line. At a million lines that is the difference between a moment and most of a day.
+  - title: The statement
+    blocks:
+      - text: |
+          Now the whole program. `statement(text, opening)` takes the raw export and the opening balance in paise, and returns the statement as a list of lines.
+
+          There is one line for each readable transaction, in order: the date, the category, the amount in rupees and the balance after it in rupees, separated by single spaces. For an opening balance of ₹1000.00, the line `2024-03-02, Groceries ,-45050` gives
+
+          ```
+          2024-03-02 groceries -₹450.50 ₹549.50
+          ```
+
+          After those comes one last line saying how many lines could not be read, such as `2 skipped`.
+
+          Every part of this already exists. `load` separates good lines from bad, `running` produces the balances, `rupees` formats an amount, and `zip` walks two sequences side by side.
+      - question:
+          id: statement
+          type: code
+          mode: write
+          system: s2
+          concepts: [s1.comprehensions-and-iterators, s1.generators-and-context-managers, s1.exceptions, s1.files-and-data-formats]
+          prompt: |
+            Paste `parse`, `load` and `running` from the earlier stages where the comment says. `Transaction` and `rupees` are given. Then write `statement(text, opening)`.
+          starter: |
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Transaction:
+                date: str
+                category: str
+                paise: int
+
+            def rupees(paise):
+                sign = "-" if paise < 0 else ""
+                paise = abs(paise)
+                return f"{sign}₹{paise // 100}.{paise % 100:02d}"
+
+
+            # Paste parse, load and running from the earlier stages here.
+
+
+            def statement(text, opening):
+                return []
+          solution: |
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Transaction:
+                date: str
+                category: str
+                paise: int
+
+            def parse(line):
+                parts = line.split(",")
+                if len(parts) != 3:
+                    raise ValueError(f"bad line: {line}")
+                try:
+                    paise = int(parts[2])
+                except ValueError:
+                    raise ValueError(f"bad line: {line}")
+                return Transaction(parts[0].strip(), parts[1].strip().lower(), paise)
+
+            def load(text):
+                good = []
+                bad = []
+                for line in text.splitlines():
+                    if line.strip():
+                        try:
+                            good.append(parse(line))
+                        except ValueError:
+                            bad.append(line)
+                return good, bad
+
+            def rupees(paise):
+                sign = "-" if paise < 0 else ""
+                paise = abs(paise)
+                return f"{sign}₹{paise // 100}.{paise % 100:02d}"
+
+            def running(transactions, opening):
+                balance = opening
+                for t in transactions:
+                    balance += t.paise
+                    yield balance
+
+            def statement(text, opening):
+                good, bad = load(text)
+                lines = [f"{t.date} {t.category} {rupees(t.paise)} {rupees(b)}" for t, b in zip(good, running(good, opening))]
+                lines.append(f"{len(bad)} skipped")
+                return lines
+          tests: |
+            for _needed in ["parse", "load", "running"]:
+                assert _needed in globals(), "paste your " + _needed + " function above statement"
+            _text = "2024-03-01, Salary ,5200000\n\n2024-03-02, Groceries ,-45050\nthis line is broken\n2024-03-03,rent,many\n2024-03-04,chai,-2005\n"
+            _lines = statement(_text, 100000)
+            assert _lines is not None, "statement must return the list of lines, not print them"
+            assert len(_lines) == 4, "three readable transactions need three lines, and then the line about skipped ones"
+            assert _lines[0] == "2024-03-01 salary ₹52000.00 ₹53000.00", "the first line is not right: compare it character by character with the example"
+            assert _lines[1] == "2024-03-02 groceries -₹450.50 ₹52549.50", "the balance on each line should build on the balance of the line before"
+            assert _lines[2] == "2024-03-04 chai -₹20.05 ₹52529.45", "a bad line should leave the balance untouched and should not appear"
+            assert _lines[3] == "2 skipped", "the last line counts the lines that could not be read"
+            assert statement("", 500) == ["0 skipped"], "an empty export still gets its last line"
+          wrong:
+            - |
+                from dataclasses import dataclass
+
+
+                @dataclass
+                class Transaction:
+                    date: str
+                    category: str
+                    paise: int
+
+                def parse(line):
+                    parts = line.split(",")
+                    if len(parts) != 3:
+                        raise ValueError(f"bad line: {line}")
+                    try:
+                        paise = int(parts[2])
+                    except ValueError:
+                        raise ValueError(f"bad line: {line}")
+                    return Transaction(parts[0].strip(), parts[1].strip().lower(), paise)
+
+                def load(text):
+                    good = []
+                    bad = []
+                    for line in text.splitlines():
+                        if line.strip():
+                            try:
+                                good.append(parse(line))
+                            except ValueError:
+                                bad.append(line)
+                    return good, bad
+
+                def rupees(paise):
+                    sign = "-" if paise < 0 else ""
+                    paise = abs(paise)
+                    return f"{sign}₹{paise // 100}.{paise % 100:02d}"
+
+                def running(transactions, opening):
+                    balance = opening
+                    for t in transactions:
+                        balance += t.paise
+                        yield balance
+
+                def statement(text, opening):
+                    good, bad = load(text)
+                    lines = [f"{t.date} {t.category} {rupees(t.paise)} {rupees(b)}" for t, b in zip(good, running(good, opening))]
+                    return lines
+            - |
+                from dataclasses import dataclass
+
+
+                @dataclass
+                class Transaction:
+                    date: str
+                    category: str
+                    paise: int
+
+                def parse(line):
+                    parts = line.split(",")
+                    if len(parts) != 3:
+                        raise ValueError(f"bad line: {line}")
+                    try:
+                        paise = int(parts[2])
+                    except ValueError:
+                        raise ValueError(f"bad line: {line}")
+                    return Transaction(parts[0].strip(), parts[1].strip().lower(), paise)
+
+                def load(text):
+                    good = []
+                    bad = []
+                    for line in text.splitlines():
+                        if line.strip():
+                            try:
+                                good.append(parse(line))
+                            except ValueError:
+                                bad.append(line)
+                    return good, bad
+
+                def rupees(paise):
+                    sign = "-" if paise < 0 else ""
+                    paise = abs(paise)
+                    return f"{sign}₹{paise // 100}.{paise % 100:02d}"
+
+                def running(transactions, opening):
+                    balance = opening
+                    for t in transactions:
+                        balance += t.paise
+                        yield balance
+
+                def statement(text, opening):
+                    good, bad = load(text)
+                    lines = [f"{t.date} {t.category} {rupees(t.paise)} {rupees(opening + t.paise)}" for t in good]
+                    lines.append(f"{len(bad)} skipped")
+                    return lines
+            - |
+                from dataclasses import dataclass
+
+
+                @dataclass
+                class Transaction:
+                    date: str
+                    category: str
+                    paise: int
+
+                def parse(line):
+                    parts = line.split(",")
+                    if len(parts) != 3:
+                        raise ValueError(f"bad line: {line}")
+                    try:
+                        paise = int(parts[2])
+                    except ValueError:
+                        raise ValueError(f"bad line: {line}")
+                    return Transaction(parts[0].strip(), parts[1].strip().lower(), paise)
+
+                def load(text):
+                    good = []
+                    bad = []
+                    for line in text.splitlines():
+                        if line.strip():
+                            try:
+                                good.append(parse(line))
+                            except ValueError:
+                                bad.append(line)
+                    return good, bad
+
+                def rupees(paise):
+                    sign = "-" if paise < 0 else ""
+                    paise = abs(paise)
+                    return f"{sign}₹{paise // 100}.{paise % 100:02d}"
+
+                def running(transactions, opening):
+                    balance = opening
+                    for t in transactions:
+                        balance += t.paise
+                        yield balance
+
+                def statement(text, opening):
+                    good, bad = load(text)
+                    lines = [f"{t.date} {t.category} {t.paise} {b}" for t, b in zip(good, running(good, opening))]
+                    lines.append(f"{len(bad)} skipped")
+                    return lines
+          explanation: |
+            `statement` is four lines long, and that is the point. `load` has already dealt with every bad line, so nothing here needs a `try`. `running` hands out balances one at a time, and `zip` pairs each transaction with the balance after it. The comprehension turns each pair into a line, and `rupees` takes care of how money looks. Each of those pieces was written and checked alone, and none of them knows about the others.
+review: |
+  You have a program that takes untidy text and produces a statement, and it is made of pieces you can name:
+
+  - `Transaction` was a data class with annotated fields, from [[s1.type-hints-and-dataclasses]].
+  - `parse` refused bad input in one consistent way and `load` decided what to do about the refusal. Raising where the problem is found and catching where it can be dealt with is from [[s1.exceptions]], and turning lines of text into values and back is from [[s1.files-and-data-formats]].
+  - `Ledger` was a class, from [[s1.classes-and-objects]], that answered `len`, `for` and `+` through special methods, from [[s1.special-methods]].
+  - `running` produced balances only when asked, from [[s1.generators-and-context-managers]], and `statement` paired them with their transactions using `zip` inside a comprehension, from [[s1.comprehensions-and-iterators]].
+  - Your test for `rupees` chose its cases at the boundaries, from [[s1.testing-with-pytest]], and the search for repeated lines came down to choosing a set over a list.
+
+  Look at how the errors were handled, because it is the part most often done badly. The function that found the problem did not try to solve it, and the function that could solve it did not need to know how it was found. That separation is what lets each piece stay small.

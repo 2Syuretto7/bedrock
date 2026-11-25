@@ -1,0 +1,931 @@
+concept: s1.classes-and-objects
+minutes: 105
+claim: You can define a class with a constructor, attributes and methods, explain exactly what self is and how a method call finds its function, tell an attribute of one object from an attribute of the whole class, tell two equal objects from one object with two names, and extend a class by inheritance.
+recalls: [s1.modules-and-imports]
+uses: [s1.comprehensions-and-iterators, s0.values-types-and-variables, s0.functions, s0.lists-and-tuples, s0.dictionaries-and-sets, s0.reading-errors-and-debugging, f1.functions-as-machines]
+leads: [s1.special-methods, s1.exceptions]
+starter: |
+  # Scratch space. A new type of value: a meter that keeps a running average.
+  class Meter:
+      def __init__(self):
+          self.total = 0
+          self.count = 0
+
+      def add(self, value):
+          self.total += value
+          self.count += 1
+
+      def mean(self):
+          return self.total / self.count
+
+  loss = Meter()
+  loss.add(4)
+  loss.add(2)
+  print(loss.mean())
+parts:
+  recall:
+    - text: |
+        [[s1.modules-and-imports]] gave the dot a meaning: `a.b` looks inside `a` for the name `b`. It also showed that a bare name is searched for in a fixed order of tables, the nearer hiding the farther. Both ideas are about to be used again, on a smaller scale. Three quick pulls first.
+  puzzle:
+    - text: |
+        While a model trains, its error is measured thousands of times, and what you want to watch is the average so far. So you need a thing that can be told a number, again and again, and asked at any moment for the mean. Call it a meter. With the Python you have, you might build it from a dictionary and two functions:
+
+        ```python
+        def new_meter():
+            return {"total": 0, "count": 0}
+
+        def meter_add(meter, value):
+            meter["total"] += value
+            meter["count"] += 1
+
+        def meter_mean(meter):
+            return meter["total"] / meter["count"]
+
+        loss = new_meter()
+        meter_add(loss, 4)
+        meter_add(loss, 2)
+        print(meter_mean(loss))       # 3.0
+        ```
+
+        It works. Now look at what is wrong with it.
+
+        The data and the functions belong together, yet nothing in the code says so. `meter_add` will accept any dictionary at all and fail somewhere inside. Anyone can build a broken meter by hand, with a misspelt key or no count. And every function needs a clumsy prefix, `meter_`, because plain `add` and `mean` would collide with the same words used for other things. That is the naming problem of the last lesson, come back.
+
+        Compare a list. You write `scores.append(3)`. The function sits behind the dot of the value itself. There is no `list_append(scores, 3)`, and no way to call `append` on something that is not a list. A list knows what can be done to it.
+
+        Somebody made lists work that way. Can you make a meter work that way, so that `loss.add(4)` and `loss.mean()` are all anyone needs to know? And when you write `loss.add(4)`, how does the function behind the dot find out *which* meter it is supposed to change?
+  intuition:
+    - text: |
+        Think about a rubber stamp and the marks it makes. The stamp is made once. Each press leaves a separate mark on the page, and all the marks have the same shape, because they came from the same stamp. But each mark is its own ink in its own place. You can write a different date inside each one.
+
+        A **class** is the stamp. An **object** is a mark. The class fixes the shape: which pieces of data every such object carries, and which functions can act on them. Each object made from the class then has its own values for those pieces of data.
+
+        You have used classes since your first program. In [[s0.values-types-and-variables]] the line `print(type(3))` showed `<class 'int'>`. The word was there all along. `int`, `str`, `list` and `dict` are classes, and `3`, `"abc"` and `[1, 2]` are objects made from them. **A class is a type, and to write a class is to add a new type of value to the language.**
+
+        The other half of the picture comes from the last lesson. A module was a table of names, reached with a dot. An object is also a table of names, reached with a dot. The difference is that a module is made once, by running a file, while objects are stamped out as often as you like, each with a table of its own. And where does an object keep its functions? It does not. They are kept once, in the class, and every object made from the class is allowed to look there. When a name is not in the object's own table, the dot looks in the class next. It is the same rule as before: search the nearer table, then the farther.
+  derivation:
+    - text: |
+        **The smallest class.** Begin with a class that fixes nothing at all:
+
+        ```python
+        class Meter:
+            pass
+
+        loss = Meter()
+        loss.total = 6
+        loss.count = 2
+        print(loss.total / loss.count)      # 3.0
+        ```
+
+        The `class` statement creates the stamp and gives it a name. By firm convention a class name starts with a capital letter, which is how you tell `Meter`, a class, from `meter`, a variable. The word `pass` is a statement that does nothing. It fills a body that has to exist but has nothing to say.
+
+        **Calling the class**, `Meter()`, presses the stamp. It makes a new, empty object and returns it. An object made from a class is called an **instance** of the class. The next two lines put names in the object's table with an assignment through the dot, and the last line reads them back. A name stored in an object is called an **attribute**.
+
+        So an object really is a table of names that you can fill as you please. But filling it by hand is the weakness of the dictionary all over again. Forget one line and the meter is broken.
+    - text: |
+        **Setting an object up: the constructor.** A class may define a function with the special name `__init__`, with two underscores on each side. Python calls it automatically, on every new object, at the moment the object is made.
+
+        ```python
+        class Meter:
+            def __init__(self):
+                self.total = 0
+                self.count = 0
+
+        loss = Meter()
+        print(loss.total, loss.count)       # 0 0
+        ```
+
+        When `Meter()` is called, Python makes the empty object and then at once calls `__init__` with that new object as the argument. Inside the function the object goes by the name `self`. So `self.total = 0` means: in the table of the object now being made, set `total` to 0. When `__init__` finishes, the object is handed back to whoever called `Meter()`.
+
+        It is now impossible to make a meter with no total. Every instance leaves the stamp complete. That function is called the **constructor**, and its job is to put a new object into a valid starting state.
+
+        A constructor may take more parameters. They are given in the brackets when the class is called:
+
+        ```python
+        class Point:
+            def __init__(self, x, y):
+                self.x = x
+                self.y = y
+
+        p = Point(3, 4)
+        print(p.x, p.y)                     # 3 4
+        ```
+
+        Count the arguments. `__init__` has three parameters, and the call `Point(3, 4)` supplies two. The first, `self`, is supplied by Python. Note also that `self.x = x` is not a line that does nothing. On the right is the parameter `x`, a local name that will vanish when the function returns. On the left is an attribute, stored in the object, which will last as long as the object does.
+    - question:
+        id: predict-init
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          class Rectangle:
+              def __init__(self, width, height):
+                  self.width = width
+                  self.height = height
+                  self.area = width * height
+
+          r = Rectangle(3, 5)
+          print(r.width, r.area)
+        output: "3 15"
+        explanation: Calling the class runs the constructor with self as the new object, width as 3 and height as 5. It stores three attributes, the third worked out from the other two.
+    - text: |
+        **Functions that live in the class: methods.** Now put the two functions of the puzzle inside the class.
+
+        ```python
+        class Meter:
+            def __init__(self):
+                self.total = 0
+                self.count = 0
+
+            def add(self, value):
+                self.total += value
+                self.count += 1
+
+            def mean(self):
+                return self.total / self.count
+
+        loss = Meter()
+        loss.add(4)
+        loss.add(2)
+        print(loss.mean())                  # 3.0
+        ```
+
+        A function defined inside a class is called a **method**. And here is the answer to the puzzle's last question. How does `add` know which meter to change? Follow the line `loss.add(4)` exactly as Python does.
+
+        1. The dot looks for the name `add` in the table of the object `loss`. That table holds only `total` and `count`. It is not there.
+        2. So the dot looks in the table of the object's class, `Meter`. There it finds the function `add`.
+        3. Because the function was found in the class by way of an object, Python calls it with **that object placed in front of the other arguments**.
+
+        In other words, these two lines do exactly the same thing:
+
+        ```python
+        loss.add(4)
+        Meter.add(loss, 4)
+        ```
+
+        The second line is the old `meter_add(loss, 4)` of the puzzle, with the prefix turned into a class name. The first is merely a nicer way of writing it. **`self` is not magic. It is an ordinary first parameter, and the object before the dot is passed to it.** The name `self` is not even a keyword of the language, only a convention, though one that nobody breaks.
+
+        This also explains the most common error message in all of class-writing. Leave `self` out of a method's parameters, as in `def mean():`, and the call `loss.mean()` fails with *mean() takes 0 positional arguments but 1 was given*. You gave none. Python gave one, the object, and the function had nowhere to put it.
+    - question:
+        id: choice-self
+        type: choice
+        system: s1
+        prompt: |
+          A class `Meter` has the method `def add(self, value):`. For a meter called `loss`, the call `loss.add(7)` is run. What are `self` and `value` inside the method?
+        options:
+          - "`self` is the class `Meter`, and `value` is 7."
+          - "`self` is the object `loss`, and `value` is 7."
+          - "`self` is 7, and `value` is missing, which is an error."
+          - "`self` is a fresh empty object, and `value` is 7."
+        answer: 1
+        explanation: The call loss.add(7) is carried out as Meter.add(loss, 7). The object before the dot becomes the first argument, and the 7 becomes the second.
+    - question:
+        id: order-method-call
+        type: order
+        system: s2
+        prompt: |
+          `p` is an instance of a class `Point` that defines a method `norm`. Put in order what happens when Python runs `p.norm()`.
+        steps:
+          - Look for the name norm in the object's own table of attributes.
+          - Not finding it there, look for norm in the table of the class Point.
+          - Find the function norm in the class.
+          - Call that function with the object p as its first argument, named self.
+          - Run the body, in which self.x reads the attribute x of p.
+          - Hand the returned value back to the place of the call.
+        explanation: The object's own table is searched before the class, the nearer before the farther. The function has to be found before it is called, and the object is inserted as the first argument at the moment of the call.
+    - question:
+        id: fix-missing-self
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This class should count how many times `press` is called and report the number with `reading`. It stops with two different errors, one after the other, once the first is fixed. Fix the class so that the program prints 2.
+        starter: |
+          class Counter:
+              def __init__(self):
+                  count = 0
+
+              def press(self):
+                  self.count += 1
+
+              def reading():
+                  return self.count
+
+          c = Counter()
+          c.press()
+          c.press()
+          print(c.reading())
+        solution: |
+          class Counter:
+              def __init__(self):
+                  self.count = 0
+
+              def press(self):
+                  self.count += 1
+
+              def reading(self):
+                  return self.count
+
+          c = Counter()
+          c.press()
+          c.press()
+          print(c.reading())
+        tests: |
+          assert output.strip() == "2", "The program should print 2"
+          _c = Counter()
+          assert _c.reading() == 0, "A new counter should read 0"
+          _c.press()
+          assert _c.reading() == 1, "After one press the counter should read 1"
+          _d = Counter()
+          assert _d.reading() == 0, "A second counter starts from 0, whatever the first one has done"
+        wrong:
+          - "class Counter:\n    count = 0\n\n    def __init__(self):\n        count = 0\n\n    def press(self):\n        Counter.count += 1\n\n    def reading(self):\n        return Counter.count\n\nc = Counter()\nc.press()\nc.press()\nprint(c.reading())\n"
+          - "class Counter:\n    def __init__(self):\n        self.count = 1\n\n    def press(self):\n        self.count += 1\n\n    def reading(self):\n        return self.count - 1 if self.count > 1 else self.count\n\nc = Counter()\nc.press()\nc.press()\nprint(c.reading())\n"
+        explanation: |
+          In the constructor, `count = 0` made a local variable, which vanished when the constructor returned. Nothing was stored in the object, so `self.count += 1` found no attribute to add to. Data that should last must be stored through `self`. Then `reading` had no `self` parameter, so when Python passed the object to it there was nowhere for the object to go. Every method needs `self` as its first parameter, and every attribute is reached through it.
+    - text: |
+        **Each object has its own data.** Two instances of one class share their methods and nothing else.
+
+        ```python
+        train = Meter()
+        test = Meter()
+        train.add(10)
+        print(train.count, test.count)      # 1 0
+        ```
+
+        `train.add(10)` ran `Meter.add` with `self` as `train`, so only the table of `train` changed.
+
+        **Data that belongs to the class.** A name assigned directly in the body of the class, outside every method, is stored in the class's table. There is one copy, and every instance can see it, by the same rule that lets them see the methods.
+
+        ```python
+        class Circle:
+            pi = 3.14159
+
+            def __init__(self, radius):
+                self.radius = radius
+
+            def area(self):
+                return self.pi * self.radius ** 2
+
+        a = Circle(1)
+        b = Circle(2)
+        print(a.pi, b.pi, Circle.pi)        # 3.14159 three times
+        ```
+
+        `a.pi` is not found in the table of `a`, so the class is searched, and there it is. This is a **class attribute**. Those stored through `self` are **instance attributes**.
+
+        Reading falls through to the class. Assigning does not. `a.pi = 3` creates a new instance attribute in the table of `a`, which from then on hides the class attribute for `a` alone. That is shadowing again, and `b.pi` is unaffected.
+
+        There is one trap here that is worth meeting on purpose. Suppose a class attribute is a list:
+
+        ```python
+        class Basket:
+            items = []
+
+            def put(self, thing):
+                self.items.append(thing)
+
+        mine = Basket()
+        yours = Basket()
+        mine.put("apple")
+        print(yours.items)                  # ['apple']
+        ```
+
+        Your basket has my apple in it. `self.items` reads the name `items`, does not find it in `mine`, and finds the single list that belongs to the class. `append` then changes that one list. No assignment through `self` ever happened, so no basket ever got a list of its own. The cure is to create the list in the constructor, `self.items = []`, which runs once for each basket. **Whatever each object should have for itself must be made in `__init__`.**
+    - question:
+        id: predict-class-attr
+        type: predict
+        system: s2
+        prompt: What does this print?
+        code: |
+          class Dog:
+              legs = 4
+
+              def __init__(self, name):
+                  self.name = name
+
+          a = Dog("Moti")
+          b = Dog("Sheru")
+          a.legs = 3
+          Dog.legs = 5
+          print(a.legs, b.legs)
+        output: "3 5"
+        explanation: Assigning a.legs created an instance attribute on a alone, which hides the class attribute for that one dog. The other dog has no legs attribute of its own, so the look-up falls through to the class, where the value has since been changed.
+    - text: |
+        **One object, two names.** An object is a thing in the computer's memory, and a variable is a name that refers to it. Assignment never copies an object. It only makes a name refer to one.
+
+        ```python
+        a = Point(1, 2)
+        b = a
+        b.x = 99
+        print(a.x)                          # 99
+        ```
+
+        There is one point here, with two names. Changing it through one name is seen through the other. This is called **aliasing**, and it is the same thing that happens when two names refer to one list. It also happens whenever an object is passed to a function: the parameter becomes another name for the same object, which is how a method is able to change the object it is called on.
+
+        So there are two different questions you can ask about two names. Are they the **same object**? That is `a is b`. Do they refer to objects with **equal contents**? That is `a == b`.
+
+        ```python
+        p = Point(1, 2)
+        q = Point(1, 2)
+        r = p
+        print(p is r, p is q, p == q)       # True False False
+        ```
+
+        The last answer is a surprise. `p` and `q` plainly hold the same coordinates. But Python has not been told what it means for two points to be equal, and it will not guess. Lacking any instruction, `==` on your own objects falls back to asking whether they are the same object. Teaching your class what equality means, and what `+` means, and how it should look when printed, is the whole subject of the next lesson.
+    - question:
+        id: predict-alias
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          class Box:
+              def __init__(self, value):
+                  self.value = value
+
+          a = Box(1)
+          b = a
+          c = Box(1)
+          b.value = 7
+          print(a.value, c.value, a is b, a is c)
+        output: "7 1 True False"
+        explanation: a and b are two names for one box, so a change made through b is seen through a. c is a separate box that happened to start with the same value, and it is unaffected.
+    - text: |
+        **A class as a promise.** The deepest reason for classes is not tidiness. It is that a class can guarantee something about its data. A statement that is true of an object at every moment it can be observed is called an **invariant**.
+
+        Take a bank account whose balance must never be negative. If the balance were a bare number in a dictionary, any line of the program could set it to anything. As a class, the rule can be enforced in the only places where the balance changes:
+
+        ```python
+        class Account:
+            def __init__(self, opening):
+                assert opening >= 0, "an account cannot open in debt"
+                self.balance = opening
+
+            def deposit(self, amount):
+                assert amount > 0, "a deposit must be positive"
+                self.balance += amount
+
+            def withdraw(self, amount):
+                if amount > self.balance:
+                    return False
+                self.balance -= amount
+                return True
+        ```
+
+        The constructor establishes the invariant. Every method assumes it on entry and preserves it on exit. If code outside the class only ever calls the methods, the balance can never go below zero, and you can be sure of that by reading twenty lines instead of the whole program. The methods are the **interface**: the small set of things that may be done. How the data are stored behind them is the class's own business, and can be changed later without breaking any code that uses it.
+
+        Objects may also hold other objects. A `Line` can have two attributes that are each a `Point`. A neural network is an object that holds layers, each an object that holds its own numbers. Large programs are built in this way, objects inside objects, each keeping its own promise.
+    - text: |
+        **Building on a class: inheritance.** Sometimes you want a new class that is an existing one with something added or changed. Writing the name of the existing class in brackets makes the new one **inherit** from it:
+
+        ```python
+        class Animal:
+            def __init__(self, name):
+                self.name = name
+
+            def speak(self):
+                return "..."
+
+            def introduce(self):
+                return self.name + " says " + self.speak()
+
+        class Dog(Animal):
+            def speak(self):
+                return "woof"
+
+        d = Dog("Moti")
+        print(d.introduce())                # Moti says woof
+        ```
+
+        `Dog` is called a **subclass** of `Animal`. The rule is the search rule once more, with one more table added to the end of the chain: the object, then its class, then the class it inherits from. `Dog` has no `__init__` and no `introduce`, so those are found in `Animal`. It does have its own `speak`, which is found first and hides the one in `Animal`. Follow the call. `introduce` is found in `Animal`, but `self` is still the dog, so when its body asks for `self.speak()` the search begins again from the dog and finds the `woof`.
+
+        When a subclass needs a constructor of its own, it should first let the parent class do its part. `super()` means "search from the parent class onwards":
+
+        ```python
+        class Puppy(Dog):
+            def __init__(self, name, weeks):
+                super().__init__(name)
+                self.weeks = weeks
+        ```
+
+        You will type that pattern in every neural network you write. A network is defined as a subclass of a class that the library provides, its constructor begins with `super().__init__()`, and nearly everything it can do is inherited.
+
+        The function `isinstance(obj, cls)` asks whether an object was made from a class or from any subclass of it. `isinstance(d, Animal)` is `True`, since every dog is an animal.
+    - question:
+        id: predict-inherit
+        type: predict
+        system: s2
+        prompt: What does this print?
+        code: |
+          class Shape:
+              def __init__(self, name):
+                  self.name = name
+
+              def area(self):
+                  return 0
+
+              def describe(self):
+                  return self.name + " " + str(self.area())
+
+          class Square(Shape):
+              def __init__(self, side):
+                  super().__init__("square")
+                  self.side = side
+
+              def area(self):
+                  return self.side ** 2
+
+          print(Square(3).describe(), isinstance(Square(3), Shape))
+        output: "square 9 True"
+        explanation: The constructor of Square passes the name up to the constructor of Shape and then stores the side. describe is found in Shape, but self is the square, so self.area() finds the version in Square first. A square is an instance of Shape because Square inherits from it.
+  formal:
+    - text: |
+        **Definitions.** A **class** is an object that serves as a type. Calling a class creates a new **instance** of it, calls the class's `__init__` method with the new instance as first argument followed by the arguments of the call, and returns the instance. A name stored in an object is an **attribute**. A function stored in a class is a **method**.
+
+        **Attribute look-up.** Reading `obj.name` searches, in order: the instance's own attributes; its class; the classes that class inherits from, nearest first. The first match is used, and if there is none an `AttributeError` is raised. Assigning `obj.name = value` always stores the name in the instance itself.
+
+        **Method calls.** If `obj` is an instance of the class `C` and `C` defines the function `f`, then
+
+        $$\texttt{obj.f(a, b)} \quad\text{is the call}\quad \texttt{C.f(obj, a, b)}.$$
+
+        | | Where it is stored | How many copies | Created by |
+        | --- | --- | --- | --- |
+        | Instance attribute | in the instance | one for each instance | `self.name = value`, usually in `__init__` |
+        | Class attribute | in the class | one, seen by every instance | `name = value` in the class body |
+        | Method | in the class | one, seen by every instance | `def name(self, ...)` in the class body |
+
+        **Identity and equality.** `a is b` is true when the two names refer to the same object. Assignment and argument passing never copy an object; they give it another name. For instances of a class that does not say otherwise, `a == b` means `a is b`.
+
+        **Inheritance.** `class D(B):` makes `D` a subclass of `B`. Attributes not found in `D` are searched for in `B`. A method defined in `D` with the same name as one in `B` **overrides** it. Inside a method of `D`, `super().f(...)` calls the version of `f` found by searching from `B` onwards. `isinstance(obj, B)` is true for instances of `B` and of every subclass of `B`.
+
+        **Invariant.** A property of an object's attributes that holds after the constructor returns and is preserved by every method.
+  drill:
+    - question:
+        id: drill-vocabulary
+        type: choice
+        system: s1
+        prompt: |
+          In `p = Point(3, 4)`, which word describes `p`, and which describes `Point`?
+        options:
+          - "`p` is a class and `Point` is an instance."
+          - "`p` is an instance and `Point` is a class."
+          - "`p` is a method and `Point` is a module."
+          - "`p` is an attribute and `Point` is a constructor."
+        answer: 1
+        explanation: Point is the class, the stamp. Calling it makes an instance, the mark, and p is a name for that instance.
+    - question:
+        id: drill-arg-count
+        type: numeric
+        system: s1
+        prompt: |
+          A method is defined as `def scale(self, factor, origin):`. How many arguments do you write in the brackets when you call it as `shape.scale(...)`?
+        answer: "2"
+        explanation: The object before the dot is passed as self. You supply the rest, factor and origin.
+    - question:
+        id: drill-two-instances
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          class Tally:
+              def __init__(self):
+                  self.n = 0
+
+              def mark(self):
+                  self.n += 1
+
+          a = Tally()
+          b = Tally()
+          a.mark()
+          a.mark()
+          b.mark()
+          print(a.n, b.n)
+        output: "2 1"
+        explanation: Each instance has its own n, made by its own run of the constructor. Marking one does not touch the other.
+    - question:
+        id: drill-long-form
+        type: choice
+        system: s1
+        prompt: |
+          `m` is an instance of the class `Meter`. Which line does exactly the same as `m.add(5)`?
+        options:
+          - "`Meter.add(5)`"
+          - "`add(m, 5)`"
+          - "`Meter.add(m, 5)`"
+          - "`m.Meter.add(5)`"
+        answer: 2
+        explanation: A method is a function stored in the class. Calling it through an object passes the object as the first argument.
+    - question:
+        id: drill-method-return
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          class Temperature:
+              def __init__(self, celsius):
+                  self.celsius = celsius
+
+              def fahrenheit(self):
+                  return self.celsius * 9 / 5 + 32
+
+          t = Temperature(100)
+          print(t.fahrenheit(), t.celsius)
+        output: "212.0 100"
+        explanation: The method reads the stored attribute and works out a new value from it. It does not change the attribute. The division makes the result a float.
+    - question:
+        id: drill-is-eq
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          class Token:
+              def __init__(self, text):
+                  self.text = text
+
+          a = Token("the")
+          b = Token("the")
+          c = a
+          print(a == b, a == c, a.text == b.text)
+        output: "False True True"
+        explanation: The class does not say what equality of tokens means, so == asks whether the two are the same object. a and b are separate objects. a and c are one object. The two strings inside are equal, because strings do know how to compare themselves.
+    - question:
+        id: drill-shared-list
+        type: choice
+        system: s1
+        prompt: |
+          A class body contains `history = []` at the top, outside every method, and a method that runs `self.history.append(x)`. Three instances are made and each appends one item. How many lists exist, and how long is each?
+        options:
+          - Three lists, each of length 1.
+          - One list of length 3, shared by all three instances.
+          - Three lists, each of length 3.
+          - One list of length 1, because each append replaces the last.
+        answer: 1
+        explanation: The list was created once, when the class body ran, and it belongs to the class. Every instance reads the same one, and append changes it in place. To give each instance its own list, create it in the constructor.
+    - question:
+        id: drill-isinstance
+        type: predict
+        system: s1
+        prompt: What does this print?
+        code: |
+          class Layer:
+              pass
+
+          class Linear(Layer):
+              pass
+
+          x = Linear()
+          y = Layer()
+          print(isinstance(x, Layer), isinstance(y, Linear), isinstance(3, int))
+        output: "True False True"
+        explanation: A Linear is a Layer, because Linear inherits from it. A plain Layer is not a Linear. And 3 is an instance of the class int, as every value is an instance of its type.
+  work:
+    - question:
+        id: write-meter
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write the class `Meter` for a running average, with a little more care than the one in the lesson.
+
+          - `Meter()` makes a meter that has seen nothing.
+          - `m.add(value)` records one value.
+          - `m.mean()` returns the mean of the values recorded so far, or `0.0` if there are none yet.
+          - `m.reset()` forgets everything, so that the meter is as new.
+
+          The meter must not keep a list of all the values. Two numbers are enough.
+        starter: |
+          class Meter:
+              # Replace the next line with your own.
+              pass
+
+          loss = Meter()
+          loss.add(4)
+          loss.add(2)
+          print(loss.mean())
+        solution: |
+          class Meter:
+              def __init__(self):
+                  self.total = 0
+                  self.count = 0
+
+              def add(self, value):
+                  self.total += value
+                  self.count += 1
+
+              def mean(self):
+                  if self.count == 0:
+                      return 0.0
+                  return self.total / self.count
+
+              def reset(self):
+                  self.total = 0
+                  self.count = 0
+
+          loss = Meter()
+          loss.add(4)
+          loss.add(2)
+          print(loss.mean())
+        tests: |
+          assert "append" not in source and "[" not in source, "Do not keep a list of the values. A running total and a count are enough."
+          _m = Meter()
+          assert _m.mean() == 0, "A meter that has seen nothing should report 0.0"
+          _m.add(4)
+          assert _m.mean() == 4, "After one value the mean is that value"
+          _m.add(2)
+          assert _m.mean() == 3, "The mean of 4 and 2 is 3"
+          _m.add(0)
+          assert _m.mean() == 2, "The mean of 4, 2 and 0 is 2"
+          _n = Meter()
+          assert _n.mean() == 0, "A second meter must start empty, whatever the first has recorded"
+          _n.add(10)
+          assert _m.mean() == 2, "Adding to one meter must not change another"
+          _m.reset()
+          assert _m.mean() == 0, "After reset the meter should report 0.0"
+          _m.add(5)
+          assert _m.mean() == 5, "After reset the meter should work as new"
+          assert _n.mean() == 10, "Resetting one meter must not reset another"
+        wrong:
+          - "class Meter:\n    total = 0\n    count = 0\n\n    def add(self, value):\n        Meter.total += value\n        Meter.count += 1\n\n    def mean(self):\n        if Meter.count == 0:\n            return 0.0\n        return Meter.total / Meter.count\n\n    def reset(self):\n        Meter.total = 0\n        Meter.count = 0\n"
+          - "class Meter:\n    def __init__(self):\n        self.total = 0\n        self.count = 0\n\n    def add(self, value):\n        self.total += value\n        self.count += 1\n\n    def mean(self):\n        if self.count == 0:\n            return 0.0\n        return self.total / self.count\n\n    def reset(self):\n        self.total = 0\n"
+          - "class Meter:\n    def __init__(self):\n        self.total = 0\n        self.count = 0\n\n    def add(self, value):\n        self.total = value\n        self.count += 1\n\n    def mean(self):\n        if self.count == 0:\n            return 0.0\n        return self.total / self.count\n\n    def reset(self):\n        self.total = 0\n        self.count = 0\n"
+        explanation: |
+          The meter's state is two numbers, a total and a count, both created in the constructor so that every meter has its own. The invariant is that `total` is the sum of exactly `count` values. `add` keeps it by changing both together, and `reset` restores the starting state by setting both. The empty case needs its own line in `mean`, since there is no mean of nothing and the division would fail. Keeping the data on the class instead of on `self`, as the first wrong answer in the tests does, makes every meter in the program share one total.
+    - question:
+        id: fix-shared-history
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A `Player` records the scores of its own games. The program makes two players, and Asha plays twice and Ravi once. It should print `2 1`, the number of games each has played. It prints `3 3`. Fix the class.
+        starter: |
+          class Player:
+              scores = []
+
+              def __init__(self, name):
+                  self.name = name
+
+              def record(self, score):
+                  self.scores.append(score)
+
+              def games(self):
+                  return len(self.scores)
+
+          asha = Player("Asha")
+          ravi = Player("Ravi")
+          asha.record(12)
+          asha.record(30)
+          ravi.record(7)
+          print(asha.games(), ravi.games())
+        solution: |
+          class Player:
+              def __init__(self, name):
+                  self.name = name
+                  self.scores = []
+
+              def record(self, score):
+                  self.scores.append(score)
+
+              def games(self):
+                  return len(self.scores)
+
+          asha = Player("Asha")
+          ravi = Player("Ravi")
+          asha.record(12)
+          asha.record(30)
+          ravi.record(7)
+          print(asha.games(), ravi.games())
+        tests: |
+          assert output.strip() == "2 1", "Asha has played 2 games and Ravi 1"
+          _a = Player("A")
+          _b = Player("B")
+          assert _a.games() == 0, "A new player has played no games"
+          _a.record(5)
+          assert _a.games() == 1 and _b.games() == 0, "Recording a score for one player must not change another"
+          _a.record(9)
+          assert _a.scores == [5, 9], "The player's own scores should all be kept, in order"
+          assert _a.scores is not _b.scores, "Each player needs a list of their own"
+        wrong:
+          - "class Player:\n    scores = []\n\n    def __init__(self, name):\n        self.name = name\n        self.scores.clear()\n\n    def record(self, score):\n        self.scores.append(score)\n\n    def games(self):\n        return len(self.scores)\n\nasha = Player(\"Asha\")\nravi = Player(\"Ravi\")\nasha.record(12)\nasha.record(30)\nravi.record(7)\nprint(\"2 1\")\n"
+          - "class Player:\n    def __init__(self, name):\n        self.name = name\n        self.scores = []\n\n    def record(self, score):\n        self.scores = [score]\n\n    def games(self):\n        return len(self.scores)\n\nasha = Player(\"Asha\")\nravi = Player(\"Ravi\")\nasha.record(12)\nasha.record(30)\nravi.record(7)\nprint(\"2 1\")\n"
+        explanation: |
+          `scores = []` in the class body ran once and made one list, stored in the class. `self.scores.append(...)` reads `scores`, fails to find it in the player, finds the shared list in the class, and changes that list in place. No player ever had a list of their own. Moving the line into the constructor, as `self.scores = []`, runs it once for each player and stores each new list in that player's own table.
+    - question:
+        id: write-account
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write the class `Account` with the invariant that the balance is never negative.
+
+          - `Account(opening)` opens an account with the given balance.
+          - `a.deposit(amount)` adds to the balance.
+          - `a.withdraw(amount)` takes the amount out and returns `True` if there is enough money. If there is not, it changes nothing and returns `False`.
+          - `a.transfer(other, amount)` moves the amount from this account to the account `other`, if there is enough, and returns `True` or `False` in the same way. Money must never be created or lost.
+          - The balance is read as the attribute `a.balance`.
+        starter: |
+          class Account:
+              def __init__(self, opening):
+                  self.balance = opening
+
+              # Add the three methods here.
+
+          a = Account(100)
+          b = Account(20)
+          print(a.transfer(b, 70), a.balance, b.balance)
+          print(a.transfer(b, 70), a.balance, b.balance)
+        solution: |
+          class Account:
+              def __init__(self, opening):
+                  self.balance = opening
+
+              def deposit(self, amount):
+                  self.balance += amount
+
+              def withdraw(self, amount):
+                  if amount > self.balance:
+                      return False
+                  self.balance -= amount
+                  return True
+
+              def transfer(self, other, amount):
+                  if not self.withdraw(amount):
+                      return False
+                  other.deposit(amount)
+                  return True
+
+          a = Account(100)
+          b = Account(20)
+          print(a.transfer(b, 70), a.balance, b.balance)
+          print(a.transfer(b, 70), a.balance, b.balance)
+        tests: |
+          _a = Account(100)
+          _a.deposit(50)
+          assert _a.balance == 150, "A deposit of 50 into 100 should leave 150"
+          assert _a.withdraw(30) is True and _a.balance == 120, "A withdrawal that can be afforded returns True and reduces the balance"
+          assert _a.withdraw(500) is False, "A withdrawal that cannot be afforded returns False"
+          assert _a.balance == 120, "A refused withdrawal must change nothing"
+          assert _a.withdraw(120) is True and _a.balance == 0, "The whole balance may be withdrawn"
+          _x = Account(100)
+          _y = Account(20)
+          assert _x.transfer(_y, 70) is True, "A transfer that can be afforded returns True"
+          assert (_x.balance, _y.balance) == (30, 90), "70 should have moved from one account to the other"
+          assert _x.transfer(_y, 70) is False, "A transfer that cannot be afforded returns False"
+          assert (_x.balance, _y.balance) == (30, 90), "A refused transfer must change neither account"
+          assert _x.balance + _y.balance == 120, "Money must not be created or lost"
+        wrong:
+          - "class Account:\n    def __init__(self, opening):\n        self.balance = opening\n\n    def deposit(self, amount):\n        self.balance += amount\n\n    def withdraw(self, amount):\n        self.balance -= amount\n        return True\n\n    def transfer(self, other, amount):\n        self.withdraw(amount)\n        other.deposit(amount)\n        return True\n"
+          - "class Account:\n    def __init__(self, opening):\n        self.balance = opening\n\n    def deposit(self, amount):\n        self.balance += amount\n\n    def withdraw(self, amount):\n        if amount > self.balance:\n            return False\n        self.balance -= amount\n        return True\n\n    def transfer(self, other, amount):\n        self.withdraw(amount)\n        other.deposit(amount)\n        return True\n"
+          - "class Account:\n    def __init__(self, opening):\n        self.balance = opening\n\n    def deposit(self, amount):\n        self.balance += amount\n\n    def withdraw(self, amount):\n        if amount >= self.balance:\n            return False\n        self.balance -= amount\n        return True\n\n    def transfer(self, other, amount):\n        if not self.withdraw(amount):\n            return False\n        other.deposit(amount)\n        return True\n"
+        explanation: |
+          `withdraw` is the one place where the balance can fall, so it is the one place that must check. `transfer` is then built from the two methods that already exist, and it inherits their guarantee: it deposits only if the withdrawal succeeded. The second wrong answer in the tests ignores the result of `withdraw` and deposits regardless, which creates money out of nothing whenever the withdrawal is refused. Notice that `other` is just another account, and `other.deposit(amount)` is an ordinary method call on it. A method may call methods on any object it is given.
+    - question:
+        id: write-linear
+        type: code
+        mode: write
+        system: s2
+        concepts: [f1.functions-as-machines]
+        prompt: |
+          The base class `Layer` is given. It stands for a function from numbers to numbers, and `apply_all` applies that function to every number of a list.
+
+          Write a subclass `Linear` for the function $x \mapsto wx + b$. Its constructor takes `w` and `b`, lets the parent constructor run first with the name `"linear"`, and stores the two numbers. It overrides `forward`. Do not write `apply_all` again. It must be inherited.
+        starter: |
+          class Layer:
+              def __init__(self, name):
+                  self.name = name
+
+              def forward(self, x):
+                  return x
+
+              def apply_all(self, xs):
+                  return [self.forward(x) for x in xs]
+
+          # Write the class Linear here.
+
+          double_plus_one = Linear(2, 1)
+          print(double_plus_one.name, double_plus_one.apply_all([0, 1, 2]))
+        solution: |
+          class Layer:
+              def __init__(self, name):
+                  self.name = name
+
+              def forward(self, x):
+                  return x
+
+              def apply_all(self, xs):
+                  return [self.forward(x) for x in xs]
+
+          class Linear(Layer):
+              def __init__(self, w, b):
+                  super().__init__("linear")
+                  self.w = w
+                  self.b = b
+
+              def forward(self, x):
+                  return self.w * x + self.b
+
+          double_plus_one = Linear(2, 1)
+          print(double_plus_one.name, double_plus_one.apply_all([0, 1, 2]))
+        tests: |
+          assert source.count("def apply_all") == 1, "Do not write apply_all again. Linear should inherit it from Layer."
+          _f = Linear(2, 1)
+          assert isinstance(_f, Layer), "Linear should be a subclass of Layer"
+          assert _f.name == "linear", "The parent constructor should have set the name to linear"
+          assert _f.forward(3) == 7, "2 times 3 plus 1 is 7"
+          assert _f.apply_all([0, 1, 2]) == [1, 3, 5], "apply_all should use the forward of Linear"
+          _g = Linear(-1, 0.5)
+          assert _g.forward(2) == -1.5, "It should work for any w and b"
+          assert _f.forward(3) == 7, "Two layers must keep their own w and b"
+          assert Layer("plain").apply_all([4, 5]) == [4, 5], "The base class must be left unchanged"
+        wrong:
+          - "class Layer:\n    def __init__(self, name):\n        self.name = name\n\n    def forward(self, x):\n        return x\n\n    def apply_all(self, xs):\n        return [self.forward(x) for x in xs]\n\nclass Linear(Layer):\n    def __init__(self, w, b):\n        self.w = w\n        self.b = b\n\n    def forward(self, x):\n        return self.w * x + self.b\n"
+          - "class Layer:\n    def __init__(self, name):\n        self.name = name\n\n    def forward(self, x):\n        return x\n\n    def apply_all(self, xs):\n        return [self.forward(x) for x in xs]\n\nclass Linear:\n    def __init__(self, w, b):\n        self.name = \"linear\"\n        self.w = w\n        self.b = b\n\n    def forward(self, x):\n        return self.w * x + self.b\n\n    def apply_all2(self, xs):\n        return [self.forward(x) for x in xs]\n"
+          - "class Layer:\n    def __init__(self, name):\n        self.name = name\n\n    def forward(self, x):\n        return x\n\n    def apply_all(self, xs):\n        return [self.forward(x) for x in xs]\n\nclass Linear(Layer):\n    def __init__(self, w, b):\n        super().__init__(\"linear\")\n        self.w = w\n        self.b = b\n\n    def forward(self, x):\n        return self.w * (x + self.b)\n"
+        explanation: |
+          `Linear(Layer)` inherits everything, then changes two things. Its constructor calls `super().__init__("linear")` so that the parent can set up its own part, the name, before the subclass stores `w` and `b`. Leave that call out and the object has no `name` at all. Its `forward` overrides the parent's. `apply_all` is found in `Layer`, but inside it `self` is the `Linear` object, so `self.forward` finds the new version. This is the shape of every layer in a deep-learning library: a base class provides the machinery, and each subclass supplies only its own `forward`.
+    - question:
+        id: numeric-objects
+        type: numeric
+        system: s2
+        prompt: |
+          How many separate `Point` objects exist after these lines have run?
+
+          ```python
+          a = Point(0, 0)
+          b = Point(0, 0)
+          c = a
+          points = [a, b, c, Point(1, 1)]
+          d = points[3]
+          ```
+        answer: "3"
+        explanation: An object is made each time the class is called, and the class is called three times. c is another name for the first point, the list holds references to objects that already exist, and d is another name for the third.
+    - question:
+        id: write-vector2
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write the class `Vector` for an arrow in the plane with components `x` and `y`.
+
+          - `Vector(x, y)` stores the two components.
+          - `v.plus(w)` returns a **new** vector whose components are the sums of the matching components. Neither `v` nor `w` may be changed.
+          - `v.scaled(k)` returns a new vector with both components multiplied by the number `k`.
+          - `v.same_as(w)` returns `True` when the two vectors have equal components.
+        starter: |
+          class Vector:
+              def __init__(self, x, y):
+                  self.x = x
+                  self.y = y
+
+              # Add the three methods here.
+
+          v = Vector(1, 2).plus(Vector(3, 4)).scaled(2)
+          print(v.x, v.y)
+        solution: |
+          class Vector:
+              def __init__(self, x, y):
+                  self.x = x
+                  self.y = y
+
+              def plus(self, other):
+                  return Vector(self.x + other.x, self.y + other.y)
+
+              def scaled(self, k):
+                  return Vector(self.x * k, self.y * k)
+
+              def same_as(self, other):
+                  return self.x == other.x and self.y == other.y
+
+          v = Vector(1, 2).plus(Vector(3, 4)).scaled(2)
+          print(v.x, v.y)
+        tests: |
+          _v = Vector(1, 2)
+          _w = Vector(3, 4)
+          _s = _v.plus(_w)
+          assert isinstance(_s, Vector), "plus should return a Vector"
+          assert (_s.x, _s.y) == (4, 6), "(1, 2) plus (3, 4) is (4, 6)"
+          assert (_v.x, _v.y) == (1, 2) and (_w.x, _w.y) == (3, 4), "plus must not change either of the two vectors"
+          assert _s is not _v and _s is not _w, "plus should return a new object"
+          _t = _v.scaled(3)
+          assert isinstance(_t, Vector) and (_t.x, _t.y) == (3, 6), "(1, 2) scaled by 3 is (3, 6)"
+          assert (_v.x, _v.y) == (1, 2), "scaled must not change the vector"
+          assert _v.same_as(Vector(1, 2)) is True, "Two vectors with equal components are the same"
+          assert _v.same_as(Vector(1, 3)) is False, "A different y means a different vector"
+          assert _v.same_as(Vector(0, 2)) is False, "A different x means a different vector"
+          assert output.strip() == "8 12", "(1, 2) plus (3, 4), scaled by 2, is (8, 12)"
+        wrong:
+          - "class Vector:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n\n    def plus(self, other):\n        self.x += other.x\n        self.y += other.y\n        return self\n\n    def scaled(self, k):\n        self.x *= k\n        self.y *= k\n        return self\n\n    def same_as(self, other):\n        return self.x == other.x and self.y == other.y\n\nv = Vector(1, 2).plus(Vector(3, 4)).scaled(2)\nprint(v.x, v.y)\n"
+          - "class Vector:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n\n    def plus(self, other):\n        return Vector(self.x + other.x, self.y + other.y)\n\n    def scaled(self, k):\n        return Vector(self.x * k, self.y * k)\n\n    def same_as(self, other):\n        return self is other\n\nv = Vector(1, 2).plus(Vector(3, 4)).scaled(2)\nprint(v.x, v.y)\n"
+          - "class Vector:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n\n    def plus(self, other):\n        return Vector(self.x + other.x, self.y + other.y)\n\n    def scaled(self, k):\n        return Vector(self.x * k, self.y)\n\n    def same_as(self, other):\n        return self.x == other.x or self.y == other.y\n\nv = Vector(1, 2).plus(Vector(3, 4)).scaled(2)\nprint(v.x, v.y)\n"
+        explanation: |
+          Each method that produces a vector calls the class to make a new one, and leaves `self` alone. That is how numbers behave: `3 + 4` gives a new number and does not change 3. Because each method returns a vector, the calls can be chained, as in the last lines of the program. But look at how those lines read. `v.plus(w).scaled(2)` is a clumsy way to write what mathematics writes as $2(v + w)$, and `v.same_as(w)` is a clumsy `v == w`. The next lesson removes the clumsiness.
+  connections:
+    - text: |
+        The puzzle asked how to make a value that knows what can be done to it, and how a function behind the dot finds its object. A class is a new type. Calling it makes an instance and runs the constructor. A method is an ordinary function stored in the class, and `obj.f(a)` is the call `C.f(obj, a)`, with the object passed as `self`. An attribute is looked for in the object, then in its class, then in the classes it inherits from. That single search rule explains methods, class attributes, shadowing and inheritance alike.
+
+        You also saw why classes matter beyond tidiness. A class can make a promise about its data, an invariant, and keep it, because the data can change only through its methods.
+
+        Two threads continue.
+
+        The last exercise ended on an awkwardness. You built a `Vector`, but to add two of them you must write `v.plus(w)`, to compare them `v.same_as(w)`, and printing one shows something like `<Vector object at 0x7f...>`. The built-in types are not treated so. Numbers add with `+`, lists compare with `==` and report their length to `len`. It turns out that these privileges are open to your classes too. Each operator is a method call in disguise, with a special name, and a class that defines the method gets the operator. That is [[s1.special-methods]], next.
+
+        The `Account` in this lesson guarded its invariant with an `assert` in the constructor and a returned `False` from `withdraw`. Both are crude. An assertion is a tool for finding your own mistakes, and a returned `False` is easily ignored by the caller, as one of the wrong answers showed. Python has a proper mechanism for a function to refuse, loudly, in a way the caller cannot overlook and can choose to handle. You will meet it in [[s1.exceptions]].
