@@ -1,0 +1,375 @@
+concept: h0.unsigned-integers-and-fixed-widths
+minutes: 80
+claim: You can give the range of an unsigned integer of any width, predict what happens when arithmetic passes the top or the bottom of that range, and imitate a fixed width in Python, whose own integers never run out of bits.
+recalls: [h0.binary-and-hexadecimal]
+uses: [f0.whole-numbers-and-place-value, f0.powers-of-two, f0.units-prefixes-and-orders-of-magnitude, f0.estimation-and-back-of-the-envelope-reasoning, s0.expressions, s0.loops, s0.functions]
+leads: [h0.twos-complement-and-overflow]
+starter: |
+  # Scratch space. A byte has 8 bits, so it holds 0 to 255.
+  width = 8
+  top = 2 ** width
+  print(top - 1)
+  print((255 + 1) % top)
+  print((0 - 1) % top)
+parts:
+  recall:
+    - text: |
+        In [[h0.binary-and-hexadecimal]] you wrote numbers in base two and base sixteen, and saw that a byte is eight bits, written as two hex digits. Two quick pulls before we ask what happens at the edge of a byte.
+  puzzle:
+    - text: |
+        An old Ambassador taxi has an odometer with five wheels, each showing a digit from 0 to 9. It counts the kilometres the car has driven. One morning, after many years in Kolkata traffic, it reads
+
+        ```
+        9 9 9 9 9
+        ```
+
+        The driver goes one more kilometre. Every wheel rolls from 9 to 0 and carries into the wheel on its left, and the leftmost wheel has nothing to carry into. The odometer now reads `0 0 0 0 0`. To anyone reading it, the taxi is brand new.
+
+        Computers count with wheels too, and their wheels are bits. In the late 1990s, a popular version of Windows kept a counter of how many milliseconds had passed since the computer was switched on. The counter was 32 bits wide. Machines that were left running day and night, in offices and in shops, began to freeze for no reason anyone could see, and always after the same length of time, a little under seven weeks.
+
+        Programs that measured how long something took were subtracting two readings of that counter, and suddenly the later reading was smaller than the earlier one. **How long can a 32-bit counter of milliseconds run before it does what the odometer did? And what exactly does a computer do when a number no longer fits in its bits?**
+  intuition:
+    - text: |
+        The odometer has a fixed number of wheels, so it can only show a fixed range of readings. Five decimal wheels show $10^5 = 1{,}00{,}000$ different readings, from 00000 to 99999. Not one more.
+
+        A row of bits is the same. In [[f0.powers-of-two]] you counted the patterns: $n$ bits can show $2^n$ of them. If those patterns stand for the whole numbers from 0 upwards, they reach from 0 to $2^n - 1$. Such a number, which is never negative, is called **unsigned**. Eight bits hold 0 to 255. Sixteen bits hold 0 to 65,535.
+
+        The number of bits is called the **width**, and inside a processor almost every number has one. The circuits that add are built for, say, 32 bits, and the place in memory where a number is kept has room for exactly that many. There is no spare wheel.
+
+        So when an addition produces a carry out of the leftmost bit, the carry is simply **lost**. What is left is the right-hand $n$ bits of the true answer. For one byte:
+
+        ```
+          1111 1111     255
+        + 0000 0001       1
+        -----------
+        1 0000 0000     256, but the 1 on the left has no bit to live in
+          0000 0000       0
+        ```
+
+        This is called **wrapping around**, or **overflow**. It is exactly the odometer, in base two. The figure below is four bits. Count up past the top and down past zero, and watch where the carry and the borrow go.
+    - figure: binary-counter
+      props: { width: 4, value: 13 }
+    - text: |
+        Notice that wrapping goes both ways. Take 1 from `0000`, and the subtraction must borrow from a bit that does not exist. The row becomes `1111`, the top of the range. An odometer wound backwards from 00000 would show 99999.
+  derivation:
+    - text: |
+        **The arithmetic of a fixed width.** Keeping only the right-hand $n$ bits of a number is the same as taking its remainder on division by $2^n$. In base ten, keeping the last five digits of 1,00,000 is taking the remainder on dividing by $10^5$, which is 0. In base two, keeping the last eight bits of 256 is taking the remainder on dividing by $2^8 = 256$, which is 0.
+
+        So for unsigned integers of width $n$, every result is the true result **modulo** $2^n$: divide by $2^n$ and keep the remainder. Clock arithmetic works the same way. Four hours after 10 o'clock is 2 o'clock, because $14 \bmod 12 = 2$.
+
+        | True sum in 8 bits | Kept bits | Result |
+        | --- | --- | --- |
+        | $255 + 1 = 256$ | `0000 0000` | 0 |
+        | $250 + 10 = 260$ | `0000 0100` | 4 |
+        | $200 + 200 = 400$ | `1001 0000` | 144 |
+        | $0 - 1 = -1$ | `1111 1111` | 255 |
+
+        **Python's integers do not wrap.** Try `print(255 + 1)` and you get 256. Try `print(2 ** 100)` and you get all 31 digits. Python's `int` is not a fixed row of bits: it uses as many bits as the number needs and grows when it must. That is unusual. C, Java, Rust and Go, and the processor underneath them all, use fixed widths, and so do the files and network messages that programs exchange.
+
+        To imitate a fixed width in Python, keep the remainder yourself:
+
+        ```python
+        top = 2 ** 8
+        print((255 + 1) % top)
+        print((250 + 10) % top)
+        print((0 - 1) % top)
+        ```
+
+        This shows 0, 4 and 255. The last line deserves a look. In Python, `%` with a positive divisor always gives a result from 0 up to the divisor, even when the number divided is negative, so $-1 \bmod 256$ is 255, exactly the borrow that wraps to the top.
+
+        **How many bits does a number need?** The smallest width that holds $N$ is the number of digits of $N$ in binary. Python will tell you with the method `bit_length`:
+
+        ```python
+        print((255).bit_length())
+        print((256).bit_length())
+        print((1460000000).bit_length())
+        ```
+
+        This shows 8, 9 and 31. The brackets around the number are needed only because a dot straight after digits would be read as a decimal point. The last number is roughly India's population. It needs 31 bits, so it fits in an unsigned 32-bit integer, whose top is about 429 crore.
+
+        **The standard widths.** Hardware and file formats use a handful of widths, all multiples of eight so that a number is a whole number of bytes.
+
+        | Width | Bytes | Largest unsigned value | Roughly |
+        | --- | --- | --- | --- |
+        | 8 bits | 1 | 255 | |
+        | 16 bits | 2 | 65,535 | 65 thousand |
+        | 32 bits | 4 | 4,294,967,295 | 429 crore, $4.3 \times 10^9$ |
+        | 64 bits | 8 | 18,446,744,073,709,551,615 | $1.8 \times 10^{19}$ |
+
+        Each doubling of the width squares the number of values. Round figures are worth knowing by heart, using $2^{10} \approx 10^3$: $2^{32} = 2^2 \times (2^{10})^3 \approx 4 \times 10^9$.
+
+        You have met these limits without knowing it. A network port is a 16-bit unsigned number, which is why ports stop at 65,535. An IPv4 address is 32 bits, so there are about 430 crore of them, fewer than the people on Earth, which is why your phone and your neighbour's share one public address through the router, and why IPv6 moved to 128 bits.
+
+        **The puzzle, solved.** A 32-bit counter of milliseconds can count to $2^{32} - 1$, and the next tick wraps it to 0. In days:
+
+        $$\frac{2^{32} \text{ ms}}{1000 \times 60 \times 60 \times 24 \text{ ms a day}} = \frac{4{,}294{,}967{,}296}{86{,}400{,}000} \approx 49.7 \text{ days}$$
+
+        A little under seven weeks. After that, a later reading of the counter could be smaller than an earlier one, a program that subtracted them got a huge or nonsensical interval, and code that waited for "enough time to pass" waited for ever. The fix was not more bits on its own: it was to do the subtraction itself in the same fixed width, where $(\text{later} - \text{earlier}) \bmod 2^{32}$ is right even across the wrap, as long as less than 49.7 days separate the two readings.
+    - question:
+        id: predict-wrap
+        type: predict
+        system: s2
+        prompt: Each line imitates an 8-bit unsigned register. Work out the true answer, then keep its remainder on division by 256.
+        code: |
+          top = 256
+          print((200 + 100) % top)
+          print((10 - 20) % top)
+          print((128 * 2) % top)
+          print((255 + 255) % top)
+        output: |
+          44
+          246
+          0
+          254
+        explanation: |
+          300 wraps to $300 - 256 = 44$. $-10$ wraps to $256 - 10 = 246$, which is what a borrow past zero gives. $256$ wraps to 0. $510 - 256 = 254$.
+    - text: |
+        **Wrapping is not an error.** Notice that nothing stopped and nothing complained. A processor adding two 32-bit numbers produces 32 bits, whatever the true answer was. Some processors set a flag to say a carry fell off, but most programming languages never look at it. That is why overflow bugs are silent wrong answers of the kind the debugging lesson warned about: the odometer does not flash a warning when it passes 99999. It just reads 00000.
+    - question:
+        id: fix-elapsed
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `elapsed(earlier, later)` takes two readings of a 32-bit millisecond counter and should **return** how many milliseconds passed between them, which is always less than 49.7 days. It is right until the counter wraps: with `earlier = 4294967000` and `later = 704` it returns a negative number instead of 1000. Fix it so that it works across the wrap.
+        starter: |
+          def elapsed(earlier, later):
+              return later - earlier
+
+          print(elapsed(1000, 3000))
+          print(elapsed(4294967000, 704))
+        solution: |
+          def elapsed(earlier, later):
+              return (later - earlier) % 2 ** 32
+
+          print(elapsed(1000, 3000))
+          print(elapsed(4294967000, 704))
+        tests: |
+          assert elapsed(1000, 3000) == 2000, "Without a wrap, 1000 to 3000 is 2000 milliseconds"
+          assert elapsed(4294967000, 704) == 1000, "Across the wrap, 4294967000 to 704 is 1000 milliseconds: 296 to reach the top, then 704 more"
+          assert elapsed(4294967295, 0) == 1, "From the top value to 0 is one tick"
+          assert elapsed(5, 5) == 0, "Two equal readings are 0 milliseconds apart"
+          assert elapsed(0, 3000000000) == 3000000000, "Three billion milliseconds, about 35 days, is still less than the counter's full circle"
+        wrong:
+          - "def elapsed(earlier, later):\n    return abs(later - earlier)\n"
+          - "def elapsed(earlier, later):\n    return (later - earlier) % 2 ** 31\n"
+          - "def elapsed(earlier, later):\n    return (later - earlier) % (2 ** 32 - 1)\n"
+        explanation: "A 32-bit counter does its arithmetic modulo $2^{32}$, so the difference must be taken modulo $2^{32}$ too. Python's `%` turns the negative difference into the right count. `abs` gives the distance the wrong way round the circle, and dividing by $2^{32} - 1$ is off by one tick."
+  formal:
+    - text: |
+        An **unsigned integer** of **width** $n$ is a row of $n$ bits standing for the whole number they spell in binary. Its range is $0$ to $2^n - 1$, which is $2^n$ values.
+
+        Arithmetic at a fixed width keeps only the lowest $n$ bits of each result. Equivalently, every result is the true result **modulo** $2^n$:
+
+        $$a \oplus b = (a + b) \bmod 2^n$$
+
+        and the same for subtraction and multiplication. A result that passes the top of the range, or goes below 0, **wraps around**. This is called **overflow** (or, going below 0, sometimes underflow). Processors do not stop when it happens.
+
+        The smallest width that holds a whole number $N \ge 1$ is the number of binary digits of $N$. In Python it is `N.bit_length()`.
+
+        Python's `int` has no fixed width and never wraps. To imitate width $n$, reduce each result with `% 2 ** n`, which in Python always lies from $0$ to $2^n - 1$, even for a negative number on the left.
+
+        The common widths are 8, 16, 32 and 64 bits, with largest unsigned values 255, 65,535, about $4.3 \times 10^9$ and about $1.8 \times 10^{19}$.
+  drill:
+    - text: Seconds each. Keep the remainder, and remember which way the wrap goes.
+    - question:
+        id: top-16
+        type: numeric
+        system: s1
+        prompt: What is the largest unsigned 16-bit value?
+        answer: "65535"
+        explanation: $2^{16} - 1 = 65{,}535$, which is why network ports stop there.
+    - question:
+        id: wrap-250-10
+        type: numeric
+        system: s1
+        prompt: In an 8-bit unsigned register, what is $250 + 10$?
+        answer: "4"
+        explanation: 260 does not fit. Keep $260 - 256 = 4$.
+    - question:
+        id: predict-minus-one
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print((0 - 1) % 256)
+        output: "255"
+        explanation: Below zero wraps to the top of the range.
+    - question:
+        id: bits-for-1000
+        type: numeric
+        system: s1
+        prompt: How many bits does an unsigned integer need to hold 1000?
+        answer: "10"
+        unit: bits
+        explanation: $2^9 = 512$ is too small and $2^{10} = 1024$ is enough.
+    - question:
+        id: predict-python-no-wrap
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(255 + 1)
+        output: "256"
+        explanation: Python's integers grow as needed. Only a fixed width wraps.
+    - question:
+        id: predict-bit-length
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print((256).bit_length())
+        output: "9"
+        explanation: 256 is `1` followed by eight zeros.
+    - question:
+        id: odometer-wrap
+        type: numeric
+        system: s1
+        prompt: A four-wheel odometer reads 9998. The car goes 5 more kilometres. What does it read?
+        answer: "3"
+        explanation: $9998 + 5 = 10{,}003$, and four wheels keep 0003.
+  work:
+    - text: Slower now. Work out the true answer first, then what the fixed width keeps.
+    - question:
+        id: write-add-fixed
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `add_fixed(a, b, width)`. It **returns** what a processor with unsigned integers of `width` bits gives for `a + b`, where `a` and `b` are already in range. So `add_fixed(255, 1, 8)` is 0 and `add_fixed(65535, 2, 16)` is 1.
+        starter: |
+          def add_fixed(a, b, width):
+              return a + b
+
+          print(add_fixed(255, 1, 8))
+        solution: |
+          def add_fixed(a, b, width):
+              return (a + b) % 2 ** width
+
+          print(add_fixed(255, 1, 8))
+        tests: |
+          assert add_fixed(3, 4, 8) == 7, "Small sums do not wrap: add_fixed(3, 4, 8) should be 7"
+          assert add_fixed(255, 1, 8) == 0, "add_fixed(255, 1, 8) should wrap to 0"
+          assert add_fixed(200, 200, 8) == 144, "add_fixed(200, 200, 8) should be 144"
+          assert add_fixed(65535, 2, 16) == 1, "add_fixed(65535, 2, 16) should be 1. Use width, not a fixed 256."
+          assert add_fixed(15, 1, 4) == 0, "Four bits wrap at 16"
+          assert add_fixed(2 ** 32 - 1, 2 ** 32 - 1, 32) == 2 ** 32 - 2, "It should work for 32 bits"
+        wrong:
+          - "def add_fixed(a, b, width):\n    return (a + b) % 256\n"
+          - "def add_fixed(a, b, width):\n    return (a + b) % (2 ** width - 1)\n"
+          - "def add_fixed(a, b, width):\n    return min(a + b, 2 ** width - 1)\n"
+        explanation: "A width of $n$ bits keeps the result modulo $2^n$. Capping at the largest value with `min` is a different rule, called saturation, which some sound and graphics hardware uses on purpose. A processor adding integers wraps."
+    - question:
+        id: write-days-to-wrap
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `days_to_wrap(width, ticks_per_second)`. A counter of `width` bits starts at 0 and goes up by one every tick. **Return** the number of days, as a float, until it wraps back to 0: the time for $2^{\text{width}}$ ticks. So `days_to_wrap(32, 1000)` is about 49.7.
+        starter: |
+          def days_to_wrap(width, ticks_per_second):
+              return 0.0
+
+          print(days_to_wrap(32, 1000))
+        solution: |
+          def days_to_wrap(width, ticks_per_second):
+              seconds = 2 ** width / ticks_per_second
+              return seconds / (60 * 60 * 24)
+
+          print(days_to_wrap(32, 1000))
+        tests: |
+          assert abs(days_to_wrap(32, 1000) - 49.71) < 0.01, "A 32-bit millisecond counter wraps after about 49.71 days"
+          assert abs(days_to_wrap(32, 1) - 49710.27) < 0.01, "A 32-bit counter of seconds wraps after about 49,710 days"
+          assert abs(days_to_wrap(16, 1) - 0.7585) < 0.001, "A 16-bit counter of seconds wraps after 65,536 seconds, about 0.76 days"
+          assert days_to_wrap(64, 1000) > 10 ** 11, "A 64-bit millisecond counter should take far longer than the age of the universe in days"
+        wrong:
+          - "def days_to_wrap(width, ticks_per_second):\n    seconds = 2 ** width * ticks_per_second\n    return seconds / (60 * 60 * 24)\n"
+          - "def days_to_wrap(width, ticks_per_second):\n    seconds = 2 ** width / ticks_per_second\n    return seconds / (60 * 60)\n"
+          - "def days_to_wrap(width, ticks_per_second):\n    seconds = width ** 2 / ticks_per_second\n    return seconds / (60 * 60 * 24)\n"
+        explanation: "$2^n$ ticks at $k$ a second take $2^n / k$ seconds, and a day is $60 \\times 60 \\times 24 = 86{,}400$ seconds. Check the units as in the arithmetic lessons: ticks divided by ticks per second leaves seconds."
+    - question:
+        id: write-bits-needed
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `bits_needed(n)` for a whole number `n` of 1 or more. It **returns** the smallest width of unsigned integer that can hold `n`. Use a loop that doubles a capacity, and do not use `bit_length` or `bin`.
+        starter: |
+          def bits_needed(n):
+              width = 0
+              return width
+
+          print(bits_needed(1000))
+        solution: |
+          def bits_needed(n):
+              width = 0
+              while 2 ** width - 1 < n:
+                  width += 1
+              return width
+
+          print(bits_needed(1000))
+        tests: |
+          assert "bit_length" not in source and "bin(" not in source, "Find the width with a loop of your own"
+          assert bits_needed(1) == 1, "1 needs 1 bit"
+          assert bits_needed(255) == 8, "255 needs 8 bits"
+          assert bits_needed(256) == 9, "256 needs 9 bits, since 8 bits stop at 255"
+          assert bits_needed(1000) == 10, "1000 needs 10 bits"
+          assert bits_needed(1460000000) == 31, "India's population, about 146 crore, needs 31 bits"
+        wrong:
+          - "def bits_needed(n):\n    width = 0\n    while 2 ** width < n:\n        width += 1\n    return width\n"
+          - "def bits_needed(n):\n    width = 1\n    while 2 ** width - 1 < n:\n        width += 1\n    return width - 1\n"
+          - "def bits_needed(n):\n    return len(str(n)) * 4\n"
+        explanation: "$w$ bits hold up to $2^w - 1$. The loop widens until that top value reaches $n$. Comparing with $2^w$ instead of $2^w - 1$ is off by one exactly at the powers of two: 256 needs 9 bits, not 8."
+    - question:
+        id: predict-odometer
+        type: predict
+        system: s2
+        prompt: This imitates a five-wheel odometer. Trace it, then give what it shows.
+        code: |
+          reading = 99997
+          for km in range(5):
+              reading = (reading + 1) % 100000
+          print(reading)
+        output: "2"
+        explanation: |
+          The readings go 99998, 99999, 0, 1, 2. The carry out of the fifth wheel is lost, which is the remainder on division by $10^5$.
+    - question:
+        id: predict-mask-bits
+        type: predict
+        system: s2
+        prompt: What does this show? Write 300 in binary first.
+        code: |
+          n = 300
+          kept = n % 256
+          print(kept, f"{kept:08b}")
+        output: "44 00101100"
+        explanation: |
+          300 is `1 0010 1100`. Keeping the low eight bits drops the 256, leaving `0010 1100`, which is 44.
+    - question:
+        id: ipv4-count
+        type: numeric
+        system: s2
+        prompt: An IPv4 address is a 32-bit unsigned number. To the nearest crore, how many different addresses are there? Give the answer in crore.
+        answer: "429"
+        tolerance: "1"
+        unit: crore
+        explanation: $2^{32} = 4{,}294{,}967{,}296$, about 429 crore. That is fewer than the people on Earth, which is why many devices share one address.
+    - question:
+        id: why-silent
+        type: choice
+        system: s2
+        prompt: Why are overflow bugs so hard to notice?
+        options:
+          - "Because the program stops with an error that is hard to read."
+          - "Because wrapping produces an ordinary-looking number in range, and nothing stops or complains, so the result is a silent wrong answer."
+          - "Because overflow only happens in Python."
+          - "Because the result is always zero."
+        answer: 1
+        explanation: The processor returns the low bits of the true answer and carries on. Only a check against what the answer ought to be, such as "a later time cannot be smaller", catches it.
+  connections:
+    - text: |
+        The puzzle is solved. A 32-bit counter of milliseconds runs for $2^{32}$ ms, about 49.7 days, and then wraps to 0 like the taxi's odometer. Every unsigned integer of width $n$ does its arithmetic modulo $2^n$, quietly, and a program that forgets this gets a silent wrong answer.
+
+        This was the place value of [[f0.whole-numbers-and-place-value]] with a fixed number of wheels, and the counting of patterns from [[f0.powers-of-two]]. The order-of-magnitude habit from [[f0.units-prefixes-and-orders-of-magnitude]] is what makes widths usable: 32 bits is about four billion, 64 bits is about eighteen billion billion, and you should know which of the two a quantity needs before you choose.
+
+        Every number so far has been 0 or more. But a bank balance can be negative, and so can a temperature or the change in a score. Somehow the same row of bits, with no minus sign to write, must hold negative numbers too. The trick nearly every processor uses turns out to be the wrap-around you have just met, read in a clever way. That is the next lesson, [[h0.twos-complement-and-overflow]].

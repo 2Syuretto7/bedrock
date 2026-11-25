@@ -1,0 +1,392 @@
+concept: h0.twos-complement-and-overflow
+minutes: 85
+claim: You can read and write negative numbers in two's complement at any width, negate a number by flipping its bits and adding one, give the range of a signed width, and predict and detect signed overflow.
+recalls: [h0.unsigned-integers-and-fixed-widths]
+uses: [f0.negative-numbers, f0.powers-of-two, h0.binary-and-hexadecimal, s0.expressions, s0.booleans-and-conditionals, s0.functions]
+leads: [h0.bitwise-operations-and-masks]
+starter: |
+  # Scratch space. Read a byte's pattern as unsigned and as signed.
+  width = 8
+  pattern = 0b1111_1011
+  if pattern >= 2 ** (width - 1):
+      signed = pattern - 2 ** width
+  else:
+      signed = pattern
+  print(pattern, signed)
+parts:
+  recall:
+    - text: |
+        In [[h0.unsigned-integers-and-fixed-widths]] a row of $n$ bits held 0 to $2^n - 1$, and arithmetic wrapped round at both ends, like an odometer. Two quick pulls, because today's trick is built out of that wrap.
+  puzzle:
+    - text: |
+        A mobile cricket game rewards every boundary with coins, and some players have played it for years. One player, with 2,147,483,647 coins in the bank, hits one more four. The coin counter now shows
+
+        ```
+        -2147483648
+        ```
+
+        This really happens. In December 2014 a music video on YouTube passed 2,147,483,647 views, and YouTube announced that it had had to change the counter, because it could not count any higher.
+
+        The number is not arbitrary. $2{,}147{,}483{,}647$ is $2^{31} - 1$, and the number that appeared is $-2^{31}$. And it is strange in two ways. An unsigned 32-bit counter would have gone on to 4,294,967,295 before wrapping, and it would have wrapped to 0, like the taxi's odometer. This one stopped at about half that, and wrapped not to 0 but to the most negative number it can hold.
+
+        A row of bits has no room for a minus sign, yet this counter holds negative numbers. **How does a row of switches store a negative number, and why does adding 1 to the largest positive number give the most negative one?**
+  intuition:
+    - text: |
+        Go back to the odometer, and wind it **backwards**. From 00002, one kilometre back gives 00001, then 00000, and then, with nothing to borrow from, 99999. On this odometer 99999 behaves exactly like $-1$: add 1 to it and you get 0, which is what $-1 + 1$ should give.
+
+        Bits do the same. In 8 bits, $0 - 1$ wraps to `1111 1111`. Add 1 to `1111 1111` and the carry falls off the end, leaving `0000 0000`. So `1111 1111` already behaves as $-1$ in every sum. Likewise `1111 1110` behaves as $-2$, since adding 2 to it gives 0.
+
+        **Two's complement** is the decision to take that seriously. Of the 256 patterns in a byte, those with a 0 in the leftmost bit are read as before, 0 to 127. Those with a 1 in the leftmost bit are read as negative numbers, $-128$ to $-1$. One way to say it exactly: **the leftmost column is worth $-128$ instead of $+128$**, and every other column keeps its value.
+
+        ```
+        −128   64   32   16    8    4    2    1
+           1    1    1    1    1    1    1    1    = −128 + 127 = −1
+           1    0    0    0    0    0    0    0    = −128
+           0    1    1    1    1    1    1    1    = 127
+        ```
+
+        Now the puzzle is no mystery. The largest signed byte is `0111 1111`, which is 127. Add 1 and the bits become `1000 0000`, exactly as for unsigned numbers. But that pattern, read as two's complement, is $-128$. The coin counter was a signed 32-bit integer: its largest value is $2^{31} - 1$, and one more coin turned on the leftmost bit, the one worth $-2^{31}$.
+
+        The figure below is a byte that can be read either way. Set it to 127, read it as two's complement and add 1. Then flip the leftmost bit on and off and watch the value jump by 256.
+    - figure: binary-counter
+      props: { width: 8, value: 127, signed: true }
+  derivation:
+    - text: |
+        **Why computers chose this.** There are simpler-looking ways to store a sign, such as spending the leftmost bit on a plus or minus sign and keeping the rest as the size. Early machines tried them, and all have awkward costs: two different zeros, and an adder that must check signs before it adds. Two's complement has none of that. It has one zero, and **the same adding circuit works for signed and unsigned numbers alike**, because both are arithmetic modulo $2^n$ on the same bits. The processor adds the bits. Whether `1111 1111` means 255 or $-1$ is decided only by how a program reads the answer.
+
+        **Reading a pattern.** For a pattern `p` read as an unsigned number from 0 to $2^n - 1$: if the leftmost bit is 0, which means $p < 2^{n-1}$, the value is $p$. Otherwise the leftmost column should have counted $-2^{n-1}$ instead of $+2^{n-1}$, a difference of $2^n$, so the value is $p - 2^n$.
+
+        ```python
+        def to_signed(pattern, width):
+            if pattern >= 2 ** (width - 1):
+                return pattern - 2 ** width
+            return pattern
+
+        print(to_signed(0b1111_1011, 8))
+        print(to_signed(200, 8))
+        print(to_signed(100, 8))
+        ```
+
+        This shows $-5$, $-56$ and 100.
+
+        **Writing a negative number.** Going the other way is the wrap you already know: the pattern for $x$ in width $n$ is $x \bmod 2^n$. In Python, `-5 % 256` is 251, and `f"{-5 % 256:08b}"` is `11111011`.
+
+        **Negating by hand.** There is a quick way to find the pattern of $-x$ from the pattern of $x$: **flip every bit, then add 1**. For 5:
+
+        ```
+          0000 0101      5
+          1111 1010      every bit flipped
+          1111 1011      plus 1: this is −5
+        ```
+
+        Why does it work? A pattern and its flipped copy have a 1 in every column between them, so they add up to `1111 1111`, which is $-1$. So the flipped copy is $-1 - x$, and adding 1 gives $-x$. In Python, flipping every bit of a byte is subtracting it from 255, since $255 - x$ turns each 1 into 0 and each 0 into 1 with no borrows.
+
+        **The range.** In $n$ bits two's complement holds $-2^{n-1}$ to $2^{n-1} - 1$. There is one more negative number than positive, because zero takes one of the patterns with a leading 0.
+
+        | Width | Smallest | Largest |
+        | --- | --- | --- |
+        | 8 bits | $-128$ | 127 |
+        | 16 bits | $-32{,}768$ | 32,767 |
+        | 32 bits | $-2{,}147{,}483{,}648$ | 2,147,483,647 |
+        | 64 bits | about $-9.2 \times 10^{18}$ | about $9.2 \times 10^{18}$ |
+
+        That extra negative number has an odd consequence. $-(-128)$ should be 128, which does not fit in 8 bits. Flip `1000 0000` and add 1, and you get `1000 0000` again. In a fixed width, negating the most negative number gives itself.
+    - question:
+        id: predict-signed
+        type: predict
+        system: s2
+        prompt: Read each 8-bit pattern as two's complement. Work out each one from the column values before you check.
+        code: |
+          def to_signed(pattern, width):
+              if pattern >= 2 ** (width - 1):
+                  return pattern - 2 ** width
+              return pattern
+
+          print(to_signed(0b1000_0001, 8))
+          print(to_signed(0x7F, 8))
+          print(to_signed(0xFF, 8))
+          print(to_signed(0b1111, 4))
+        output: |
+          -127
+          127
+          -1
+          -1
+        explanation: |
+          `1000 0001` is $-128 + 1 = -127$. `7F` is `0111 1111`, the largest positive byte. `FF` is all ones, which is $-1$ at every width, and so is `1111` in four bits.
+    - text: |
+        **Signed overflow.** Arithmetic still wraps at the edges, but now the edges are in different places. Adding 1 to the largest positive number wraps to the most negative, and taking 1 from the most negative wraps to the largest positive. In 8 bits:
+
+        | True sum | Kept pattern | Read as signed |
+        | --- | --- | --- |
+        | $127 + 1 = 128$ | `1000 0000` | $-128$ |
+        | $100 + 100 = 200$ | `1100 1000` | $-56$ |
+        | $-100 + (-100) = -200$ | `0011 1000` | 56 |
+
+        There is a simple test for it. **When two numbers of the same sign are added and the answer has the other sign, the sum has overflowed.** Two positives cannot honestly add up to a negative. When the signs differ, the true sum always lies between them, so it always fits, and overflow is impossible.
+
+        **Where you will meet it.** Python's own integers never overflow, as you saw last lesson. But Python is surrounded by things that do. A PostgreSQL `integer` column is a signed 32-bit number, so a table whose row ids count up past 2,147,483,647 stops accepting new rows, a failure that has taken down real services. NumPy arrays, which you will meet later, use fixed widths by default. And the computer's clock in many older systems counts seconds since the start of 1970 in a signed 32-bit integer. It runs out at
+
+        $$2^{31} - 1 = 2{,}147{,}483{,}647 \text{ seconds after 1 January 1970}$$
+
+        which is 03:14:07 on 19 January 2038, UTC. One second later such a clock reads $-2^{31}$ seconds, which is a date in December 1901. Engineers call it the year 2038 problem, and systems that run for decades, in cars, factories and power plants, are being checked for it now.
+    - question:
+        id: fix-add-signed
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `add_signed(a, b, width)` should **return** what a processor gives for `a + b` when both are signed integers of `width` bits: the true sum, wrapped and read as two's complement. It is right for small sums, but `add_signed(127, 1, 8)` returns 0 instead of $-128$. Find the bug and fix it.
+        starter: |
+          def add_signed(a, b, width):
+              pattern = (a + b) % 2 ** width
+              if pattern > 2 ** (width - 1):
+                  return pattern - 2 ** width
+              return pattern % 2 ** (width - 1)
+
+          print(add_signed(3, 4, 8))
+          print(add_signed(127, 1, 8))
+        solution: |
+          def add_signed(a, b, width):
+              pattern = (a + b) % 2 ** width
+              if pattern >= 2 ** (width - 1):
+                  return pattern - 2 ** width
+              return pattern
+
+          print(add_signed(3, 4, 8))
+          print(add_signed(127, 1, 8))
+        tests: |
+          assert add_signed(3, 4, 8) == 7, "Small sums do not wrap: add_signed(3, 4, 8) should be 7"
+          assert add_signed(127, 1, 8) == -128, "add_signed(127, 1, 8) should wrap to -128. Which patterns are negative: from 128, or from 129?"
+          assert add_signed(-128, -1, 8) == 127, "add_signed(-128, -1, 8) should wrap to 127"
+          assert add_signed(100, 100, 8) == -56, "add_signed(100, 100, 8) should be -56"
+          assert add_signed(-3, 1, 8) == -2, "A negative answer that fits should come back unchanged"
+          assert add_signed(2147483647, 1, 32) == -2147483648, "It should work for 32 bits, as the game's coin counter did"
+        wrong:
+          - "def add_signed(a, b, width):\n    pattern = (a + b) % 2 ** width\n    if pattern > 2 ** (width - 1):\n        return pattern - 2 ** width\n    return pattern\n"
+          - "def add_signed(a, b, width):\n    return a + b\n"
+          - "def add_signed(a, b, width):\n    pattern = (a + b) % 2 ** width\n    if pattern >= 2 ** (width - 1):\n        return 2 ** width - pattern\n    return pattern\n"
+        explanation: "There were two slips. The pattern $2^{n-1}$, a 1 followed by zeros, is the most negative number, so the test must be `>=`, not `>`. And the last line threw away a bit it had no business touching: a pattern below $2^{n-1}$ is already its own value. Mixing up `>` and `>=` exactly at a boundary is the most common bug in this kind of code."
+  formal:
+    - text: |
+        In **two's complement** at width $n$, a pattern of bits $b_{n-1} \ldots b_1 b_0$ stands for
+
+        $$-b_{n-1} 2^{n-1} + \sum_{i=0}^{n-2} b_i 2^i$$
+
+        That is, the leftmost column is worth $-2^{n-1}$ and every other column its usual power of two. The leftmost bit is 1 exactly for the negative numbers, and is called the **sign bit**.
+
+        The range is $-2^{n-1}$ to $2^{n-1} - 1$. Zero has one pattern, all zeros. All ones is $-1$.
+
+        **Reading:** a pattern $p$, taken as unsigned, has the signed value $p$ if $p < 2^{n-1}$ and $p - 2^n$ otherwise. **Writing:** the pattern of $x$ is $x \bmod 2^n$.
+
+        **Negation:** the pattern of $-x$ is the pattern of $x$ with every bit flipped, plus 1. Negating $-2^{n-1}$ gives $-2^{n-1}$ again.
+
+        Addition, subtraction and multiplication give the same bits whether the patterns are read as signed or unsigned, because both are arithmetic modulo $2^n$. **Signed overflow** happens when the true result lies outside the range. For addition, it happens exactly when both operands have the same sign and the result read as two's complement has the other sign.
+  drill:
+    - text: Seconds each. The leftmost column is worth minus its usual value.
+    - question:
+        id: signed-byte-max
+        type: numeric
+        system: s1
+        prompt: What is the largest signed 8-bit value?
+        answer: "127"
+        explanation: $2^7 - 1 = 127$, the pattern `0111 1111`.
+    - question:
+        id: signed-byte-min
+        type: numeric
+        system: s1
+        prompt: What is the smallest signed 8-bit value?
+        answer: "-128"
+        explanation: $-2^7 = -128$, the pattern `1000 0000`.
+    - question:
+        id: all-ones
+        type: numeric
+        system: s1
+        prompt: "What is `1111 1111` read as a signed byte?"
+        answer: "-1"
+        explanation: $-128 + 127 = -1$. All ones is $-1$ at every width.
+    - question:
+        id: predict-minus-five
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(-5 % 256)
+        output: "251"
+        explanation: The byte pattern for $-5$ is $256 - 5$.
+    - question:
+        id: wrap-127
+        type: numeric
+        system: s1
+        prompt: In a signed 8-bit register, what is $127 + 1$?
+        answer: "-128"
+        explanation: The bits become `1000 0000`, whose leftmost column is worth $-128$.
+    - question:
+        id: overflow-signs
+        type: choice
+        system: s1
+        prompt: "A signed sum of two negative numbers comes out positive. What happened?"
+        options: ["Nothing unusual", "Overflow", "The answer is exact", "A rounding error"]
+        answer: 1
+        explanation: Two negatives cannot honestly add up to a positive.
+    - question:
+        id: signed-32-max
+        type: choice
+        system: s1
+        prompt: Which is the largest signed 32-bit value?
+        options: ["4,294,967,295", "2,147,483,647", "2,147,483,648", "65,535"]
+        answer: 1
+        explanation: $2^{31} - 1$. The number on the game's coin counter.
+  work:
+    - text: Slower now. For each answer, say the pattern as well as the value.
+    - question:
+        id: write-to-pattern
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `pattern(x, width)`. `x` is a whole number that fits in a signed integer of `width` bits. **Return** its two's complement pattern as a string of exactly `width` bits, so `pattern(-5, 8)` is `"11111011"` and `pattern(5, 8)` is `"00000101"`.
+        starter: |
+          def pattern(x, width):
+              return ""
+
+          print(pattern(-5, 8))
+        solution: |
+          def pattern(x, width):
+              bits = f"{x % 2 ** width:b}"
+              while len(bits) < width:
+                  bits = "0" + bits
+              return bits
+
+          print(pattern(-5, 8))
+        tests: |
+          assert pattern(-5, 8) == "11111011", "pattern(-5, 8) should be '11111011'"
+          assert pattern(5, 8) == "00000101", "pattern(5, 8) should be '00000101', padded to 8 bits"
+          assert pattern(-1, 4) == "1111", "pattern(-1, 4) should be '1111'"
+          assert pattern(-128, 8) == "10000000", "pattern(-128, 8) should be '10000000'"
+          assert pattern(0, 16) == "0" * 16, "pattern(0, 16) should be sixteen zeros"
+          assert pattern(-2, 16) == "1" * 15 + "0", "pattern(-2, 16) should be fifteen ones and a zero"
+        wrong:
+          - "def pattern(x, width):\n    return f\"{x:b}\"\n"
+          - "def pattern(x, width):\n    return f\"{abs(x) % 2 ** width:b}\"\n"
+          - "def pattern(x, width):\n    return f\"{x % 2 ** width:b}\"\n"
+        explanation: "`x % 2 ** width` turns a negative number into its pattern, as the wrap does. Then the bits must be padded on the left to the full width. Python's own `f\"{-5:b}\"` gives `-101`, a minus sign and the bits of 5, which is how Python writes it and not how a register holds it."
+    - question:
+        id: write-negate
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `negate(p, width)`. `p` is a pattern, written as a whole number from 0 to $2^{\text{width}} - 1$. **Return** the pattern of its negation, found the way a processor does: flip every bit, then add 1, keeping `width` bits. So `negate(5, 8)` is 251, the pattern of $-5$. Flip the bits by subtracting from the all-ones pattern, and do not use the minus sign on `p` itself.
+        starter: |
+          def negate(p, width):
+              return p
+
+          print(negate(5, 8))
+        solution: |
+          def negate(p, width):
+              ones = 2 ** width - 1
+              flipped = ones - p
+              return (flipped + 1) % 2 ** width
+
+          print(negate(5, 8))
+        tests: |
+          assert negate(5, 8) == 251, "negate(5, 8) should be 251, the pattern 11111011"
+          assert negate(251, 8) == 5, "Negating -5 should give 5 back"
+          assert negate(1, 4) == 15, "negate(1, 4) should be 15, the pattern 1111"
+          assert negate(0, 8) == 0, "Negating 0 should give 0. Is the carry out of the top kept?"
+          assert negate(128, 8) == 128, "Negating -128 in 8 bits gives -128 again"
+        wrong:
+          - "def negate(p, width):\n    ones = 2 ** width - 1\n    return ones - p\n"
+          - "def negate(p, width):\n    ones = 2 ** width - 1\n    return ones - p + 1\n"
+          - "def negate(p, width):\n    return 2 ** width - p - 1\n"
+        explanation: "Subtracting from all ones flips every bit with no borrows, and adding 1 completes the negation. The last step must keep `width` bits: flipping 0 gives all ones, and adding 1 carries out of the top, which leaves 0, as it should."
+    - question:
+        id: write-overflowed
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `overflowed(a, b, width)`. `a` and `b` are signed integers that fit in `width` bits. **Return** `True` if adding them in a `width`-bit register overflows, and `False` otherwise. Check whether the true sum lies outside the signed range.
+        starter: |
+          def overflowed(a, b, width):
+              return False
+
+          print(overflowed(127, 1, 8))
+        solution: |
+          def overflowed(a, b, width):
+              total = a + b
+              return total < -2 ** (width - 1) or total > 2 ** (width - 1) - 1
+
+          print(overflowed(127, 1, 8))
+        tests: |
+          assert overflowed(127, 1, 8) is True, "127 + 1 overflows a signed byte"
+          assert overflowed(100, 27, 8) is False, "100 + 27 is 127, which just fits"
+          assert overflowed(-128, -1, 8) is True, "-128 + -1 overflows a signed byte"
+          assert overflowed(-100, -28, 8) is False, "-100 + -28 is -128, which just fits"
+          assert overflowed(100, -100, 8) is False, "Numbers of different signs never overflow when added"
+          assert overflowed(2147483647, 1, 32) is True, "The game's coin counter overflowed at 32 bits"
+        wrong:
+          - "def overflowed(a, b, width):\n    total = a + b\n    return total < -2 ** (width - 1) or total > 2 ** (width - 1)\n"
+          - "def overflowed(a, b, width):\n    total = a + b\n    return total > 2 ** (width - 1) - 1\n"
+          - "def overflowed(a, b, width):\n    total = a + b\n    return total > 2 ** width - 1\n"
+        explanation: "The signed range is $-2^{n-1}$ to $2^{n-1} - 1$, and both ends matter: two large negatives overflow just as two large positives do. Python's integers give the true sum, so the check is a plain comparison. In a language with fixed widths you would use the sign rule instead, since the true sum is never seen."
+    - question:
+        id: predict-negate-trace
+        type: predict
+        system: s2
+        prompt: Trace this. Write each pattern in 4 bits as you go.
+        code: |
+          width = 4
+          p = 0b0110
+          flipped = (2 ** width - 1) - p
+          result = (flipped + 1) % 2 ** width
+          print(flipped, result, result - 2 ** width)
+        output: "9 10 -6"
+        explanation: |
+          `0110` is 6. Flipped it is `1001`, which is 9. Adding 1 gives `1010`, which is 10 as an unsigned pattern, and $10 - 16 = -6$ read as two's complement. Flip and add one negated 6.
+    - question:
+        id: predict-clock-2038
+        type: predict
+        system: s2
+        prompt: This imitates a signed 32-bit clock counting seconds. What does it show?
+        code: |
+          width = 32
+          seconds = 2 ** 31 - 1
+          pattern = (seconds + 1) % 2 ** width
+          if pattern >= 2 ** (width - 1):
+              seconds = pattern - 2 ** width
+          else:
+              seconds = pattern
+          print(seconds)
+        output: "-2147483648"
+        explanation: |
+          One second after $2^{31} - 1$ the leftmost bit turns on, and read as two's complement the clock jumps to $-2^{31}$ seconds, a date in 1901.
+    - question:
+        id: postgres-ids
+        type: numeric
+        system: s2
+        prompt: A table's row ids are a signed 32-bit integer starting at 1, and the service adds 500 rows a second, day and night. In about how many days does it run out of ids?
+        answer: "49.7"
+        tolerance: "0.5"
+        unit: days
+        explanation: |
+          $2^{31} - 1 \approx 2.147 \times 10^9$ ids at 500 a second take $4.29 \times 10^6$ seconds, and $4.29 \times 10^6 \div 86{,}400 \approx 49.7$ days. The same answer as the millisecond counter, by coincidence of the numbers: half the ids, half the rate.
+    - question:
+        id: why-same-adder
+        type: choice
+        system: s2
+        prompt: Why can a processor use the same adding circuit for signed and unsigned integers?
+        options:
+          - "Because signed integers are converted to unsigned ones before every addition."
+          - "Because both kinds are arithmetic modulo $2^n$ on the same bits: the bits of the sum are the same, and only the reading of the answer differs."
+          - "Because negative numbers are stored with a separate sign that the adder ignores."
+          - "Because signed integers cannot overflow."
+        answer: 1
+        explanation: Reading the leftmost column as $-2^{n-1}$ instead of $+2^{n-1}$ shifts every negative value by exactly $2^n$, which modulo $2^n$ is no change at all. That is the whole reason two's complement won.
+  connections:
+    - text: |
+        The puzzle is solved. The coin counter was a signed 32-bit integer, whose largest value is $2^{31} - 1$. One more coin turned on the leftmost bit, which two's complement reads as $-2^{31}$, so the counter jumped from the top of its range to the bottom.
+
+        Two's complement is the negative numbers of [[f0.negative-numbers]] built from the wrap-around of [[h0.unsigned-integers-and-fixed-widths]]: $-1$ is simply the pattern that gives 0 when 1 is added to it. One circuit serves both kinds of number, and the only difference between them is how a program reads the bits.
+
+        That idea, the same bits read in different ways, will keep coming back in this cluster. So far a pattern has always been read as a single number. But a byte is also eight separate switches, and much of systems programming treats it that way: one bit for "can read", one for "can write", eight bits of a colour, twenty-four bits of a network. To work with the bits one at a time, or in chosen groups, you need operators that act on bits rather than on numbers. That is the next lesson, [[h0.bitwise-operations-and-masks]].

@@ -1,0 +1,369 @@
+concept: h0.endianness-and-byte-order
+minutes: 80
+claim: You can lay a multi-byte number out in memory or in a message in big-endian or little-endian order, read it back either way by hand and in Python, and say which order a processor, a network protocol or a file format uses.
+recalls: [h0.floating-point-and-ieee-754]
+uses: [h0.binary-and-hexadecimal, h0.unsigned-integers-and-fixed-widths, h0.twos-complement-and-overflow, h0.bitwise-operations-and-masks, h0.characters-unicode-and-utf-8, f0.whole-numbers-and-place-value, s0.lists-and-tuples, s0.loops, s0.functions]
+leads: [h0.alignment-and-the-size-of-things]
+starter: |
+  # Scratch space. The same number, laid out in two orders.
+  balance = 25000
+  print(balance.to_bytes(4, "little").hex(" "))
+  print(balance.to_bytes(4, "big").hex(" "))
+  data = balance.to_bytes(4, "little")
+  print(int.from_bytes(data, "little"), int.from_bytes(data, "big"))
+parts:
+  recall:
+    - text: |
+        In [[h0.floating-point-and-ieee-754]] a float was 64 bits: eight bytes holding one number. Today's question is which of those bytes goes first. Two quick pulls before it.
+  puzzle:
+    - text: |
+        A metro card holds its balance as a 32-bit unsigned number of paise. When you tap in, the gate reads the card and sends the balance to the station's server in a message of four bytes. Your card holds ₹250.00, which is 25,000 paise. The gate sends:
+
+        ```
+        a8 61 00 00
+        ```
+
+        The server's program reads those four bytes as a number and shows the balance on the operator's screen:
+
+        ```
+        ₹2,82,49,292.80
+        ```
+
+        Nearly three crore rupees on a metro card. Nobody has tampered with anything. The gate's chip and the server's program both did exactly what they were built to do, and every one of the four bytes arrived exactly as it was sent.
+
+        In [[h0.unsigned-integers-and-fixed-widths]] a 32-bit number was a single row of 32 bits. But memory, files and networks do not deal in rows of 32 bits. They deal in **bytes**, one after another, each with its own address or position. **When a number takes more than one byte, which byte goes first? And how can two programs that agree on everything else read the same four bytes as two different numbers?**
+  intuition:
+    - text: |
+        Write 25,000 in hex: `0x000061A8`. As four bytes, that is `00`, `00`, `61` and `A8`. The byte `00` on the left is the **most significant**: it counts the largest amounts, as the crores column does in a written number. `A8` on the right is the **least significant**, the ones.
+
+        Now lay those four bytes out in memory, at addresses one after another. There are two natural choices.
+
+        - **Big-endian**: the most significant byte first, at the lowest address. The bytes go `00 00 61 A8`, the same order in which you write the number on paper.
+        - **Little-endian**: the least significant byte first. The bytes go `A8 61 00 00`, the number written backwards, byte by byte. The bits inside each byte are not reversed. Only the order of the bytes is.
+
+        The names come from *Gulliver's Travels*, where two nations go to war over which end of a boiled egg to crack first. The joke is the point: neither choice is better, but two sides that choose differently cannot understand each other.
+
+        The metro gate's chip is little-endian, as most chips are today, so it sent `A8 61 00 00`. The server's program read the first byte as the most significant, big-endian, which turned the bytes into `0xA8610000`:
+
+        $$\text{A8}_{16} \times 256^3 + \text{61}_{16} \times 256^2 = 168 \times 16{,}777{,}216 + 97 \times 65{,}536 = 2{,}824{,}929{,}280 \text{ paise}$$
+
+        That is ₹2,82,49,292.80. Same four bytes, two readings, as with the signed and unsigned readings of the same bits.
+  derivation:
+    - text: |
+        **A number in base 256.** A row of bytes is a number written in base 256, where each "digit" is a byte from 0 to 255. Big-endian writes the digits as we write any number, most significant first. Reading a big-endian row is the left-to-right rule from [[h0.binary-and-hexadecimal]], with 256 in place of 2:
+
+        ```python
+        def read_big(data):
+            value = 0
+            for b in data:
+                value = value * 256 + b
+            return value
+
+        print(read_big(bytes([0x00, 0x00, 0x61, 0xA8])))
+        ```
+
+        This shows 25000. `bytes([...])` makes a bytes value from a list of whole numbers, and looping over it gives them back. For little-endian, the first byte is worth 1, the next 256, the next $256^2$, so byte $i$ is shifted up by $8i$ bits:
+
+        ```python
+        def read_little(data):
+            value = 0
+            for i in range(len(data)):
+                value = value | (data[i] << (8 * i))
+            return value
+
+        print(read_little(bytes([0xA8, 0x61, 0x00, 0x00])))
+        ```
+
+        This also shows 25000. Writing works the other way round: byte $i$ of a little-endian number is `(n >> (8 * i)) & 0xFF`, the field-extracting move from [[h0.bitwise-operations-and-masks]].
+
+        **Python does it for you.** Integers have the methods `to_bytes` and `from_bytes`, which take the number of bytes and the order:
+
+        ```python
+        print((25000).to_bytes(4, "little").hex(" "))
+        print((25000).to_bytes(4, "big").hex(" "))
+        print(int.from_bytes(bytes([1, 0]), "little"))
+        print(int.from_bytes(bytes([1, 0]), "big"))
+        ```
+
+        This shows `a8 61 00 00`, then `00 00 61 a8`, then 1, then 256. Give `signed=True` and they use two's complement: `(-2).to_bytes(2, "little", signed=True)` is `fe ff`.
+
+        **Who uses which.** Nearly every processor you will program is little-endian: the x86 chips in most laptops and servers, and ARM chips as they are normally run in phones, Macs and the cloud. Little-endian has a small practical advantage: the byte at a number's address is its lowest byte whatever the number's width, so reading a 32-bit value as 16 bits takes the same address.
+
+        Networks chose the other way. The internet's protocols, from IP to TCP, write every multi-byte field big-endian, which they call **network byte order**. A program sending a port number or an address converts from its machine's order to network order on the way out, and back on the way in. File formats declare their own: PNG images are big-endian, while WAV sound files, BMP images and ZIP archives are little-endian. A format's documentation always says which, and a program that reads it must too.
+
+        **Where order does not matter.** A single byte has no order to get wrong, so neither does a sequence of single bytes. UTF-8 text, a sequence of bytes, reads the same on every machine, which is one more reason it won. UTF-16, which stores code points in 2-byte units, does have an order, and its files often begin with two special bytes, `ff fe` or `fe ff`, called a byte order mark, purely to say which.
+    - question:
+        id: predict-byte-order
+        type: predict
+        system: s2
+        prompt: Write each number in hex, as whole bytes, before you check.
+        code: |
+          print((0x1234).to_bytes(2, "big").hex())
+          print((0x1234).to_bytes(2, "little").hex())
+          print(int.from_bytes(bytes([0x0A, 0x01]), "little"))
+          print(int.from_bytes(bytes([0x0A, 0x01]), "big"))
+        output: |
+          1234
+          3412
+          266
+          2561
+        explanation: |
+          Big-endian keeps the order you write. Little-endian swaps the two bytes. Read little-endian, `0a 01` is $0x0A + 0x01 \times 256 = 10 + 256 = 266$. Read big-endian it is $10 \times 256 + 1 = 2561$.
+    - question:
+        id: fix-read-balance
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The gate sends the balance as four bytes, **little-endian**. `read_balance(data)` should **return** the balance in paise. For the bytes `a8 61 00 00` it returns 2824929280 instead of 25000. Find the bug and fix it. Do not use `from_bytes`.
+        starter: |
+          def read_balance(data):
+              value = 0
+              for b in data:
+                  value = value * 256 + b
+              return value
+
+          print(read_balance(bytes([0xA8, 0x61, 0x00, 0x00])))
+        solution: |
+          def read_balance(data):
+              value = 0
+              for i in range(len(data)):
+                  value = value | (data[i] << (8 * i))
+              return value
+
+          print(read_balance(bytes([0xA8, 0x61, 0x00, 0x00])))
+        tests: |
+          assert "from_bytes" not in source, "Read the bytes yourself, without from_bytes"
+          assert read_balance(bytes([0xA8, 0x61, 0x00, 0x00])) == 25000, "a8 61 00 00 is 25000 paise when read little-endian"
+          assert read_balance(bytes([0x01, 0x00, 0x00, 0x00])) == 1, "01 00 00 00 is 1, little-endian: the first byte is the ones"
+          assert read_balance(bytes([0x00, 0x00, 0x00, 0x01])) == 2 ** 24, "00 00 00 01 is 2 ** 24, little-endian: the last byte is the most significant"
+          assert read_balance(bytes([0xFF, 0xFF, 0xFF, 0xFF])) == 2 ** 32 - 1, "ff ff ff ff is the largest 32-bit value"
+        wrong:
+          - "def read_balance(data):\n    value = 0\n    for i in range(len(data)):\n        value = value | (data[i] << i)\n    return value\n"
+          - "def read_balance(data):\n    value = 0\n    for i in range(len(data)):\n        value = value | (data[i] << (8 * (3 - i)))\n    return value\n"
+          - "def read_balance(data):\n    value = 0\n    for b in data:\n        value = value * 256 + b\n    return value % 2 ** 16\n"
+        explanation: "The loop read the bytes big-endian: each new byte pushed the earlier ones up by a place. Little-endian puts the **least** significant byte first, so byte $i$ is worth $256^i$ and is shifted up by $8i$ bits. Shifting by $i$ alone counts bits instead of bytes."
+  formal:
+    - text: |
+        A value of $k$ bytes, $v = \sum_{i=0}^{k-1} d_i \, 256^i$ with each $d_i$ from 0 to 255, is stored at $k$ consecutive addresses.
+
+        - **Big-endian**: the byte at the lowest address is $d_{k-1}$, the most significant, and the bytes follow in decreasing significance.
+        - **Little-endian**: the byte at the lowest address is $d_0$, the least significant, and the bytes follow in increasing significance.
+
+        The order of bits within a byte is not affected. Single bytes, and sequences of single bytes such as UTF-8 text, have no byte order.
+
+        In little-endian, byte $i$ of $n$ is `(n >> (8 * i)) & 0xFF`, and the value is the sum of `data[i] << (8 * i)`. In big-endian, the value is built by `value = value * 256 + b` for each byte in turn.
+
+        In Python, `n.to_bytes(k, order)` and `int.from_bytes(data, order)` convert, where `order` is `"big"` or `"little"`, with `signed=True` for two's complement. `bytes([...])` makes bytes from whole numbers.
+
+        Most processors today are little-endian. Internet protocols use big-endian, called **network byte order**. Every binary file format specifies its order.
+  drill:
+    - text: Seconds each. Say which byte is most significant before you answer.
+    - question:
+        id: big-first-byte
+        type: choice
+        system: s1
+        prompt: "The 16-bit value `0x1234` is stored big-endian. What is the first byte?"
+        options: ["0x12", "0x34", "0x21", "0x43"]
+        answer: 0
+        explanation: Big-endian puts the most significant byte first.
+    - question:
+        id: little-first-byte
+        type: choice
+        system: s1
+        prompt: "The 16-bit value `0x1234` is stored little-endian. What is the first byte?"
+        options: ["0x12", "0x34", "0x21", "0x43"]
+        answer: 1
+        explanation: Little-endian puts the least significant byte first.
+    - question:
+        id: predict-from-little
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(int.from_bytes(bytes([0, 1]), "little"))
+        output: "256"
+        explanation: The second byte is worth 256 in little-endian.
+    - question:
+        id: predict-from-big
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(int.from_bytes(bytes([0, 1]), "big"))
+        output: "1"
+        explanation: The last byte is the ones in big-endian.
+    - question:
+        id: network-order
+        type: choice
+        system: s1
+        prompt: Which order do internet protocols use for multi-byte fields?
+        options: ["Little-endian", "Big-endian", "Whichever the sending machine uses", "None: they send single bytes only"]
+        answer: 1
+        explanation: It is called network byte order.
+    - question:
+        id: utf8-order
+        type: choice
+        system: s1
+        prompt: Does UTF-8 text read differently on big-endian and little-endian machines?
+        options: ["Yes, always", "No: it is a sequence of single bytes", "Only for Devanagari", "Only for emoji"]
+        answer: 1
+        explanation: Byte order only matters for values of more than one byte.
+    - question:
+        id: predict-two-bytes-hex
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print((258).to_bytes(2, "little").hex())
+        output: "0201"
+        explanation: 258 is `0x0102`. Little-endian writes `02` first.
+  work:
+    - text: Slower now. Write the bytes out in a row, with their positions, before reading them.
+    - question:
+        id: write-to-little
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `to_little(n, size)`. It **returns** a list of `size` whole numbers, the bytes of the unsigned number `n` in little-endian order. So `to_little(25000, 4)` is `[0xA8, 0x61, 0x00, 0x00]`. Use shifts and masks, not `to_bytes`.
+        starter: |
+          def to_little(n, size):
+              return []
+
+          print(to_little(25000, 4))
+        solution: |
+          def to_little(n, size):
+              result = []
+              for i in range(size):
+                  result.append((n >> (8 * i)) & 0xFF)
+              return result
+
+          print(to_little(25000, 4))
+        tests: |
+          assert "to_bytes" not in source, "Build the bytes with shifts and masks, without to_bytes"
+          assert to_little(25000, 4) == [0xA8, 0x61, 0x00, 0x00], "25000 should be [0xA8, 0x61, 0x00, 0x00]"
+          assert to_little(1, 2) == [1, 0], "1 in two bytes should be [1, 0]"
+          assert to_little(0x1234, 2) == [0x34, 0x12], "0x1234 should be [0x34, 0x12]: least significant first"
+          assert to_little(0, 3) == [0, 0, 0], "0 in three bytes should be [0, 0, 0]"
+          assert to_little(2 ** 32 - 1, 4) == [255, 255, 255, 255], "The largest 32-bit value is four bytes of 255"
+        wrong:
+          - "def to_little(n, size):\n    result = []\n    for i in range(size):\n        result.append((n >> (8 * (size - 1 - i))) & 0xFF)\n    return result\n"
+          - "def to_little(n, size):\n    result = []\n    for i in range(size):\n        result.append(n >> (8 * i))\n    return result\n"
+          - "def to_little(n, size):\n    result = []\n    for i in range(size):\n        result.append((n >> i) & 0xFF)\n    return result\n"
+        explanation: "Shifting right by $8i$ brings byte $i$ to the bottom, and `& 0xFF` keeps just that byte. Counting $i$ upwards from 0 gives the least significant byte first. Without the mask, the higher bytes ride along in every entry."
+    - question:
+        id: write-swap16
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A program reads 16-bit values from a file in the wrong order. Write `swap16(n)`, which takes a whole number from 0 to 65,535 and **returns** it with its two bytes swapped, so `swap16(0x1234)` is `0x3412`. Use shifts, masks and `|`.
+        starter: |
+          def swap16(n):
+              return n
+
+          print(hex(swap16(0x1234)))
+        solution: |
+          def swap16(n):
+              low = n & 0xFF
+              high = n >> 8
+              return (low << 8) | high
+
+          print(hex(swap16(0x1234)))
+        tests: |
+          assert swap16(0x1234) == 0x3412, "swap16(0x1234) should be 0x3412"
+          assert swap16(0x00FF) == 0xFF00, "swap16(0x00FF) should be 0xFF00"
+          assert swap16(0xFF00) == 0x00FF, "swap16(0xFF00) should be 0x00FF"
+          assert swap16(swap16(0xBEEF)) == 0xBEEF, "Swapping twice should give the number back"
+          assert swap16(0) == 0, "swap16(0) should be 0"
+        wrong:
+          - "def swap16(n):\n    return (n << 8) | (n >> 8)\n"
+          - "def swap16(n):\n    low = n & 0xF\n    high = n >> 4\n    return (low << 4) | high\n"
+          - "def swap16(n):\n    return 0xFFFF - n\n"
+        explanation: "The low byte is `n & 0xFF` and the high byte is `n >> 8`. Moving the low byte up 8 places and putting the high byte below it swaps them. Shifting the whole of `n` left keeps the old high byte too, above bit 16, so the answer grows past 16 bits."
+    - question:
+        id: write-read-signed-little
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A thermometer sends temperatures in tenths of a degree as **signed** 16-bit numbers, little-endian. Write `temperature(data)`, which takes two bytes and **returns** the temperature in degrees as a float, so the bytes `fe ff`, which are $-2$ tenths, give $-0.2$. You may use `from_bytes`.
+        starter: |
+          def temperature(data):
+              return 0.0
+
+          print(temperature(bytes([0xFE, 0xFF])))
+        solution: |
+          def temperature(data):
+              tenths = int.from_bytes(data, "little", signed=True)
+              return tenths / 10
+
+          print(temperature(bytes([0xFE, 0xFF])))
+        tests: |
+          assert abs(temperature(bytes([0xFE, 0xFF])) - (-0.2)) < 1e-9, "fe ff is -2 tenths, so -0.2 degrees"
+          assert abs(temperature(bytes([0x6E, 0x01])) - 36.6) < 1e-9, "6e 01 is 366 tenths, so 36.6 degrees"
+          assert abs(temperature(bytes([0x00, 0x00])) - 0.0) < 1e-9, "00 00 is 0 degrees"
+          assert abs(temperature(bytes([0x0C, 0xFE])) - (-50.0)) < 1e-9, "0c fe is -500 tenths, so -50.0 degrees"
+        wrong:
+          - "def temperature(data):\n    tenths = int.from_bytes(data, \"little\")\n    return tenths / 10\n"
+          - "def temperature(data):\n    tenths = int.from_bytes(data, \"big\", signed=True)\n    return tenths / 10\n"
+          - "def temperature(data):\n    tenths = int.from_bytes(data, \"little\", signed=True)\n    return tenths * 10\n"
+        explanation: "Three things must all be right: the byte order, little; the reading of the bits, two's complement; and the unit, tenths. Leaving out `signed=True` turns $-2$ tenths into 65,534 tenths, a thermometer reading of 6,553 degrees."
+    - question:
+        id: predict-read-loops
+        type: predict
+        system: s2
+        prompt: Both loops read the same bytes. Trace each one and give what it shows.
+        code: |
+          data = bytes([0x02, 0x01])
+          big = 0
+          for b in data:
+              big = big * 256 + b
+          little = 0
+          for i in range(len(data)):
+              little = little | (data[i] << (8 * i))
+          print(big, little)
+        output: "513 258"
+        explanation: |
+          Big-endian: $2 \times 256 + 1 = 513$. Little-endian: $2 + 1 \times 256 = 258$.
+    - question:
+        id: predict-signed-bytes
+        type: predict
+        system: s2
+        prompt: What does this show? Think about two's complement in two bytes.
+        code: |
+          data = (-1).to_bytes(2, "little", signed=True)
+          print(data.hex(), int.from_bytes(data, "little"))
+        output: "ffff 65535"
+        explanation: |
+          $-1$ is all ones in any width. Read back without `signed=True`, the same two bytes are the largest unsigned 16-bit value.
+    - question:
+        id: misread-balance
+        type: numeric
+        system: s2
+        prompt: A card's balance is 1 paisa, sent as four bytes little-endian. A server reads the bytes big-endian. How many paise does it think the card holds?
+        answer: "16777216"
+        unit: paise
+        explanation: The bytes are `01 00 00 00`. Read big-endian, the `01` is the most significant byte, worth $256^3 = 16{,}777{,}216$.
+    - question:
+        id: why-both-exist
+        type: choice
+        system: s2
+        prompt: Why do programs that exchange binary data have to agree on a byte order?
+        options:
+          - "Because little-endian is faster and big-endian is slower."
+          - "Because a byte sequence carries no record of the order it was written in: the same bytes read in the other order are a different number, and nothing complains."
+          - "Because the bits inside each byte are reversed on some machines."
+          - "Because text files cannot be read otherwise."
+        answer: 1
+        explanation: As with encodings and signedness, the bytes are fine and only the reading differs. A format or protocol fixes the order so that every reader agrees.
+  connections:
+    - text: |
+        The puzzle is solved. The gate's chip is little-endian and sent 25,000 paise as `a8 61 00 00`, least significant byte first. The server read the first byte as the most significant, getting `0xA8610000`, 2,82,49,292.80 rupees. Nothing was lost or changed. The two programs disagreed only about which end of the number came first.
+
+        This is the third time in the cluster that the same bits have meant two things: signed or unsigned in [[h0.twos-complement-and-overflow]], one encoding or another in [[h0.characters-unicode-and-utf-8]], and now one byte order or the other. The lesson is the same each time. Bits carry no label, so every boundary a value crosses, into a file, onto a network, into another program, must say how it is to be read.
+
+        Reading a row of bytes as a number in base 256 is the place value of [[f0.whole-numbers-and-place-value]] once again, and pulling one byte out with a shift and a mask is the tool of [[h0.bitwise-operations-and-masks]].
+
+        One question about layout remains. A record such as a metro tap holds several fields: a card number, a station, a time, a fare. Laid out one after another, their sizes should simply add up. Yet compilers routinely make records larger than the sum of their fields, with gaps nobody asked for. Why would a computer waste memory on purpose? That is the last lesson of the cluster, [[h0.alignment-and-the-size-of-things]].

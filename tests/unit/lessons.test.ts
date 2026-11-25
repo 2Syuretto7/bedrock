@@ -57,6 +57,10 @@ describe("lesson validation", () => {
     expect(await messages("f0.counting", (l) => (figureAt(l, "step-through").props = { rate: 7 }))).toContain("Figure step-through props: program:");
     expect(await messages("f0.counting", (l) => (figureAt(l, "step-through").props = { program: "fixed-deposit" }))).toContain("Figure step-through props: program:");
     expect(await messages("f0.counting", (l) => (figureAt(l, "step-through").props = { program: "deposit", rate: 3 }))).toContain("Figure step-through props: rate:");
+    expect(await messages("f0.counting", (l) => (figureAt(l, "binary-counter").props = { width: 16 }))).toContain("Figure binary-counter props: width:");
+    expect(await messages("f0.counting", (l) => (figureAt(l, "binary-counter").props = { value: 256 }))).toContain("Figure binary-counter props: value:");
+    expect(await messages("f0.counting", (l) => (figureAt(l, "struct-padding").props = { record: "train" }))).toContain("Figure struct-padding props: record:");
+    expect(await messages("f0.counting", (l) => (figureAt(l, "struct-padding").props = { record: "tap", padded: true }))).toContain("Figure struct-padding props:");
     const broken = await validateLessons({
       graph,
       files: files(),

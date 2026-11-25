@@ -29,6 +29,16 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
     fixed: z.boolean().optional(),
     first: z.enum(["Kabir", "Asha"]).optional(),
   }),
+  "binary-counter": z.strictObject({
+    width: z.union([z.literal(4), z.literal(8)]).optional(),
+    value: z.number().int().min(0).max(255).optional(),
+    signed: z.boolean().optional(),
+  }),
+  "struct-padding": z.strictObject({
+    record: z.enum(["char-int", "tap"]).optional(),
+    packed: z.boolean().optional(),
+    sorted: z.boolean().optional(),
+  }),
   "call-stack": z.strictObject({ n: z.number().optional() }),
   "growth-rates": z.strictObject({ n: z.number().optional() }),
   "truth-table": z.strictObject({ p: z.boolean().optional(), q: z.boolean().optional() }),

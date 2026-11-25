@@ -1,0 +1,656 @@
+cluster: H0
+title: Reading a day of metro taps
+minutes: 60
+claim: You will have written the program that reads a metro gate's binary log, checks every record for damage, decodes its fields from raw bytes, and reports the busiest station and the day's fares, and you will have found the bug that made every tap-in cost hundreds of rupees.
+brief: |
+  Every lesson in this cluster was about what bytes mean. This project hands you nothing but bytes, and asks you to turn them into a report a station manager can read.
+
+  **The log.** Each gate on a small city metro writes one **record** for every tap, in and out, to a binary file. A record is always 12 bytes, packed with no padding, every number **little-endian**:
+
+  | Offset | Size | Field | Meaning |
+  |---|---|---|---|
+  | 0 | 4 | card | the card's number, unsigned |
+  | 4 | 2 | station | the station's number, unsigned |
+  | 6 | 1 | kind | the character `I` for a tap in or `O` for a tap out, in ASCII |
+  | 7 | 2 | fare | the fare charged, in paise, unsigned: 0 for a tap in |
+  | 9 | 2 | minute | minutes since midnight, unsigned |
+  | 11 | 1 | check | a check byte, explained in the first stage |
+
+  The stations are numbered 1 to 5:
+
+  ```python
+  names = {1: "Airport", 2: "MG Road", 3: "Central Station", 4: "University", 5: "Old Market"}
+  ```
+
+  Here is the start of one morning's file, a record to a line, in hex:
+
+  ```
+  41 9c 00 00 03 00 49 00 00 e5 01 73
+  42 9c 00 00 02 00 49 00 00 ea 01 7e
+  41 9c 00 00 04 00 4f 8c 0a 00 02 12
+  ```
+
+  Read the first line with the table. The card is `41 9c 00 00`, little-endian, which is `0x9C41`, card 40001. The station is `03 00`, station 3. The kind is `49`, the letter `I`. The fare is `00 00`, nothing, as it should be for a tap in. The minute is `e5 01`, which is `0x01E5`, minute 485, or 8:05 in the morning. The last byte, `73`, is the check.
+
+  The third line is card 40001 tapping out at station 4, University, at minute 512, charged `8c 0a`, which is `0x0A8C`, 2,700 paise. Twenty-seven rupees.
+
+  **The rules.** Money stays in whole paise from start to finish. Files are sometimes damaged: a cable glitch flips a bit, or a gate loses power halfway through a record. A damaged record must never be counted, but it must be reported, so that somebody can go and look at the gate.
+
+  You will build the program in four stages: checking a record, decoding it, reading a whole file, and writing the report. Each stage's editor starts with the functions from earlier stages already written.
+starter: |
+  # Scratch space. The first record of the morning, byte by byte.
+  record = bytes([0x41, 0x9C, 0x00, 0x00, 0x03, 0x00, 0x49, 0x00, 0x00, 0xE5, 0x01, 0x73])
+  print(record.hex(" "))
+  print(int.from_bytes(record[0:4], "little"), int.from_bytes(record[9:11], "little"))
+  print(chr(record[6]))
+stages:
+  - title: Is this record whole?
+    blocks:
+      - text: |
+          The check byte is the XOR of the eleven bytes before it, using `^` from the lesson on bitwise operations. The gate works it out as it writes each record. The program that reads the file works it out again from the eleven bytes it received, and compares. If any single bit of the record has flipped, in the data or in the check byte itself, that bit's column now has one more or one fewer 1, so the two results disagree.
+      - question:
+          id: xor-three
+          type: predict
+          system: s1
+          concepts: [h0.bitwise-operations-and-masks, s0.loops]
+          prompt: What does this show?
+          code: |
+            check = 0
+            for b in bytes([3, 5, 6]):
+                check = check ^ b
+            print(check)
+          output: "0"
+          explanation: |
+            $3 \oplus 5 = 6$, since `011` and `101` differ in the two lower bits. Then $6 \oplus 6 = 0$, because anything XORed with itself is 0.
+      - question:
+          id: valid
+          type: code
+          mode: write
+          system: s2
+          concepts: [h0.bitwise-operations-and-masks, h0.unsigned-integers-and-fixed-widths, s0.loops, s0.functions]
+          prompt: |
+            Write `valid(record)`. It takes a bytes value and **returns** `True` if it is exactly 12 bytes long and its last byte equals the XOR of the eleven bytes before it, and `False` otherwise. A piece shorter than 12 bytes, cut off when a gate lost power, is not valid.
+          starter: |
+            def valid(record):
+                return True
+
+            record = bytes([0x41, 0x9C, 0x00, 0x00, 0x03, 0x00, 0x49, 0x00, 0x00, 0xE5, 0x01, 0x73])
+            print(valid(record))
+          solution: |
+            def valid(record):
+                if len(record) != 12:
+                    return False
+                check = 0
+                for i in range(11):
+                    check = check ^ record[i]
+                return check == record[11]
+
+            record = bytes([0x41, 0x9C, 0x00, 0x00, 0x03, 0x00, 0x49, 0x00, 0x00, 0xE5, 0x01, 0x73])
+            print(valid(record))
+          tests: |
+            _good = bytes([0x41, 0x9C, 0x00, 0x00, 0x03, 0x00, 0x49, 0x00, 0x00, 0xE5, 0x01, 0x73])
+            _out = bytes([0x41, 0x9C, 0x00, 0x00, 0x04, 0x00, 0x4F, 0x8C, 0x0A, 0x00, 0x02, 0x12])
+            assert valid(_good) is True, "The first record of the morning is whole, so valid should return True"
+            assert valid(_out) is True, "The University tap-out is whole, so valid should return True"
+            assert valid(_good[:11] + bytes([0x72])) is False, "A check byte with one bit flipped should make the record invalid"
+            assert valid(_good[:9] + bytes([0xE1]) + _good[10:]) is False, "A minute byte with one bit flipped should make the record invalid"
+            assert valid(_out[:4] + bytes([0x05]) + _out[5:]) is False, "A station byte changed from 04 to 05 should make the record invalid"
+            assert valid(_good[:7]) is False, "A piece of 7 bytes is not a whole record"
+            assert valid(bytes(12)) is True, "Twelve zero bytes: the XOR of eleven zeros is 0, which matches"
+            assert valid(_good + bytes([0])) is False, "Thirteen bytes is not a record"
+          wrong:
+            - "def valid(record):\n    if len(record) != 12:\n        return False\n    check = 0\n    for i in range(12):\n        check = check ^ record[i]\n    return check == record[11]\n"
+            - "def valid(record):\n    if len(record) != 12:\n        return False\n    check = 0\n    for i in range(11):\n        check = check + record[i]\n    return check == record[11]\n"
+            - "def valid(record):\n    check = 0\n    for i in range(len(record) - 1):\n        check = check ^ record[i]\n    return check == record[len(record) - 1]\n"
+            - "def valid(record):\n    if len(record) != 12:\n        return False\n    check = 0\n    for i in range(11):\n        check = check | record[i]\n    return check == record[11]\n"
+          explanation: |
+            The XOR runs over bytes 0 to 10 only; including byte 11 compares the check with something it is part of. Plain addition is a different checksum, and its total soon passes 255, so it would not fit in one byte without a mask. OR is not a checksum at all: once a bit is 1 it stays 1. Testing the length first is what turns a cut-off piece into `False` instead of a wrong answer or an error.
+      - question:
+          id: xor-misses
+          type: choice
+          system: s2
+          concepts: [h0.bitwise-operations-and-masks, h0.binary-and-hexadecimal]
+          prompt: The XOR check byte catches every single flipped bit. Which damage can it miss?
+          options:
+            - "One byte changed from 00 to ff, every one of its bits flipped."
+            - "The same bit position flipped in two different bytes, such as the lowest bit of the station and the lowest bit of the minute."
+            - "The check byte itself damaged, and nothing else."
+            - "The record cut off after seven bytes."
+          answer: 1
+          explanation: |
+            XOR works column by column. Two flips in the same column cancel: that column's count of 1s changes by two, which leaves its XOR the same. Eight flips in one byte are in eight different columns, so each is caught. That is why real formats often use stronger checks, which later lessons meet.
+  - title: Reading one record
+    blocks:
+      - text: |
+          Python's `struct` module can take a record apart in one call. The fields are an unsigned 4-byte number, `I`, an unsigned 2-byte number, `H`, a single byte, `c`, and two more unsigned 2-byte numbers, `H` and `H`, and a format that starts with `<` reads them little-endian and packed. The check byte is not part of the data, so only the first eleven bytes are unpacked.
+      - question:
+          id: calcsize-formats
+          type: predict
+          system: s1
+          concepts: [h0.alignment-and-the-size-of-things, h0.unsigned-integers-and-fixed-widths]
+          prompt: What does this show?
+          code: |
+            import struct
+            print(struct.calcsize("<IHcHH"), struct.calcsize("IHcHH"))
+          output: "11 12"
+          explanation: |
+            Packed, the fields add up to $4 + 2 + 1 + 2 + 2 = 11$. With the machine's own layout, the 2-byte `fare` cannot start at offset 7, so a byte of padding pushes it to 8, and the total becomes 12.
+      - text: |
+          Ravi wrote `decode` first. His version unpacked the whole record with `"<IHcHH"`, and `struct` stopped him with an error: `unpack requires a buffer of 11 bytes`. He noticed that deleting the `<` made the error go away, and moved on. Now the card numbers and stations come out right, but every tap-in shows a fare in the hundreds of rupees, and the minutes are nonsense.
+      - question:
+          id: decode
+          type: code
+          mode: find-bug
+          system: s2
+          concepts: [h0.alignment-and-the-size-of-things, h0.endianness-and-byte-order, h0.characters-unicode-and-utf-8, s0.functions, s0.lists-and-tuples]
+          prompt: |
+            `decode(record)` should **return** a tuple `(card, station, kind, fare, minute)` for a valid 12-byte record, with `kind` as the string `"I"` or `"O"` and the other four as whole numbers. Find the bug and fix it. Work out by hand which bytes of the first record Ravi's version reads as the fare.
+          starter: |
+            import struct
+
+            def decode(record):
+                card, station, kind, fare, minute = struct.unpack("IHcHH", record)
+                return (card, station, kind.decode(), fare, minute)
+
+            record = bytes([0x41, 0x9C, 0x00, 0x00, 0x03, 0x00, 0x49, 0x00, 0x00, 0xE5, 0x01, 0x73])
+            print(decode(record))
+          solution: |
+            import struct
+
+            def decode(record):
+                card, station, kind, fare, minute = struct.unpack("<IHcHH", record[:11])
+                return (card, station, kind.decode(), fare, minute)
+
+            record = bytes([0x41, 0x9C, 0x00, 0x00, 0x03, 0x00, 0x49, 0x00, 0x00, 0xE5, 0x01, 0x73])
+            print(decode(record))
+          tests: |
+            _first = bytes([0x41, 0x9C, 0x00, 0x00, 0x03, 0x00, 0x49, 0x00, 0x00, 0xE5, 0x01, 0x73])
+            _out = bytes([0x41, 0x9C, 0x00, 0x00, 0x04, 0x00, 0x4F, 0x8C, 0x0A, 0x00, 0x02, 0x12])
+            _late = bytes([0x45, 0x9C, 0x00, 0x00, 0x03, 0x00, 0x4F, 0x62, 0x07, 0x6A, 0x02, 0x98])
+            assert decode(_first) == (40001, 3, "I", 0, 485), "The first record should be (40001, 3, 'I', 0, 485): a tap in at 8:05 costs nothing"
+            assert decode(_out) == (40001, 4, "O", 2700, 512), "The University tap-out should be (40001, 4, 'O', 2700, 512)"
+            assert decode(_late) == (40005, 3, "O", 1890, 618), "The last record should be (40005, 3, 'O', 1890, 618)"
+            assert type(decode(_first)[2]) == str, "kind should be a string, 'I' or 'O', not bytes"
+          wrong:
+            - "import struct\n\ndef decode(record):\n    card, station, kind, fare, minute = struct.unpack(\">IHcHH\", record[:11])\n    return (card, station, kind.decode(), fare, minute)\n"
+            - "import struct\n\ndef decode(record):\n    card, station, kind, fare, minute = struct.unpack(\"<IHcHH\", record[:11])\n    return (card, station, kind, fare, minute)\n"
+            - "import struct\n\ndef decode(record):\n    card, station, kind, fare, minute = struct.unpack(\"<IHcHH\", record[1:12])\n    return (card, station, kind.decode(), fare, minute)\n"
+          explanation: |
+            Without `<`, `struct` uses the machine's own layout, which puts a byte of padding before the 2-byte `fare` so that it starts at an even offset. The file has no padding. So Ravi's version skipped the real first byte of the fare, read the fare's second byte and the minute's first byte as the fare, `00 e5`, which is 58,624 paise, and read the minute's second byte and the check byte as the minute. The error message was telling the truth: the data is 11 bytes. The fix was to unpack `record[:11]`, not to change the layout. Big-endian would get every multi-byte field wrong instead, and forgetting `decode()` leaves `kind` as the bytes `b"I"`.
+  - title: The whole file
+    blocks:
+      - text: |
+          A file of records is just the records one after another, with nothing between them. Because every record is exactly 12 bytes, record $k$, counting from 0, starts at byte $12k$, and there is no need to search for where one ends and the next begins. That is the whole point of fixed-width records, and the reason the padding question mattered: a reader and a writer that disagree about one record's size disagree about where every later record starts.
+      - question:
+          id: records-in-file
+          type: numeric
+          system: s1
+          concepts: [h0.alignment-and-the-size-of-things, s0.expressions]
+          prompt: A gate's file is 1,20,006 bytes long. How many whole 12-byte records does it hold?
+          answer: "10000"
+          unit: records
+          explanation: |
+            $120{,}006 \,/\!/\, 12 = 10{,}000$, with 6 bytes left over: the start of a record the gate never finished.
+      - question:
+          id: read-taps
+          type: code
+          mode: write
+          system: s2
+          concepts: [h0.alignment-and-the-size-of-things, h0.bitwise-operations-and-masks, s0.loops, s0.lists-and-tuples, s0.functions]
+          prompt: |
+            Write `read_taps(data)`. It takes the bytes of a whole file and **returns** a tuple of two things: a list of the decoded taps from every valid record, in file order, and the number of damaged pieces. A piece is damaged if it fails `valid`, and that includes a short piece at the end of a cut-off file. `valid` and `decode` are written for you.
+          starter: |
+            import struct
+
+            def valid(record):
+                if len(record) != 12:
+                    return False
+                check = 0
+                for i in range(11):
+                    check = check ^ record[i]
+                return check == record[11]
+
+            def decode(record):
+                card, station, kind, fare, minute = struct.unpack("<IHcHH", record[:11])
+                return (card, station, kind.decode(), fare, minute)
+
+            def read_taps(data):
+                taps = []
+                damaged = 0
+                return (taps, damaged)
+          solution: |
+            import struct
+
+            def valid(record):
+                if len(record) != 12:
+                    return False
+                check = 0
+                for i in range(11):
+                    check = check ^ record[i]
+                return check == record[11]
+
+            def decode(record):
+                card, station, kind, fare, minute = struct.unpack("<IHcHH", record[:11])
+                return (card, station, kind.decode(), fare, minute)
+
+            def read_taps(data):
+                taps = []
+                damaged = 0
+                for start in range(0, len(data), 12):
+                    record = data[start:start + 12]
+                    if valid(record):
+                        taps.append(decode(record))
+                    else:
+                        damaged += 1
+                return (taps, damaged)
+          tests: |
+            import struct as _struct
+            def _rec(card, station, kind, fare, minute):
+                body = _struct.pack("<IHcHH", card, station, kind.encode(), fare, minute)
+                check = 0
+                for b in body:
+                    check = check ^ b
+                return body + bytes([check])
+            _a = _rec(40001, 3, "I", 0, 485)
+            _b = _rec(40001, 4, "O", 2700, 512)
+            _c = _rec(40002, 2, "I", 0, 490)
+            _bad = _b[:9] + bytes([_b[9] ^ 4]) + _b[10:]
+            assert read_taps(_a + _b) == ([(40001, 3, "I", 0, 485), (40001, 4, "O", 2700, 512)], 0), "Two whole records should give both taps and 0 damaged"
+            assert read_taps(_a + _bad + _c) == ([(40001, 3, "I", 0, 485), (40002, 2, "I", 0, 490)], 1), "A damaged record in the middle should be skipped and counted, and the record after it still read"
+            assert read_taps(_a + _c[:5]) == ([(40001, 3, "I", 0, 485)], 1), "A cut-off piece at the end should count as 1 damaged"
+            assert read_taps(bytes(0)) == ([], 0), "An empty file gives no taps and nothing damaged"
+            assert read_taps(_bad) == ([], 1), "A file of one damaged record gives no taps and 1 damaged"
+          wrong:
+            - |
+              import struct
+
+              def valid(record):
+                  if len(record) != 12:
+                      return False
+                  check = 0
+                  for i in range(11):
+                      check = check ^ record[i]
+                  return check == record[11]
+
+              def decode(record):
+                  card, station, kind, fare, minute = struct.unpack("<IHcHH", record[:11])
+                  return (card, station, kind.decode(), fare, minute)
+
+              def read_taps(data):
+                  taps = []
+                  damaged = 0
+                  for start in range(0, len(data), 12):
+                      record = data[start:start + 12]
+                      if valid(record):
+                          taps.append(decode(record))
+                  return (taps, damaged)
+            - |
+              import struct
+
+              def valid(record):
+                  if len(record) != 12:
+                      return False
+                  check = 0
+                  for i in range(11):
+                      check = check ^ record[i]
+                  return check == record[11]
+
+              def decode(record):
+                  card, station, kind, fare, minute = struct.unpack("<IHcHH", record[:11])
+                  return (card, station, kind.decode(), fare, minute)
+
+              def read_taps(data):
+                  taps = []
+                  damaged = 0
+                  for start in range(0, len(data) // 12 * 12, 12):
+                      record = data[start:start + 12]
+                      if valid(record):
+                          taps.append(decode(record))
+                      else:
+                          damaged += 1
+                  return (taps, damaged)
+            - |
+              import struct
+
+              def valid(record):
+                  if len(record) != 12:
+                      return False
+                  check = 0
+                  for i in range(11):
+                      check = check ^ record[i]
+                  return check == record[11]
+
+              def decode(record):
+                  card, station, kind, fare, minute = struct.unpack("<IHcHH", record[:11])
+                  return (card, station, kind.decode(), fare, minute)
+
+              def read_taps(data):
+                  taps = []
+                  damaged = 0
+                  for start in range(0, len(data), 11):
+                      record = data[start:start + 12]
+                      if valid(record):
+                          taps.append(decode(record))
+                      else:
+                          damaged += 1
+                  return (taps, damaged)
+            - |
+              import struct
+
+              def valid(record):
+                  if len(record) != 12:
+                      return False
+                  check = 0
+                  for i in range(11):
+                      check = check ^ record[i]
+                  return check == record[11]
+
+              def decode(record):
+                  card, station, kind, fare, minute = struct.unpack("<IHcHH", record[:11])
+                  return (card, station, kind.decode(), fare, minute)
+
+              def read_taps(data):
+                  taps = []
+                  damaged = 0
+                  for start in range(0, len(data), 12):
+                      record = data[start:start + 12]
+                      if valid(record):
+                          taps.append(decode(record))
+                      else:
+                          damaged += 1
+                          break
+                  return (taps, damaged)
+          explanation: |
+            The loop steps through the file 12 bytes at a time, and a slice that runs past the end simply comes back short, so a cut-off piece fails `valid` like any other damage. Stopping at the last whole record would hide that piece, stepping by 11 reads every record after the first from the wrong place, and breaking out at the first damaged record throws away every good record after it.
+  - title: The day's report
+    blocks:
+      - text: |
+          The station manager wants three lines: which station was busiest, counting taps in and out alike, how much was collected in fares, and how many damaged records were skipped. Fares stay in whole paise until the very end, and only the finished total is written as rupees and paise, with `//` and `%`, as in the lesson on floating point.
+      - question:
+          id: paise-not-floats
+          type: choice
+          system: s2
+          concepts: [h0.floating-point-and-ieee-754]
+          prompt: Why should the program add up the fares as whole paise instead of converting each one to rupees as a float first?
+          options:
+            - "Because floats cannot hold numbers as large as a day's fares."
+            - "Because amounts like 18.90 have no exact binary float, and a sum of many such floats can drift away from the exact total, while whole numbers of paise add up exactly."
+            - "Because the file stores the fares as text."
+            - "Because Python cannot add floats in a loop."
+          answer: 1
+          explanation: |
+            As in the lesson on floating point, 18.90 is stored as the nearest binary fraction, a tiny bit off. Integers in Python are exact at any size, so a ledger in paise never drifts.
+      - question:
+          id: report
+          type: code
+          mode: write
+          system: s2
+          concepts: [h0.floating-point-and-ieee-754, h0.alignment-and-the-size-of-things, s0.dictionaries-and-sets, s0.strings, s0.functions]
+          prompt: |
+            Write `report(data, names)`. It reads the file with `read_taps` and **returns** a string of three lines, with `"\n"` between them, like this:
+
+            ```
+            Busiest station: Central Station, 5 taps
+            Fares collected: ₹109.80
+            Damaged records skipped: 1
+            ```
+
+            The busiest station is the one with the most valid taps, in and out together. If two stations tie, name the one with the smaller number. The fares line always shows two digits of paise. `names` is a dictionary from station number to name, and every file has at least one valid record. `read_taps` and everything it uses are written for you.
+          starter: |
+            import struct
+
+            def valid(record):
+                if len(record) != 12:
+                    return False
+                check = 0
+                for i in range(11):
+                    check = check ^ record[i]
+                return check == record[11]
+
+            def decode(record):
+                card, station, kind, fare, minute = struct.unpack("<IHcHH", record[:11])
+                return (card, station, kind.decode(), fare, minute)
+
+            def read_taps(data):
+                taps = []
+                damaged = 0
+                for start in range(0, len(data), 12):
+                    record = data[start:start + 12]
+                    if valid(record):
+                        taps.append(decode(record))
+                    else:
+                        damaged += 1
+                return (taps, damaged)
+
+            def report(data, names):
+                return ""
+          solution: |
+            import struct
+
+            def valid(record):
+                if len(record) != 12:
+                    return False
+                check = 0
+                for i in range(11):
+                    check = check ^ record[i]
+                return check == record[11]
+
+            def decode(record):
+                card, station, kind, fare, minute = struct.unpack("<IHcHH", record[:11])
+                return (card, station, kind.decode(), fare, minute)
+
+            def read_taps(data):
+                taps = []
+                damaged = 0
+                for start in range(0, len(data), 12):
+                    record = data[start:start + 12]
+                    if valid(record):
+                        taps.append(decode(record))
+                    else:
+                        damaged += 1
+                return (taps, damaged)
+
+            def report(data, names):
+                taps, damaged = read_taps(data)
+                counts = {}
+                paise = 0
+                for card, station, kind, fare, minute in taps:
+                    counts[station] = counts.get(station, 0) + 1
+                    paise += fare
+                best = None
+                for station in sorted(counts):
+                    if best is None or counts[station] > counts[best]:
+                        best = station
+                busiest = f"Busiest station: {names[best]}, {counts[best]} taps"
+                fares = f"Fares collected: ₹{paise // 100}.{paise % 100:02d}"
+                skipped = f"Damaged records skipped: {damaged}"
+                return busiest + "\n" + fares + "\n" + skipped
+          tests: |
+            import struct as _struct
+            def _rec(card, station, kind, fare, minute):
+                body = _struct.pack("<IHcHH", card, station, kind.encode(), fare, minute)
+                check = 0
+                for b in body:
+                    check = check ^ b
+                return body + bytes([check])
+            _names = {1: "Airport", 2: "MG Road", 3: "Central Station", 4: "University", 5: "Old Market"}
+            _taps = [(40001, 3, "I", 0, 485), (40002, 2, "I", 0, 490), (40001, 4, "O", 2700, 512), (40003, 3, "I", 0, 515), (40002, 3, "O", 1890, 520), (40004, 1, "I", 0, 530), (40003, 5, "O", 2250, 540), (40004, 3, "O", 4500, 575), (40005, 2, "I", 0, 600), (40005, 3, "O", 1890, 618)]
+            _recs = []
+            for _t in _taps:
+                _recs.append(_rec(_t[0], _t[1], _t[2], _t[3], _t[4]))
+            _r = _recs[6]
+            _recs[6] = _r[:9] + bytes([_r[9] ^ 4]) + _r[10:]
+            _day = bytes(0)
+            for _x in _recs:
+                _day = _day + _x
+            assert report(_day, _names) == "Busiest station: Central Station, 5 taps\nFares collected: ₹109.80\nDamaged records skipped: 1", "The morning's file should report Central Station with 5 taps, ₹109.80 and 1 damaged record"
+            _tie = _rec(1, 4, "I", 0, 600) + _rec(2, 2, "I", 0, 601) + _rec(1, 2, "O", 3005, 640) + _rec(2, 4, "O", 3000, 650)
+            assert report(_tie, _names) == "Busiest station: MG Road, 2 taps\nFares collected: ₹60.05\nDamaged records skipped: 0", "A tie between stations 2 and 4 should name station 2, MG Road, and ₹60.05 needs two digits of paise"
+            _small = _rec(9, 1, "I", 0, 690) + _rec(9, 1, "O", 5, 700) + _rec(9, 1, "I", 0, 701)[:6]
+            assert report(_small, _names) == "Busiest station: Airport, 2 taps\nFares collected: ₹0.05\nDamaged records skipped: 1", "Five paise should be written ₹0.05, and the cut-off piece counted"
+          wrong:
+            - |
+              import struct
+
+              def valid(record):
+                  if len(record) != 12:
+                      return False
+                  check = 0
+                  for i in range(11):
+                      check = check ^ record[i]
+                  return check == record[11]
+
+              def decode(record):
+                  card, station, kind, fare, minute = struct.unpack("<IHcHH", record[:11])
+                  return (card, station, kind.decode(), fare, minute)
+
+              def read_taps(data):
+                  taps = []
+                  damaged = 0
+                  for start in range(0, len(data), 12):
+                      record = data[start:start + 12]
+                      if valid(record):
+                          taps.append(decode(record))
+                      else:
+                          damaged += 1
+                  return (taps, damaged)
+
+              def report(data, names):
+                  taps, damaged = read_taps(data)
+                  counts = {}
+                  paise = 0
+                  for card, station, kind, fare, minute in taps:
+                      counts[station] = counts.get(station, 0) + 1
+                      paise += fare
+                  best = None
+                  for station in sorted(counts):
+                      if best is None or counts[station] > counts[best]:
+                          best = station
+                  return f"Busiest station: {names[best]}, {counts[best]} taps\nFares collected: ₹{paise / 100}\nDamaged records skipped: {damaged}"
+            - |
+              import struct
+
+              def valid(record):
+                  if len(record) != 12:
+                      return False
+                  check = 0
+                  for i in range(11):
+                      check = check ^ record[i]
+                  return check == record[11]
+
+              def decode(record):
+                  card, station, kind, fare, minute = struct.unpack("<IHcHH", record[:11])
+                  return (card, station, kind.decode(), fare, minute)
+
+              def read_taps(data):
+                  taps = []
+                  damaged = 0
+                  for start in range(0, len(data), 12):
+                      record = data[start:start + 12]
+                      if valid(record):
+                          taps.append(decode(record))
+                      else:
+                          damaged += 1
+                  return (taps, damaged)
+
+              def report(data, names):
+                  taps, damaged = read_taps(data)
+                  counts = {}
+                  paise = 0
+                  for card, station, kind, fare, minute in taps:
+                      counts[station] = counts.get(station, 0) + 1
+                      paise += fare
+                  best = None
+                  for station in sorted(counts):
+                      if best is None or counts[station] >= counts[best]:
+                          best = station
+                  return f"Busiest station: {names[best]}, {counts[best]} taps\nFares collected: ₹{paise // 100}.{paise % 100:02d}\nDamaged records skipped: {damaged}"
+            - |
+              import struct
+
+              def valid(record):
+                  if len(record) != 12:
+                      return False
+                  check = 0
+                  for i in range(11):
+                      check = check ^ record[i]
+                  return check == record[11]
+
+              def decode(record):
+                  card, station, kind, fare, minute = struct.unpack("<IHcHH", record[:11])
+                  return (card, station, kind.decode(), fare, minute)
+
+              def read_taps(data):
+                  taps = []
+                  damaged = 0
+                  for start in range(0, len(data), 12):
+                      record = data[start:start + 12]
+                      if valid(record):
+                          taps.append(decode(record))
+                      else:
+                          damaged += 1
+                  return (taps, damaged)
+
+              def report(data, names):
+                  taps, damaged = read_taps(data)
+                  counts = {}
+                  paise = 0
+                  for card, station, kind, fare, minute in taps:
+                      if kind == "O":
+                          counts[station] = counts.get(station, 0) + 1
+                      paise += fare
+                  best = None
+                  for station in sorted(counts):
+                      if best is None or counts[station] > counts[best]:
+                          best = station
+                  return f"Busiest station: {names[best]}, {counts[best]} taps\nFares collected: ₹{paise // 100}.{paise % 100:02d}\nDamaged records skipped: {damaged}"
+            - |
+              import struct
+
+              def valid(record):
+                  if len(record) != 12:
+                      return False
+                  check = 0
+                  for i in range(11):
+                      check = check ^ record[i]
+                  return check == record[11]
+
+              def decode(record):
+                  card, station, kind, fare, minute = struct.unpack("<IHcHH", record[:11])
+                  return (card, station, kind.decode(), fare, minute)
+
+              def read_taps(data):
+                  taps = []
+                  damaged = 0
+                  for start in range(0, len(data), 12):
+                      record = data[start:start + 12]
+                      if valid(record):
+                          taps.append(decode(record))
+                      else:
+                          damaged += 1
+                  return (taps, damaged)
+
+              def report(data, names):
+                  taps, damaged = read_taps(data)
+                  counts = {}
+                  paise = 0
+                  for card, station, kind, fare, minute in taps:
+                      counts[station] = counts.get(station, 0) + 1
+                      paise += fare
+                  best = None
+                  for station in sorted(counts):
+                      if best is None or counts[station] > counts[best]:
+                          best = station
+                  return f"Busiest station: {names[best]}, {counts[best]} taps\nFares collected: ₹{paise // 100}.{paise % 100}\nDamaged records skipped: {damaged}"
+          explanation: |
+            One pass over the taps builds the tally of taps per station and the total in paise. Walking the stations in increasing order and replacing the best only on a strictly larger count keeps the smaller number in a tie; `>=` would let the later station win. Dividing by 100 gives a float such as `109.8`, which drops the second digit of paise, and `{paise % 100}` without `:02d` writes five paise as `.5`, which reads as fifty.
+review: |
+  You started with twelve bytes to a tap and ended with a report a station manager can act on. Every step came from a lesson in this cluster:
+
+  - The check byte was the XOR of [[h0.bitwise-operations-and-masks]], catching any single flipped bit, though not two flips in the same column.
+  - Each field was a fixed-width unsigned number from [[h0.unsigned-integers-and-fixed-widths]], written as hex digits from [[h0.binary-and-hexadecimal]].
+  - The numbers were little-endian, from [[h0.endianness-and-byte-order]], and the kind was an ASCII letter, from [[h0.characters-unicode-and-utf-8]].
+  - The bug in `decode` was [[h0.alignment-and-the-size-of-things]] in action: the machine's own layout added a byte of padding that the packed file did not have, and every field after it moved. The error that Ravi made go away had been telling him the record's true size.
+  - The fares stayed in whole paise, as [[h0.floating-point-and-ieee-754]] taught, and became rupees only in the last line.
+
+  Two habits are worth keeping. When a format says how many bytes a record has, believe it, and make the program check: an error about a size is information, not an obstacle. And never let a damaged record vanish quietly. Counting and reporting it costs one line, and it is how somebody finds out that a gate is failing.
