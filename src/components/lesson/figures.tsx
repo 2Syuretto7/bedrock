@@ -914,6 +914,276 @@ function CallStack(props: Props) {
   );
 }
 
+type TraceStep = { line: number; scope: string; names: [string, string][]; output: string[]; note: string };
+type Trace = { lines: string[]; steps: TraceStep[] };
+
+/** A float as Python shows it: a whole number keeps its ".0". */
+const pyFloat = (x: number) => (Number.isInteger(x) ? x.toFixed(1) : String(x));
+
+/** Collects the steps of a trace as a program is walked line by line. */
+function recorder() {
+  const steps: TraceStep[] = [];
+  const output: string[] = [];
+  return {
+    steps,
+    at(line: number, scope: string, names: [string, string][], note: string, shows?: string) {
+      if (shows !== undefined) output.push(shows);
+      steps.push({ line, scope, names: names.map(([n, v]) => [n, v]), output: [...output], note });
+    },
+  };
+}
+
+const MAIN = "the main program";
+
+function concessionTrace(age: number, woman: boolean): Trace {
+  const w = woman ? "True" : "False";
+  const lines = [
+    `age = ${age}`,
+    `woman = ${w}`,
+    "fare = 1200",
+    "if woman and age >= 58:",
+    "    fare = fare * 0.5",
+    "elif age >= 60:",
+    "    fare = fare * 0.6",
+    "print(fare)",
+  ];
+  const r = recorder();
+  const names: [string, string][] = [["age", String(age)]];
+  r.at(0, MAIN, names, `age is bound to ${age}.`);
+  names.push(["woman", w]);
+  r.at(1, MAIN, names, `woman is bound to ${w}.`);
+  names.push(["fare", "1200"]);
+  r.at(2, MAIN, names, "fare is bound to 1200, the full fare.");
+  const first = woman && age >= 58;
+  r.at(
+    3,
+    MAIN,
+    names,
+    woman
+      ? `woman is True and ${age} >= 58 is ${age >= 58 ? "True" : "False"}, so the condition is ${first ? "True and the block under if runs" : "False. Python moves on to the elif"}.`
+      : "woman is False, so the whole and is False without looking at the age. Python moves on to the elif.",
+  );
+  let fare = "1200";
+  if (first) {
+    fare = pyFloat(1200 * 0.5);
+    names[2] = ["fare", fare];
+    r.at(4, MAIN, names, `fare becomes ${fare}. The elif is skipped, because a block in the chain has already run.`);
+  } else {
+    const second = age >= 60;
+    r.at(5, MAIN, names, `${age} >= 60 is ${second ? "True, so the block under elif runs" : "False. No condition in the chain was true, so no block runs and the fare is left alone"}.`);
+    if (second) {
+      fare = pyFloat(1200 * 0.6);
+      names[2] = ["fare", fare];
+      r.at(6, MAIN, names, `fare becomes ${fare}.`);
+    }
+  }
+  r.at(7, MAIN, names, `print shows ${fare}. The program ends.`, fare);
+  return { lines, steps: r.steps };
+}
+
+function depositTrace(rate: number): Trace {
+  const factor = `1.${String(rate).padStart(2, "0")}`;
+  const lines = ["balance = 100000", "year = 0", "while balance < 200000:", `    balance = balance * ${factor}`, "    year += 1", "print(year)"];
+  const r = recorder();
+  const names: [string, string][] = [["balance", "100000"]];
+  r.at(0, MAIN, names, "balance is bound to 100000.");
+  names.push(["year", "0"]);
+  r.at(1, MAIN, names, "year is bound to 0.");
+  let balance = 100000;
+  let year = 0;
+  const f = Number(factor);
+  for (;;) {
+    const shown = names[0][1];
+    if (!(balance < 200000)) {
+      r.at(2, MAIN, names, `${shown} < 200000 is False, so the loop ends and Python carries on below the block.`);
+      break;
+    }
+    r.at(2, MAIN, names, `${shown} < 200000 is True, so the block runs${year === 0 ? "" : " again"}.`);
+    balance = balance * f;
+    names[0] = ["balance", pyFloat(balance)];
+    r.at(3, MAIN, names, `balance becomes ${pyFloat(balance)}.`);
+    year += 1;
+    names[1] = ["year", String(year)];
+    r.at(4, MAIN, names, `year becomes ${year}. Python jumps back to the while line.`);
+  }
+  r.at(5, MAIN, names, `print shows ${year}. The deposit first reaches double in year ${year}.`, String(year));
+  return { lines, steps: r.steps };
+}
+
+const ORDERS: Record<string, [string, number][]> = {
+  Kabir: [
+    ["Kabir", 0],
+    ["Asha", 420],
+    ["Ravi", 380],
+    ["Meera", 510],
+  ],
+  Asha: [
+    ["Asha", 420],
+    ["Kabir", 0],
+    ["Ravi", 380],
+    ["Meera", 510],
+  ],
+};
+
+const pyList = (items: string[]) => `[${items.map((s) => `'${s}'`).join(", ")}]`;
+
+function whoAteTrace(fixed: boolean, first: string): Trace {
+  const orders = ORDERS[first] ?? ORDERS.Kabir;
+  const lines = [
+    "def who_ate(orders):",
+    "    diners = []",
+    "    for name, amount in orders.items():",
+    "        if amount > 0:",
+    "            diners.append(name)",
+    fixed ? "    return diners" : "        return diners",
+    "",
+    `orders = {${orders.map(([n, a]) => `"${n}": ${a}`).join(", ")}}`,
+    "people = who_ate(orders)",
+    "print(len(people))",
+  ];
+  const r = recorder();
+  const dict = "a dictionary of 4 orders";
+  const main: [string, string][] = [["who_ate", "a function"]];
+  r.at(0, MAIN, main, "Python binds the name who_ate to the recipe. Nothing inside it runs yet.");
+  main.push(["orders", dict]);
+  r.at(7, MAIN, main, `orders is bound to a dictionary of 4 orders, with ${first} first.`);
+  const inside = "who_ate";
+  const local: [string, string][] = [["orders", dict]];
+  r.at(8, inside, local, "who_ate(orders) is called. Python goes into the function, with its own name orders bound to the same dictionary.");
+  const diners: string[] = [];
+  local.push(["diners", "[]"]);
+  r.at(1, inside, local, "diners is bound to a new, empty list.");
+  let turns = 0;
+  for (const [name, amount] of orders) {
+    turns += 1;
+    const pair: [string, string][] = [
+      ["name", `'${name}'`],
+      ["amount", String(amount)],
+    ];
+    if (turns === 1) local.push(...pair);
+    else local.splice(2, 2, ...pair);
+    r.at(2, inside, local, `The loop takes ${turns === 1 ? "its first" : "the next"} pair: name is '${name}' and amount is ${amount}.`);
+    if (amount > 0) {
+      r.at(3, inside, local, `${amount} > 0 is True, so the append runs.`);
+      diners.push(name);
+      local[1] = ["diners", pyList(diners)];
+      r.at(4, inside, local, `diners becomes ${pyList(diners)}.`);
+    } else {
+      r.at(3, inside, local, `${amount} > 0 is False, so the append is skipped.`);
+    }
+    if (!fixed) {
+      r.at(
+        5,
+        inside,
+        local,
+        `The return is inside the loop's block, so it runs now, at the end of the first turn. who_ate returns ${pyList(diners)} without looking at the other ${orders.length - turns} orders.`,
+      );
+      break;
+    }
+  }
+  if (fixed) {
+    r.at(2, inside, local, "No pairs are left, so the loop ends.");
+    r.at(5, inside, local, `The return is below the loop, so it runs once, after every order has been checked. who_ate returns ${pyList(diners)}.`);
+  }
+  main.push(["people", pyList(diners)]);
+  r.at(8, MAIN, main, `Back in the main program, people is bound to ${pyList(diners)}. The names inside who_ate are gone.`);
+  const count = diners.length;
+  const verdict = count === 0 ? "Nobody is listed, so dividing the bill among them would divide by zero." : count === 1 ? `Only ${diners[0]} is listed, so ${diners[0]} would pay the whole bill.` : `The bill would be split ${count} ways, as it should be.`;
+  r.at(9, MAIN, main, `print shows ${count}. ${verdict}`, String(count));
+  return { lines, steps: r.steps };
+}
+
+const PROGRAMS = ["concession", "deposit", "who-ate"] as const;
+
+/** A short program run one line at a time, with the line about to finish marked and every name's value beside it. */
+function StepThrough(props: Props) {
+  const program = PROGRAMS.find((p) => p === props.program) ?? "deposit";
+  const [age, setAge] = useState(clamp(Math.round(num(props.age, 65)), 50, 75));
+  const [woman, setWoman] = useState(props.woman !== false);
+  const [rate, setRate] = useState(clamp(Math.round(num(props.rate, 7)), 4, 12));
+  const [fixed, setFixed] = useState(props.fixed === true);
+  const [first, setFirst] = useState(props.first === "Asha" ? "Asha" : "Kabir");
+  const [step, setStep] = useState(1);
+  const trace = program === "concession" ? concessionTrace(age, woman) : program === "deposit" ? depositTrace(rate) : whoAteTrace(fixed, first);
+  const total = trace.steps.length;
+  const at = clamp(step, 1, total);
+  const now = trace.steps[at - 1];
+  const restart = <T,>(set: (v: T) => void) => (v: T) => {
+    set(v);
+    setStep(1);
+  };
+  const rows = Math.max(...trace.steps.map((s) => s.names.length));
+  const height = 44 + rows * 40;
+  const named = now.names.map(([n, v]) => `${n} = ${v}`).join(", ");
+  const summary = `Step ${at} of ${total}, line ${now.line + 1}: ${now.note} Names in ${now.scope === MAIN ? MAIN : `${now.scope}`}: ${named}.`;
+  const title = program === "concession" ? "Stepping through the railway concession" : program === "deposit" ? "Stepping through the fixed deposit" : "Stepping through the bill splitter";
+  return (
+    <Frame
+      title={title}
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="step" value={at} onChange={setStep} min={1} max={total} />
+          <button type="button" className="btn btn-secondary" onClick={() => setStep(at === total ? 1 : total)}>
+            {at === total ? "Back to the start" : "Jump to the end"}
+          </button>
+          {program === "concession" ? (
+            <>
+              <Stepper label="age" value={age} onChange={restart(setAge)} min={50} max={75} />
+              <Toggle label="woman" value={woman} onChange={restart(setWoman)} />
+            </>
+          ) : null}
+          {program === "deposit" ? <Stepper label="rate" value={rate} onChange={restart(setRate)} min={4} max={12} /> : null}
+          {program === "who-ate" ? (
+            <>
+              <button type="button" className="btn btn-secondary" aria-pressed={fixed} onClick={() => restart(setFixed)(!fixed)}>
+                {fixed ? "Put the return back inside the loop" : "Move the return out of the loop"}
+              </button>
+              <button type="button" className="btn btn-secondary" aria-pressed={first === "Asha"} onClick={() => restart(setFirst)(first === "Asha" ? "Kabir" : "Asha")}>
+                {first === "Asha" ? "Put Kabir first" : "Put Asha first"}
+              </button>
+            </>
+          ) : null}
+        </>
+      }
+    >
+      <pre className="fig-code" tabIndex={0}>
+        {trace.lines.map((text, i) => (
+          <span key={i} className="fig-code-line" aria-current={i === now.line ? "step" : undefined}>
+            <span className="fig-code-number" aria-hidden="true">
+              {i + 1}
+            </span>
+            {text}
+          </span>
+        ))}
+      </pre>
+      <svg viewBox={`0 0 440 ${height}`} className="fig-names" role="img" aria-label={`The names in ${now.scope === MAIN ? MAIN : now.scope} and the values they are bound to: ${named}`}>
+        <text x="10" y="24" className="fig-mono">
+          {now.scope === MAIN ? "Names in the main program" : `Names inside ${now.scope}`}
+        </text>
+        {now.names.map(([name, value], i) => {
+          const y = 44 + i * 40;
+          return (
+            <g key={name}>
+              <text x="126" y={y + 21} textAnchor="end" className="fig-step-name">
+                {name}
+              </text>
+              <line x1="134" x2="166" y1={y + 15} y2={y + 15} className="fig-line" />
+              <path d={`M 160 ${y + 10} L 168 ${y + 15} L 160 ${y + 20}`} className="fig-line" />
+              <rect x="172" y={y} width="260" height="30" className="fig-ghost" />
+              <text x="182" y={y + 21} className="fig-step-value">
+                {value}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      <p className="label fig-output-label">Output</p>
+      <pre className="fig-output">{now.output.length ? now.output.join("\n") : " "}</pre>
+    </Frame>
+  );
+}
+
 const RATES: { name: string; f: (n: number) => number }[] = [
   { name: "log₂ n", f: (n) => Math.log2(n) },
   { name: "n", f: (n) => n },
@@ -3287,6 +3557,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "inverse-line": InverseLine,
   growth: Growth,
   "partial-sums": PartialSums,
+  "step-through": StepThrough,
   "call-stack": CallStack,
   "growth-rates": GrowthRates,
   "truth-table": TruthTable,

@@ -54,6 +54,9 @@ describe("lesson validation", () => {
     expect(await messages("f0.counting", (l) => (figureAt(l, "linear-map").props = { map: "spin" }))).toContain("Figure linear-map props: map:");
     expect(await messages("f0.counting", (l) => (figureAt(l, "log-scale").props = { set: "weights" }))).toContain("Figure log-scale props: set:");
     expect(await messages("f0.counting", (l) => (figureAt(l, "log-scale").props = { first: 7 }))).toContain("Figure log-scale props: first:");
+    expect(await messages("f0.counting", (l) => (figureAt(l, "step-through").props = { rate: 7 }))).toContain("Figure step-through props: program:");
+    expect(await messages("f0.counting", (l) => (figureAt(l, "step-through").props = { program: "fixed-deposit" }))).toContain("Figure step-through props: program:");
+    expect(await messages("f0.counting", (l) => (figureAt(l, "step-through").props = { program: "deposit", rate: 3 }))).toContain("Figure step-through props: rate:");
     const broken = await validateLessons({
       graph,
       files: files(),
