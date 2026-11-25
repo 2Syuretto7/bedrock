@@ -66,6 +66,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "trie": z.strictObject({ words: z.array(z.string()).optional(), count: z.number().optional(), prefix: z.string().optional() }),
   "graph-storage": z.strictObject({ directed: z.boolean().optional(), node: z.number().optional() }),
   "choice-tree": z.strictObject({ mains: z.number().optional(), drinks: z.number().optional(), sweets: z.number().optional(), pick: z.number().optional() }),
+  "pascal-triangle": z.strictObject({ n: z.number().optional(), k: z.number().optional() }),
   "union-find": z.strictObject({ bySize: z.boolean().optional(), find: z.number().optional(), joins: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),

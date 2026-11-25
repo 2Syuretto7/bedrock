@@ -3131,6 +3131,68 @@ function ChoiceTree(props: Props) {
   );
 }
 
+/** Pascal's triangle up to row n, with one entry and the two above it that add to it picked out, and the row's total. */
+function PascalTriangle(props: Props) {
+  const [rows, setRows] = useState(clamp(Math.round(num(props.n, 5)), 1, 10));
+  const [k, setK] = useState(clamp(Math.round(num(props.k, 2)), 0, rows));
+  const at = Math.min(k, rows);
+  const triangle: number[][] = [[1]];
+  for (let n = 1; n <= rows; n++) triangle.push(Array.from({ length: n + 1 }, (_, j) => (j === 0 || j === n ? 1 : triangle[n - 1][j - 1] + triangle[n - 1][j])));
+  const step = 38;
+  const spot = (n: number, j: number): Spot => [220 + (j - n / 2) * step, 22 + n * 24];
+  const value = triangle[rows][at];
+  const left = at > 0 ? triangle[rows - 1][at - 1] : 0;
+  const right = at < rows ? triangle[rows - 1][at] : 0;
+  const parents = [at > 0 ? at - 1 : -1, at < rows ? at : -1].filter((j) => j >= 0);
+  const total = 2 ** rows;
+  const reason =
+    at === 0 || at === rows
+      ? `It is at the edge of the row, where there is only one way: choose ${at === 0 ? "none" : "all"} of the ${rows}.`
+      : `It is the sum of the two entries above it, ${left} + ${right}: the choices of ${at} that include one particular item, C(${rows - 1}, ${at - 1}) = ${left}, and those that leave it out, C(${rows - 1}, ${at}) = ${right}.`;
+  return (
+    <Frame
+      title="Pascal's triangle"
+      summary={`Row ${rows} lists the number of ways to choose k items from ${rows}, for k from 0 to ${rows}: ${triangle[rows].join(", ")}. The picked entry is C(${rows}, ${at}) = ${value}. ${reason} The row adds up to ${total} = 2^${rows}, the number of subsets of ${plural(rows, "item")}.`}
+      controls={
+        <>
+          <Stepper
+            label="row n"
+            value={rows}
+            onChange={(v) => {
+              setRows(v);
+              setK(Math.min(at, v));
+            }}
+            min={1}
+            max={10}
+          />
+          <Stepper label="k" value={at} onChange={setK} min={0} max={rows} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`Pascal's triangle to row ${rows}, with C(${rows}, ${at}) = ${value} and the entries above it picked out`}>
+        {triangle.map((row, n) =>
+          row.map((entry, j) => {
+            const [x, y] = spot(n, j);
+            const on = n === rows && j === at;
+            const feeds = n === rows - 1 && parents.includes(j);
+            return (
+              <g key={`${n}-${j}`}>
+                {on || feeds ? <rect x={x - 17} y={y - 13} width="34" height="20" className={on ? "fig-accent" : "fig-fill"} /> : null}
+                <text x={x} y={y + 2} textAnchor="middle" className="fig-small" style={{ fill: on ? "var(--bg)" : n === rows || feeds ? "var(--text)" : "var(--text-secondary)" }}>
+                  {entry}
+                </text>
+              </g>
+            );
+          }),
+        )}
+        <text x="12" y="282" className="fig-small">
+          {`row ${rows} adds up to ${total}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -4413,6 +4475,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "graph-storage": GraphStorage,
   "union-find": UnionFind,
   "choice-tree": ChoiceTree,
+  "pascal-triangle": PascalTriangle,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
