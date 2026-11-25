@@ -790,6 +790,30 @@ function Growth(props: Props) {
   );
 }
 
+/** 1 + 2 + … + n as a staircase of squares, and two staircases fitted together into an n by (n + 1) rectangle. */
+function TriangleSum(props: Props) {
+  const [n, setN] = useState(clamp(Math.round(num(props.n, 4)), 1, 10));
+  const size = Math.min(26, 250 / (n + 1));
+  const total = (n * (n + 1)) / 2;
+  const cells: ReactNode[] = [];
+  for (let row = 1; row <= n; row++) {
+    for (let col = 1; col <= n + 1; col++) {
+      cells.push(<rect key={`${row}-${col}`} x={20 + (col - 1) * size} y={15 + (row - 1) * size} width={size - 2} height={size - 2} className={col <= row ? "fig-accent" : "fig-fill"} />);
+    }
+  }
+  return (
+    <Frame
+      title="Sum of the first n whole numbers"
+      summary={`1 + 2 + … + ${n} is the staircase of shaded squares, row k holding k of them: ${total} in all. A second copy of the staircase, turned over, fills the plain squares and completes a rectangle ${n} by ${n + 1} with ${n * (n + 1)} squares. So the staircase is half of it: ${n} × ${n + 1} ÷ 2 = ${total}.`}
+      controls={<Stepper label="n" value={n} onChange={setN} min={1} max={10} />}
+    >
+      <svg viewBox="0 0 340 280" role="img" aria-label={`A staircase of ${total} squares and its copy, forming a rectangle ${n} by ${n + 1}`}>
+        {cells}
+      </svg>
+    </Frame>
+  );
+}
+
 /** The running totals of a + ar + ar² + …: they settle when the ratio is small, and do not when it is not. */
 function PartialSums(props: Props) {
   const [ratio, setRatio] = useState(clamp(num(props.ratio, 0.5), -1.2, 1.2));
@@ -3781,6 +3805,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "arrow-map": ArrowMap,
   "inverse-line": InverseLine,
   growth: Growth,
+  "triangle-sum": TriangleSum,
   "partial-sums": PartialSums,
   "step-through": StepThrough,
   "binary-counter": BinaryCounter,
