@@ -1,0 +1,840 @@
+concept: s2.arrays-and-dynamic-arrays
+minutes: 100
+claim: You can explain how an array reaches position i in one step, count what inserting and removing cost and say how that count grows with the length, store a grid in one array, and build a list that grows by doubling, showing that n appends cost fewer than 3n steps in all though one append can cost n.
+recalls: [f2.equivalence-relations-and-partial-orders, s1.testing-with-pytest]
+uses: [f2.relations-and-functions-between-sets, f2.loop-invariants, f1.arithmetic-and-geometric-series, f1.logarithms, f1.coordinates-lines-and-slope, h0.alignment-and-the-size-of-things, s0.lists-and-tuples, s0.loops, s0.functions, s1.classes-and-objects, s1.special-methods, s1.exceptions, s1.comprehensions-and-iterators]
+leads: [s2.linked-lists, s2.stacks-and-queues, s2.hash-tables, f3.asymptotic-notation, s3.amortised-analysis]
+bridges:
+  f2.equivalence-relations-and-partial-orders: |
+    The logic cluster ended with a promise: that a data structure is a set of values with operations on it, and that its promises are invariants. Here is the first one. An array of $n$ items is a function from the positions $0, 1, \dots, n - 1$ to values. The growing list you build today keeps an invariant you can state exactly: the first `length` slots of its block hold the items in order, and `length` is at most the block's capacity. Every method either keeps that true in a few steps or, when the block is full, restores it by moving house.
+starter: |
+  # Scratch space. A list lives in a block of fixed room. When the block is full, a bigger block
+  # is found and every item is copied across. copies_made counts the copying for a run of appends,
+  # under two rules for the room in the new block: one more slot, or twice as many.
+  def copies_made(appends, grow):
+      room = 1
+      count = 0
+      copies = 0
+      for _ in range(appends):
+          if count == room:
+              copies += count
+              room = grow(room)
+          count += 1
+      return copies
+
+  for n in [1000, 2000, 4000, 8000]:
+      print(n, copies_made(n, lambda room: room + 1), copies_made(n, lambda room: 2 * room))
+parts:
+  recall:
+    - text: |
+        [[f2.equivalence-relations-and-partial-orders]] closed the logic cluster by saying what a data structure is: values, operations on them, and invariants that the operations keep. This cluster builds them, one at a time, and the first is the plainest. You will also lean on [[s1.testing-with-pytest]], because the code today has edges everywhere: the empty array, the full block, the last slot. Three quick pulls first.
+  puzzle:
+    - text: |
+        A music app keeps your playlist of 2 lakh songs in a Python list. Here is roughly what three operations cost on an ordinary laptop, each done 200 times.
+
+        | Operation | Time for 200 |
+        | --- | --- |
+        | read the song in the middle, `songs[100000]` | about 0.01 ms |
+        | add a song at the end, `songs.append(s)` | about 0.01 ms |
+        | insert a song at the front, `songs.insert(0, s)` | about 20 ms |
+
+        The third is a thousand times slower than the others. But the first row should puzzle you more. Python went straight to the song in the middle without passing the 1,00,000 before it, and a list ten times longer would be no slower. A person asked for the 1,00,000th name on a list would have to count.
+
+        There is a second puzzle hiding in the second row. A list is kept in one block of memory, and a block cannot be stretched, because the memory just past its end may belong to something else. So when the block is full and you append, there is only one thing that can happen: a bigger block is found elsewhere and **every song is copied across**. Appending to a full list of 2 lakh songs costs 2 lakh copies. Yet appending is quick, and you have relied on that in almost every program you have written.
+
+        Run the starter. It counts the copying for two rules for how much room the new block gets. With one more slot each time, 1000 appends make 4,99,500 copies, and doubling the appends quadruples the copies. With twice the room each time, 1000 appends make 1023 copies, and doubling the appends roughly doubles them.
+
+        **How can a list reach any position in one step? Why does the same arrangement make the front so dear? And why does doubling make the copying almost free, when a single append can still copy everything?**
+  intuition:
+    - text: |
+        A computer's memory is one very long row of numbered boxes. The number of a box is its **address**, and the machine can open any box in one step if it is given the address. That is its only trick.
+
+        Think of a new layout of plots on the edge of a city, every plot 30 feet wide, numbered from the corner. Where does plot 40 begin? At $30 \times 40 = 1200$ feet from the corner. Nobody walks past plots 0 to 39 counting them. The answer comes from arithmetic, because the plots are side by side, with no gaps, and all the same width.
+
+        An **array** stores a list the same way. It takes a run of boxes next to each other and gives every item the same room. If the run starts at address 1000 and each item takes 8 boxes, item $i$ starts at $1000 + 8i$. One multiplication and one addition, and item 1,00,000 is found as fast as item 5.
+
+        And there is the price. With no gaps, there is nowhere to put a new item in the middle. To insert at the front, every item must shuffle one place along, as a whole row in a cinema stands up to let one latecomer reach the aisle seat.
+
+        The block's size is the other price. A family whose flat is full cannot push the walls into the neighbour's flat. It moves to a bigger flat and carries everything. Moving is hard work, so a sensible family takes a flat twice the size, and then it is a long while before it has to move again. Step through the appends in the figure, and watch the tall bars, which are the moves.
+    - figure: doubling-array
+      props: { appends: 9 }
+    - text: |
+        Most appends cost one step. A few are tall: the 2nd, 3rd, 5th, 9th and 17th, each of which finds the block full and copies everything first. The tall bars get **taller**, doubling each time, and they get **rarer**, the gaps between them doubling too. The two doublings cancel. Spread each tall bar over the cheap appends that follow it, and it adds about one step to each. After 17 appends the figure counts 17 writes and 31 copies: 48 steps, fewer than 3 per append.
+  derivation:
+    - text: |
+        **The address formula.** An array is a block of memory holding $n$ slots of equal size $s$, starting at address $a$. Slot $i$ is at
+
+        $$\text{address}(i) = a + s \cdot i,$$
+
+        a straight line with slope $s$ and intercept $a$, as in [[f1.coordinates-lines-and-slope]]. Reading or writing slot $i$ is one computation and one visit to memory, whatever $i$ and $n$ are. This is called **random access**. As a mathematical object, the array is just a function from the positions $\{0, 1, \dots, n - 1\}$ to values, in the sense of [[f2.relations-and-functions-between-sets]], and random access says that this function can be evaluated in one step.
+
+        A Python list is an array. That may seem impossible, since one list can hold a number, a string and another list side by side, and those are not the same size. The answer is that the slots do not hold the items. Each slot holds the **address of an item**, and an address is always the same size, 8 bytes on today's machines, as [[h0.alignment-and-the-size-of-things]] measured. The items live elsewhere. That is why two slots can refer to one object.
+
+        **Counting cost.** To compare structures you need a way to say what an operation costs that does not depend on which laptop runs it. Count the **steps**: slots read or written, items moved, comparisons made. Then ask how the count grows as the number of items, $n$, grows. Four shapes cover nearly everything in this cluster.
+
+        | The cost is | When $n$ doubles, the cost | Example |
+        | --- | --- | --- |
+        | constant | stays the same | reading slot $i$ |
+        | logarithmic, about $\log_2 n$ | goes up by about one step | the halving search of [[f2.loop-invariants]] |
+        | linear, in proportion to $n$ | doubles | inserting at the front |
+        | quadratic, in proportion to $n^2$ | is multiplied by 4 | building a list by inserting each item at the front |
+
+        The middle column is the test to remember. A cost of $3n + 5$ steps and a cost of $n$ steps are both linear: they differ by a constant factor, and both double when $n$ does. Constant factors matter on a real machine, but the shape of growth matters more, because it decides what happens when the data become a hundred times larger. Making "grows like" exact is the job of [[f3.asymptotic-notation]].
+
+        **What an array makes cheap and what it makes dear.** Let the array hold $n$ items in a block with spare room at the end.
+
+        | Operation | Steps | Cost |
+        | --- | --- | --- |
+        | read or write slot $i$ | one address worked out | constant |
+        | add at the end | one write | constant |
+        | remove the last item | one step | constant |
+        | insert at position $i$ | the $n - i$ items from $i$ onwards move right | linear |
+        | remove position $i$ | the $n - i - 1$ items after it move left | linear |
+
+        The number of moves depends on where you insert. At the end it is 0, at the front $n$, and averaged over all positions about $\frac{n}{2}$. Half of $n$ still doubles when $n$ does, so it is still linear.
+
+        Moving the items is itself a small algorithm, and it is easy to get wrong.
+    - question:
+        id: order-insert
+        type: order
+        system: s2
+        prompt: An array holds 6 items in slots 0 to 5 of a block with room for 8. Put the steps in order to insert a new item at position 2 without losing anything.
+        steps:
+          - "Copy the item in slot 5 into slot 6."
+          - "Copy the item in slot 4 into slot 5."
+          - "Copy the item in slot 3 into slot 4."
+          - "Copy the item in slot 2 into slot 3."
+          - "Write the new item into slot 2."
+        explanation: The shuffling must start from the far end. Slot 6 is empty, so the last item can move into it safely, which frees slot 5 for the item before it, and so on back to slot 2. Starting from slot 2 instead would copy its item over slot 3 before that one had been saved, and the same value would be smeared along the rest of the array.
+    - text: |
+        **Building at the front.** Build a list of $n$ items by inserting each new one at the front. The first insertion moves 0 items, the second 1, and the last $n - 1$. By the sum of an arithmetic series from [[f1.arithmetic-and-geometric-series]],
+
+        $$0 + 1 + 2 + \dots + (n - 1) = \frac{n(n - 1)}{2}.$$
+
+        That is quadratic. For the playlist of 2 lakh songs it is about 2,000 crore moves. Building the same list by appending is 2 lakh writes. If you need the items in reverse order, append them all and reverse once at the end.
+
+        **Grids are arrays.** A grid with $r$ rows and $c$ columns, such as the seats of a cinema hall, is usually stored as **one** array of $r \cdot c$ items, row after row. The item in row $i$ and column $j$ is at position
+
+        $$i \cdot c + j,$$
+
+        the address formula again, one level up: skip $i$ whole rows of $c$, then $j$ more. This is called **row-major** order. A table that looks two-dimensional to you is a single run of boxes to the machine.
+
+        **When the block is full.** Now the second puzzle. A **dynamic array** is an array that hides its block's size from you. It keeps a block with room for some number of items, its **capacity**, and a count of how many slots are in use, its **length**. Its invariant is the one from the bridge: the first `length` slots hold the items in order, and `length` is at most `capacity`. Appending writes into slot `length` and adds 1 to it. When `length` equals `capacity` there is no slot to write into, so the array must move: get a new block, copy every item across, and give up the old block.
+
+        Suppose the new block always has **twice** the room, starting from room for 1. The moves happen when the array holds 1, 2, 4, 8, and so on items. If the last move before $n$ appends was at $2^k$ items, so that $2^k < n$, the total copying is a geometric series from [[f1.arithmetic-and-geometric-series]]:
+
+        $$1 + 2 + 4 + \dots + 2^k = 2^{k + 1} - 1 < 2n.$$
+
+        So $n$ appends make $n$ writes and fewer than $2n$ copies, fewer than $3n$ steps in all. **Averaged over the whole run, each append costs fewer than 3 steps**, a constant, even though the single append that triggers a move costs about as many steps as there are items. A cost averaged over a whole sequence of operations in this way is called **amortised**, from the old word for paying off a loan in instalments. The general method, and its uses far beyond lists, comes in [[s3.amortised-analysis]].
+    - question:
+        id: derive-total
+        type: numeric
+        system: s2
+        prompt: |
+          A dynamic array starts with room for 1 and doubles its room whenever it is full. 3000 items are appended. How many item copies are made in all?
+        answer: "4095"
+        explanation: |
+          A move happens whenever an append finds the block full, which is when the array holds 1, 2, 4, and so on up to 2048 items. The next would be at 4096, which is never reached. The copies are $1 + 2 + 4 + \dots + 2048 = 2 \times 2048 - 1 = 4095$. With the 3000 writes that is 7095 steps, about 2.4 per append.
+    - text: |
+        **Why doubling, and not adding.** Try growing by a fixed amount instead, say 100 more slots each time. The moves come at 100, 200, 300 items and so on up to about $n$, and the copying is an arithmetic series:
+
+        $$100 + 200 + \dots + n = 100\left(1 + 2 + \dots + \frac{n}{100}\right) \approx \frac{n^2}{200}.$$
+
+        That is quadratic in total. The 100 delays the trouble and does not cure it: the moves come at a steady rate while each one keeps getting dearer. The rule of one more slot, which you ran in the starter, is the extreme case, with a move on every append.
+
+        What cures it is growing by a **factor**, so that the gaps between moves grow in step with their cost. The factor need not be 2. With a factor $g$ the copies form a geometric series with ratio $g$, which is less than $\frac{g}{g - 1}$ times its last term: below $2n$ for a factor of 2, below $3n$ for a factor of 1.5. CPython, the usual Python, grows its lists by about one eighth each time, a factor near 1.125, which still gives a constant amortised cost, only a larger constant. The choice is a trade. A large factor copies less and wastes more room, since just after doubling half the block is empty. A small factor wastes little and copies more often.
+
+        **Shrinking.** If items are removed, a block may end up mostly empty, and a careful dynamic array gives the room back. The obvious rule, halve the block as soon as the items fit in half, has a trap. Fill a block of 1024 exactly, then append one item: the block doubles to 2048. Remove one: the items fit in half again, so the block halves to 1024. Append: it doubles. Each call now copies a thousand items. The cure is a gap between the two thresholds: double when full, but halve only when the block is a **quarter** full. After a halving the block is half full, so it takes many operations to reach either threshold again, and the copying is paid for by those operations.
+  formal:
+    - text: |
+        **Array.** $n$ slots of equal size $s$ in consecutive memory from address $a$. Slot $i$ is at $a + s \cdot i$, so reading and writing by position cost a constant number of steps. Inserting at position $i$ moves $n - i$ items and removing position $i$ moves $n - i - 1$, both linear in $n$, except at the end.
+
+        **Python list.** A dynamic array of addresses of objects.
+
+        **Growth of a cost.** As $n$ doubles, a constant cost stays the same, a logarithmic cost goes up by about one step, a linear cost doubles and a quadratic cost is multiplied by 4. Constant factors are ignored.
+
+        **Building at the front.** $0 + 1 + \dots + (n - 1) = \frac{n(n - 1)}{2}$ moves, quadratic.
+
+        **Row-major storage.** A grid with $c$ columns stored row after row has its entry $(i, j)$ at position $i \cdot c + j$.
+
+        **Dynamic array.** A block of `capacity` slots and a `length`, with the invariant that slots $0$ to $\text{length} - 1$ hold the items in order and $\text{length} \le \text{capacity}$. An append to a full block first moves everything to a block of twice the capacity.
+
+        **Amortised cost of appending.** With doubling from 1, $n$ appends make fewer than $2n$ copies and $3n$ steps, so the amortised cost of an append is constant. Growing by a fixed amount makes the total quadratic.
+
+        **Shrinking.** Halve the block when it is a quarter full, not half full.
+  drill:
+    - text: Seconds each. For an array, count the items that move or the steps taken.
+    - question:
+        id: drill-address
+        type: numeric
+        system: s1
+        prompt: |
+          An array starts at address 1000 and each slot takes 8 boxes. At what address is slot 5?
+        answer: "1040"
+        explanation: 1000 + 8 × 5.
+    - question:
+        id: drill-address-zero
+        type: numeric
+        system: s1
+        prompt: |
+          An array starts at address 5000 and each slot takes 4 boxes. At what address is slot 0?
+        answer: "5000"
+        explanation: The first slot is at the start itself, which is one reason counting from 0 is natural.
+    - question:
+        id: drill-moves-insert
+        type: numeric
+        system: s1
+        prompt: |
+          An array holds 10 items. How many items move when a new one is inserted at position 3?
+        answer: "7"
+        explanation: The items at positions 3 to 9 each move one place right.
+    - question:
+        id: drill-moves-front
+        type: numeric
+        system: s1
+        prompt: |
+          An array holds 10 items. How many items move when a new one is inserted at position 0?
+        answer: "10"
+        explanation: Every item moves.
+    - question:
+        id: drill-moves-remove
+        type: numeric
+        system: s1
+        prompt: |
+          An array holds 10 items. How many items move when the item at position 3 is removed?
+        answer: "6"
+        explanation: The items at positions 4 to 9 each move one place left to close the gap.
+    - question:
+        id: drill-flat
+        type: numeric
+        system: s1
+        prompt: |
+          A grid with 4 rows and 5 columns is stored row after row in one array. At which position is the entry in row 2, column 3, counting rows and columns from 0?
+        answer: "13"
+        explanation: Two full rows of 5 come first, then 3 more.
+    - question:
+        id: drill-linear-doubles
+        type: numeric
+        system: s1
+        prompt: |
+          An operation's cost is linear in $n$. It takes 40 steps when $n$ is 1000. About how many steps does it take when $n$ is 2000?
+        answer: "80"
+        explanation: A linear cost doubles when $n$ doubles.
+    - question:
+        id: drill-quadratic-doubles
+        type: numeric
+        system: s1
+        prompt: |
+          A cost is quadratic in $n$. It takes 50 steps when $n$ is 100. About how many steps does it take when $n$ is 200?
+        answer: "200"
+        explanation: Doubling $n$ multiplies $n^2$ by 4.
+    - question:
+        id: drill-log-doubles
+        type: choice
+        system: s1
+        prompt: |
+          A cost is logarithmic in $n$, about $\log_2 n$ steps. What happens to it when $n$ doubles?
+        options: ["It goes up by about one step", "It doubles", "It stays exactly the same", "It is multiplied by 4"]
+        answer: 0
+        explanation: $\log_2 (2n) = \log_2 n + 1$.
+    - question:
+        id: drill-room
+        type: numeric
+        system: s1
+        prompt: |
+          A dynamic array starts with room for 1 and doubles when full. How much room does it have after 9 appends?
+        answer: "16"
+        explanation: The room goes 1, 2, 4, 8, and the 9th append finds 8 full and moves to 16.
+    - question:
+        id: drill-copies-nine
+        type: numeric
+        system: s1
+        prompt: |
+          The same dynamic array: how many item copies have been made after 9 appends?
+        answer: "15"
+        explanation: Moves at 1, 2, 4 and 8 items copy 1 + 2 + 4 + 8.
+    - question:
+        id: predict-list-ops
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          xs = [3, 8, 1]
+          xs.insert(1, 5)
+          last = xs.pop()
+          print(xs, last)
+        output: "[3, 5, 8] 1"
+        explanation: Inserting 5 at position 1 moves 8 and 1 along, giving [3, 5, 8, 1]. Then `pop` removes and returns the last item, 1, which costs a constant number of steps.
+    - question:
+        id: predict-doubling
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          room, count, moves = 1, 0, []
+          for _ in range(20):
+              if count == room:
+                  moves.append(count)
+                  room *= 2
+              count += 1
+          print(moves, room)
+        output: "[1, 2, 4, 8, 16] 32"
+        explanation: The block is full, and a move happens, each time the count reaches the room. After 20 appends the last move was at 16, to a block with room for 32.
+  work:
+    - text: Slower now. Before writing a method, say which invariant it must keep.
+    - question:
+        id: work-front-total
+        type: numeric
+        system: s2
+        prompt: |
+          A program builds an array of 1000 items by inserting each new item at the front. The first insertion moves 0 items, the second moves 1, and so on. How many moves are made in all?
+        answer: "499500"
+        explanation: |
+          The moves are $0 + 1 + 2 + \dots + 999 = \frac{999 \times 1000}{2} = 499500$. Building the same array by appending takes 1000 writes and no moves. For a lakh of items the gap widens a hundredfold more: about 500 crore moves against a lakh of writes.
+    - question:
+        id: write-dynamic-array
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Finish `DynamicArray`. Its block is the list `self.slots`, which always has exactly `self.capacity` slots, and must never be grown with the list's own `append`.
+
+          - `append(value)`: if the block is full, move every item to a new block of twice the capacity, adding 1 to `self.moved` for each item copied. Then write `value` into the first free slot.
+          - `a[i]`: return the item at position `i`, and raise `IndexError` if `i` is not one of $0, 1, \dots, \text{length} - 1$. Negative positions are not allowed.
+        starter: |
+          class DynamicArray:
+              def __init__(self):
+                  self.capacity = 1
+                  self.length = 0
+                  self.slots = [None]
+                  self.moved = 0
+
+              def __len__(self):
+                  return self.length
+
+              def append(self, value):
+                  pass
+
+              def __getitem__(self, i):
+                  pass
+
+
+          a = DynamicArray()
+          for k in range(10):
+              a.append(k * k)
+          print(len(a), a.capacity, a.moved, a[9])
+        solution: |
+          class DynamicArray:
+              def __init__(self):
+                  self.capacity = 1
+                  self.length = 0
+                  self.slots = [None]
+                  self.moved = 0
+
+              def __len__(self):
+                  return self.length
+
+              def append(self, value):
+                  if self.length == self.capacity:
+                      bigger = [None] * (2 * self.capacity)
+                      for i in range(self.length):
+                          bigger[i] = self.slots[i]
+                          self.moved += 1
+                      self.slots = bigger
+                      self.capacity = 2 * self.capacity
+                  self.slots[self.length] = value
+                  self.length += 1
+
+              def __getitem__(self, i):
+                  if not 0 <= i < self.length:
+                      raise IndexError("index out of range")
+                  return self.slots[i]
+
+
+          a = DynamicArray()
+          for k in range(10):
+              a.append(k * k)
+          print(len(a), a.capacity, a.moved, a[9])
+        tests: |
+          _e = DynamicArray()
+          assert len(_e) == 0, "A new array is empty"
+          try:
+              _e[0]
+              assert False, "An empty array has no position 0, so a[0] should raise IndexError"
+          except IndexError:
+              pass
+          _e.append("x")
+          assert len(_e) == 1 and _e[0] == "x", "One append should give an array holding that one item"
+          assert _e.capacity == 1 and _e.moved == 0, "The first append fits in the room for 1, so nothing moves"
+          _a = DynamicArray()
+          for _k in range(1000):
+              _a.append(_k * _k)
+          assert len(_a) == 1000, "After 1000 appends the length should be 1000"
+          assert _a[0] == 0 and _a[500] == 250000 and _a[999] == 998001, "The items should come back in the order they were appended"
+          assert len(_a.slots) == _a.capacity, "The block should have exactly capacity slots"
+          assert _a.capacity == 1024, "Doubling from 1, the room after 1000 appends should be 1024"
+          assert _a.moved == 1023, "Doubling from 1, 1000 appends should copy 1 + 2 + ... + 512 = 1023 items"
+          for _bad in [1000, 1023, -1]:
+              try:
+                  _a[_bad]
+                  assert False, "a[" + str(_bad) + "] should raise IndexError"
+              except IndexError:
+                  pass
+          assert output.strip() == "10 16 15 81", "The program should print 10 16 15 81"
+        wrong:
+          - |
+            class DynamicArray:
+                def __init__(self):
+                    self.capacity = 1
+                    self.length = 0
+                    self.slots = [None]
+                    self.moved = 0
+
+                def __len__(self):
+                    return self.length
+
+                def append(self, value):
+                    if self.length == self.capacity:
+                        bigger = [None] * (self.capacity + 1)
+                        for i in range(self.length):
+                            bigger[i] = self.slots[i]
+                            self.moved += 1
+                        self.slots = bigger
+                        self.capacity = self.capacity + 1
+                    self.slots[self.length] = value
+                    self.length += 1
+
+                def __getitem__(self, i):
+                    if not 0 <= i < self.length:
+                        raise IndexError("index out of range")
+                    return self.slots[i]
+
+
+            a = DynamicArray()
+            for k in range(10):
+                a.append(k * k)
+            print(len(a), a.capacity, a.moved, a[9])
+          - |
+            class DynamicArray:
+                def __init__(self):
+                    self.capacity = 1
+                    self.length = 0
+                    self.slots = [None]
+                    self.moved = 0
+
+                def __len__(self):
+                    return self.length
+
+                def append(self, value):
+                    if self.length == self.capacity:
+                        bigger = [None] * (2 * self.capacity)
+                        for i in range(self.length):
+                            bigger[i] = self.slots[i]
+                            self.moved += 1
+                        self.slots = bigger
+                        self.capacity = 2 * self.capacity
+                    self.slots[self.length] = value
+                    self.length += 1
+
+                def __getitem__(self, i):
+                    return self.slots[i]
+
+
+            a = DynamicArray()
+            for k in range(10):
+                a.append(k * k)
+            print(len(a), a.capacity, a.moved, a[9])
+          - |
+            class DynamicArray:
+                def __init__(self):
+                    self.capacity = 1
+                    self.length = 0
+                    self.slots = [None]
+                    self.moved = 0
+
+                def __len__(self):
+                    return self.length
+
+                def append(self, value):
+                    self.slots.append(value)
+                    self.length += 1
+
+                def __getitem__(self, i):
+                    if not 0 <= i < self.length:
+                        raise IndexError("index out of range")
+                    return self.slots[i + 1]
+
+
+            a = DynamicArray()
+            for k in range(10):
+                a.append(k * k)
+            print(len(a), a.capacity, a.moved, a[9])
+        explanation: |
+          `append` keeps the invariant in two cases. If there is a free slot, writing into slot `length` and adding 1 keeps the first `length` slots filled in order. If the block is full, copying every item into a block twice the size first makes a free slot, and then the same two steps work. Copying from slot 0 upwards is safe here, unlike an insertion, because the old and new blocks are different lists. `__getitem__` must check the position itself: the block has spare slots beyond `length`, holding `None`, and a Python list would also accept $-1$ and quietly return the last slot of the **block**, which is not an item at all.
+    - question:
+        id: fix-shrink
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This `DynamicArray` doubles its block when full and gives room back when items are popped. Every answer it gives is right. But the program at the bottom, which holds 1024 items and then appends and pops one item in turn a thousand times, copies over twenty lakh items, about two thousand for every call. Find why, and change the rule for shrinking so that the block still shrinks when it is mostly empty but this pattern copies only once. The program should then print 1024.
+        starter: |
+          class DynamicArray:
+              def __init__(self):
+                  self.capacity = 1
+                  self.length = 0
+                  self.slots = [None]
+                  self.moved = 0
+
+              def _move_to(self, capacity):
+                  block = [None] * capacity
+                  for i in range(self.length):
+                      block[i] = self.slots[i]
+                      self.moved += 1
+                  self.slots = block
+                  self.capacity = capacity
+
+              def append(self, value):
+                  if self.length == self.capacity:
+                      self._move_to(2 * self.capacity)
+                  self.slots[self.length] = value
+                  self.length += 1
+
+              def pop(self):
+                  if self.length == 0:
+                      raise IndexError("pop from an empty array")
+                  self.length -= 1
+                  value = self.slots[self.length]
+                  self.slots[self.length] = None
+                  if self.capacity > 1 and self.length <= self.capacity // 2:
+                      self._move_to(self.capacity // 2)
+                  return value
+
+
+          a = DynamicArray()
+          for k in range(1024):
+              a.append(k)
+          start = a.moved
+          for _ in range(1000):
+              a.append(0)
+              a.pop()
+          print(a.moved - start)
+        solution: |
+          class DynamicArray:
+              def __init__(self):
+                  self.capacity = 1
+                  self.length = 0
+                  self.slots = [None]
+                  self.moved = 0
+
+              def _move_to(self, capacity):
+                  block = [None] * capacity
+                  for i in range(self.length):
+                      block[i] = self.slots[i]
+                      self.moved += 1
+                  self.slots = block
+                  self.capacity = capacity
+
+              def append(self, value):
+                  if self.length == self.capacity:
+                      self._move_to(2 * self.capacity)
+                  self.slots[self.length] = value
+                  self.length += 1
+
+              def pop(self):
+                  if self.length == 0:
+                      raise IndexError("pop from an empty array")
+                  self.length -= 1
+                  value = self.slots[self.length]
+                  self.slots[self.length] = None
+                  if self.capacity > 1 and self.length <= self.capacity // 4:
+                      self._move_to(self.capacity // 2)
+                  return value
+
+
+          a = DynamicArray()
+          for k in range(1024):
+              a.append(k)
+          start = a.moved
+          for _ in range(1000):
+              a.append(0)
+              a.pop()
+          print(a.moved - start)
+        tests: |
+          _a = DynamicArray()
+          for _k in range(100):
+              _a.append(_k)
+          assert [_a.pop() for _ in range(100)] == list(range(99, -1, -1)), "pop should return the items last first"
+          try:
+              _a.pop()
+              assert False, "pop on an empty array should raise IndexError"
+          except IndexError:
+              pass
+          _a.append(7)
+          _a.append(8)
+          assert _a.pop() == 8 and _a.pop() == 7, "After being emptied, the array should still accept appends"
+          _one = DynamicArray()
+          _one.append(1)
+          _one.pop()
+          _one.append(2)
+          assert _one.pop() == 2, "Popping the only item and appending again should work"
+          _b = DynamicArray()
+          for _k in range(1024):
+              _b.append(_k)
+          _start = _b.moved
+          for _ in range(1000):
+              _b.append(0)
+              _b.pop()
+          assert _b.moved - _start <= 2048, "Appending and popping in turn at 1024 items should not copy on every call"
+          for _ in range(1020):
+              _b.pop()
+          assert _b.capacity <= 16, "With 4 items left out of 1024, the block should have shrunk"
+          assert output.strip() == "1024", "The program should print 1024"
+        wrong:
+          - |
+            class DynamicArray:
+                def __init__(self):
+                    self.capacity = 1
+                    self.length = 0
+                    self.slots = [None]
+                    self.moved = 0
+
+                def _move_to(self, capacity):
+                    block = [None] * capacity
+                    for i in range(self.length):
+                        block[i] = self.slots[i]
+                        self.moved += 1
+                    self.slots = block
+                    self.capacity = capacity
+
+                def append(self, value):
+                    if self.length == self.capacity:
+                        self._move_to(2 * self.capacity)
+                    self.slots[self.length] = value
+                    self.length += 1
+
+                def pop(self):
+                    if self.length == 0:
+                        raise IndexError("pop from an empty array")
+                    self.length -= 1
+                    value = self.slots[self.length]
+                    self.slots[self.length] = None
+                    return value
+
+
+            a = DynamicArray()
+            for k in range(1024):
+                a.append(k)
+            start = a.moved
+            for _ in range(1000):
+                a.append(0)
+                a.pop()
+            print(a.moved - start)
+          - |
+            class DynamicArray:
+                def __init__(self):
+                    self.capacity = 1
+                    self.length = 0
+                    self.slots = [None]
+                    self.moved = 0
+
+                def _move_to(self, capacity):
+                    block = [None] * capacity
+                    for i in range(self.length):
+                        block[i] = self.slots[i]
+                        self.moved += 1
+                    self.slots = block
+                    self.capacity = capacity
+
+                def append(self, value):
+                    if self.length == self.capacity:
+                        self._move_to(2 * self.capacity)
+                    self.slots[self.length] = value
+                    self.length += 1
+
+                def pop(self):
+                    if self.length == 0:
+                        raise IndexError("pop from an empty array")
+                    self.length -= 1
+                    value = self.slots[self.length]
+                    self.slots[self.length] = None
+                    if self.length <= self.capacity // 4:
+                        self._move_to(self.capacity // 2)
+                    return value
+
+
+            a = DynamicArray()
+            for k in range(1024):
+                a.append(k)
+            start = a.moved
+            for _ in range(1000):
+                a.append(0)
+                a.pop()
+            print(a.moved - start)
+        explanation: |
+          With the rule "halve as soon as the items fit in half", the thresholds for growing and shrinking touch. At 1024 items in a block of 1024, an append doubles the block to 2048, and the pop that follows leaves 1024 items, exactly half, so the block halves straight back. Each pair of calls copies about 2048 items. Shrinking only at a quarter puts a gap between the thresholds. After the one move to 2048, the items would have to fall to 512 before the block shrinks, and after any halving the block is half full, so a long run of calls must pass before the next move. The guard `self.capacity > 1` matters too: without it, popping the last item halves a block of 1 to a block of 0, and the next append doubles 0 to 0 and has nowhere to write.
+    - question:
+        id: write-grid
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A cinema hall's seats form a grid of `rows` rows and `cols` seats per row. `Grid` stores the whole grid in **one** list, `self.cells`, row after row. Write `get(i, j)` and `put(i, j, value)` for row `i` and seat `j`, both counted from 0. Both must raise `IndexError` for a seat that does not exist, even when the position $i \cdot c + j$ happens to land inside the list.
+        starter: |
+          class Grid:
+              def __init__(self, rows, cols):
+                  self.rows = rows
+                  self.cols = cols
+                  self.cells = [0] * (rows * cols)
+
+              def get(self, i, j):
+                  pass
+
+              def put(self, i, j, value):
+                  pass
+
+
+          hall = Grid(4, 5)
+          hall.put(2, 3, 1)
+          print([k for k, seat in enumerate(hall.cells) if seat == 1], hall.get(2, 3))
+        solution: |
+          class Grid:
+              def __init__(self, rows, cols):
+                  self.rows = rows
+                  self.cols = cols
+                  self.cells = [0] * (rows * cols)
+
+              def _position(self, i, j):
+                  if not (0 <= i < self.rows and 0 <= j < self.cols):
+                      raise IndexError("no seat at row " + str(i) + ", seat " + str(j))
+                  return i * self.cols + j
+
+              def get(self, i, j):
+                  return self.cells[self._position(i, j)]
+
+              def put(self, i, j, value):
+                  self.cells[self._position(i, j)] = value
+
+
+          hall = Grid(4, 5)
+          hall.put(2, 3, 1)
+          print([k for k, seat in enumerate(hall.cells) if seat == 1], hall.get(2, 3))
+        tests: |
+          _g = Grid(4, 5)
+          _g.put(2, 3, 9)
+          assert _g.cells[13] == 9, "Row 2, seat 3 of a grid with 5 seats per row is position 2 * 5 + 3 = 13"
+          assert _g.get(2, 3) == 9, "get should return what put stored"
+          _g.put(0, 0, 1)
+          _g.put(3, 4, 2)
+          assert _g.cells[0] == 1 and _g.cells[19] == 2, "The first seat is position 0 and the last is position 19"
+          _t = Grid(2, 3)
+          _t.put(1, 0, 5)
+          assert _t.cells == [0, 0, 0, 5, 0, 0], "Row 1, seat 0 of a grid with 3 seats per row is position 3"
+          for _bad in [(0, 5), (1, -1), (4, 0), (-1, 2)]:
+              try:
+                  _g.get(_bad[0], _bad[1])
+                  assert False, "get" + str(_bad) + " should raise IndexError"
+              except IndexError:
+                  pass
+              try:
+                  _g.put(_bad[0], _bad[1], 0)
+                  assert False, "put" + str(_bad) + " should raise IndexError"
+              except IndexError:
+                  pass
+          assert output.strip() == "[13] 1", "The program should print [13] 1"
+        wrong:
+          - |
+            class Grid:
+                def __init__(self, rows, cols):
+                    self.rows = rows
+                    self.cols = cols
+                    self.cells = [0] * (rows * cols)
+
+                def get(self, i, j):
+                    return self.cells[i * self.cols + j]
+
+                def put(self, i, j, value):
+                    self.cells[i * self.cols + j] = value
+
+
+            hall = Grid(4, 5)
+            hall.put(2, 3, 1)
+            print([k for k, seat in enumerate(hall.cells) if seat == 1], hall.get(2, 3))
+          - |
+            class Grid:
+                def __init__(self, rows, cols):
+                    self.rows = rows
+                    self.cols = cols
+                    self.cells = [0] * (rows * cols)
+
+                def _position(self, i, j):
+                    if not (0 <= i < self.rows and 0 <= j < self.cols):
+                        raise IndexError("no such seat")
+                    return j * self.rows + i
+
+                def get(self, i, j):
+                    return self.cells[self._position(i, j)]
+
+                def put(self, i, j, value):
+                    self.cells[self._position(i, j)] = value
+
+
+            hall = Grid(4, 5)
+            hall.put(2, 3, 1)
+            print([k for k, seat in enumerate(hall.cells) if seat == 1], hall.get(2, 3))
+          - |
+            class Grid:
+                def __init__(self, rows, cols):
+                    self.rows = rows
+                    self.cols = cols
+                    self.cells = [0] * (rows * cols)
+
+                def _position(self, i, j):
+                    if not (0 <= i <= self.rows and 0 <= j <= self.cols):
+                        raise IndexError("no such seat")
+                    return i * self.cols + j
+
+                def get(self, i, j):
+                    return self.cells[self._position(i, j)]
+
+                def put(self, i, j, value):
+                    self.cells[self._position(i, j)] = value
+
+
+            hall = Grid(4, 5)
+            hall.put(2, 3, 1)
+            print([k for k, seat in enumerate(hall.cells) if seat == 1], hall.get(2, 3))
+        explanation: |
+          Row-major order puts row $i$ after $i$ full rows of `cols` seats, so seat $(i, j)$ is at $i \cdot \text{cols} + j$. Without its own check, the formula never complains: seat 5 of row 0 does not exist, but $0 \cdot 5 + 5 = 5$ is a perfectly good position, the first seat of row 1, and a booking would land in the wrong row with no error. Negative numbers are worse, because Python counts them from the end of the list. Putting the check in one helper that both methods call keeps the two from disagreeing. Storing the grid column after column, at $j \cdot \text{rows} + i$, is a layout that is also used, but it is not the one asked for here.
+    - question:
+        id: work-fixed-step
+        type: numeric
+        system: s2
+        prompt: |
+          A dynamic array starts with room for 100 and, whenever it is full, moves to a block with 100 **more** slots. 10000 items are appended. How many item copies are made in all?
+        answer: "495000"
+        explanation: |
+          The moves come at 100, 200, and so on up to 9900 items: $100 + 200 + \dots + 9900 = 100 \times (1 + 2 + \dots + 99) = 100 \times 4950 = 495000$. Doubling from 100 instead moves at 100, 200, 400, up to 6400, which is $12700$ copies. Double the appends to 20000 and the first count roughly quadruples while the second roughly doubles: quadratic against linear.
+    - question:
+        id: work-deadline
+        type: choice
+        system: s2
+        prompt: |
+          A game draws a frame every 16 milliseconds, and each frame appends a few hundred items to a list that has grown to a crore of items. Every so often a frame stutters badly. Which explanation and remedy are right?
+        options:
+          - "An append that finds the block full copies the whole crore of items, which can take longer than one frame. The constant amortised cost is an average over many appends, not a promise about each one, so reserve the room in advance or keep the list from growing during play."
+          - "Appending is amortised constant, so no single append can be slow, and the stutter must come from somewhere else."
+          - "The list is too long for random access, so reading it becomes slow; split it into shorter lists."
+          - "Doubling wastes half the block, and the wasted memory slows every append; grow by a fixed amount instead."
+        answer: 0
+        explanation: |
+          An amortised cost bounds the total over a sequence, so the average per append is small. It says nothing about the worst single append, and that one copies every item. A frame that happens to contain it is late. Code with a deadline on **each** operation, such as games, audio and control systems, avoids the move in the middle of the work, for example by making the block big enough before play starts. Growing by a fixed amount would make things worse: moves would come far more often, and the total would become quadratic.
+  connections:
+    - text: |
+        The two puzzles had one answer. An array reaches any position in one step because its items sit side by side at equal spacing, so an address is arithmetic, and that same packing leaves no room in the middle, so the front is dear. And a list grows cheaply because it moves rarely: by doubling, the moves get rarer exactly as fast as they get dearer, and a geometric series keeps their total below $2n$.
+
+        You also have a way to talk about cost that will carry you through this cluster: count steps, and ask what happens when $n$ doubles. The four answers, the same, one more, twice, four times, are the constant, logarithmic, linear and quadratic shapes. The discrete mathematics cluster will make them exact in [[f3.asymptotic-notation]], and the algorithms cluster will return to averaging over a sequence in [[s3.amortised-analysis]], where the same doubling turns up in hash tables and in a queue built from two stacks.
+
+        Arrays are everywhere below the surface. The vectors and matrices of machine learning are arrays in row-major order, and a large part of making numerical code fast is walking memory in the order it is laid out. A string is an array of characters. A video frame is an array of pixels. Two structures in this cluster are built directly on arrays: a stack, in which items arrive and leave only at the cheap end, in [[s2.stacks-and-queues]], and a hash table, which turns a key into a position so that random access works for names as well as numbers, in [[s2.hash-tables]].
+
+        But first, the opposite design. The array is dear at the front because its items are packed together. What if they were not? Let every item live wherever there is room and carry the address of the next one. Then inserting anywhere disturbs nobody, and random access is lost. That trade is [[s2.linked-lists]].

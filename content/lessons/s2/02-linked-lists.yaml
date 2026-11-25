@@ -1,0 +1,1092 @@
+concept: s2.linked-lists
+minutes: 100
+claim: You can build a linked list from nodes, walk it, insert and remove after a node you hold in a constant number of steps, keep a tail so that appending is cheap, reverse a list in place, tell whether a list loops back on itself using two pointers, and choose between a linked list and an array by the operations a program performs.
+recalls: [s2.arrays-and-dynamic-arrays]
+uses: [s1.classes-and-objects, s1.special-methods, s1.exceptions, s1.recursion, s1.generators-and-context-managers, s1.comprehensions-and-iterators, f2.loop-invariants, f2.induction-and-strong-induction, f1.arithmetic-and-geometric-series, s0.lists-and-tuples, s0.loops, s0.functions]
+leads: [s2.stacks-and-queues, s2.hash-tables, s2.binary-search-trees, s2.graphs-and-their-representations]
+starter: |
+  # Scratch space. Three nodes, each holding a value and a link to the next node.
+  class Node:
+      def __init__(self, value, next):
+          self.value = value
+          self.next = next
+
+  head = Node(3, Node(8, Node(1, None)))
+  head.next = Node(5, head.next)   # insert 5 after the first node: nothing moves
+
+  node = head
+  while node is not None:
+      print(node.value)
+      node = node.next
+parts:
+  recall:
+    - text: |
+        [[s2.arrays-and-dynamic-arrays]] showed that an array is fast at its end and slow at its front, and that both facts come from one decision: the items sit packed side by side. Today you make the opposite decision and see what it buys and what it costs. Three quick pulls first.
+  puzzle:
+    - text: |
+        A passenger train is a row of coaches, and you can add one in the middle. At a big junction, the railway sometimes attaches an extra coach partway along a train. Nobody lifts the coaches behind it and slides them back. The train is uncoupled at one point, the new coach is shunted in, and two couplings are made. A train of 24 coaches costs the same two couplings as a train of 4.
+
+        The reason is that a coach is not kept in place by its **position**. It is kept in place by what it is **coupled to**. Each coach knows only the next one.
+
+        The same trick works in memory. In the last lesson, a Python list's slot held the address of an item. Now let every item carry, next to it, the address of the item after it, and let the items live wherever there happens to be room. That is a **linked list**, and inserting into the middle costs two changes of address, however long the list.
+
+        But the train has a cost too. A ticket checker looking for coach S9 cannot do arithmetic on an address. They walk from the engine, coach by coach. And there is a stranger danger. If one coupling were made to point **back** at an earlier coach, a walk along the train would never reach the end. In memory, that is a program that hangs.
+
+        **What exactly does the coupled design make cheap, and what dear? And if a list might loop back on itself, can you find out without remembering every node you have seen, using only two names?**
+  intuition:
+    - text: |
+        Move the place of insertion from the front to the back, and compare the work done by the array of the last lesson and by a linked list.
+    - figure: array-list
+      props: { index: 2 }
+    - text: |
+        At the front, the array moves every item and the linked list follows no links at all: the new node simply points at the old first node. At the back, the array moves nothing and the linked list follows every link to reach the end. Each design is quick exactly where the other is slow. Neither is better. They answer different questions quickly.
+
+        For the second question, think of two friends jogging on a path that might end at a road or might loop round a park. One runs twice as fast as the other. If the path ends, the fast one reaches the end first. If it loops, the fast one comes round from behind and catches the slow one, since on a loop the faster runner must eventually lap the slower. Neither needs a map, and neither needs to remember where they have been.
+  derivation:
+    - text: |
+        **Nodes and links.** Give each item its own small object, a **node**, holding the item and a reference to the next node. The last node holds `None`, meaning there is no next. The list as a whole is known by its first node, the **head**. An empty list is just `None`.
+
+        ```python
+        class Node:
+            def __init__(self, value, next):
+                self.value = value
+                self.next = next
+
+        head = Node(3, Node(8, Node(1, None)))
+        ```
+
+        This is the list 3, 8, 1. Walking it is a loop that holds one node at a time and stops when the node in hand is `None`:
+
+        ```python
+        node = head
+        while node is not None:
+            print(node.value)
+            node = node.next
+        ```
+
+        The nodes may be anywhere in memory, so there is no formula for the third one. Reaching position $i$ takes $i$ steps of `node = node.next`, which is linear in $n$ in the worst case, where the array took a constant number of steps.
+
+        **Inserting and removing after a node in hand.** In return, nothing ever moves. To insert a value after a node you already hold, make a new node that points where the old one pointed, and then point the old one at the new one:
+
+        ```python
+        def insert_after(node, value):
+            node.next = Node(value, node.next)
+        ```
+
+        Two links are set, whatever the length of the list: a constant cost. The order matters. The old value of `node.next` is the only record of where the rest of the list is, so the new node must take it over before it is overwritten. The one line above does that correctly, because Python works out the right-hand side, `node.next` included, before assigning. Removing the node after one you hold is one assignment, `node.next = node.next.next`, which makes the list skip over it. Nothing refers to the skipped node any more, and Python reclaims its memory.
+
+        At the front it is simpler still. A new node points at the old head and becomes the head, `head = Node(value, head)`, and removing the first node is `head = head.next`.
+    - question:
+        id: derivation-order-of-links
+        type: choice
+        system: s2
+        prompt: |
+          To insert a new node `fresh` after `node`, two links must be set, one at a time. Which order is correct, and what goes wrong with the other?
+        options:
+          - "`fresh.next = node.next` and then `node.next = fresh`. In the other order, `node.next` is already `fresh` when it is copied, so `fresh` points at itself and the rest of the list is lost."
+          - "`node.next = fresh` and then `fresh.next = node.next`. Either order works."
+          - "`fresh.next = node` and then `node.next = fresh`."
+          - "Only one link needs to be set."
+        answer: 0
+        explanation: |
+          Done the wrong way round, `node.next` is first set to `fresh`, and then `fresh.next = node.next` copies that same reference, so the new node points at itself. A walk along the list would then go round and round `fresh` for ever. With linked structures the safe habit is to attach the new piece to what follows it first, and only then let the old structure point at it.
+    - text: |
+        **The end needs a tail.** Appending to a linked list known only by its head means walking to the last node first: linear. The fix is to remember the last node too, in a second reference called the **tail**. Wrap both in one object with an invariant: `head` is the first node and `tail` the last, and both are `None` exactly when the list is empty.
+
+        ```python
+        class LinkedList:
+            def __init__(self):
+                self.head = None
+                self.tail = None
+
+            def append(self, value):
+                fresh = Node(value, None)
+                if self.tail is None:
+                    self.head = fresh
+                else:
+                    self.tail.next = fresh
+                self.tail = fresh
+        ```
+
+        The empty case needs its own branch, because an empty list has no last node whose link could change. Every method must keep the invariant, and the dangerous moments are the edges: the first item arriving and the last one leaving. A method that removes the only node must set **both** references back to `None`.
+
+        **The two side by side.** For a list of $n$ items:
+
+        | Operation | Array | Linked list with a tail |
+        | --- | --- | --- |
+        | reach position $i$ | constant | linear: $i$ links |
+        | insert or remove at the front | linear | constant |
+        | add at the end | constant, averaged | constant |
+        | remove at the end | constant | linear: the node before the tail must be found |
+        | insert or remove after a node in hand | linear | constant |
+        | walk through every item | linear | linear |
+
+        **What the counts leave out.** Walking is linear for both, and in practice the array is several times faster. A node carries a reference beside every value, so a linked list takes more memory. And processors fetch memory in neighbouring chunks, so stepping through an array finds the next items already fetched, while each link may lead somewhere far away. For this reason the array is the default, and plain linked lists are rarer in real programs than in textbooks. Their idea is worth more than they are: nodes that refer to other nodes are how every branching structure is built.
+
+        **Doubly linked lists.** Give each node a second reference, `prev`, to the node before it. Now a node in hand can be removed by itself, with no need to find its predecessor: `node.prev.next = node.next` and `node.next.prev = node.prev`. Removing at the end becomes constant too. The price is two references per node and four links to set on every insertion. Doubly linked lists are what text editors, browser histories and caches that throw out the least recently used item are built on. A common trick is a **sentinel**, a dummy node that sits before the first real node and after the last, so the list is never truly empty and the edge cases disappear.
+
+        **Reversing in place.** A singly linked list can be turned round without making a single new node, by flipping every link. Walk along holding two names: `prev`, the head of the part already reversed, and `node`, the head of the part not yet reached.
+
+        ```python
+        def reverse(head):
+            prev = None
+            node = head
+            while node is not None:
+                after = node.next
+                node.next = prev
+                prev = node
+                node = after
+            return prev
+        ```
+
+        The invariant of [[f2.loop-invariants]] makes this easy to trust. At the top of every pass, the nodes already visited form a list headed by `prev`, in reverse order, and the nodes not yet visited form a list headed by `node`, in their original order. At the start the first part is empty and the second is everything. Each pass moves one node from the front of the second part to the front of the first. When `node` is `None`, everything is in the first part. The variant is the number of nodes not yet visited. Notice the name `after`: it saves the rest of the list before `node.next` is overwritten, the same discipline as in insertion.
+    - question:
+        id: order-reverse
+        type: order
+        system: s2
+        prompt: Put the four lines of one pass of the reversal loop in order, so that no part of the list is lost.
+        steps:
+          - "after = node.next"
+          - "node.next = prev"
+          - "prev = node"
+          - "node = after"
+        explanation: The reference to the rest of the list lives only in `node.next`, so it is saved first. Then that link can be turned round to point at the reversed part. Then `node` joins the reversed part as its new head, and finally the walk moves on to the saved rest. Turning the link round before saving it would leave nothing pointing at the unvisited nodes.
+    - text: |
+        **A list that loops.** Suppose a bug has made the last node point back at some earlier node. A walk that waits for `None` never ends. One way to notice is to remember every node seen in a set, but that needs memory in proportion to $n$. Robert Floyd's method needs two names. Move `slow` one link at a time and `fast` two links at a time, both from the head.
+
+        If the list ends, `fast` reaches `None` first, after about $\frac{n}{2}$ passes, and the answer is no. If it loops, both eventually enter the loop and go round it for ever. Once both are on it, look at the number of links by which `fast` is behind `slow`, counted forwards round the loop. Each pass, `slow` moves one link and `fast` two, so that gap shrinks by exactly one. It is a whole number, it cannot shrink for ever, and when it reaches 0 the two names refer to the **same node**. That gap is a variant in exactly the sense of [[f2.loop-invariants]], and it is what guarantees the meeting. The test for "the same node" is `slow is fast`, identity, not equality of values, since two different nodes may hold equal values.
+
+        **Recursion on lists.** A linked list is either empty, `None`, or a node followed by a linked list. That definition refers to itself, so functions on lists can be written the way [[s1.recursion]] taught:
+
+        ```python
+        def length(node):
+            if node is None:
+                return 0
+            return 1 + length(node.next)
+        ```
+
+        And claims about every list can be proved the way [[f2.induction-and-strong-induction]] proved claims about every number: show the claim for the empty list, and show that if it holds for a list it holds for that list with one more node in front. Python's limit of about a thousand nested calls makes the loop version the practical one for long lists, but the recursive description is the one to reason with.
+  formal:
+    - text: |
+        **Linked list.** Nodes, each holding a value and a reference to the next node, the last holding `None`. The list is known by its head, and the empty list is `None`.
+
+        **Costs.** Reaching position $i$ follows $i$ links, linear. Inserting or removing after a node in hand, or at the head, sets a constant number of links.
+
+        **Insertion discipline.** Give the new node the old link before overwriting the old link.
+
+        **Head and tail.** Keeping a reference to the last node makes appending constant. Invariant: `head` is the first node and `tail` the last, and both are `None` exactly when the list is empty.
+
+        **Doubly linked list.** Each node also refers to the node before it, so a node in hand can be removed in constant time.
+
+        **Reversal in place.** Invariant: `prev` heads the visited nodes in reverse order and `node` heads the unvisited nodes in order.
+
+        **Cycle detection (Floyd).** A slow pointer moves one link per pass and a fast one two. The list loops if and only if they come to refer to the same node; otherwise the fast pointer reaches `None`.
+  drill:
+    - text: Seconds each. Count links followed or links changed.
+    - question:
+        id: drill-links
+        type: numeric
+        system: s1
+        prompt: |
+          Starting with the head of a linked list in hand, how many links are followed to reach the node at position 4?
+        answer: "4"
+        explanation: One link takes you from position 0 to 1, and so on.
+    - question:
+        id: drill-last-link
+        type: choice
+        system: s1
+        prompt: |
+          What does the last node of a linked list hold as its link?
+        options: ["`None`", "The head", "Its own reference", "0"]
+        answer: 0
+        explanation: "`None` marks the end, and it is what a walk tests for."
+    - question:
+        id: drill-insert-links
+        type: numeric
+        system: s1
+        prompt: |
+          How many links are set to insert a new node after a node you hold in a singly linked list of a crore of nodes?
+        answer: "2"
+        explanation: The new node's link and the old node's link. The length does not enter into it.
+    - question:
+        id: drill-doubly-links
+        type: numeric
+        system: s1
+        prompt: |
+          How many links are set to insert a new node between two neighbouring nodes of a doubly linked list?
+        answer: "4"
+        explanation: The new node's next and prev, the earlier node's next, and the later node's prev.
+    - question:
+        id: drill-cost-front
+        type: choice
+        system: s1
+        prompt: |
+          How does the cost of removing the first item grow with $n$, for a linked list and for an array?
+        options: ["Constant for the linked list, linear for the array", "Linear for both", "Constant for both", "Linear for the linked list, constant for the array"]
+        answer: 0
+        explanation: The linked list moves its head along one link. The array closes the gap by moving every remaining item.
+    - question:
+        id: drill-cost-reach
+        type: choice
+        system: s1
+        prompt: |
+          How does the cost of reading the item at position $\frac{n}{2}$ grow with $n$ in a linked list?
+        options: ["Linear", "Constant", "Logarithmic", "Quadratic"]
+        answer: 0
+        explanation: About $\frac{n}{2}$ links are followed, and that doubles when $n$ does.
+    - question:
+        id: drill-remove-end
+        type: choice
+        system: s1
+        prompt: |
+          A singly linked list keeps a head and a tail. Why is removing the **last** node still slow?
+        options: ["The new last node is the one before the tail, and only a walk from the head finds it", "The tail must be copied", "The head must be moved", "It is not slow"]
+        answer: 0
+        explanation: Links point forwards only. A doubly linked list fixes this with a reference back.
+    - question:
+        id: drill-identity
+        type: choice
+        system: s1
+        prompt: |
+          In cycle detection, why is the test `slow is fast` and not `slow.value == fast.value`?
+        options: ["Two different nodes may hold equal values, and only meeting at the same node shows a loop", "`is` is faster to type", "Values cannot be compared", "`==` would loop for ever"]
+        answer: 0
+        explanation: A list such as 1, 2, 1, 2 has repeated values and no loop.
+    - question:
+        id: predict-walk
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          class Node:
+              def __init__(self, value, next):
+                  self.value = value
+                  self.next = next
+
+          head = Node(3, Node(8, Node(1, None)))
+          head = Node(5, head)
+          node = head.next
+          total = 0
+          while node is not None:
+              total += node.value
+              node = node.next
+          print(head.value, total)
+        output: "5 12"
+        explanation: A new node holding 5 becomes the head, in front of 3, 8, 1. The walk starts at the second node, so it adds 3 + 8 + 1.
+    - question:
+        id: predict-push-front
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          class Node:
+              def __init__(self, value, next):
+                  self.value = value
+                  self.next = next
+
+          head = None
+          for v in [1, 2, 3]:
+              head = Node(v, head)
+          values = []
+          while head is not None:
+              values.append(head.value)
+              head = head.next
+          print(values)
+        output: "[3, 2, 1]"
+        explanation: Each new node goes in front of the last, so the list comes out in the reverse of the order the values arrived.
+  work:
+    - text: "Slower now. For each method, name the edge cases first: the empty list, one node, the end."
+    - question:
+        id: write-to-list
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `to_list(head)`. `head` is the first node of a linked list, or `None` for an empty list. Return an ordinary Python list of the values, in order, without changing the linked list.
+        starter: |
+          class Node:
+              def __init__(self, value, next):
+                  self.value = value
+                  self.next = next
+
+          def to_list(head):
+              # Replace the next line with your own.
+              return []
+
+          print(to_list(Node(3, Node(8, Node(1, None)))))
+        solution: |
+          class Node:
+              def __init__(self, value, next):
+                  self.value = value
+                  self.next = next
+
+          def to_list(head):
+              values = []
+              node = head
+              while node is not None:
+                  values.append(node.value)
+                  node = node.next
+              return values
+
+          print(to_list(Node(3, Node(8, Node(1, None)))))
+        tests: |
+          assert to_list(Node(3, Node(8, Node(1, None)))) == [3, 8, 1], "The list 3, 8, 1 should give [3, 8, 1]. You returned " + repr(to_list(Node(3, Node(8, Node(1, None)))))
+          assert to_list(None) == [], "An empty list, given as None, should give []"
+          assert to_list(Node(7, None)) == [7], "A single node should give [7]"
+          assert to_list(Node(0, Node(0, None))) == [0, 0], "Values of 0 are still values"
+          assert to_list(Node(None, Node(2, None))) == [None, 2], "A node may hold the value None. Only the link decides where the list ends"
+          _head = None
+          for _v in range(50):
+              _head = Node(_v, _head)
+          assert to_list(_head) == list(range(49, -1, -1)), "A list of 50 nodes should come back whole and in order"
+          _keep = Node(1, Node(2, None))
+          to_list(_keep)
+          assert _keep.next is not None and _keep.next.value == 2, "to_list should not change the linked list"
+          assert output.strip() == "[3, 8, 1]", "The program should print [3, 8, 1]"
+        wrong:
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+            def to_list(head):
+                values = []
+                node = head
+                while node.next is not None:
+                    values.append(node.value)
+                    node = node.next
+                return values
+
+            print([3, 8, 1])
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+            def to_list(head):
+                values = []
+                node = head
+                while node is not None and node.value:
+                    values.append(node.value)
+                    node = node.next
+                return values
+
+            print([3, 8, 1])
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+            def to_list(head):
+                values = []
+                node = head
+                while node is not None:
+                    node = node.next
+                    if node is not None:
+                        values.append(node.value)
+                return values
+
+            print([3, 8, 1])
+        explanation: |
+          This is the standard walk: hold a node, use it, step to the next, and stop when the node in hand is `None`. The test must be on the node itself. Testing `node.next` stops one node early and misses the last value, and it fails outright on an empty list, where there is no node to ask. Testing the value confuses "the list has ended" with "this item happens to be 0". Stepping before using skips the head. The walk visits each node once, so its cost is linear.
+    - question:
+        id: write-insert-at
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `insert_at(head, i, value)`. Insert a new node holding `value` so that it ends up at position `i`, and return the head of the list, which is a new node when `i` is 0. You may assume `i` is between 0 and the length of the list.
+        starter: |
+          class Node:
+              def __init__(self, value, next):
+                  self.value = value
+                  self.next = next
+
+          def to_list(head):
+              values = []
+              while head is not None:
+                  values.append(head.value)
+                  head = head.next
+              return values
+
+          def insert_at(head, i, value):
+              # Replace the next line with your own.
+              return head
+
+          print(to_list(insert_at(Node(3, Node(8, Node(1, None))), 2, 5)))
+        solution: |
+          class Node:
+              def __init__(self, value, next):
+                  self.value = value
+                  self.next = next
+
+          def to_list(head):
+              values = []
+              while head is not None:
+                  values.append(head.value)
+                  head = head.next
+              return values
+
+          def insert_at(head, i, value):
+              if i == 0:
+                  return Node(value, head)
+              node = head
+              for _ in range(i - 1):
+                  node = node.next
+              node.next = Node(value, node.next)
+              return head
+
+          print(to_list(insert_at(Node(3, Node(8, Node(1, None))), 2, 5)))
+        tests: |
+          def _make(values):
+              head = None
+              for v in values[::-1]:
+                  head = Node(v, head)
+              return head
+          def _read(head):
+              values = []
+              steps = 0
+              while head is not None and steps < 1000:
+                  values.append(head.value)
+                  head = head.next
+                  steps += 1
+              assert steps < 1000, "The list never ends. A node points back into the list"
+              return values
+          assert _read(insert_at(_make([3, 8, 1]), 2, 5)) == [3, 8, 5, 1], "Inserting 5 at position 2 of 3, 8, 1 should give 3, 8, 5, 1. You got " + repr(_read(insert_at(_make([3, 8, 1]), 2, 5)))
+          assert _read(insert_at(_make([3, 8, 1]), 0, 5)) == [5, 3, 8, 1], "Inserting at position 0 should return a new head"
+          assert _read(insert_at(_make([3, 8, 1]), 3, 5)) == [3, 8, 1, 5], "Inserting at position 3 puts the node at the end"
+          assert _read(insert_at(_make([3, 8, 1]), 1, 5)) == [3, 5, 8, 1], "Inserting at position 1 should give 3, 5, 8, 1"
+          assert _read(insert_at(None, 0, 9)) == [9], "Inserting into an empty list gives a list of one node"
+          _h = _make([1, 2, 3, 4])
+          assert insert_at(_h, 2, 0) is _h, "When i is not 0 the head does not change, so return the same head"
+          assert output.strip() == "[3, 8, 5, 1]", "The program should print [3, 8, 5, 1]"
+        wrong:
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+            def insert_at(head, i, value):
+                node = head
+                for _ in range(i - 1):
+                    node = node.next
+                node.next = Node(value, node.next)
+                return head
+
+            print([3, 8, 5, 1])
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+            def insert_at(head, i, value):
+                if i == 0:
+                    return Node(value, head)
+                node = head
+                for _ in range(i):
+                    node = node.next
+                node.next = Node(value, node.next)
+                return head
+
+            print([3, 8, 5, 1])
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+            def insert_at(head, i, value):
+                if i == 0:
+                    return Node(value, head)
+                node = head
+                for _ in range(i - 1):
+                    node = node.next
+                fresh = Node(value, None)
+                node.next = fresh
+                fresh.next = node.next
+                return head
+
+            print([3, 8, 5, 1])
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+            def insert_at(head, i, value):
+                if i == 0:
+                    return Node(value, head)
+                node = head
+                for _ in range(i - 1):
+                    node = node.next
+                node.next = Node(value, node.next)
+                return node
+
+            print([3, 8, 5, 1])
+        explanation: |
+          To put a node at position $i$ you need the node at position $i - 1$ in hand, because that is the node whose link changes. So the walk follows $i - 1$ links, and one more would overshoot. Position 0 has no node before it and is handled on its own: the new node points at the old head and is returned as the head. The new node must be given the old link at the moment it is made. If the old link is overwritten first, the new node ends up pointing at itself, which one of the tests detects as a list that never ends.
+    - question:
+        id: fix-tail
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A clinic keeps its waiting list in this `LinkedList`, with a head and a tail. After the room empties and new patients arrive, some of them vanish: the program below should print `['Kiran', 'Meena'] 2`, and prints `['Kiran'] 2`. Find which method breaks the invariant "`head` and `tail` are both `None` exactly when the list is empty", and fix it.
+        starter: |
+          class Node:
+              def __init__(self, value, next):
+                  self.value = value
+                  self.next = next
+
+
+          class LinkedList:
+              def __init__(self):
+                  self.head = None
+                  self.tail = None
+                  self.length = 0
+
+              def __len__(self):
+                  return self.length
+
+              def __iter__(self):
+                  node = self.head
+                  while node is not None:
+                      yield node.value
+                      node = node.next
+
+              def push_front(self, value):
+                  self.head = Node(value, self.head)
+                  if self.tail is None:
+                      self.tail = self.head
+                  self.length += 1
+
+              def append(self, value):
+                  fresh = Node(value, None)
+                  if self.tail is None:
+                      self.head = fresh
+                  else:
+                      self.tail.next = fresh
+                  self.tail = fresh
+                  self.length += 1
+
+              def pop_front(self):
+                  if self.head is None:
+                      raise IndexError("pop from an empty list")
+                  value = self.head.value
+                  self.head = self.head.next
+                  self.length -= 1
+                  return value
+
+
+          waiting = LinkedList()
+          waiting.append("Asha")
+          waiting.append("Ravi")
+          waiting.pop_front()
+          waiting.pop_front()
+          waiting.append("Meena")
+          waiting.push_front("Kiran")
+          print(list(waiting), len(waiting))
+        solution: |
+          class Node:
+              def __init__(self, value, next):
+                  self.value = value
+                  self.next = next
+
+
+          class LinkedList:
+              def __init__(self):
+                  self.head = None
+                  self.tail = None
+                  self.length = 0
+
+              def __len__(self):
+                  return self.length
+
+              def __iter__(self):
+                  node = self.head
+                  while node is not None:
+                      yield node.value
+                      node = node.next
+
+              def push_front(self, value):
+                  self.head = Node(value, self.head)
+                  if self.tail is None:
+                      self.tail = self.head
+                  self.length += 1
+
+              def append(self, value):
+                  fresh = Node(value, None)
+                  if self.tail is None:
+                      self.head = fresh
+                  else:
+                      self.tail.next = fresh
+                  self.tail = fresh
+                  self.length += 1
+
+              def pop_front(self):
+                  if self.head is None:
+                      raise IndexError("pop from an empty list")
+                  value = self.head.value
+                  self.head = self.head.next
+                  if self.head is None:
+                      self.tail = None
+                  self.length -= 1
+                  return value
+
+
+          waiting = LinkedList()
+          waiting.append("Asha")
+          waiting.append("Ravi")
+          waiting.pop_front()
+          waiting.pop_front()
+          waiting.append("Meena")
+          waiting.push_front("Kiran")
+          print(list(waiting), len(waiting))
+        tests: |
+          _q = LinkedList()
+          _q.append(1)
+          assert _q.pop_front() == 1, "pop_front should return the only item"
+          assert _q.head is None and _q.tail is None, "After the last item leaves, head and tail should both be None"
+          _q.append(2)
+          _q.append(3)
+          assert list(_q) == [2, 3], "Appending after the list was emptied should work"
+          assert _q.head.value == 2 and _q.tail.value == 3, "head and tail should be the first and last nodes"
+          _r = LinkedList()
+          for _k in range(5):
+              _r.append(_k)
+          assert [_r.pop_front() for _ in range(5)] == [0, 1, 2, 3, 4], "Items should leave in the order they were appended"
+          try:
+              _r.pop_front()
+              assert False, "pop_front on an empty list should raise IndexError"
+          except IndexError:
+              pass
+          _r.push_front("b")
+          _r.append("c")
+          _r.push_front("a")
+          assert list(_r) == ["a", "b", "c"] and len(_r) == 3, "push_front and append should work together after emptying"
+          assert output.strip() == "['Kiran', 'Meena'] 2", "The program should print ['Kiran', 'Meena'] 2"
+        wrong:
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+
+            class LinkedList:
+                def __init__(self):
+                    self.head = None
+                    self.tail = None
+                    self.length = 0
+
+                def __len__(self):
+                    return self.length
+
+                def __iter__(self):
+                    node = self.head
+                    while node is not None:
+                        yield node.value
+                        node = node.next
+
+                def push_front(self, value):
+                    self.head = Node(value, self.head)
+                    if self.tail is None:
+                        self.tail = self.head
+                    self.length += 1
+
+                def append(self, value):
+                    fresh = Node(value, None)
+                    if self.head is None:
+                        self.head = fresh
+                    else:
+                        self.tail.next = fresh
+                    self.tail = fresh
+                    self.length += 1
+
+                def pop_front(self):
+                    if self.head is None:
+                        raise IndexError("pop from an empty list")
+                    value = self.head.value
+                    self.head = self.head.next
+                    self.length -= 1
+                    return value
+
+
+            waiting = LinkedList()
+            waiting.append("Asha")
+            waiting.append("Ravi")
+            waiting.pop_front()
+            waiting.pop_front()
+            waiting.append("Meena")
+            waiting.push_front("Kiran")
+            print(list(waiting), len(waiting))
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+
+            class LinkedList:
+                def __init__(self):
+                    self.head = None
+                    self.tail = None
+                    self.length = 0
+
+                def __len__(self):
+                    return self.length
+
+                def __iter__(self):
+                    node = self.head
+                    while node is not None:
+                        yield node.value
+                        node = node.next
+
+                def push_front(self, value):
+                    self.head = Node(value, self.head)
+                    if self.tail is None:
+                        self.tail = self.head
+                    self.length += 1
+
+                def append(self, value):
+                    fresh = Node(value, None)
+                    if self.tail is None:
+                        self.head = fresh
+                    else:
+                        self.tail.next = fresh
+                    self.tail = fresh
+                    self.length += 1
+
+                def pop_front(self):
+                    if self.head is None:
+                        raise IndexError("pop from an empty list")
+                    value = self.head.value
+                    self.head = self.head.next
+                    if self.head is None:
+                        self.head = None
+                    self.length -= 1
+                    return value
+
+
+            waiting = LinkedList()
+            waiting.append("Asha")
+            waiting.append("Ravi")
+            waiting.pop_front()
+            waiting.pop_front()
+            waiting.append("Meena")
+            waiting.push_front("Kiran")
+            print(list(waiting), len(waiting))
+        explanation: |
+          `pop_front` moved the head along but never touched the tail. When the last patient left, `head` became `None` while `tail` still referred to Ravi's old node. The invariant was broken, and the next `append` believed the list was not empty: it attached Meena behind Ravi's detached node, where no walk from the head would ever find her, though the length counted her. Removing the last node is one of the two edges where both references change, and the method must say so: when the head becomes `None`, so must the tail.
+    - question:
+        id: predict-reverse
+        type: predict
+        system: s2
+        prompt: |
+          `reverse` is the in-place reversal from the lesson. What does this show? Think about which node `h` still refers to.
+        code: |
+          class Node:
+              def __init__(self, value, next):
+                  self.value = value
+                  self.next = next
+
+          def to_list(head):
+              values = []
+              while head is not None:
+                  values.append(head.value)
+                  head = head.next
+              return values
+
+          def reverse(head):
+              prev = None
+              node = head
+              while node is not None:
+                  after = node.next
+                  node.next = prev
+                  prev = node
+                  node = after
+              return prev
+
+          h = Node(1, Node(2, Node(3, Node(4, None))))
+          r = reverse(h)
+          print(to_list(r), to_list(h))
+        output: "[4, 3, 2, 1] [1]"
+        explanation: |
+          `reverse` returns the old last node as the new head, so `r` gives 4, 3, 2, 1. No node was copied: the same four nodes were relinked. `h` still refers to the node holding 1, which was the head and is now the last node, with `None` as its link. So `to_list(h)` finds just that one node. After an in-place change, every outside reference to a node still points at that node, wherever it now sits.
+    - question:
+        id: fix-reverse
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This reversal should print `[1, 8, 3]` and prints `[3]`. The invariant says that `node` should head the part of the list not yet visited. Find the line after which that stops being true, and fix the function.
+        starter: |
+          class Node:
+              def __init__(self, value, next):
+                  self.value = value
+                  self.next = next
+
+          def to_list(head):
+              values = []
+              while head is not None:
+                  values.append(head.value)
+                  head = head.next
+              return values
+
+          def reverse(head):
+              prev = None
+              node = head
+              while node is not None:
+                  node.next = prev
+                  prev = node
+                  node = node.next
+              return prev
+
+          print(to_list(reverse(Node(3, Node(8, Node(1, None))))))
+        solution: |
+          class Node:
+              def __init__(self, value, next):
+                  self.value = value
+                  self.next = next
+
+          def to_list(head):
+              values = []
+              while head is not None:
+                  values.append(head.value)
+                  head = head.next
+              return values
+
+          def reverse(head):
+              prev = None
+              node = head
+              while node is not None:
+                  after = node.next
+                  node.next = prev
+                  prev = node
+                  node = after
+              return prev
+
+          print(to_list(reverse(Node(3, Node(8, Node(1, None))))))
+        tests: |
+          def _make(values):
+              head = None
+              for v in values[::-1]:
+                  head = Node(v, head)
+              return head
+          assert to_list(reverse(_make([3, 8, 1]))) == [1, 8, 3], "Reversing 3, 8, 1 should give 1, 8, 3"
+          assert reverse(None) is None, "Reversing the empty list gives the empty list"
+          assert to_list(reverse(_make([7]))) == [7], "Reversing one node gives the same node"
+          assert to_list(reverse(_make(list(range(100))))) == list(range(99, -1, -1)), "A hundred nodes should all come back, reversed"
+          _first = _make([1, 2])
+          _second = _first.next
+          assert reverse(_first) is _second, "The nodes should be relinked, not copied: the old last node becomes the head"
+          assert output.strip() == "[1, 8, 3]", "The program should print [1, 8, 3]"
+        wrong:
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+            def to_list(head):
+                values = []
+                while head is not None:
+                    values.append(head.value)
+                    head = head.next
+                return values
+
+            def reverse(head):
+                prev = None
+                node = head
+                while node is not None:
+                    after = node.next
+                    node.next = prev
+                    prev = node
+                    node = after
+                return head
+
+            print([1, 8, 3])
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+            def to_list(head):
+                values = []
+                while head is not None:
+                    values.append(head.value)
+                    head = head.next
+                return values
+
+            def reverse(head):
+                values = to_list(head)
+                new_head = None
+                for v in values:
+                    new_head = Node(v, new_head)
+                return new_head
+
+            print([1, 8, 3])
+        explanation: |
+          After `node.next = prev`, the only reference to the unvisited part of the list is gone, and `node = node.next` follows the link that was just turned round, back into the reversed part. On the first pass that link is `None`, so the loop ends with one node. Saving `node.next` in `after` before overwriting it, and stepping to `after`, keeps the invariant. Building a fresh list of new nodes gives the right values but is not a reversal in place: it doubles the memory, and anyone holding a reference to a node of the original sees no change.
+    - question:
+        id: write-has-cycle
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `has_cycle(head)`, which returns `True` if following links from `head` would go round for ever and `False` if it reaches `None`. Use Floyd's two pointers and a fixed number of names: no set, dictionary or list of nodes seen.
+        starter: |
+          class Node:
+              def __init__(self, value, next):
+                  self.value = value
+                  self.next = next
+
+          def has_cycle(head):
+              return False
+
+          a = Node(1, Node(2, Node(3, Node(4, Node(5, None)))))
+          print(has_cycle(a))
+          a.next.next.next.next.next = a.next.next
+          print(has_cycle(a))
+        solution: |
+          class Node:
+              def __init__(self, value, next):
+                  self.value = value
+                  self.next = next
+
+          def has_cycle(head):
+              slow = head
+              fast = head
+              while fast is not None and fast.next is not None:
+                  slow = slow.next
+                  fast = fast.next.next
+                  if slow is fast:
+                      return True
+              return False
+
+          a = Node(1, Node(2, Node(3, Node(4, Node(5, None)))))
+          print(has_cycle(a))
+          a.next.next.next.next.next = a.next.next
+          print(has_cycle(a))
+        tests: |
+          _body = source.split("def has_cycle")[1].split("\na =")[0]
+          assert "set" not in _body and "{" not in _body and "[" not in _body and "append" not in _body, "Use two pointers only, with no collection of nodes seen"
+          def _chain(n, back=None):
+              nodes = [Node(k, None) for k in range(n)]
+              for k in range(n - 1):
+                  nodes[k].next = nodes[k + 1]
+              if back is not None and n > 0:
+                  nodes[n - 1].next = nodes[back]
+              return nodes[0] if n > 0 else None
+          assert has_cycle(None) is False, "The empty list has no cycle"
+          assert has_cycle(_chain(1)) is False, "One node with no link has no cycle"
+          assert has_cycle(_chain(1, 0)) is True, "One node linking to itself is a cycle"
+          assert has_cycle(_chain(2)) is False, "Two nodes, no cycle"
+          assert has_cycle(_chain(2, 0)) is True, "Two nodes linking back to the first is a cycle"
+          for _n in range(1, 30):
+              assert has_cycle(_chain(_n)) is False, "A list of " + str(_n) + " nodes ending in None has no cycle"
+              for _back in [0, _n // 2, _n - 1]:
+                  assert has_cycle(_chain(_n, _back)) is True, "A list of " + str(_n) + " nodes whose last links back to node " + str(_back) + " is a cycle"
+          _same = Node(1, Node(2, Node(1, Node(2, None))))
+          assert has_cycle(_same) is False, "Repeated values are not a cycle: compare nodes, not values"
+          assert output.strip() == "False\nTrue", "The program should print False, then True"
+        wrong:
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+            def has_cycle(head):
+                slow = head
+                fast = head
+                while fast is not None and fast.next is not None:
+                    slow = slow.next
+                    fast = fast.next
+                    if slow is fast:
+                        return True
+                return False
+
+            print(False)
+            print(True)
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+            def has_cycle(head):
+                slow = head
+                fast = head
+                while fast is not None and fast.next is not None:
+                    slow = slow.next
+                    fast = fast.next.next
+                    if slow.value == fast.value:
+                        return True
+                return False
+
+            print(False)
+            print(True)
+          - |
+            class Node:
+                def __init__(self, value, next):
+                    self.value = value
+                    self.next = next
+
+            def has_cycle(head):
+                slow = head
+                fast = head
+                while fast.next is not None and fast.next.next is not None:
+                    slow = slow.next
+                    fast = fast.next.next
+                    if slow is fast:
+                        return True
+                return False
+
+            print(False)
+            print(True)
+        explanation: |
+          The loop runs only while `fast` can take two steps, which handles the lists that end: `fast` reaches `None`, or a last node, and the answer is `False`. On a list that loops, `fast` never finds an end, and the gap between the pointers round the loop shrinks by one each pass until they refer to the same node. Moving both at the same speed makes them equal after the first pass, on every list. Comparing values instead of nodes reports a cycle in 1, 2, 1, 2. And asking `fast.next` before checking `fast` fails on the empty list. The method follows at most a few times $n$ links and keeps two names, whatever the length.
+    - question:
+        id: work-remove-all
+        type: choice
+        system: s2
+        prompt: |
+          A Python list of $n$ items is emptied by repeatedly removing the **first** item with `xs.pop(0)`. A linked list of the same $n$ items is emptied by repeatedly removing its head. How do the total costs compare?
+        options:
+          - "The Python list moves $(n - 1) + (n - 2) + \\dots + 0$ items in all, which is quadratic. The linked list moves its head $n$ times, which is linear."
+          - "Both are linear, since each removes $n$ items."
+          - "Both are quadratic."
+          - "The linked list is slower, since it must walk to the front."
+        answer: 0
+        explanation: |
+          Removing position 0 of an array closes the gap by moving every remaining item one place left, and the total is $\frac{n(n - 1)}{2}$. Removing the head of a linked list is one assignment. A loop that takes items from the front of a long Python list is a common and well-hidden cause of slow programs, and the next lesson has the proper tool for it.
+    - question:
+        id: work-choose
+        type: choice
+        system: s2
+        prompt: |
+          A program stores 10 lakh records. It reads them constantly by their position, and now and then adds one at the end. It never inserts in the middle. Which structure suits it, and why?
+        options:
+          - "An array, because reading by position takes a constant number of steps and adding at the end moves nothing. A linked list would follow up to 10 lakh links for each read."
+          - "A linked list, because inserting is constant."
+          - "Either, since walking both is linear."
+          - "A doubly linked list, because it can be walked from either end."
+        answer: 0
+        explanation: |
+          The work is almost all reads by position, which is the one thing an array does in a single step and a linked list does worst. The linked list's strength, cheap insertion at a place already in hand, is never used, and its weaknesses all are: slow reads, a reference stored beside every item, and nodes scattered through memory. Choosing a structure is this kind of bookkeeping: list the operations, weigh them by how often they happen, and read off the costs.
+  connections:
+    - text: |
+        The coupled train answered the puzzle. Because each node knows only the next, inserting or removing next to a node in hand changes a couple of links and moves nothing, however long the list. Because no node has an address you can work out, reaching position $i$ means following $i$ links. And because a link can point anywhere, even backwards, a list can loop, which two pointers moving at different speeds detect with no memory of where they have been, guaranteed to meet by a gap that shrinks by one each pass.
+
+        You also practised the discipline that every linked structure demands: save a link before you overwrite it, and treat the empty and one-node cases as the places where the invariant is most likely to break. Those habits carry straight over to trees, where each node has two links instead of one, in [[s2.binary-search-trees]], and to graphs, where a node may have any number, in [[s2.graphs-and-their-representations]]. A hash table, in [[s2.hash-tables]], keeps short linked lists inside an array, one per slot.
+
+        Real systems use linked lists in particular places. An operating system keeps lists of waiting processes. A memory allocator keeps a list of free blocks, linked through the free blocks themselves. A cache that throws out the least recently used item keeps a doubly linked list in order of use and moves an item to the front, in constant time, whenever it is touched.
+
+        Notice what the cheap operations in these two lessons had in common. An array is fast at its end. A linked list is fast at its head, and with a tail at its end. A great many programs need nothing more than that: put things in and take them out, always at an end. Restricting yourself on purpose to the ends gives two of the most useful structures there are, and which end things leave from decides the order in which a whole computation unfolds: [[s2.stacks-and-queues]].

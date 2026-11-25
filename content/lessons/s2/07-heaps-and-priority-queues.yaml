@@ -1,0 +1,646 @@
+concept: s2.heaps-and-priority-queues
+minutes: 100
+claim: You can store a complete binary tree in a plain list with no links, keep a min-heap in order by sifting up after an insertion and down after a removal, build a heap from n items in linear time, and use Python's heapq as a priority queue, to keep the k largest of a stream, and to merge sorted lists.
+recalls: [s2.balanced-search-trees]
+uses: [s2.binary-search-trees, s2.arrays-and-dynamic-arrays, s2.stacks-and-queues, f2.loop-invariants, f2.induction-and-strong-induction, f1.logarithms, f1.arithmetic-and-geometric-series, f1.summation-notation, s1.modules-and-imports, s0.lists-and-tuples, s0.loops, s0.functions]
+leads: [s2.tries, h2.scheduling, s3.sorting, s3.shortest-paths, s3.greedy-algorithms]
+starter: |
+  # Scratch space. Patients reach a casualty ward with a triage score,
+  # and the doctor always sees the lowest score first: 1 is the most urgent.
+  # This keeps them in a plain list. How many scores are looked at in all?
+  waiting = []
+  looks = 0
+  seen = []
+
+  for score in [5, 9, 7, 2, 10, 3, 8, 1]:
+      waiting.append(score)
+
+  while len(waiting) > 0:
+      looks += len(waiting)
+      urgent = min(waiting)
+      waiting.remove(urgent)
+      seen.append(urgent)
+
+  print(seen)
+  print("scores looked at:", looks)
+parts:
+  recall:
+    - text: |
+        [[s2.balanced-search-trees]] kept every key in order and answered any question about order in logarithmic time, paying for it with two links and a stored height in every node, and a rotation now and then. Today's structure answers only one question about order, and in return needs no links at all. Three quick pulls first.
+  puzzle:
+    - text: |
+        The casualty ward of a district hospital receives patients all day. A triage nurse gives each one a score from 1, the most urgent, to 10. Whenever a doctor falls free, the most urgent patient waiting must be seen next, and new patients keep arriving in between. So two operations alternate, over and over: **add a patient**, and **take out the most urgent**.
+
+        A stack would give the newest arrival, and a queue the patient who has waited longest. Neither is wanted. Here are the plans you have so far, judged by what happens to each operation's cost when the number waiting doubles.
+
+        | Plan | Add a patient | Take out the most urgent |
+        | --- | --- | --- |
+        | a list in order of arrival | constant: append | linear: look at every score |
+        | a list kept sorted, most urgent last | linear: shift the rest to make room | constant: pop the end |
+        | a balanced search tree | logarithmic | logarithmic: walk left to the end |
+
+        Run the starter. It follows the first plan with eight patients, and looks at 36 scores to see them all, $8 + 7 + \dots + 1$. A city's ambulance control room handling a lakh of calls this way would look at about 500 crore scores.
+
+        The balanced tree from the last lesson solves the problem. But it does far more than it was asked. It keeps **every** patient in order, ready to say who is seventeenth, which nobody in the ward wants to know, and for that it pays with links, heights and rotations.
+
+        **Is there an arrangement that keeps only as much order as is needed to find the most urgent, so that both operations are cheap, and that fits in a plain list with no links at all?**
+  intuition:
+    - text: |
+        Think of an inter-school kabaddi tournament with 16 teams, played as a knockout. After 15 matches the champion is known, and the champion played only four of them, one in each round. It never met most of the field: their defeats by other teams stood in for those matches.
+
+        Draw the tournament with the champion at the top, the two finalists beneath, the four semi-finalists beneath them, and so on. It is a tree, and a bushy one. Doubling the number of teams adds just one round, so a thousand teams need ten rounds, and ten lakh need twenty.
+
+        Now arrange the waiting patients in a bushy tree with one rule: **every patient is at least as urgent as the two directly beneath**. The most urgent patient is then at the top, since everyone is at least as urgent as everyone below them. And almost nothing else is promised. Two patients side by side can be in either order. This is far less than sorting, and it is all the ward needs.
+
+        The reward comes when the arrangement is disturbed. Put a new patient at the bottom. The rule can now be broken in just one place, between the newcomer and the patient directly above, so swap those two if need be, and look again one level up. The repair climbs one path, with at most one swap for each level. Taking out the top is repaired in the same way, going down.
+
+        The figure shows such an arrangement, called a **heap**, drawn as a tree and as the list that stores it. Insert an item, and then remove the smallest.
+    - figure: heap
+    - text: |
+        Inserting 1 put it at the end of the list, the next free place at the bottom of the tree, and two swaps carried it to the top. Removing the smallest moved the last item, 3, to the top, and one swap with its smaller child, 2, restored the rule. Each repair walked one path and left the rest of the heap alone.
+  derivation:
+    - text: |
+        **A tree with no links.** A binary tree is **complete** when every level is full except perhaps the last, and the last is filled from the left. Number the nodes level by level, left to right, starting from 0 at the root. Then the family relations are arithmetic:
+
+        | Node | Index |
+        | --- | --- |
+        | the root | $0$ |
+        | the left child of the node at $i$ | $2i + 1$ |
+        | the right child of the node at $i$ | $2i + 2$ |
+        | the parent of the node at $i$, for $i > 0$ | $\lfloor (i - 1) / 2 \rfloor$ |
+
+        Why? Level $d$ holds $2^d$ nodes, and the levels above it hold $1 + 2 + \dots + 2^{d - 1} = 2^d - 1$, a geometric series from [[f1.arithmetic-and-geometric-series]]. So level $d$ begins at index $2^d - 1$, and the node $p$ places along it has index $i = 2^d - 1 + p$. The $p$ nodes before it on its level have $2p$ children between them, so its own children are $2p$ and $2p + 1$ places along level $d + 1$. Their indices are $2^{d + 1} - 1 + 2p = 2i + 1$ and one more. Reading the formula backwards gives the parent: in Python, `(i - 1) // 2`.
+
+        So a complete tree fits in a plain list, node $i$ in slot $i$, and moving to a child or a parent is arithmetic on the index, like the address formula of [[s2.arrays-and-dynamic-arrays]]. There are no links and no node objects. A complete tree of $n$ nodes has height $\lfloor \log_2 n \rfloor$, by [[f1.logarithms]]: about 20 for ten lakh nodes. Completeness is the perfect shape that the AVL rule of the last lesson only approximates, and here it costs nothing to keep, because the tree only ever grows or shrinks at its last slot.
+
+        **The heap property.** A **min-heap** is a complete binary tree, stored in a list, in which every node's value is at most the values of its children. A **max-heap** is the mirror image, with every parent at least as large as its children.
+
+        *The smallest value is at index 0.* Take any node and walk up towards the root. Each step goes to a parent whose value is no larger, so the root's value is no larger than the node's. This is an induction on the depth, in the manner of [[f2.induction-and-strong-induction]].
+
+        The list `[2, 5, 3, 9, 6, 8]` is a heap. The root 2 has children 5 and 3, at indices 1 and 2. The node 5 has children 9 and 6, at indices 3 and 4, and the node 3 has one child, 8, at index 5. The list is **not sorted**: 5 comes before 3. Compare the invariant of [[s2.binary-search-trees]], which orders left against right and so makes searching possible. The heap property orders top against bottom, and so makes the minimum easy. In exchange, a heap cannot tell you whether 7 is present without looking at every slot.
+
+        **Adding: sift up.** To add a value, keep the tree complete by putting it in the next free slot, the end of the list. Then repair the heap property, which can be broken only between the new value and its parent.
+
+        ```python
+        def push(heap, value):
+            heap.append(value)
+            i = len(heap) - 1
+            while i > 0 and heap[(i - 1) // 2] > heap[i]:
+                parent = (i - 1) // 2
+                heap[parent], heap[i] = heap[i], heap[parent]
+                i = parent
+        ```
+
+        Here is the invariant, in the sense of [[f2.loop-invariants]]: *the heap property holds between every parent and child, except perhaps between position `i` and its parent.* It holds at the start, since appending creates exactly one new parent and child pair. Each swap moves a value up past a larger one. The value that moves up becomes the parent of the old parent's other child too, and it is smaller than the old parent, which was already no larger than that child, so that pair is fine. The only possible fault has moved up, to the new `i` and its parent. When the loop stops, either `i` is the root or its parent is no larger, so there is no fault anywhere. Each pass climbs a level, so there are at most $\lfloor \log_2 n \rfloor$ swaps: logarithmic.
+
+        **Removing the smallest: sift down.** The smallest is at index 0, but the root cannot simply be deleted, because that would leave two separate trees. Keep the shape complete instead: move the **last** value into the root and shorten the list. The shape is now right and the root is probably wrong, so repair downwards.
+
+        ```python
+        def sift_down(heap, i):
+            while True:
+                least = i
+                for child in [2 * i + 1, 2 * i + 2]:
+                    if child < len(heap) and heap[child] < heap[least]:
+                        least = child
+                if least == i:
+                    return
+                heap[least], heap[i] = heap[i], heap[least]
+                i = least
+
+        def pop(heap):
+            smallest = heap[0]
+            last = heap.pop()
+            if len(heap) > 0:
+                heap[0] = last
+                sift_down(heap, 0)
+            return smallest
+        ```
+
+        At each step, find the least of the node and its children. If the node itself is least, stop. Otherwise swap it with that **smaller child** and continue from there. The invariant now reads: *the property holds everywhere except perhaps between position `i` and its children.* The walk follows one path towards a leaf, so it too makes at most $\lfloor \log_2 n \rfloor$ swaps. The `if len(heap) > 0` matters: when the heap held one value, removing it leaves nothing to sift.
+    - question:
+        id: derivation-smaller-child
+        type: choice
+        system: s2
+        prompt: |
+          After the last value moves to the root, the list is `[8, 3, 2, 6, 4, 5]`. With which child must 8 be swapped first, and why?
+        options:
+          - "With 2, the smaller child. The value that moves up becomes the parent of the other child as well, so it must be no larger than 3, and only 2 is."
+          - "With 3, the left child, because sifting down always goes left first."
+          - "With 3, because it is closer in value to 8, so the swap disturbs the heap least."
+          - "With neither, because a min-heap allows a large value at the root."
+        answer: 0
+        explanation: |
+          Whichever child rises becomes the parent of the other one. If 3 rose, it would sit above 2, and the heap property would break at once. If 2 rises, it sits above 3 and above 8, and both are fine. So the swap is always with the smaller child. After it the list is `[2, 3, 8, 6, 4, 5]`, and 8, now at index 2, still has a smaller child, 5, so one more swap gives `[2, 3, 5, 6, 4, 8]`. Swapping with whichever child happens to come first is the most common mistake in writing a heap.
+    - question:
+        id: order-pop
+        type: order
+        system: s2
+        prompt: |
+          The min-heap `[1, 3, 2, 7, 4, 5, 6]` has its smallest value removed. Put the steps in order.
+        steps:
+          - "Keep 1, the value at index 0, to return at the end."
+          - "Remove the last value, 6, from the end of the list and put it at index 0, giving [6, 3, 2, 7, 4, 5]."
+          - "Compare 6 with its children 3 and 2, and swap it with the smaller, 2, giving [2, 3, 6, 7, 4, 5]."
+          - "6 is now at index 2, with one child, 5, at index 5. Swap them, giving [2, 3, 5, 7, 4, 6]."
+          - "6 is now at index 5 and has no children, so stop and return 1."
+        explanation: The removed value is the root. The last value fills the hole, which keeps the tree complete, and then sinks, always towards the smaller child, until it is no larger than its children or reaches the bottom. Two swaps were needed, and the heap of six has height 2, so no removal could have needed more.
+    - text: |
+        **Building a heap from many items at once.** Suppose all $n$ patients are already waiting when the ward opens. Pushing them one by one costs up to $\log_2 n$ swaps each. There is a cheaper way. Every leaf is already a heap of one. Work backwards from the last node that has a child, at index $\lfloor n / 2 \rfloor - 1$, to the root, and sift each node down. When a node's turn comes, both of its subtrees are already heaps, so one sift down makes its own subtree a heap too.
+
+        ```python
+        def heapify(items):
+            for i in range(len(items) // 2 - 1, -1, -1):
+                sift_down(items, i)
+        ```
+
+        How much work is that? Half the nodes are leaves and do nothing. A quarter sit one level above the leaves and sift at most one level. An eighth sift at most two, and so on. Writing the total with [[f1.summation-notation]],
+
+        $$\text{swaps} \le \sum_{h \ge 1} h \cdot \frac{n}{2^{h + 1}} = \frac{n}{2} \sum_{h \ge 1} \frac{h}{2^h}.$$
+
+        The last sum is 2. To see it, split each $h$ into $h$ ones and count each one separately: the ones belonging to $h \ge k$ add up to $\frac{1}{2^k} + \frac{1}{2^{k + 1}} + \dots = \frac{1}{2^{k - 1}}$, and adding those over $k = 1, 2, 3, \dots$ gives $1 + \frac{1}{2} + \frac{1}{4} + \dots = 2$. So building a heap bottom-up takes at most $n$ swaps: **linear**. The nodes that might sift a long way are few, and the many nodes near the bottom can only sift a little. Pushing one by one puts it the other way round: most items land near the bottom and may climb all the way up.
+
+        **Python's heap.** The module `heapq` gives these operations on an ordinary list: `heapq.heappush(xs, x)` sifts up, `heapq.heappop(xs)` removes the smallest, and `heapq.heapify(xs)` builds a heap in place in linear time. There is no separate heap type, and `xs[0]` shows the smallest without removing it. It is always a min-heap.
+
+        To attach a patient to a score, push a tuple. Tuples compare item by item, as in [[s0.lists-and-tuples]], so the score decides first. Two patients with equal scores would then be compared by name, which is meaningless, so put an arrival number second: equal scores are then seen in order of arrival, and the names are never compared.
+
+        ```python
+        import heapq
+
+        ward = []
+        arrived = 0
+        for score, name in [(3, "Ravi"), (1, "Fatima"), (3, "Anjali"), (2, "Gurpreet")]:
+            heapq.heappush(ward, (score, arrived, name))
+            arrived += 1
+
+        while ward:
+            score, _, name = heapq.heappop(ward)
+            print(score, name)
+        ```
+
+        This shows Fatima, then Gurpreet, then Ravi and Anjali, who share a score and are seen in the order they came. For the **largest** first, push the negated score, $-s$ in place of $s$.
+
+        **What a heap is for.** A collection with "add an item" and "remove the most urgent" is called a **priority queue**. It is an idea, like the stack and the queue of [[s2.stacks-and-queues]], and the heap is the usual way to build it.
+
+        | Operation | Heap | Balanced search tree | Sorted list |
+        | --- | --- | --- | --- |
+        | look at the smallest | constant | logarithmic | constant |
+        | add | logarithmic | logarithmic | linear |
+        | remove the smallest | logarithmic | logarithmic | constant |
+        | build from $n$ items | linear | about $n \log_2 n$ | about $n \log_2 n$ |
+        | find any given item | linear | logarithmic | logarithmic |
+
+        Three patterns use it again and again.
+
+        - **The best $k$ of a stream.** JEE results arrive as lakhs of scores, and you want the top 10. Sorting all of them is more than is needed. Keep a min-heap of at most 10 scores. Push each new score, and whenever the heap holds 11, pop the smallest. At the end the heap holds the 10 largest, and its root is the weakest of the best, the score a newcomer must beat. Each step costs about $\log_2 10$, a constant, and the memory is 10 scores however long the stream.
+        - **Merging sorted lists.** Each railway zone sends its departures sorted by time, and the national board wants one sorted list. Put the first departure of each zone in a heap. Pop the earliest, and push the next departure from the same zone. Every departure costs about $\log_2$ of the number of zones.
+        - **Events in time.** A simulation, or an operating system choosing which process to run, keeps future events in a heap keyed by time, pops the earliest and lets it push new ones. You will meet this in [[h2.scheduling]], and the same loop finds shortest routes on a map in [[s3.shortest-paths]].
+
+        Popping everything from a heap returns the items in increasing order, which is a way of sorting, called **heap sort**, compared with the others in [[s3.sorting]]. A heap cannot cheaply find a particular item, so it cannot cheaply change one's priority. The usual remedy is to push a fresh entry and, when an entry is popped, skip it if it is out of date.
+  formal:
+    - text: |
+        **Complete binary tree.** Every level full except perhaps the last, which is filled from the left. Stored in a list with the root at index 0, the children of index $i$ at $2i + 1$ and $2i + 2$, and its parent at $\lfloor (i - 1) / 2 \rfloor$. Height $\lfloor \log_2 n \rfloor$.
+
+        **Min-heap.** A complete binary tree whose every node's value is at most its children's values. The minimum is at index 0. A max-heap is the mirror.
+
+        **Sift up** (after appending): swap with the parent while smaller. **Sift down** (after moving the last value to the root): swap with the smaller child while larger. Each costs at most the height, so logarithmic.
+
+        **Heapify.** Sift down every node from index $\lfloor n / 2 \rfloor - 1$ back to 0. At most $\sum_{h \ge 1} h \cdot n / 2^{h + 1} = n$ swaps: linear.
+
+        **Priority queue.** A collection with "add" and "remove the smallest". In Python, `heapq.heappush`, `heapq.heappop` and `heapq.heapify` on a list, with tuples for (priority, tie-breaker, item).
+  drill:
+    - text: Seconds each. Move by index arithmetic, and repair along one path.
+    - question:
+        id: drill-left-child
+        type: numeric
+        system: s1
+        prompt: |
+          In a heap stored in a list, at which index is the left child of the node at index 3?
+        answer: "7"
+        explanation: $2 \cdot 3 + 1 = 7$.
+    - question:
+        id: drill-parent
+        type: numeric
+        system: s1
+        prompt: |
+          At which index is the parent of the node at index 10?
+        answer: "4"
+        explanation: '$\lfloor (10 - 1) / 2 \rfloor = 4$. Check it: the children of 4 are 9 and 10.'
+    - question:
+        id: drill-is-heap
+        type: choice
+        system: s1
+        prompt: Which of these lists is a min-heap?
+        options: ["[1, 4, 2, 7, 5, 3]", "[1, 3, 2, 4, 2]", "[5, 4, 3, 2, 1]", "[2, 1, 3, 4, 5]"]
+        answer: 0
+        explanation: In `[1, 4, 2, 7, 5, 3]`, 1 is at most 4 and 2, 4 is at most 7 and 5, and 2 is at most 3. In `[1, 3, 2, 4, 2]` the node 3 has the child 2 at index 4. The other two have a larger value above a smaller one at the root.
+    - question:
+        id: drill-largest
+        type: choice
+        system: s1
+        prompt: |
+          Where can the **largest** value of a min-heap with distinct values be?
+        options: ["At a node with no children", "At index 0", "At index 1 or 2", "Anywhere at all"]
+        answer: 0
+        explanation: Any node with a child is smaller than that child, so it cannot be the largest. The largest is at a leaf, and about half the nodes are leaves, so a min-heap is no help in finding it.
+    - question:
+        id: drill-swaps-16
+        type: numeric
+        system: s1
+        prompt: |
+          A heap holds 15 values. A sixteenth is pushed. At most how many swaps can sifting it up need?
+        answer: "4"
+        explanation: The new value goes to index 15, at depth $\lfloor \log_2 16 \rfloor = 4$, so it can climb at most four levels.
+    - question:
+        id: drill-height-1000
+        type: numeric
+        system: s1
+        prompt: |
+          What is the height of a heap holding 1000 values?
+        answer: "9"
+        explanation: $2^9 = 512 \le 1000 < 1024 = 2^{10}$, so the height is $\lfloor \log_2 1000 \rfloor = 9$.
+    - question:
+        id: drill-peek
+        type: choice
+        system: s1
+        prompt: |
+          What does it cost to look at the smallest value of a heap of $n$ values without removing it?
+        options: ["Constant", "Logarithmic", "Linear", "Quadratic"]
+        answer: 0
+        explanation: It is at index 0. Only removing it needs a repair.
+    - question:
+        id: drill-largest-first
+        type: choice
+        system: s1
+        prompt: |
+          `heapq` always gives the smallest first. How do you make it give the largest score first?
+        options: ["Push the negated score, and negate it again when it is popped", "Push the score as it is and pop from the end of the list", "Call heapify after every push", "Push the score twice"]
+        answer: 0
+        explanation: Negation turns the largest into the smallest. The end of a heap's list holds no particular value, so popping from it gives nothing useful.
+    - question:
+        id: predict-heapq
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import heapq
+
+          jobs = []
+          for p in [5, 2, 8, 1, 9]:
+              heapq.heappush(jobs, p)
+          print(heapq.heappop(jobs), heapq.heappop(jobs), jobs[0], len(jobs))
+        output: "1 2 5 3"
+        explanation: The two smallest come out first, 1 and then 2. The next smallest, 5, is now at index 0, and three values remain.
+    - question:
+        id: predict-sift-up
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          heap = [2, 5, 3, 9, 6, 8, 7]
+          heap.append(4)
+          i = len(heap) - 1
+          while i > 0 and heap[(i - 1) // 2] > heap[i]:
+              parent = (i - 1) // 2
+              heap[parent], heap[i] = heap[i], heap[parent]
+              i = parent
+          print(heap, i)
+        output: "[2, 4, 3, 5, 6, 8, 7, 9] 1"
+        explanation: 4 starts at index 7, whose parent at index 3 holds 9, so they swap. At index 3 its parent at index 1 holds 5, so they swap again. At index 1 its parent holds 2, which is smaller, so the climb stops there.
+  work:
+    - text: Slower now. After every change to the list, say where the heap property could have broken, and check only there.
+    - question:
+        id: write-push
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `push(heap, value)`. `heap` is a list in min-heap order. Add `value` and restore the heap property by sifting up, changing the list in place. Do not sort and do not use `heapq`: the tests count how many slots you read, and a push should read only one path.
+        starter: |
+          def push(heap, value):
+              heap.append(value)
+
+          heap = [2, 5, 3, 9, 6, 8]
+          push(heap, 1)
+          push(heap, 7)
+          print(heap)
+        solution: |
+          def push(heap, value):
+              heap.append(value)
+              i = len(heap) - 1
+              while i > 0 and heap[(i - 1) // 2] > heap[i]:
+                  parent = (i - 1) // 2
+                  heap[parent], heap[i] = heap[i], heap[parent]
+                  i = parent
+
+          heap = [2, 5, 3, 9, 6, 8]
+          push(heap, 1)
+          push(heap, 7)
+          print(heap)
+        tests: |
+          import random
+          def _is_heap(h):
+              for _i in range(1, len(h)):
+                  if h[(_i - 1) // 2] > h[_i]:
+                      return False
+              return True
+          assert "sort" not in source and "heapq" not in source, "Sift up by swapping; do not sort the list or use heapq"
+          random.seed(5)
+          for _trial in range(200):
+              _h = []
+              _vals = [random.randint(0, 50) for _ in range(random.randint(1, 40))]
+              for _v in _vals:
+                  push(_h, _v)
+                  assert _is_heap(_h), "After pushing " + str(_v) + " the list " + str(_h) + " is not a min-heap"
+              assert sorted(_h) == sorted(_vals), "The heap should hold exactly the values pushed"
+          _reads = [0]
+          class _Counted(list):
+              def __getitem__(self, i):
+                  _reads[0] += 1
+                  return list.__getitem__(self, i)
+          _big = _Counted(range(0, 2046, 2))
+          _reads[0] = 0
+          push(_big, 1)
+          assert _is_heap(list(_big)) and list(_big)[1] == 1, "Pushing 1 into the even numbers 0 to 2044 should carry it up to index 1"
+          assert _reads[0] <= 60, "push read " + str(_reads[0]) + " slots of a heap of 1024; one path of height 10 needs about 40"
+          assert output.strip() == "[1, 5, 2, 7, 6, 8, 3, 9]", "The program should print [1, 5, 2, 7, 6, 8, 3, 9]"
+        wrong:
+          - |
+            def push(heap, value):
+                heap.append(value)
+                i = len(heap) - 1
+                if i > 0 and heap[(i - 1) // 2] > heap[i]:
+                    parent = (i - 1) // 2
+                    heap[parent], heap[i] = heap[i], heap[parent]
+
+            print([1, 5, 2, 7, 6, 8, 3, 9])
+          - |
+            def push(heap, value):
+                heap.append(value)
+                i = len(heap) - 1
+                while i > 0 and heap[i // 2] > heap[i]:
+                    parent = i // 2
+                    heap[parent], heap[i] = heap[i], heap[parent]
+                    i = parent
+
+            print([1, 5, 2, 7, 6, 8, 3, 9])
+          - |
+            def push(heap, value):
+                heap.append(value)
+                for start in range(len(heap) // 2 - 1, -1, -1):
+                    i = start
+                    while True:
+                        least = i
+                        for child in [2 * i + 1, 2 * i + 2]:
+                            if child < len(heap) and heap[child] < heap[least]:
+                                least = child
+                        if least == i:
+                            break
+                        heap[least], heap[i] = heap[i], heap[least]
+                        i = least
+
+            print([1, 5, 2, 7, 6, 8, 3, 9])
+        explanation: |
+          Appending keeps the tree complete, and the new value can break the heap property only against its parent, at index `(i - 1) // 2`. While the parent is larger, swap and move up; the fault, if any, moves up with the value. One pass of the loop is not enough, since a very small value may need to climb all the way to the root, and the parent formula must be `(i - 1) // 2`, because the root is at 0. Rebuilding the whole heap after each push gives the right list, but reads every slot every time: linear work for a job that needs only one path.
+    - question:
+        id: fix-pop
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This program empties a heap with `pop` and should show its values in increasing order, `[1, 2, 3, 4, 5, 6, 7]`. It shows `[1, 3, 4, 5, 6, 2, 7]`. Find the fault in the sifting down and fix it.
+        starter: |
+          def pop(heap):
+              smallest = heap[0]
+              last = heap.pop()
+              if len(heap) > 0:
+                  heap[0] = last
+                  i = 0
+                  while True:
+                      moved = False
+                      for child in [2 * i + 1, 2 * i + 2]:
+                          if child < len(heap) and heap[child] < heap[i]:
+                              heap[child], heap[i] = heap[i], heap[child]
+                              i = child
+                              moved = True
+                              break
+                      if not moved:
+                          break
+              return smallest
+
+          heap = [1, 3, 2, 7, 4, 5, 6]
+          drained = []
+          while len(heap) > 0:
+              drained.append(pop(heap))
+          print(drained)
+        solution: |
+          def pop(heap):
+              smallest = heap[0]
+              last = heap.pop()
+              if len(heap) > 0:
+                  heap[0] = last
+                  i = 0
+                  while True:
+                      least = i
+                      for child in [2 * i + 1, 2 * i + 2]:
+                          if child < len(heap) and heap[child] < heap[least]:
+                              least = child
+                      if least == i:
+                          break
+                      heap[least], heap[i] = heap[i], heap[least]
+                      i = least
+              return smallest
+
+          heap = [1, 3, 2, 7, 4, 5, 6]
+          drained = []
+          while len(heap) > 0:
+              drained.append(pop(heap))
+          print(drained)
+        tests: |
+          import heapq as _hq
+          import random
+          random.seed(21)
+          for _trial in range(200):
+              _vals = [random.randint(0, 60) for _ in range(random.randint(1, 40))]
+              _h = list(_vals)
+              _hq.heapify(_h)
+              _out = []
+              while len(_h) > 0:
+                  _out.append(pop(_h))
+              assert _out == sorted(_vals), "Emptying a heap of " + str(sorted(_vals)) + " gave " + str(_out)
+          _one = [4]
+          assert pop(_one) == 4 and _one == [], "Popping the only value should return it and leave an empty list"
+          assert output.strip() == "[1, 2, 3, 4, 5, 6, 7]", "The program should print [1, 2, 3, 4, 5, 6, 7]"
+        wrong:
+          - |
+            def pop(heap):
+                smallest = heap[0]
+                last = heap.pop()
+                if len(heap) > 0:
+                    heap[0] = last
+                    i = 0
+                    least = i
+                    for child in [2 * i + 1, 2 * i + 2]:
+                        if child < len(heap) and heap[child] < heap[least]:
+                            least = child
+                    heap[least], heap[i] = heap[i], heap[least]
+                return smallest
+
+            print([1, 2, 3, 4, 5, 6, 7])
+          - |
+            def pop(heap):
+                smallest = heap[0]
+                last = heap.pop()
+                heap[0] = last
+                i = 0
+                while True:
+                    least = i
+                    for child in [2 * i + 1, 2 * i + 2]:
+                        if child < len(heap) and heap[child] < heap[least]:
+                            least = child
+                    if least == i:
+                        break
+                    heap[least], heap[i] = heap[i], heap[least]
+                    i = least
+                return smallest
+
+            print([1, 2, 3, 4, 5, 6, 7])
+        explanation: |
+          The loop swapped the sinking value with the **first** child smaller than it, not the **smallest** child. On the first removal 6 went to the root, and its left child 3 was smaller, so 3 rose above 2, and the heap property broke at once: the next removal returned 3 while 2 was still waiting. Find the least of the node and both children, swap with that, and stop when the node itself is least. The guard `if len(heap) > 0` must stay, since removing the only value leaves nothing to sift.
+    - question:
+        id: write-top-k
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `top_k(scores, k)`, which returns the `k` largest of `scores`, largest first. `scores` may be an enormous stream read one item at a time, so keep a min-heap, with `heapq`, of at most `k` of the best scores seen so far, and never hold the whole stream: the tests watch how large your heap grows. You may assume there are at least `k` scores.
+        starter: |
+          import heapq
+
+          def top_k(scores, k):
+              return []
+
+          print(top_k([212, 187, 254, 199, 276, 231, 168, 245], 3))
+        solution: |
+          import heapq
+
+          def top_k(scores, k):
+              best = []
+              for score in scores:
+                  heapq.heappush(best, score)
+                  if len(best) > k:
+                      heapq.heappop(best)
+              result = []
+              while len(best) > 0:
+                  result.append(heapq.heappop(best))
+              return result[::-1]
+
+          print(top_k([212, 187, 254, 199, 276, 231, 168, 245], 3))
+        tests: |
+          import random
+          _sizes = [0]
+          _real_push = heapq.heappush
+          _real_heapify = heapq.heapify
+          def _watch_push(h, x):
+              _real_push(h, x)
+              _sizes[0] = max(_sizes[0], len(h))
+          def _watch_heapify(h):
+              _real_heapify(h)
+              _sizes[0] = max(_sizes[0], len(h))
+          heapq.heappush = _watch_push
+          heapq.heapify = _watch_heapify
+          random.seed(8)
+          for _trial in range(150):
+              _k = random.randint(1, 6)
+              _scores = [random.randint(0, 300) for _ in range(random.randint(_k + 20, 80))]
+              _want = sorted(_scores)[::-1][:_k]
+              _sizes[0] = 0
+              _got = top_k(iter(_scores), _k)
+              assert _got == _want, "The " + str(_k) + " largest of " + str(_scores) + " are " + str(_want) + ", largest first, not " + str(_got)
+              assert 0 < _sizes[0] <= _k + 1, "Keep a heap of at most k + 1 scores with heapq; yours held " + str(_sizes[0]) + " with k = " + str(_k)
+          heapq.heappush = _real_push
+          heapq.heapify = _real_heapify
+          assert output.strip() == "[276, 254, 245]", "The program should print [276, 254, 245]"
+        wrong:
+          - |
+            import heapq
+
+            def top_k(scores, k):
+                return sorted(scores)[::-1][:k]
+
+            print([276, 254, 245])
+          - |
+            import heapq
+
+            def top_k(scores, k):
+                every = []
+                for score in scores:
+                    heapq.heappush(every, -score)
+                result = []
+                for _ in range(k):
+                    result.append(-heapq.heappop(every))
+                return result
+
+            print([276, 254, 245])
+          - |
+            import heapq
+
+            def top_k(scores, k):
+                best = []
+                for score in scores:
+                    heapq.heappush(best, score)
+                    if len(best) > k:
+                        heapq.heappop(best)
+                result = []
+                while len(best) > 0:
+                    result.append(heapq.heappop(best))
+                return result
+
+            print([276, 254, 245])
+        explanation: |
+          A **min**-heap of the best $k$ so far keeps the weakest of them at the root, which is exactly the one to throw out when a better score arrives. Push every score, and whenever the heap holds $k + 1$, pop the smallest: whatever leaves cannot be among the $k$ largest, since $k$ larger scores remain. Emptying the heap at the end gives the survivors smallest first, so reverse them. A max-heap of every score also finds the answer, but it holds the whole stream, which is what the stream was too large for. Sorting the whole stream has the same trouble.
+    - question:
+        id: work-build-15
+        type: numeric
+        system: s2
+        prompt: |
+          Fifteen values are built into a heap bottom-up, sifting down each node from the last one with a child back to the root. At most how many swaps can the whole build make?
+        answer: "11"
+        explanation: |
+          Fifteen values make a full tree of height 3: 8 leaves, which do nothing, 4 nodes that can sift at most 1 level, 2 that can sift at most 2, and the root, which can sift at most 3. That is $4 + 4 + 3 = 11$, fewer than the 15 values. Pushing the same values one at a time could need $2 \cdot 1 + 4 \cdot 2 + 8 \cdot 3 = 34$ swaps, because most values land near the bottom with far to climb.
+    - question:
+        id: work-change-priority
+        type: choice
+        system: s2
+        prompt: |
+          A patient's condition gets worse while waiting, and the score must change from 6 to 2. The heap has no quick way to find where the patient's entry is. What is the usual remedy?
+        options:
+          - "Push a new entry with score 2 and leave the old one in the heap. When an entry is popped, skip it if that patient has already been seen."
+          - "Search the list for the entry, change its score, and do nothing more."
+          - "Sort the whole list after changing the score."
+          - "Pop entries until the patient comes out, change the score, and push everything back."
+        answer: 0
+        explanation: |
+          Pushing costs logarithmic time and needs no search. The patient now has two entries. The one with score 2 comes out first and the patient is seen; when the stale one with score 6 surfaces later, a record of who has been seen, such as a set, says to discard it. Changing the score in place without repairing would break the heap property, since 2 may now sit below a larger parent. Sorting costs far more than needed, and popping until the patient appears can be linear. The same trick of stale entries appears in the shortest-route algorithm of the algorithms cluster.
+    - question:
+        id: work-median
+        type: choice
+        system: s2
+        prompt: |
+          A cricket statistics site must show the median of all innings scores so far, after every new innings. Which arrangement handles each new score in logarithmic time?
+        options:
+          - "A max-heap of the lower half and a min-heap of the upper half, kept within one of each other in size, so the median is at the top of one or both."
+          - "One min-heap of all the scores, since the median is at its root."
+          - "One min-heap, popping half the scores to find the middle each time."
+          - "A list kept sorted, inserting each new score in its place."
+        answer: 0
+        explanation: |
+          The median separates the lower half from the upper half. With the lower half in a max-heap, its largest is on top, and with the upper half in a min-heap, its smallest is on top, so the middle values are at the two roots. A new score goes into one heap, and if the sizes now differ by two, one root moves across: a few pushes and pops, each logarithmic. A single min-heap has its minimum at the root, not its median, and popping half of it is linear. A sorted list gives the median at once but each insertion shifts up to half the list, which is linear.
+  connections:
+    - text: |
+        The puzzle asked for an arrangement that keeps only the order needed to find the most urgent, cheaply and without links. The heap keeps a complete tree in a list, where a node's children and parent are found by arithmetic, and promises only that every parent is no larger than its children. That one promise puts the smallest at the root. Adding a value climbs one path and removing the smallest sinks along one, so both are logarithmic, and a whole heap can be built in linear time. A lakh of waiting patients need at most 16 swaps for each arrival or departure, not a lakh of looks.
+
+        Notice what the heap gave up. A balanced search tree can find any key and list all of them in order. A heap cannot find a particular value without looking everywhere, and its list is not sorted. Choosing a data structure is choosing which questions to make cheap, and a heap makes one question as cheap as possible by refusing all the others.
+
+        Priority queues are everywhere. Your phone's operating system keeps waiting tasks in one, as you will see in [[h2.scheduling]]. Route planners keep the places still to be explored in one, ordered by distance, in [[s3.shortest-paths]]. Many of the greedy methods of [[s3.greedy-algorithms]], which always take the best-looking choice next, run on a heap.
+
+        So far every structure has compared whole keys with each other. But many keys are words: names, words of a dictionary, phone numbers, web addresses. Comparing two long words takes time in proportion to their length, and words that share a beginning, such as "rail", "railway" and "railways", are compared letter by letter again and again. The next structure branches on one letter at a time and stores each shared beginning once: [[s2.tries]].

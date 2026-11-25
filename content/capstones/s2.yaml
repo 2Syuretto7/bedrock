@@ -1,0 +1,606 @@
+cluster: S2
+title: A bus operator's control room
+minutes: 100
+claim: You will have built the core of a bus operator's control room, a route map stored as neighbour sets, a waitlist served by priority and then by arrival, a search box that completes town names, and a running count of how many separate pieces the network is in as routes open, and chosen a structure for each of two further jobs by what it must answer cheaply.
+brief: |
+  Every lesson in this cluster ended with the same advice: choose a structure by the questions you will ask of it. This project asks many different questions of one body of data, so it needs several structures at once, each picked for its job.
+
+  **The project.** A state bus operator runs routes between towns, and its control room needs software. Routes arrive as lines of text such as `Pune - Mumbai`, and a route runs both ways. Passengers wait for seats, with senior citizens served first. Booking clerks type the start of a town's name and expect suggestions. New routes open every month, and the planners want to know, after each one, how many separate pieces the network still falls into.
+
+  You will build each piece in its own stage, each with its own tests. The structures are all ones you have built by hand already; here you choose them, combine them, and use Python's own versions where they exist. Keep the cost of every operation in mind as you go: the operator has thousands of towns and lakhs of passengers, and an answer that looks at everything every time will not do.
+starter: |
+  # Scratch space for the control room.
+  routes = ["Pune - Mumbai", "Mumbai - Surat", "Pune - Nashik"]
+  for line in routes:
+      print(line.split("-"))
+stages:
+  - title: The route map
+    blocks:
+      - text: |
+          The routes form an undirected graph whose nodes are towns. The control room's commonest questions are "which towns can I reach directly from here?" and "is there a direct route between these two?", so store the map as adjacency sets: a dictionary from each town to the set of towns it has a direct route to.
+
+          The lines are untidy. The town names may have spaces around them, and the same route may be listed twice, perhaps the other way round.
+      - question:
+          id: route-map
+          type: code
+          mode: write
+          system: s2
+          concepts: [s2.graphs-and-their-representations, s2.hash-tables]
+          prompt: |
+            Write `route_map(lines)`. Each line holds two town names separated by `-`, possibly with spaces around them. Return a dictionary mapping every town that appears to the set of towns it has a direct route to, in both directions.
+          starter: |
+            def route_map(lines):
+                return {}
+
+            routes = ["Pune - Mumbai", "Mumbai -Surat", " Pune-Nashik", "Nashik - Mumbai", "Goa - Belagavi", "Mumbai - Pune"]
+            towns = route_map(routes)
+            print(sorted(towns["Mumbai"]), len(towns), sum(len(towns[t]) for t in towns))
+          solution: |
+            def route_map(lines):
+                towns = {}
+                for line in lines:
+                    a, b = line.split("-")
+                    a = a.strip()
+                    b = b.strip()
+                    if a not in towns:
+                        towns[a] = set()
+                    if b not in towns:
+                        towns[b] = set()
+                    towns[a].add(b)
+                    towns[b].add(a)
+                return towns
+
+            routes = ["Pune - Mumbai", "Mumbai -Surat", " Pune-Nashik", "Nashik - Mumbai", "Goa - Belagavi", "Mumbai - Pune"]
+            towns = route_map(routes)
+            print(sorted(towns["Mumbai"]), len(towns), sum(len(towns[t]) for t in towns))
+          tests: |
+            import random
+            random.seed(47)
+            _names = ["Pune", "Mumbai", "Surat", "Nashik", "Goa", "Belagavi", "Kolhapur", "Satara"]
+            for _trial in range(100):
+                _pairs = []
+                for _ in range(random.randint(1, 12)):
+                    _a, _b = random.sample(_names, 2)
+                    _pairs.append((_a, _b))
+                _lines = [" " * random.randint(0, 2) + _a + " " * random.randint(0, 2) + "-" + " " * random.randint(0, 2) + _b + " " * random.randint(0, 2) for _a, _b in _pairs]
+                _want = {}
+                for _a, _b in _pairs:
+                    _want[_a] = _want.get(_a, set()) | {_b}
+                    _want[_b] = _want.get(_b, set()) | {_a}
+                _got = route_map(_lines)
+                assert sorted(_got) == sorted(_want), "For " + str(_lines) + " the towns should be " + str(sorted(_want)) + ", not " + str(sorted(_got))
+                for _t in _want:
+                    assert set(_got[_t]) == _want[_t], "For " + str(_lines) + ", " + _t + " should have direct routes to " + str(sorted(_want[_t])) + ", not " + str(sorted(_got[_t]))
+                    assert isinstance(_got[_t], set), "Map each town to a set, so that a repeated route is recorded once and a lookup is one step"
+            assert output.strip() == "['Nashik', 'Pune', 'Surat'] 6 10", "The program should print ['Nashik', 'Pune', 'Surat'] 6 10"
+          wrong:
+            - |
+              def route_map(lines):
+                  towns = {}
+                  for line in lines:
+                      a, b = line.split("-")
+                      a = a.strip()
+                      b = b.strip()
+                      if a not in towns:
+                          towns[a] = set()
+                      if b not in towns:
+                          towns[b] = set()
+                      towns[a].add(b)
+                  return towns
+
+              print(['Nashik', 'Pune', 'Surat'], 6, 10)
+            - |
+              def route_map(lines):
+                  towns = {}
+                  for line in lines:
+                      a, b = line.split("-")
+                      if a not in towns:
+                          towns[a] = set()
+                      if b not in towns:
+                          towns[b] = set()
+                      towns[a].add(b)
+                      towns[b].add(a)
+                  return towns
+
+              print(['Nashik', 'Pune', 'Surat'], 6, 10)
+            - |
+              def route_map(lines):
+                  towns = {}
+                  for line in lines:
+                      a, b = line.split("-")
+                      a = a.strip()
+                      b = b.strip()
+                      if a not in towns:
+                          towns[a] = []
+                      if b not in towns:
+                          towns[b] = []
+                      towns[a].append(b)
+                      towns[b].append(a)
+                  return towns
+
+              print(['Nashik', 'Pune', 'Surat'], 6, 10)
+          explanation: |
+            Split each line at the `-` and strip both names, or "Mumbai " and "Mumbai" become two different towns. Record each route at both ends, since a route runs both ways. Sets make the repeated route, Mumbai to Pune after Pune to Mumbai, harmless, and answer "is there a direct route?" in one look on average, by hashing. With lists, a repeated route would appear twice in each town's list. The six lines hold five distinct routes, since "Mumbai - Pune" repeats the first, so the sets hold 10 names, twice five.
+      - question:
+          id: degree-sum
+          type: numeric
+          system: s1
+          concepts: [s2.graphs-and-their-representations]
+          prompt: |
+            A route map has 14 different routes, each joining two different towns. Add up, over every town, the number of towns it has a direct route to. What is the total?
+          answer: "28"
+          explanation: Each route is counted once at each of its two ends, so the total is twice the number of routes.
+  - title: Who gets the next seat
+    blocks:
+      - text: |
+          When a seat frees up on a full bus, the waitlist decides who gets it. Senior citizens, priority 1, come before everyone else, priority 2, and within a priority it is first come, first served. Passengers join and seats free up all day, so both operations must be cheap: a heap, through `heapq`, with entries that compare in the right order.
+      - question:
+          id: waitlist
+          type: code
+          mode: write
+          system: s2
+          concepts: [s2.heaps-and-priority-queues, s2.stacks-and-queues]
+          prompt: |
+            Complete the `Waitlist` class. `add(name, priority)` puts a passenger on the list. `serve()` removes and returns the name of the passenger who should get the next seat: the lowest priority number first, and among equal priorities the one who was added first. If nobody is waiting, `serve()` returns `None`. Use `heapq`.
+          starter: |
+            import heapq
+
+            class Waitlist:
+                def __init__(self):
+                    self.heap = []
+
+                def add(self, name, priority):
+                    pass
+
+                def serve(self):
+                    return None
+
+            seats = Waitlist()
+            seats.add("Kiran", 2)
+            seats.add("Meena", 1)
+            seats.add("Ravi", 2)
+            seats.add("Lata", 1)
+            print(seats.serve(), seats.serve(), seats.serve())
+            seats.add("Sunil", 1)
+            print(seats.serve(), seats.serve(), seats.serve())
+          solution: |
+            import heapq
+
+            class Waitlist:
+                def __init__(self):
+                    self.heap = []
+                    self.arrived = 0
+
+                def add(self, name, priority):
+                    heapq.heappush(self.heap, (priority, self.arrived, name))
+                    self.arrived += 1
+
+                def serve(self):
+                    if len(self.heap) == 0:
+                        return None
+                    return heapq.heappop(self.heap)[2]
+
+            seats = Waitlist()
+            seats.add("Kiran", 2)
+            seats.add("Meena", 1)
+            seats.add("Ravi", 2)
+            seats.add("Lata", 1)
+            print(seats.serve(), seats.serve(), seats.serve())
+            seats.add("Sunil", 1)
+            print(seats.serve(), seats.serve(), seats.serve())
+          tests: |
+            import random
+            _pushes = [0]
+            _real_push = heapq.heappush
+            def _watch(h, x):
+                _pushes[0] += 1
+                _real_push(h, x)
+            heapq.heappush = _watch
+            random.seed(53)
+            _names = ["Zoya", "Arjun", "Meena", "Kiran", "Bala", "Yusuf", "Chitra", "Om"]
+            for _trial in range(150):
+                _w = Waitlist()
+                _waiting = []
+                _order = 0
+                for _step in range(random.randint(1, 30)):
+                    if random.random() < 0.6:
+                        _n = random.choice(_names)
+                        _p = random.randint(1, 2)
+                        _w.add(_n, _p)
+                        _waiting.append((_p, _order, _n))
+                        _order += 1
+                    else:
+                        _want = None
+                        if _waiting:
+                            _best = min(_waiting)
+                            _waiting.remove(_best)
+                            _want = _best[2]
+                        _got = _w.serve()
+                        assert _got == _want, "serve() should give " + str(_want) + ", not " + str(_got) + ": lowest priority number first, then first come, first served"
+            heapq.heappush = _real_push
+            assert _pushes[0] > 0, "Keep the waitlist in a heap with heapq.heappush"
+            assert output.strip() == "Meena Lata Kiran\nSunil Ravi None", "The program should print Meena Lata Kiran, then Sunil Ravi None"
+          wrong:
+            - |
+              import heapq
+
+              class Waitlist:
+                  def __init__(self):
+                      self.heap = []
+
+                  def add(self, name, priority):
+                      heapq.heappush(self.heap, (priority, name))
+
+                  def serve(self):
+                      if len(self.heap) == 0:
+                          return None
+                      return heapq.heappop(self.heap)[1]
+
+              print("Meena Lata Kiran")
+              print("Sunil Ravi None")
+            - |
+              import heapq
+
+              class Waitlist:
+                  def __init__(self):
+                      self.heap = []
+                      self.arrived = 0
+
+                  def add(self, name, priority):
+                      heapq.heappush(self.heap, (priority, self.arrived, name))
+                      self.arrived += 1
+
+                  def serve(self):
+                      return heapq.heappop(self.heap)[2]
+
+              print("Meena Lata Kiran")
+              print("Sunil Ravi None")
+            - |
+              import heapq
+
+              class Waitlist:
+                  def __init__(self):
+                      self.heap = []
+                      self.arrived = 0
+
+                  def add(self, name, priority):
+                      heapq.heappush(self.heap, (priority, -self.arrived, name))
+                      self.arrived += 1
+
+                  def serve(self):
+                      if len(self.heap) == 0:
+                          return None
+                      return heapq.heappop(self.heap)[2]
+
+              print("Meena Lata Kiran")
+              print("Sunil Ravi None")
+          explanation: |
+            A heap entry is a tuple, and tuples compare item by item, so the order of the items is the order of the rules: priority first, then the order of arrival, then the name, which is never reached because arrival numbers differ. Without the arrival number, two passengers with the same priority would be served alphabetically, so Kiran before Ravi by luck and Arjun before Zoya whoever came first. The arrival number must increase, so that earlier passengers compare as smaller; negating it gives last come, first served, a stack inside each priority. Each `add` and `serve` costs logarithmic time, however long the list grows.
+  - title: A search box for towns
+    blocks:
+      - text: |
+          Booking clerks type the start of a town's name and the search box suggests every town that begins that way, in alphabetical order. The control room keeps the town names in a trie. A colleague wrote the code below, and the clerks have noticed that some towns never appear in the suggestions.
+      - question:
+          id: fix-suggestions
+          type: code
+          mode: find-bug
+          system: s2
+          concepts: [s2.tries]
+          prompt: |
+            This program should print `['SURAT', 'SURATGARH', 'SURI'] ['SANGLI', 'SATARA']`. It prints `['SURATGARH', 'SURI'] ['SANGLI', 'SATARA']`: Surat has gone missing. Find the fault and fix it.
+          starter: |
+            class TrieNode:
+                def __init__(self):
+                    self.children = {}
+                    self.end = False
+
+            def insert(root, word):
+                node = root
+                for letter in word:
+                    if letter not in node.children:
+                        node.children[letter] = TrieNode()
+                    node = node.children[letter]
+                node.end = True
+
+            def collect(node, prefix, found):
+                if len(node.children) == 0:
+                    found.append(prefix)
+                for letter in sorted(node.children):
+                    collect(node.children[letter], prefix + letter, found)
+
+            def complete(root, prefix):
+                node = root
+                for letter in prefix:
+                    if letter not in node.children:
+                        return []
+                    node = node.children[letter]
+                found = []
+                collect(node, prefix, found)
+                return found
+
+            root = TrieNode()
+            for town in ["SURAT", "SURATGARH", "SURI", "SATARA", "SANGLI"]:
+                insert(root, town)
+            print(complete(root, "SUR"), complete(root, "SA"))
+          solution: |
+            class TrieNode:
+                def __init__(self):
+                    self.children = {}
+                    self.end = False
+
+            def insert(root, word):
+                node = root
+                for letter in word:
+                    if letter not in node.children:
+                        node.children[letter] = TrieNode()
+                    node = node.children[letter]
+                node.end = True
+
+            def collect(node, prefix, found):
+                if node.end:
+                    found.append(prefix)
+                for letter in sorted(node.children):
+                    collect(node.children[letter], prefix + letter, found)
+
+            def complete(root, prefix):
+                node = root
+                for letter in prefix:
+                    if letter not in node.children:
+                        return []
+                    node = node.children[letter]
+                found = []
+                collect(node, prefix, found)
+                return found
+
+            root = TrieNode()
+            for town in ["SURAT", "SURATGARH", "SURI", "SATARA", "SANGLI"]:
+                insert(root, town)
+            print(complete(root, "SUR"), complete(root, "SA"))
+          tests: |
+            import random
+            random.seed(59)
+            for _trial in range(100):
+                _words = set("".join(random.choice("AB") for _ in range(random.randint(1, 6))) for _ in range(random.randint(1, 15)))
+                _root = TrieNode()
+                for _w in _words:
+                    insert(_root, _w)
+                for _p in ["", "A", "B", "AB", "BA", "AAA"]:
+                    _want = sorted(_w for _w in _words if _w[:len(_p)] == _p)
+                    _got = complete(_root, _p)
+                    assert _got == _want, "With " + str(sorted(_words)) + " stored, the suggestions for " + repr(_p) + " should be " + str(_want) + ", not " + str(_got)
+            assert output.strip() == "['SURAT', 'SURATGARH', 'SURI'] ['SANGLI', 'SATARA']", "The program should print ['SURAT', 'SURATGARH', 'SURI'] ['SANGLI', 'SATARA']"
+          wrong:
+            - |
+              class TrieNode:
+                  def __init__(self):
+                      self.children = {}
+                      self.end = False
+
+              def insert(root, word):
+                  node = root
+                  for letter in word:
+                      if letter not in node.children:
+                          node.children[letter] = TrieNode()
+                      node = node.children[letter]
+                  node.end = True
+
+              def collect(node, prefix, found):
+                  for letter in sorted(node.children):
+                      collect(node.children[letter], prefix + letter, found)
+                  if node.end:
+                      found.append(prefix)
+
+              def complete(root, prefix):
+                  node = root
+                  for letter in prefix:
+                      if letter not in node.children:
+                          return []
+                      node = node.children[letter]
+                  found = []
+                  collect(node, prefix, found)
+                  return found
+
+              print(['SURAT', 'SURATGARH', 'SURI'], ['SANGLI', 'SATARA'])
+          explanation: |
+            The code treated "has no children" as "ends a word". Every leaf does end a word, but not every word ends at a leaf: SURAT is a word and also the beginning of SURATGARH, so its node has a child and was skipped. That is what the flag is for. Test `node.end`, and do it **before** visiting the children, so that a word is listed ahead of its own extensions and the suggestions stay alphabetical.
+  - title: How many pieces is the network in?
+    blocks:
+      - text: |
+          Routes open one at a time. After each, the planners want the number of separate pieces the network falls into, where two towns are in the same piece if some sequence of routes joins them. Searching the map after every opening would cross the whole network each time. Union-find answers in a few steps per route, but it works with item numbers $0$ to $n - 1$, not town names, so give each town a number first.
+      - question:
+          id: pieces
+          type: code
+          mode: write
+          system: s2
+          concepts: [s2.union-find, s2.hash-tables]
+          prompt: |
+            Write `pieces_after(towns, routes)`. `towns` lists every town once, and `routes` lists pairs of town names in the order they open. Return a list holding, after each route opens, the number of separate pieces the network is in. Use the `DisjointSets` class given, with a dictionary from town name to number.
+          starter: |
+            class DisjointSets:
+                def __init__(self, n):
+                    self.parent = list(range(n))
+                    self.tree_size = [1] * n
+                    self.sets = n
+
+                def find(self, x):
+                    root = x
+                    while self.parent[root] != root:
+                        root = self.parent[root]
+                    while self.parent[x] != root:
+                        following = self.parent[x]
+                        self.parent[x] = root
+                        x = following
+                    return root
+
+                def union(self, a, b):
+                    ra = self.find(a)
+                    rb = self.find(b)
+                    if ra == rb:
+                        return False
+                    if self.tree_size[ra] > self.tree_size[rb]:
+                        ra, rb = rb, ra
+                    self.parent[ra] = rb
+                    self.tree_size[rb] += self.tree_size[ra]
+                    self.sets -= 1
+                    return True
+
+            def pieces_after(towns, routes):
+                return []
+
+            towns = ["Pune", "Mumbai", "Surat", "Nashik", "Goa", "Belagavi"]
+            routes = [("Pune", "Mumbai"), ("Goa", "Belagavi"), ("Mumbai", "Pune"),
+                      ("Nashik", "Surat"), ("Mumbai", "Surat"), ("Belagavi", "Pune")]
+            print(pieces_after(towns, routes))
+          solution: |
+            class DisjointSets:
+                def __init__(self, n):
+                    self.parent = list(range(n))
+                    self.tree_size = [1] * n
+                    self.sets = n
+
+                def find(self, x):
+                    root = x
+                    while self.parent[root] != root:
+                        root = self.parent[root]
+                    while self.parent[x] != root:
+                        following = self.parent[x]
+                        self.parent[x] = root
+                        x = following
+                    return root
+
+                def union(self, a, b):
+                    ra = self.find(a)
+                    rb = self.find(b)
+                    if ra == rb:
+                        return False
+                    if self.tree_size[ra] > self.tree_size[rb]:
+                        ra, rb = rb, ra
+                    self.parent[ra] = rb
+                    self.tree_size[rb] += self.tree_size[ra]
+                    self.sets -= 1
+                    return True
+
+            def pieces_after(towns, routes):
+                number = {}
+                for i, town in enumerate(towns):
+                    number[town] = i
+                network = DisjointSets(len(towns))
+                counts = []
+                for a, b in routes:
+                    network.union(number[a], number[b])
+                    counts.append(network.sets)
+                return counts
+
+            towns = ["Pune", "Mumbai", "Surat", "Nashik", "Goa", "Belagavi"]
+            routes = [("Pune", "Mumbai"), ("Goa", "Belagavi"), ("Mumbai", "Pune"),
+                      ("Nashik", "Surat"), ("Mumbai", "Surat"), ("Belagavi", "Pune")]
+            print(pieces_after(towns, routes))
+          tests: |
+            import random
+            random.seed(61)
+            for _trial in range(150):
+                _towns = ["T" + str(_i) for _i in range(random.randint(1, 12))]
+                _routes = [(random.choice(_towns), random.choice(_towns)) for _ in range(random.randint(0, 20))]
+                _label = {}
+                for _t in _towns:
+                    _label[_t] = _t
+                _want = []
+                for _a, _b in _routes:
+                    if _label[_a] != _label[_b]:
+                        _old = _label[_a]
+                        for _t in _towns:
+                            if _label[_t] == _old:
+                                _label[_t] = _label[_b]
+                    _want.append(len(set(_label.values())))
+                _got = pieces_after(_towns, _routes)
+                assert _got == _want, "For towns " + str(_towns) + " and routes " + str(_routes) + " the counts should be " + str(_want) + ", not " + str(_got)
+            assert output.strip() == "[5, 4, 4, 3, 2, 1]", "The program should print [5, 4, 4, 3, 2, 1]"
+          wrong:
+            - |
+              def pieces_after(towns, routes):
+                  counts = []
+                  pieces = len(towns)
+                  for a, b in routes:
+                      pieces -= 1
+                      counts.append(pieces)
+                  return counts
+
+              print([5, 4, 4, 3, 2, 1])
+            - |
+              class DisjointSets:
+                  def __init__(self, n):
+                      self.parent = list(range(n))
+                      self.sets = n
+
+                  def find(self, x):
+                      while self.parent[x] != x:
+                          x = self.parent[x]
+                      return x
+
+                  def union(self, a, b):
+                      ra = self.find(a)
+                      rb = self.find(b)
+                      if ra == rb:
+                          return False
+                      self.parent[ra] = rb
+                      self.sets -= 1
+                      return True
+
+              def pieces_after(towns, routes):
+                  number = {}
+                  for i, town in enumerate(towns):
+                      number[town] = i
+                  network = DisjointSets(len(towns))
+                  counts = []
+                  for a, b in routes:
+                      counts.append(network.sets)
+                      network.union(number[a], number[b])
+                  return counts
+
+              print([5, 4, 4, 3, 2, 1])
+          explanation: |
+            A dictionary gives each town its number in one step on average, which is the job hash tables do best. Each route is then one `union`, and `sets` already counts the pieces, going down by one only when the route joins two pieces that were separate. The third route, Mumbai to Pune again, joins nothing new, so the count stays at 4. Subtracting one for every route ignores exactly that. And the count must be read **after** the union, or every answer is one route late.
+  - title: Choosing for two more jobs
+    blocks:
+      - text: |
+          Two more requests have come in. Neither needs much code once the structure is right, and choosing the structure is the whole of the work.
+      - question:
+          id: fares
+          type: choice
+          system: s2
+          concepts: [s2.balanced-search-trees, s2.heaps-and-priority-queues]
+          prompt: |
+            The control room keeps the fare of every bus running today, and fares are added, removed and changed all day. A passenger gives a budget and asks for the dearest bus whose fare is within it. Which structure answers each request, and each change, in logarithmic time?
+          options:
+            - "A balanced search tree of fares: a floor search walks one path of logarithmic length, and insertions and removals keep it balanced."
+            - "A min-heap of fares, since the cheapest fare is always at the root."
+            - "A hash table from fare to bus, since lookups take one step."
+            - "A list kept sorted, since the dearest fare within the budget is next to where the budget would go."
+          answer: 0
+          explanation: |
+            The request is a question about order, the largest fare at most the budget, and a balanced search tree answers such questions along one path, with height logarithmic in the number of fares whatever order they arrive in. A heap knows only its smallest item; any other question means looking everywhere. A hash table has no notion of "the largest below", since it scatters fares on purpose. A sorted list finds the place quickly by halving, but every insertion and removal shifts the items after it, which is linear.
+      - question:
+          id: positions
+          type: choice
+          system: s2
+          concepts: [s2.stacks-and-queues, s2.arrays-and-dynamic-arrays]
+          prompt: |
+            Every bus reports its position every ten seconds, and the control room's screen shows each bus's last 30 positions. When a new position arrives, the oldest must be dropped. How should each bus's positions be kept?
+          options:
+            - "A ring buffer: an array of 30 slots with a front index that moves round, so each new position overwrites the oldest in constant time."
+            - "A Python list, inserting each new position at index 0 and popping the last."
+            - "A min-heap ordered by time."
+            - "A singly linked list with no tail pointer, appending each new position at its end."
+          answer: 0
+          explanation: |
+            This is a queue of fixed length: positions leave in the order they arrived. A ring buffer of 30 slots never grows, never moves an item, and adds and drops in constant time by moving its index round the array. Inserting at index 0 of a list shifts every item along each time, linear in the length. A heap does extra work to answer a question nobody asks, which item is oldest, when the answer is always the next slot. A linked list without a tail pointer must walk the whole list to append.
+review: |
+  The control room is built, and each part rests on a structure chosen for the questions asked of it:
+
+  - The route map was adjacency sets, from [[s2.graphs-and-their-representations]], so that a town's direct routes are listed in steps proportional to their number and "is there a direct route?" is one look. The sets did their work by hashing, from [[s2.hash-tables]], which also turned town names into numbers in the last stage.
+  - The waitlist was a heap of tuples, from [[s2.heaps-and-priority-queues]]. Its arrival number kept first come, first served within a priority, the order of a queue from [[s2.stacks-and-queues]], and making it decrease would have turned each priority into a stack.
+  - The search box was a trie, from [[s2.tries]], and its fault was confusing "a leaf" with "the end of a word", the very distinction the flag exists to keep.
+  - The count of pieces was union-find, from [[s2.union-find]], which answers how many pieces in a few steps per route where searching the map would cross it every time.
+  - The fares needed order and changes together, which only a balanced search tree from [[s2.balanced-search-trees]] gives in logarithmic time, and the positions needed a fixed-length queue in an array, the ring buffer of [[s2.arrays-and-dynamic-arrays]] and [[s2.stacks-and-queues]].
+
+  Notice that no stage needed a clever algorithm. Each needed the right structure, and then the code was short. That is the lesson of the whole cluster: decide which questions must be cheap, choose the structure that makes them cheap, and the program follows.

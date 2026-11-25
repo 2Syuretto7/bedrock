@@ -2631,6 +2631,425 @@ function Heap() {
   );
 }
 
+type TreeNode = { key: number; left: TreeNode | null; right: TreeNode | null; height: number };
+const levels = (t: TreeNode | null): number => (t ? t.height : 0);
+const treeNode = (key: number, left: TreeNode | null, right: TreeNode | null): TreeNode => ({ key, left, right, height: 1 + Math.max(levels(left), levels(right)) });
+const turnRight = (t: TreeNode) => treeNode(t.left!.key, t.left!.left, treeNode(t.key, t.left!.right, t.right));
+const turnLeft = (t: TreeNode) => treeNode(t.right!.key, treeNode(t.key, t.left, t.right!.left), t.right!.right);
+
+/** Inserts a key as a binary search tree does, and, if asked, restores the AVL balance on the way back up, counting the rotations. */
+function treeInsert(t: TreeNode | null, key: number, balance: boolean, turns: { count: number }): TreeNode {
+  if (!t) return treeNode(key, null, null);
+  if (key === t.key) return t;
+  let next = key < t.key ? treeNode(t.key, treeInsert(t.left, key, balance, turns), t.right) : treeNode(t.key, t.left, treeInsert(t.right, key, balance, turns));
+  if (!balance) return next;
+  const lean = levels(next.left) - levels(next.right);
+  if (lean > 1) {
+    if (key > next.left!.key) {
+      next = treeNode(next.key, turnLeft(next.left!), next.right);
+      turns.count += 1;
+    }
+    turns.count += 1;
+    return turnRight(next);
+  }
+  if (lean < -1) {
+    if (key < next.right!.key) {
+      next = treeNode(next.key, next.left, turnRight(next.right!));
+      turns.count += 1;
+    }
+    turns.count += 1;
+    return turnLeft(next);
+  }
+  return next;
+}
+
+const TREE_KEYS = [50, 30, 70, 20, 40, 60, 80, 35, 65, 10, 90, 45, 55, 75, 25];
+
+/** A binary search tree built by inserting keys one at a time, in the order given or in sorted order, with or without rebalancing, and the path a search takes. */
+function SearchTree(props: Props) {
+  const given = Array.isArray(props.keys) && props.keys.every((k) => typeof k === "number") && props.keys.length > 0 ? (props.keys as number[]).slice(0, 15) : TREE_KEYS;
+  const [count, setCount] = useState(clamp(Math.round(num(props.count, given.length)), 1, given.length));
+  const [sorted, setSorted] = useState(props.sorted === true);
+  const [balance, setBalance] = useState(props.balance === true);
+  const [target, setTarget] = useState(clamp(Math.round(num(props.target, 45) / 5) * 5, 0, 100));
+  const offerBalance = typeof props.balance === "boolean";
+  const order = sorted ? [...given.slice(0, count)].sort((a, b) => a - b) : given.slice(0, count);
+  const turns = { count: 0 };
+  let root: TreeNode | null = null;
+  for (const key of order) root = treeInsert(root, key, balance, turns);
+  const height = levels(root) - 1;
+  const path: number[] = [];
+  let node = root;
+  while (node && node.key !== target) {
+    path.push(node.key);
+    node = target < node.key ? node.left : node.right;
+  }
+  const found = node !== null;
+  if (node) path.push(node.key);
+  const placed: { key: number; at: Spot; parent: Spot | null }[] = [];
+  let column = 0;
+  const step = order.length > 1 ? 400 / (order.length - 1) : 0;
+  const rise = Math.min(48, 236 / Math.max(height, 1));
+  const lay = (t: TreeNode | null, depth: number, parent: Spot | null) => {
+    if (!t) return;
+    const index = placed.length;
+    placed.push({ key: t.key, at: [0, 0], parent });
+    lay(t.left, depth + 1, null);
+    const at: Spot = [order.length > 1 ? 20 + column * step : 220, 24 + depth * rise];
+    column += 1;
+    placed[index].at = at;
+    lay(t.right, depth + 1, null);
+  };
+  lay(root, 0, null);
+  const where = new Map(placed.map((p) => [p.key, p.at]));
+  const edges: { from: Spot; to: Spot; on: boolean }[] = [];
+  const collect = (t: TreeNode | null) => {
+    if (!t) return;
+    for (const child of [t.left, t.right]) {
+      if (child) {
+        edges.push({ from: where.get(t.key)!, to: where.get(child.key)!, on: path.includes(t.key) && path.includes(child.key) });
+        collect(child);
+      }
+    }
+  };
+  collect(root);
+  return (
+    <Frame
+      title="A binary search tree"
+      summary={`Inserting ${order.join(", ")} in that order${balance ? ", rebalancing after each insertion," : ""} gives a tree of height ${height}: its deepest key is ${plural(height, "link")} below the root${
+        balance ? `, and ${plural(turns.count, "rotation was", "rotations were")} needed along the way` : ""
+      }. Read from left to right, the keys are in increasing order. Searching for ${target} compares it with ${path.join(", ")} and ${found ? "finds it" : "reaches an empty place, so it is not in the tree"}: ${plural(path.length, "comparison")}.`}
+      controls={
+        <>
+          <Stepper label="keys" value={count} onChange={setCount} min={1} max={given.length} />
+          <Slider label="search for" value={target} onChange={setTarget} min={0} max={100} step={5} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setSorted(!sorted)}>
+            {sorted ? "Insert in the order given" : "Insert in sorted order"}
+          </button>
+          {offerBalance ? (
+            <button type="button" className="btn btn-secondary btn-small" onClick={() => setBalance(!balance)}>
+              {balance ? "Stop rebalancing" : "Rebalance after each insert"}
+            </button>
+          ) : null}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`A binary search tree of ${plural(order.length, "key")} with height ${height}, and the search path for ${target}`}>
+        {edges.map((edge, i) => (
+          <line key={i} x1={edge.from[0]} y1={edge.from[1]} x2={edge.to[0]} y2={edge.to[1]} className={edge.on ? "fig-accent-line" : "fig-axis"} />
+        ))}
+        {placed.map(({ key, at }) => {
+          const on = path.includes(key);
+          return (
+            <g key={key}>
+              <circle cx={at[0]} cy={at[1]} r="12" className={on ? "fig-accent" : "fig-fill"} />
+              <text x={at[0]} y={at[1] + 4} textAnchor="middle" className="fig-small" style={{ fill: on ? "var(--bg)" : "var(--text)" }}>
+                {key}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
+type TrieNode = { prefix: string; end: boolean; children: TrieNode[] };
+
+/** Builds a trie of the words, one node for each distinct beginning, with the children of each node in alphabetical order. */
+function buildTrie(words: string[]): TrieNode {
+  const root: TrieNode = { prefix: "", end: false, children: [] };
+  for (const word of words) {
+    let node = root;
+    for (const letter of word) {
+      let next = node.children.find((child) => child.prefix === node.prefix + letter);
+      if (!next) {
+        next = { prefix: node.prefix + letter, end: false, children: [] };
+        node.children.push(next);
+        node.children.sort((a, b) => (a.prefix < b.prefix ? -1 : 1));
+      }
+      node = next;
+    }
+    node.end = true;
+  }
+  return root;
+}
+
+const TRIE_WORDS = ["TO", "TEA", "TEN", "TENT", "IN", "INN", "INK"];
+const quoted = (text: string) => `\u201c${text}\u201d`;
+
+/** A trie built from a few words, with the path that typing a beginning follows and the words found below it. */
+function Trie(props: Props) {
+  const given =
+    Array.isArray(props.words) && props.words.length > 0 && props.words.every((w) => typeof w === "string" && /^[A-Z]{1,5}$/.test(w)) ? (props.words as string[]).slice(0, 8) : TRIE_WORDS;
+  const letters = [...new Set(given.join(""))].sort();
+  const start = typeof props.prefix === "string" ? [...props.prefix.toUpperCase()].filter((c) => letters.includes(c)).join("").slice(0, 5) : "";
+  const [count, setCount] = useState(clamp(Math.round(num(props.count, given.length)), 1, given.length));
+  const [typed, setTyped] = useState(start);
+  const words = given.slice(0, count);
+  const root = buildTrie(words);
+  const all: TrieNode[] = [];
+  const walk = (node: TrieNode) => {
+    all.push(node);
+    node.children.forEach(walk);
+  };
+  walk(root);
+  let reached: TrieNode | null = root;
+  for (const letter of typed) reached = reached?.children.find((child) => child.prefix === reached!.prefix + letter) ?? null;
+  const deepest = Math.max(...all.map((node) => node.prefix.length));
+  const rise = Math.min(52, 200 / Math.max(deepest, 1));
+  const place = new Map<string, Spot>();
+  let leaf = 0;
+  const leaves = all.filter((node) => node.children.length === 0).length;
+  const gap = leaves > 1 ? 380 / (leaves - 1) : 0;
+  const lay = (node: TrieNode): number => {
+    let x: number;
+    if (node.children.length === 0) {
+      x = leaves > 1 ? 30 + leaf * gap : 220;
+      leaf += 1;
+    } else {
+      const xs = node.children.map(lay);
+      x = (xs[0] + xs[xs.length - 1]) / 2;
+    }
+    place.set(node.prefix, [x, 26 + node.prefix.length * rise]);
+    return x;
+  };
+  lay(root);
+  const onPath = (prefix: string) => typed !== "" && typed.startsWith(prefix);
+  const found = reached ? all.filter((node) => node.end && node.prefix.startsWith(reached!.prefix)).map((node) => node.prefix) : [];
+  const total = words.reduce((sum, word) => sum + word.length, 0);
+  let matched = 0;
+  while (matched < typed.length && all.some((node) => node.prefix === typed.slice(0, matched + 1))) matched += 1;
+  const outcome =
+    typed === ""
+      ? "Nothing has been typed yet, so every word is below the root."
+      : reached
+        ? `Typing ${quoted(typed)} follows ${plural(typed.length, "link")} down from the root, one for each letter, and the words below the node it reaches are ${found.length > 0 ? found.join(", ") : "none"}.`
+        : `Typing ${quoted(typed)} finds no link for the letter ${quoted(typed[matched])} after ${matched === 0 ? "the root" : quoted(typed.slice(0, matched))}, so no word begins with ${quoted(typed)}.`;
+  return (
+    <Frame
+      title="A trie of words"
+      summary={`The trie holds ${plural(words.length, "word")}: ${words.join(", ")}. It has ${plural(all.length, "node")}, counting the root, for ${plural(total, "letter")} in all, because words that begin the same way share the nodes for that beginning. A ringed node ends a word. ${outcome}`}
+      controls={
+        <>
+          <Stepper label="words" value={count} onChange={setCount} min={1} max={given.length} />
+          {letters.map((letter) => (
+            <button key={letter} type="button" className="btn btn-secondary btn-small" aria-label={`Type ${letter}`} disabled={typed.length >= 5} onClick={() => setTyped(typed + letter)}>
+              {letter}
+            </button>
+          ))}
+          <button type="button" className="btn btn-secondary btn-small" disabled={typed === ""} onClick={() => setTyped(typed.slice(0, -1))}>
+            Delete a letter
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`A trie of ${plural(words.length, "word")} with ${plural(all.length, "node")}, and the path for ${typed === "" ? "nothing typed" : quoted(typed)}`}>
+        {all
+          .filter((node) => node.prefix !== "")
+          .map((node) => {
+            const parent = place.get(node.prefix.slice(0, -1))!;
+            return <Link key={"link" + node.prefix} from={parent} to={place.get(node.prefix)!} gap={13} hot={onPath(node.prefix)} />;
+          })}
+        {all.map((node) => {
+          const at = place.get(node.prefix)!;
+          const on = node.prefix === "" || onPath(node.prefix);
+          return (
+            <g key={"node" + node.prefix}>
+              {node.end ? <circle cx={at[0]} cy={at[1]} r="15" className="fig-guide" fill="none" /> : null}
+              <circle cx={at[0]} cy={at[1]} r="11" className={on ? "fig-accent" : "fig-fill"} />
+              <text x={at[0]} y={at[1] + 4} textAnchor="middle" className="fig-small" style={{ fill: on ? "var(--bg)" : "var(--text)" }}>
+                {node.prefix === "" ? "\u00b7" : node.prefix.slice(-1)}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="250" className="fig-small">
+          typed: {typed === "" ? "nothing yet" : typed}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const STORE_SPOTS: Record<string, Spot> = { A: [36, 70], B: [126, 40], C: [84, 150], D: [196, 106], E: [146, 206], F: [204, 196] };
+const STORE_NAMES = Object.keys(STORE_SPOTS);
+const STORE_EDGES: [string, string][] = [
+  ["A", "B"],
+  ["A", "C"],
+  ["B", "C"],
+  ["B", "D"],
+  ["C", "E"],
+  ["D", "E"],
+  ["D", "F"],
+  ["E", "F"],
+];
+
+/** One small graph stored two ways, as a table of 0s and 1s and as a list of neighbours for each node, with one node's row and list picked out. */
+function GraphStorage(props: Props) {
+  const [directed, setDirected] = useState(props.directed === true);
+  const [at, setAt] = useState(clamp(Math.round(num(props.node, 3)), 1, STORE_NAMES.length) - 1);
+  const joined = (a: string, b: string) => STORE_EDGES.some(([p, q]) => (p === a && q === b) || (!directed && p === b && q === a));
+  const table = STORE_NAMES.map((a) => STORE_NAMES.map((b) => (joined(a, b) ? 1 : 0)));
+  const lists = STORE_NAMES.map((a) => STORE_NAMES.filter((b) => joined(a, b)));
+  const name = STORE_NAMES[at];
+  const mine = lists[at];
+  const ones = table.flat().filter((v) => v === 1).length;
+  const into = STORE_NAMES.filter((b) => joined(b, name));
+  const entries = STORE_NAMES.length ** 2;
+  return (
+    <Frame
+      title="A graph as a table and as lists"
+      summary={`The graph has ${STORE_NAMES.length} nodes and ${STORE_EDGES.length} ${directed ? "arrows" : "edges"}. ${
+        directed
+          ? `${name} has arrows out to ${mine.length > 0 ? mine.join(", ") : "nowhere"} and arrows in from ${into.length > 0 ? into.join(", ") : "nowhere"}, so its out-degree is ${mine.length} and its in-degree is ${into.length}.`
+          : `${name} has degree ${mine.length}: its neighbours are ${mine.join(", ")}.`
+      } In the table, row ${name} has a 1 in ${plural(mine.length, "column")}${mine.length > 0 ? `, ${mine.join(", ")},` : ""} and a 0 in the other ${STORE_NAMES.length - mine.length}. In the lists, ${name}'s list holds ${plural(mine.length, "name")}. The whole table has ${entries} entries, of which ${ones} are 1${
+        directed ? ", one for each arrow" : ", two for each edge, since each edge is recorded from both ends"
+      }; the lists hold ${ones} names in all.`}
+      controls={
+        <>
+          <Stepper label="node" value={at + 1} onChange={(v) => setAt(v - 1)} min={1} max={STORE_NAMES.length} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setDirected(!directed)}>
+            {directed ? "Make the edges two-way" : "Make the edges one-way"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`A graph of ${STORE_NAMES.length} nodes beside its table of 0s and 1s, with node ${name}, its row and its list picked out`}>
+        {STORE_EDGES.map(([a, b]) => (
+          <Link key={a + b} from={STORE_SPOTS[a]} to={STORE_SPOTS[b]} arrow={directed} hot={a === name || (!directed && b === name)} />
+        ))}
+        {STORE_NAMES.map((n) => (
+          <Dot key={n} at={STORE_SPOTS[n]} name={n} mark={n === name ? "now" : mine.includes(n) ? "done" : "wait"} />
+        ))}
+        {STORE_NAMES.map((n, j) => (
+          <text key={"col" + n} x={258 + j * 28 + 12} y="30" textAnchor="middle" className="fig-small">
+            {n}
+          </text>
+        ))}
+        {table.map((row, i) => (
+          <g key={"row" + i}>
+            <text x="244" y={56 + i * 30} className="fig-small">
+              {STORE_NAMES[i]}
+            </text>
+            <Cells values={row} x={258} y={38 + i * 30} w={28} h={26} hot={i === at ? row.map((v, j) => (v === 1 ? j : -1)).filter((j) => j >= 0) : []} faint={i === at ? [] : row.map((_, j) => j)} />
+          </g>
+        ))}
+        {STORE_NAMES.map((n, i) => (
+          <text key={"list" + n} x={12 + (i % 3) * 76} y={i < 3 ? 240 : 258} className="fig-small">
+            {`${n}: ${lists[i].join(" ") || "nothing"}`}
+          </text>
+        ))}
+        <text x="12" y="282" className="fig-mono">
+          {`${name}: [${mine.join(", ")}]`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const UNION_JOINS: [number, number][] = [
+  [0, 1],
+  [1, 2],
+  [2, 3],
+  [4, 5],
+  [5, 6],
+  [3, 6],
+  [6, 7],
+];
+
+/** Eight items joined into sets one pair at a time, each set a tree of pointers to a root, with or without joining the smaller tree under the larger, and the path a find follows. */
+function UnionFind(props: Props) {
+  const [joins, setJoins] = useState(clamp(Math.round(num(props.joins, UNION_JOINS.length)), 0, UNION_JOINS.length));
+  const [bySize, setBySize] = useState(props.bySize === true);
+  const [target, setTarget] = useState(clamp(Math.round(num(props.find, 0)), 0, 7));
+  const parent = Array.from({ length: 8 }, (_, i) => i);
+  const size = Array(8).fill(1) as number[];
+  const root = (x: number) => {
+    while (parent[x] !== x) x = parent[x];
+    return x;
+  };
+  for (const [a, b] of UNION_JOINS.slice(0, joins)) {
+    let [ra, rb] = [root(a), root(b)];
+    if (ra === rb) continue;
+    if (bySize && size[ra] > size[rb]) [ra, rb] = [rb, ra];
+    parent[ra] = rb;
+    size[rb] += size[ra];
+  }
+  const depth = (x: number) => {
+    let d = 0;
+    while (parent[x] !== x) {
+      x = parent[x];
+      d += 1;
+    }
+    return d;
+  };
+  const path = [target];
+  while (parent[path[path.length - 1]] !== path[path.length - 1]) path.push(parent[path[path.length - 1]]);
+  const roots = parent.map((p, i) => (p === i ? i : -1)).filter((i) => i >= 0);
+  const kids = (x: number) => parent.map((p, i) => (p === x && i !== x ? i : -1)).filter((i) => i >= 0);
+  const members = (r: number) => parent.map((_, i) => i).filter((i) => root(i) === r);
+  const tallest = Math.max(...parent.map((_, i) => depth(i)));
+  const rise = Math.min(44, 176 / Math.max(tallest, 1));
+  const spots = new Map<number, Spot>();
+  let column = 0;
+  const lay = (x: number, d: number): number => {
+    const below = kids(x);
+    let at: number;
+    if (below.length === 0) {
+      at = 30 + column * 54;
+      column += 1;
+    } else {
+      const xs = below.map((k) => lay(k, d + 1));
+      at = (xs[0] + xs[xs.length - 1]) / 2;
+    }
+    spots.set(x, [at, 26 + d * rise]);
+    return at;
+  };
+  roots.forEach((r) => lay(r, 0));
+  const shift = (440 - (60 + (column - 1) * 54)) / 2;
+  for (const [item, at] of spots) spots.set(item, [at[0] + shift, at[1]]);
+  const shown = UNION_JOINS.slice(0, joins).map(([a, b]) => `(${a}, ${b})`);
+  return (
+    <Frame
+      title="Sets as trees of pointers"
+      summary={`${joins === 0 ? "No joins yet, so each of the 8 items is a set on its own." : `After ${plural(joins, "join")}, ${shown.join(", ")}, ${bySize ? "each pointing the root of the smaller tree at the root of the larger" : "each pointing the root of the first item's tree at the root of the second's"}, the 8 items form ${plural(roots.length, "set")}: ${roots.map((r) => `{${members(r).join(", ")}}`).join(", ")}.`} Each set is a tree whose root names it, and the list underneath holds parent[i], the item that i points to; a root points to itself. The tallest tree has height ${tallest}. find(${target}) follows ${plural(path.length - 1, "link")} from ${target}${path.length > 1 ? `, through ${path.slice(1).join(", ")}` : ""}, and reaches the root ${path[path.length - 1]}.`}
+      controls={
+        <>
+          <Stepper label="joins" value={joins} onChange={setJoins} min={0} max={UNION_JOINS.length} />
+          <Stepper label="find" value={target} onChange={setTarget} min={0} max={7} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setBySize(!bySize)}>
+            {bySize ? "Join without looking at size" : "Join the smaller under the larger"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 300" role="img" aria-label={`8 items in ${plural(roots.length, "set")}, drawn as trees of height at most ${tallest}, with the path of find(${target}) marked`}>
+        {parent.map((p, i) =>
+          p === i ? null : <Link key={"up" + i} from={spots.get(i)!} to={spots.get(p)!} arrow gap={14} hot={path.includes(i) && path.includes(p)} />,
+        )}
+        {parent.map((_, i) => {
+          const at = spots.get(i)!;
+          const on = path.includes(i);
+          return (
+            <g key={"item" + i}>
+              <circle cx={at[0]} cy={at[1]} r="12" className={on ? "fig-accent" : parent[i] === i ? "fig-fill" : "fig-ghost"} />
+              <text x={at[0]} y={at[1] + 4} textAnchor="middle" className="fig-small" style={{ fill: on ? "var(--bg)" : "var(--text)" }}>
+                {i}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="234" className="fig-small">
+          parent:
+        </text>
+        <Cells values={parent} x={12} y={242} w={52} h={28} hot={path.length > 1 ? path.slice(0, -1) : []} under={(i) => String(i)} />
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -3908,6 +4327,10 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "stack-queue": StackQueue,
   "hash-table": HashTable,
   heap: Heap,
+  "search-tree": SearchTree,
+  trie: Trie,
+  "graph-storage": GraphStorage,
+  "union-find": UnionFind,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

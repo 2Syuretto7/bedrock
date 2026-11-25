@@ -1,0 +1,824 @@
+concept: s2.tries
+minutes: 90
+claim: You can store a set of words in a trie, with one node for each distinct beginning, look up a word or a beginning in steps proportional to its length however many words are stored, list every word with a given beginning in alphabetical order, and find the longest stored word at the start of a text, as autocomplete boxes and tokenisers do.
+recalls: [s2.heaps-and-priority-queues]
+uses: [s2.hash-tables, s2.binary-search-trees, s2.linked-lists, f2.induction-and-strong-induction, f2.loop-invariants, s1.recursion, s1.classes-and-objects, s0.dictionaries-and-sets, s0.strings, s0.loops, s0.functions]
+leads: [s2.graphs-and-their-representations, f3.counting-with-products-and-sums, s3.binary-search, s7.tokenising, s7.regular-expressions-and-finite-automata]
+starter: |
+  # Scratch space. A booking site suggests station names as you type.
+  # This version checks every name against what has been typed so far.
+  stations = ["NEW DELHI", "NEW JALPAIGURI", "NAGPUR", "NASIK ROAD", "NELLORE",
+              "NEW BONGAIGAON", "NAGERCOIL", "NANDED", "NEW TINSUKIA", "NARKATIAGANJ"]
+  typed = "NEW"
+  checked = 0
+  matches = []
+
+  for name in stations:
+      checked += 1
+      if name[:len(typed)] == typed:
+          matches.append(name)
+
+  print(matches)
+  print("names checked:", checked)
+parts:
+  recall:
+    - text: |
+        [[s2.heaps-and-priority-queues]] made one question about order as cheap as possible, which is the smallest, by refusing to answer any other. Every structure so far has compared whole keys with each other. Today's structure never compares two keys at all: it reads a key one letter at a time. Three quick pulls first.
+  puzzle:
+    - text: |
+        A railway booking site has a box marked "From". As you type, it lists every station whose name begins with what you have typed so far: type N, E, W and it offers New Delhi, New Jalpaiguri, New Bongaigaon and New Tinsukia. Indian Railways has more than 7,000 stations, and at busy times a lakh of people are typing at once, so the list must be ready after every keystroke.
+
+        Run the starter. It checks all ten of its names on every keystroke, and the real site would check all 7,000. The cost grows in step with the number of stations, and most of the work is spent rejecting names that begin with B or K.
+
+        What about the structures you have? A hash table finds an exact name in a few steps, but "NEW" is not a name, and hashing scatters New Delhi and New Jalpaiguri to unrelated buckets on purpose. A balanced search tree does better: the names beginning with NEW sit together in order, between "NEW" and "NEX", so a floor search and an in-order walk find them. But each of its $\log_2 n$ comparisons reads two names letter by letter from the start, and names that share a long beginning are compared over that beginning again and again.
+
+        **Is there a structure in which finding everything that begins with what has been typed costs steps that depend only on the length of what was typed, and not at all on how many names are stored?**
+  intuition:
+    - text: |
+        India Post solved this problem in 1972 with the PIN code. A PIN has six digits, and they are read from the left. The first digit names one of the large postal regions: 1 is the north, covering Delhi, Haryana, Punjab and the hill states. The first two digits name a sub-region, and 11 is Delhi. The first three name a sorting district, and the last three a single post office: 110001 is the head post office in New Delhi.
+
+        A sorting office never compares one PIN with another. It reads the first digit and drops the letter into one of a few bags. The next office along reads the second digit and chooses among its bags, and so on. After six readings the letter is at its post office, whether India has a thousand post offices or a lakh and a half. And every letter for anywhere in Delhi passes through the same bag marked 11, so "everything that begins with 11" is simply the contents of one bag.
+
+        Arrange words in the same way. Start at a root. Each letter of a word chooses a branch, so each word is a path from the root, and words that begin alike share the start of their paths. Mark the places where a word ends, because a path can pass through a word on its way to a longer one: IN lies on the way to INN. This arrangement is called a **trie**, from re**trie**val, and usually pronounced "try".
+
+        The figure shows a trie of seven words. Type a beginning with the letter buttons, and add or remove words with the stepper.
+    - figure: trie
+      props: { prefix: "TE" }
+    - text: |
+        The seven words have 20 letters between them, but the trie has only 11 nodes, counting the root, because TEA, TEN and TENT share T and E, and IN, INN and INK share I and N. Typing T and E follows two links and reaches a node whose branches hold exactly the words beginning with TE. Typing T, O, N stops after TO, which has no branch for N: no word begins with TON, and the trie knew it after three steps.
+  derivation:
+    - text: |
+        **A node.** Each node holds a dictionary, from [[s0.dictionaries-and-sets]], that maps a letter to the child reached by that letter, and a flag saying whether a word ends here.
+
+        ```python
+        class TrieNode:
+            def __init__(self):
+                self.children = {}
+                self.end = False
+        ```
+
+        A node does not store its own letters. Its beginning is spelled by the letters on the path from the root to it, so the root stands for the empty beginning. The flag matters because a node exists for every beginning of every stored word, whether or not that beginning is a word itself. If the trie holds only INN, there is a node for IN, and its flag says that IN was never stored.
+
+        **Insertion and lookup.** Both walk down from the root, one letter at a time.
+
+        ```python
+        class TrieNode:
+            def __init__(self):
+                self.children = {}
+                self.end = False
+
+        class Trie:
+            def __init__(self):
+                self.root = TrieNode()
+
+            def insert(self, word):
+                node = self.root
+                for letter in word:
+                    if letter not in node.children:
+                        node.children[letter] = TrieNode()
+                    node = node.children[letter]
+                node.end = True
+
+            def find(self, text):
+                node = self.root
+                for letter in text:
+                    if letter not in node.children:
+                        return None
+                    node = node.children[letter]
+                return node
+
+            def contains(self, word):
+                node = self.find(word)
+                return node is not None and node.end
+        ```
+
+        The loop in `find` keeps an invariant in the sense of [[f2.loop-invariants]]: *after reading the first $k$ letters, `node` is the node for the first $k$ letters of `text`*. If some letter has no branch, no stored word begins with `text`, and `find` returns `None`. Otherwise it returns the node for `text`, and a beginning is present exactly when `find` returns a node. Whether it is a whole word is the flag's business.
+
+        **What it costs.** A word of $L$ letters takes $L$ steps down, each a dictionary lookup, which costs a constant on average by [[s2.hash-tables]]. That is the whole cost. The number of words stored, $n$, does not appear: a trie of ten words and a trie of a crore words look up "TENT" in four steps each.
+
+        | Question | Hash table | Balanced search tree | Trie |
+        | --- | --- | --- | --- |
+        | is this exact word stored? | about $L$, to compute the hash | about $\log_2 n$ comparisons, each up to $L$ letters | $L$ steps |
+        | which words begin with this? | must look at every word | a floor search, then an in-order walk | $L$ steps, then the words below |
+        | list all words alphabetically | must sort them | an in-order walk | a walk in letter order |
+
+        **How many nodes.** Each node other than the root is the end of a path that spells some beginning of a stored word, and different nodes spell different beginnings. So the number of nodes is one more than the number of distinct non-empty beginnings, which is at most the total number of letters in all the words. The trie saves exactly the letters that words share at their starts. Strings over 26 letters can begin in $26^L$ ways at length $L$, and how such counts multiply is the subject of [[f3.counting-with-products-and-sums]].
+    - question:
+        id: derivation-count-nodes
+        type: numeric
+        system: s2
+        prompt: |
+          A trie holds CAT, CAR, CART and DOG. How many nodes does it have, counting the root?
+        answer: "9"
+        explanation: |
+          Count the distinct beginnings: C, CA, CAT, CAR, CART, D, DO, DOG. That is 8, and the root makes 9. The 13 letters of the four words need only 8 nodes below the root, because CAT, CAR and CART share C and A, and CART also shares CAR.
+    - question:
+        id: order-insert
+        type: order
+        system: s2
+        prompt: |
+          A trie holds TEN. Put the steps of inserting TENT in order.
+        steps:
+          - "Start at the root."
+          - "The root has a branch for T: follow it."
+          - "That node has a branch for E: follow it."
+          - "That node has a branch for N: follow it, reaching the node for TEN, whose flag is already set."
+          - "That node has no branch for T, so make a new node and follow the new branch to it."
+          - "The letters are used up, so set the new node's flag: TENT ends here."
+        explanation: Insertion follows existing branches as long as they exist, and creates nodes only for the part of the word that is new. Here only one node is created. The flag on TEN is left alone, so TEN remains a word in its own right, now also a beginning of TENT.
+    - text: |
+        **Every word with a given beginning.** Walk down to the node for the beginning with `find`, and then collect every word below it. Collecting is recursion, as in [[s1.recursion]]: a node contributes its own word, if its flag is set, and then the words of each of its children, with the child's letter added.
+
+        ```python
+        def words_below(node, prefix, found):
+            if node.end:
+                found.append(prefix)
+            for letter in sorted(node.children):
+                words_below(node.children[letter], prefix + letter, found)
+        ```
+
+        Visiting a node before its children, and the children in alphabetical order of their letters, lists the words in **alphabetical order**. A word comes before its own extensions, TEN before TENT, as a dictionary has it. And everything below the branch for A comes before everything below the branch for N, so TEA comes before TEN. Induction on the height of the subtree, from [[f2.induction-and-strong-induction]], turns this into a proof, just as it did for the in-order walk of [[s2.binary-search-trees]].
+
+        The cost is the walk down, $L$ steps, plus the nodes below, which number at most the letters of the words found. The other stations are never touched. A real autocomplete box usually wants only the few most popular matches, not all of them, and keeps at each node a short list of the best words below it, worked out when the words are inserted.
+
+        **The longest word at the start of a text.** A different question turns up in two very different places. A compiler, reading program text, must split it into words, and a language model's tokeniser must split text into pieces from its vocabulary. Both usually take the **longest** vocabulary word that begins the remaining text. A router forwarding a packet looks up the longest stored beginning of the destination address. In a trie this is one walk. Follow the text's letters down from the root for as long as branches exist, and remember the last node passed whose flag was set. When the walk stops, that remembered node marks the longest stored word that begins the text. Then the tokeniser cuts that word off and starts again from the root.
+
+        With the vocabulary un, under, understand, stand, standing and ing, the text "understanding" walks down u, n, d, e, r, s, t, a, n, d, passing flags at "un", "under" and "understand", and then finds no branch for i. So the first piece is "understand", the walk restarts at "ing", and the text splits as understand and ing. You will meet this in [[s7.tokenising]], and you will see there that a trie is the simplest of the machines of [[s7.regular-expressions-and-finite-automata]].
+
+        **Variations.** A node with a single child is wasteful, and long words make long chains of them. A **compressed trie**, or radix tree, merges each such chain into one branch labelled with a whole string; routers and many databases use them. A trie can branch on digits, as the PIN code does, or on the bits of a number, two branches per node. And a sorted list of words offers a halving search for beginnings, met in [[s3.binary-search]], which uses far less memory than a trie when the words rarely change. In Python each trie node carries a whole dictionary, so a trie of a lakh of words can use many megabytes; tries win on speed and on questions about beginnings, not on memory.
+  formal:
+    - text: |
+        **Trie.** A tree whose root stands for the empty string, in which each branch is labelled with a letter, the branches from one node have different letters, and each node stands for the string spelled on the path to it. A flag at each node marks whether that string is a stored word.
+
+        **Lookup and insertion.** Follow, or create, the branch for each letter in turn: $L$ steps for a word of length $L$, independent of the number of words $n$.
+
+        **Size.** One node for each distinct beginning of a stored word, plus the root: at most one more than the total number of letters.
+
+        **Beginnings.** The words beginning with $p$ are exactly the flagged nodes below the node for $p$. Visiting a node before its children, and children in letter order, lists them alphabetically.
+
+        **Longest match.** Walk the text's letters from the root, remembering the last flagged node; when no branch continues, that node is the longest stored word beginning the text.
+  drill:
+    - text: Seconds each. Follow one letter per link.
+    - question:
+        id: drill-steps
+        type: numeric
+        system: s1
+        prompt: |
+          A trie holds 1 crore words. How many links does looking up a 7-letter word follow?
+        answer: "7"
+        explanation: One link for each letter. The number of words stored does not matter.
+    - question:
+        id: drill-nodes-tea-ten
+        type: numeric
+        system: s1
+        prompt: |
+          A trie holds TEA and TEN. How many nodes does it have, counting the root?
+        answer: "5"
+        explanation: The root, T, TE, TEA and TEN. The two words share T and E.
+    - question:
+        id: drill-new-nodes
+        type: numeric
+        system: s1
+        prompt: |
+          A trie holds TEN. How many new nodes does inserting TENT create?
+        answer: "1"
+        explanation: T, E and N are already there; only the final T is new.
+    - question:
+        id: drill-flag
+        type: choice
+        system: s1
+        prompt: |
+          A trie holds only INN. `find("IN")` returns a node. Is IN a stored word?
+        options: ["No: the node exists because IN begins INN, but its flag is not set", "Yes: find returned a node", "Yes: every beginning of a stored word is stored", "It cannot be told from the trie"]
+        answer: 0
+        explanation: A node exists for every beginning of every stored word. Only the flag says whether the beginning was itself inserted.
+    - question:
+        id: drill-order
+        type: choice
+        system: s1
+        prompt: |
+          Visiting each node before its children, and the children in letter order, in what order are TO, TEA, TENT and TEN listed?
+        options: ["TEA, TEN, TENT, TO", "TO, TEA, TEN, TENT", "TEN, TEA, TENT, TO", "TEA, TENT, TEN, TO"]
+        answer: 0
+        explanation: Everything below TE comes before TO, since E comes before O. Below TE, the A branch comes before the N branch, and TEN is listed at its own node before TENT, which is below it.
+    - question:
+        id: drill-children
+        type: numeric
+        system: s1
+        prompt: |
+          The words use only the 26 lowercase English letters. At most how many children can one node have?
+        answer: "26"
+        explanation: One branch for each letter that can come next.
+    - question:
+        id: drill-hash-prefix
+        type: choice
+        system: s1
+        prompt: |
+          Why can a hash table not list the stored words that begin with NEW without looking at all of them?
+        options: ["A good hash function scatters keys, so words that begin alike land in unrelated buckets", "A hash table can hold only short keys", "A hash table keeps its keys sorted, but backwards", "Hashing NEW raises an error"]
+        answer: 0
+        explanation: A hash table is designed so that similar keys do not collide. That same design means nothing about a key's bucket reveals its beginning.
+    - question:
+        id: predict-trie
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          class TrieNode:
+              def __init__(self):
+                  self.children = {}
+                  self.end = False
+
+          root = TrieNode()
+          for word in ["IN", "INN", "INK"]:
+              node = root
+              for letter in word:
+                  if letter not in node.children:
+                      node.children[letter] = TrieNode()
+                  node = node.children[letter]
+              node.end = True
+
+          below_in = root.children["I"].children["N"]
+          print(sorted(below_in.children), below_in.end, root.children["I"].end)
+        output: "['K', 'N'] True False"
+        explanation: The node for IN has branches for K and N, leading to INK and INN. IN was inserted, so its flag is set. I was never inserted, so the node for I has its flag clear.
+    - question:
+        id: predict-below
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          class TrieNode:
+              def __init__(self):
+                  self.children = {}
+                  self.end = False
+
+          def add(root, word):
+              node = root
+              for letter in word:
+                  if letter not in node.children:
+                      node.children[letter] = TrieNode()
+                  node = node.children[letter]
+              node.end = True
+
+          def words_below(node, prefix, found):
+              if node.end:
+                  found.append(prefix)
+              for letter in sorted(node.children):
+                  words_below(node.children[letter], prefix + letter, found)
+
+          root = TrieNode()
+          for word in ["TO", "TENT", "TEA", "TEN"]:
+              add(root, word)
+          found = []
+          words_below(root.children["T"].children["E"], "TE", found)
+          print(found)
+        output: "['TEA', 'TEN', 'TENT']"
+        explanation: The walk starts at the node for TE, which is not a word. Its children are A and N, visited in that order. TEA is found below A. Below N, TEN is listed at its own node before its child gives TENT. TO is not below TE, so it is never reached.
+  work:
+    - text: Slower now. For each walk, say which node you are at after each letter, and what the flag there means.
+    - question:
+        id: fix-insert-flag
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This trie stores TEN and TO, and then checks five strings. It should print `['TEN', 'TO']`. It prints `['T', 'TE', 'TEN', 'TO']`. Find the fault and fix it.
+        starter: |
+          class TrieNode:
+              def __init__(self):
+                  self.children = {}
+                  self.end = False
+
+          class Trie:
+              def __init__(self):
+                  self.root = TrieNode()
+
+              def insert(self, word):
+                  node = self.root
+                  for letter in word:
+                      if letter not in node.children:
+                          node.children[letter] = TrieNode()
+                      node = node.children[letter]
+                      node.end = True
+
+              def contains(self, word):
+                  node = self.root
+                  for letter in word:
+                      if letter not in node.children:
+                          return False
+                      node = node.children[letter]
+                  return node.end
+
+          trie = Trie()
+          trie.insert("TEN")
+          trie.insert("TO")
+          print([w for w in ["T", "TE", "TEN", "TENT", "TO"] if trie.contains(w)])
+        solution: |
+          class TrieNode:
+              def __init__(self):
+                  self.children = {}
+                  self.end = False
+
+          class Trie:
+              def __init__(self):
+                  self.root = TrieNode()
+
+              def insert(self, word):
+                  node = self.root
+                  for letter in word:
+                      if letter not in node.children:
+                          node.children[letter] = TrieNode()
+                      node = node.children[letter]
+                  node.end = True
+
+              def contains(self, word):
+                  node = self.root
+                  for letter in word:
+                      if letter not in node.children:
+                          return False
+                      node = node.children[letter]
+                  return node.end
+
+          trie = Trie()
+          trie.insert("TEN")
+          trie.insert("TO")
+          print([w for w in ["T", "TE", "TEN", "TENT", "TO"] if trie.contains(w)])
+        tests: |
+          import random
+          random.seed(13)
+          for _trial in range(100):
+              _words = set("".join(random.choice("ABC") for _ in range(random.randint(1, 5))) for _ in range(random.randint(1, 12)))
+              _t = Trie()
+              for _w in _words:
+                  _t.insert(_w)
+              for _n in range(0, 6):
+                  for _probe in ["".join(random.choice("ABC") for _ in range(_n)) for _ in range(6)]:
+                      assert _t.contains(_probe) == (_probe in _words), "With " + str(sorted(_words)) + " stored, contains(" + repr(_probe) + ") should be " + str(_probe in _words)
+          _t = Trie()
+          _t.insert("INN")
+          assert not _t.root.children["I"].end and not _t.root.children["I"].children["N"].end, "Inserting INN alone must not mark I or IN as words"
+          assert _t.root.children["I"].children["N"].children["N"].end, "Inserting INN must mark the node for INN"
+          assert output.strip() == "['TEN', 'TO']", "The program should print ['TEN', 'TO']"
+        wrong:
+          - |
+            class TrieNode:
+                def __init__(self):
+                    self.children = {}
+                    self.end = False
+
+            class Trie:
+                def __init__(self):
+                    self.root = TrieNode()
+
+                def insert(self, word):
+                    node = self.root
+                    for letter in word:
+                        if letter not in node.children:
+                            node.children[letter] = TrieNode()
+                            node.end = True
+                        node = node.children[letter]
+
+                def contains(self, word):
+                    node = self.root
+                    for letter in word:
+                        if letter not in node.children:
+                            return False
+                        node = node.children[letter]
+                    return node.end
+
+            print(['TEN', 'TO'])
+          - |
+            class TrieNode:
+                def __init__(self):
+                    self.children = {}
+                    self.end = False
+
+            class Trie:
+                def __init__(self):
+                    self.root = TrieNode()
+
+                def insert(self, word):
+                    node = self.root
+                    for letter in word:
+                        if letter not in node.children:
+                            node.children[letter] = TrieNode()
+                        node = node.children[letter]
+                    node.end = True
+
+                def contains(self, word):
+                    node = self.root
+                    for letter in word:
+                        if letter not in node.children:
+                            return False
+                        node = node.children[letter]
+                    return True
+
+            print(['TEN', 'TO'])
+        explanation: |
+          The flag means "a stored word ends here", so it belongs only to the node reached after the **last** letter. The starter set it inside the loop, on every node along the way, so every beginning of TEN became a word. Moving `node.end = True` out of the loop, after it, marks only the end. `contains` must then return the flag rather than simply whether the walk succeeded, since a successful walk only shows that the string begins some stored word.
+    - question:
+        id: write-complete
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `complete(trie, prefix)`, which returns every stored word beginning with `prefix`, in alphabetical order, and an empty list if there are none. Walk down to the node for `prefix` and collect only below it: the tests count the nodes you look inside, and a trie full of other words must not slow you down.
+        starter: |
+          class TrieNode:
+              def __init__(self):
+                  self.children = {}
+                  self.end = False
+
+          class Trie:
+              def __init__(self):
+                  self.root = TrieNode()
+
+              def insert(self, word):
+                  node = self.root
+                  for letter in word:
+                      if letter not in node.children:
+                          node.children[letter] = TrieNode()
+                      node = node.children[letter]
+                  node.end = True
+
+          def complete(trie, prefix):
+              return []
+
+          trie = Trie()
+          for name in ["NEW DELHI", "NAGPUR", "NEW JALPAIGURI", "NELLORE", "NEW TINSUKIA", "NANDED"]:
+              trie.insert(name)
+          print(complete(trie, "NEW"))
+          print(complete(trie, "NA"), complete(trie, "X"))
+        solution: |
+          class TrieNode:
+              def __init__(self):
+                  self.children = {}
+                  self.end = False
+
+          class Trie:
+              def __init__(self):
+                  self.root = TrieNode()
+
+              def insert(self, word):
+                  node = self.root
+                  for letter in word:
+                      if letter not in node.children:
+                          node.children[letter] = TrieNode()
+                      node = node.children[letter]
+                  node.end = True
+
+          def collect(node, prefix, found):
+              if node.end:
+                  found.append(prefix)
+              for letter in sorted(node.children):
+                  collect(node.children[letter], prefix + letter, found)
+
+          def complete(trie, prefix):
+              node = trie.root
+              for letter in prefix:
+                  if letter not in node.children:
+                      return []
+                  node = node.children[letter]
+              found = []
+              collect(node, prefix, found)
+              return found
+
+          trie = Trie()
+          for name in ["NEW DELHI", "NAGPUR", "NEW JALPAIGURI", "NELLORE", "NEW TINSUKIA", "NANDED"]:
+              trie.insert(name)
+          print(complete(trie, "NEW"))
+          print(complete(trie, "NA"), complete(trie, "X"))
+        tests: |
+          import random
+          random.seed(17)
+          for _trial in range(80):
+              _words = set("".join(random.choice("ABCD") for _ in range(random.randint(1, 6))) for _ in range(random.randint(1, 25)))
+              _t = Trie()
+              for _w in _words:
+                  _t.insert(_w)
+              for _p in ["", "A", "B", "AB", "CA", "DDD", "ABCD", "Z"]:
+                  _want = sorted(_w for _w in _words if _w[:len(_p)] == _p)
+                  _got = complete(_t, _p)
+                  assert _got == _want, "With " + str(sorted(_words)) + " stored, complete(trie, " + repr(_p) + ") should be " + str(_want) + ", not " + str(_got)
+          _looks = [0]
+          class _Counted:
+              def __init__(self):
+                  self._kids = {}
+                  self.end = False
+              @property
+              def children(self):
+                  _looks[0] += 1
+                  return self._kids
+          _real = TrieNode
+          TrieNode = _Counted
+          _t = Trie()
+          for _i in range(3000):
+              _t.insert("Z" + str(_i))
+          for _w in ["MANGO", "MANGROVE", "MANY", "MAP"]:
+              _t.insert(_w)
+          TrieNode = _real
+          _looks[0] = 0
+          assert complete(_t, "MAN") == ["MANGO", "MANGROVE", "MANY"], "complete(trie, 'MAN') should be ['MANGO', 'MANGROVE', 'MANY']"
+          assert _looks[0] <= 60, "complete looked inside " + str(_looks[0]) + " nodes to find three words among 3004; walk to the node for the beginning and collect only below it"
+          assert output.strip() == "['NEW DELHI', 'NEW JALPAIGURI', 'NEW TINSUKIA']\n['NAGPUR', 'NANDED'] []", "The program should print the three NEW stations, then ['NAGPUR', 'NANDED'] []"
+        wrong:
+          - |
+            class TrieNode:
+                def __init__(self):
+                    self.children = {}
+                    self.end = False
+
+            class Trie:
+                def __init__(self):
+                    self.root = TrieNode()
+
+                def insert(self, word):
+                    node = self.root
+                    for letter in word:
+                        if letter not in node.children:
+                            node.children[letter] = TrieNode()
+                        node = node.children[letter]
+                    node.end = True
+
+            def collect(node, prefix, found):
+                if node.end:
+                    found.append(prefix)
+                for letter in sorted(node.children):
+                    collect(node.children[letter], prefix + letter, found)
+
+            def complete(trie, prefix):
+                found = []
+                collect(trie.root, "", found)
+                return [w for w in found if w[:len(prefix)] == prefix]
+
+            print("['NEW DELHI', 'NEW JALPAIGURI', 'NEW TINSUKIA']")
+            print(['NAGPUR', 'NANDED'], [])
+          - |
+            class TrieNode:
+                def __init__(self):
+                    self.children = {}
+                    self.end = False
+
+            class Trie:
+                def __init__(self):
+                    self.root = TrieNode()
+
+                def insert(self, word):
+                    node = self.root
+                    for letter in word:
+                        if letter not in node.children:
+                            node.children[letter] = TrieNode()
+                        node = node.children[letter]
+                    node.end = True
+
+            def collect(node, prefix, found):
+                for letter in sorted(node.children):
+                    collect(node.children[letter], prefix + letter, found)
+                if node.end:
+                    found.append(prefix)
+
+            def complete(trie, prefix):
+                node = trie.root
+                for letter in prefix:
+                    if letter not in node.children:
+                        return []
+                    node = node.children[letter]
+                found = []
+                collect(node, prefix, found)
+                return found
+
+            print("['NEW DELHI', 'NEW JALPAIGURI', 'NEW TINSUKIA']")
+            print(['NAGPUR', 'NANDED'], [])
+        explanation: |
+          Two walks. The first goes down from the root along the letters of the beginning; if a letter has no branch, nothing begins that way and the answer is empty. The second collects everything below the node reached. To come out alphabetical, a node's own word must be added **before** the words below it, so that a word precedes its extensions, and the children must be visited in letter order. Collecting every word in the trie and then filtering gives the same list but looks at all 3,004 words to find three, which is the cost the trie exists to avoid.
+    - question:
+        id: write-longest-match
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `longest_match(trie, text)`, which returns the longest stored word that `text` begins with, or the empty string if there is none. Make one walk down from the root, remembering how many letters had been read the last time you passed a node whose flag is set. Stop as soon as there is no branch for the next letter: the tests count the nodes you look inside, and texts may be very long.
+        starter: |
+          class TrieNode:
+              def __init__(self):
+                  self.children = {}
+                  self.end = False
+
+          class Trie:
+              def __init__(self):
+                  self.root = TrieNode()
+
+              def insert(self, word):
+                  node = self.root
+                  for letter in word:
+                      if letter not in node.children:
+                          node.children[letter] = TrieNode()
+                      node = node.children[letter]
+                  node.end = True
+
+          def longest_match(trie, text):
+              return ""
+
+          vocabulary = Trie()
+          for piece in ["un", "under", "understand", "stand", "standing", "ing"]:
+              vocabulary.insert(piece)
+          print(longest_match(vocabulary, "understanding"), longest_match(vocabulary, "standings"))
+          print(longest_match(vocabulary, "undo"), longest_match(vocabulary, "zebra") == "")
+        solution: |
+          class TrieNode:
+              def __init__(self):
+                  self.children = {}
+                  self.end = False
+
+          class Trie:
+              def __init__(self):
+                  self.root = TrieNode()
+
+              def insert(self, word):
+                  node = self.root
+                  for letter in word:
+                      if letter not in node.children:
+                          node.children[letter] = TrieNode()
+                      node = node.children[letter]
+                  node.end = True
+
+          def longest_match(trie, text):
+              node = trie.root
+              best = 0
+              read = 0
+              for letter in text:
+                  if letter not in node.children:
+                      break
+                  node = node.children[letter]
+                  read += 1
+                  if node.end:
+                      best = read
+              return text[:best]
+
+          vocabulary = Trie()
+          for piece in ["un", "under", "understand", "stand", "standing", "ing"]:
+              vocabulary.insert(piece)
+          print(longest_match(vocabulary, "understanding"), longest_match(vocabulary, "standings"))
+          print(longest_match(vocabulary, "undo"), longest_match(vocabulary, "zebra") == "")
+        tests: |
+          import random
+          random.seed(19)
+          for _trial in range(150):
+              _words = set("".join(random.choice("ab") for _ in range(random.randint(1, 5))) for _ in range(random.randint(1, 8)))
+              _t = Trie()
+              for _w in _words:
+                  _t.insert(_w)
+              for _probe in ["".join(random.choice("ab") for _ in range(random.randint(0, 7))) for _ in range(10)]:
+                  _fits = [_w for _w in _words if _probe[:len(_w)] == _w]
+                  _want = max(_fits, key=len) if _fits else ""
+                  _got = longest_match(_t, _probe)
+                  assert _got == _want, "With " + str(sorted(_words)) + " stored, longest_match(trie, " + repr(_probe) + ") should be " + repr(_want) + ", not " + repr(_got)
+          _looks = [0]
+          class _Counted:
+              def __init__(self):
+                  self._kids = {}
+                  self.end = False
+              @property
+              def children(self):
+                  _looks[0] += 1
+                  return self._kids
+          _real = TrieNode
+          TrieNode = _Counted
+          _t = Trie()
+          for _w in ["a", "aa", "aaaa", "b"]:
+              _t.insert(_w)
+          TrieNode = _real
+          _looks[0] = 0
+          assert longest_match(_t, "a" * 5000) == "aaaa", "With a, aa and aaaa stored, a text of 5000 a's begins with aaaa"
+          assert _looks[0] <= 20, "longest_match looked inside " + str(_looks[0]) + " nodes for a text of 5000 letters and words of at most 4; stop when there is no branch"
+          assert output.strip() == "understand standing\nun True", "The program should print: understand standing, then: un True"
+        wrong:
+          - |
+            class TrieNode:
+                def __init__(self):
+                    self.children = {}
+                    self.end = False
+
+            class Trie:
+                def __init__(self):
+                    self.root = TrieNode()
+
+                def insert(self, word):
+                    node = self.root
+                    for letter in word:
+                        if letter not in node.children:
+                            node.children[letter] = TrieNode()
+                        node = node.children[letter]
+                    node.end = True
+
+            def longest_match(trie, text):
+                node = trie.root
+                read = 0
+                for letter in text:
+                    if letter not in node.children:
+                        break
+                    node = node.children[letter]
+                    read += 1
+                return text[:read]
+
+            print("understand standing")
+            print("un True")
+          - |
+            class TrieNode:
+                def __init__(self):
+                    self.children = {}
+                    self.end = False
+
+            class Trie:
+                def __init__(self):
+                    self.root = TrieNode()
+
+                def insert(self, word):
+                    node = self.root
+                    for letter in word:
+                        if letter not in node.children:
+                            node.children[letter] = TrieNode()
+                        node = node.children[letter]
+                    node.end = True
+
+            def stored(trie, word):
+                node = trie.root
+                for letter in word:
+                    if letter not in node.children:
+                        return False
+                    node = node.children[letter]
+                return node.end
+
+            def longest_match(trie, text):
+                for k in range(len(text), 0, -1):
+                    if stored(trie, text[:k]):
+                        return text[:k]
+                return ""
+
+            print("understand standing")
+            print("un True")
+          - |
+            class TrieNode:
+                def __init__(self):
+                    self.children = {}
+                    self.end = False
+
+            class Trie:
+                def __init__(self):
+                    self.root = TrieNode()
+
+                def insert(self, word):
+                    node = self.root
+                    for letter in word:
+                        if letter not in node.children:
+                            node.children[letter] = TrieNode()
+                        node = node.children[letter]
+                    node.end = True
+
+            def longest_match(trie, text):
+                node = trie.root
+                read = 0
+                for letter in text:
+                    if letter not in node.children:
+                        break
+                    node = node.children[letter]
+                    read += 1
+                    if node.end:
+                        return text[:read]
+                return ""
+
+            print("understand standing")
+            print("un True")
+        explanation: |
+          Where the walk stops is not the answer. In "undo" the walk gets through u, n and d, because "under" begins that way, but "und" is not a word, so the answer is the last place a flag was passed, "un". That is why the walk must remember the last flagged position and keep going, rather than returning at the first flag, which would give "un" for "understanding" too. Trying every beginning of the text from the longest down also finds the answer, but starts a new walk for each length, thousands of walks for a long text, where one walk of at most the longest word's length is enough.
+    - question:
+        id: work-pin-nodes
+        type: numeric
+        system: s2
+        prompt: |
+          A trie stores the 99 PIN codes from 110001 to 110099 as strings of six digits. How many nodes does it have, counting the root?
+        answer: "114"
+        explanation: |
+          Count the distinct beginnings by length. Lengths 1 to 4 have one each, 1, 11, 110 and 1100, which makes 4. Length 5 has ten, 11000 to 11009. Length 6 has the 99 codes themselves. That is $4 + 10 + 99 = 113$ beginnings, and the root makes 114, against $6 \cdot 99 = 594$ digits written out separately.
+    - question:
+        id: work-which
+        type: choice
+        system: s2
+        prompt: |
+          A spelling checker only ever asks one question: is this exact word in a dictionary of 5 lakh words? Memory is tight. Which structure fits best?
+        options:
+          - "A hash table, such as a Python set: each lookup costs about the word's length, and it stores each word once without a dictionary in every node."
+          - "A trie, because it is the only structure whose lookups do not depend on the number of words."
+          - "A balanced search tree, because it keeps the words in alphabetical order."
+          - "A min-heap of the words, since the smallest word is at the root."
+        answer: 0
+        explanation: |
+          For exact lookups a hash table and a trie cost about the same, a number of steps proportional to the word's length, but the hash table needs far less memory than a trie whose every node carries its own dictionary. The trie earns its memory only when questions are about beginnings: suggestions as you type, the longest match, or listing words in order. Choose the structure for the questions you will ask.
+  connections:
+    - text: |
+        The puzzle asked for a way to find every station beginning with what has been typed, at a cost that depends only on what was typed. A trie stores each word as a path of letters from a root, so words that begin alike share their beginnings. Typing walks one link per letter, whatever the number of stations, and the matching names are exactly the words below the node reached. Every step reads one letter and chooses a branch, as a PIN sorting office reads one digit and chooses a bag. Nothing is ever compared with a whole key.
+
+        Two more uses came free. A walk that visits a node before its children, and children in letter order, lists the words alphabetically. And a walk that remembers the last flagged node finds the longest stored word at the start of a text, the question asked by compilers, by the tokenisers of language models, and by every router on the internet.
+
+        Every structure in this cluster so far has been a list or a tree: one way in at the top, and exactly one route from there to each item. Much of the world is not shaped like that. Roads join towns in loops, friendships run in every direction, and web pages link back to pages that linked to them. Such a web of connections is a graph, and the first question about a graph is how to store it so that the questions you will ask are cheap: [[s2.graphs-and-their-representations]].

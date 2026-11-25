@@ -1,0 +1,913 @@
+concept: s2.binary-search-trees
+minutes: 100
+claim: You can state the invariant of a binary search tree, search, insert and remove keys by walking one path from the root, list the keys in sorted order, answer order questions such as the largest key not above a limit, and explain why the cost of every operation is the height of the tree, which is about log2 n when the tree is bushy and n when it is a path.
+recalls: [s2.hash-tables, s2.linked-lists]
+uses: [s2.arrays-and-dynamic-arrays, f2.loop-invariants, f2.induction-and-strong-induction, f2.equivalence-relations-and-partial-orders, f1.logarithms, f1.arithmetic-and-geometric-series, s1.recursion, s1.classes-and-objects, s1.special-methods, s1.generators-and-context-managers, s0.lists-and-tuples, s0.loops, s0.functions]
+leads: [s2.balanced-search-trees, s2.heaps-and-priority-queues, s2.tries, f3.trees-and-their-properties, s3.sorting]
+starter: |
+  # Scratch space. Each node holds a key and links to two smaller trees.
+  class Node:
+      def __init__(self, key):
+          self.key = key
+          self.left = None
+          self.right = None
+
+  def insert(node, key):
+      if node is None:
+          return Node(key)
+      if key < node.key:
+          node.left = insert(node.left, key)
+      elif key > node.key:
+          node.right = insert(node.right, key)
+      return node
+
+  def in_order(node):
+      if node is None:
+          return []
+      return in_order(node.left) + [node.key] + in_order(node.right)
+
+  root = None
+  for fare in [950, 1200, 780, 1500, 1100, 600, 1350]:
+      root = insert(root, fare)
+  print(in_order(root))
+parts:
+  recall:
+    - text: |
+        [[s2.hash-tables]] found any key in a few steps by scattering keys over an array, and ended by admitting that scattering destroys order. [[s2.linked-lists]] gave you nodes joined by links. Today each node gets two links, and the result keeps its keys in order. Three quick pulls first.
+  puzzle:
+    - text: |
+        A travel site holds the fares for every flight between two cities, and fares change all day. It must answer questions like these, thousands of times a second:
+
+        - Is there a fare of exactly ₹1,100?
+        - What is the dearest fare I can afford with ₹1,000?
+        - Which fares lie between ₹800 and ₹1,200?
+
+        And between questions, fares are added and removed.
+
+        Each structure so far fails one way or another. A hash table answers the first question at once and is helpless with the other two: ₹999 and ₹1,000 land in unrelated buckets. A **sorted** array answers all three with the halving search of [[f2.loop-invariants]], in about $\log_2 n$ steps, but adding a fare means moving every larger fare one place along, which is linear. A linked list in sorted order inserts without moving anything, once you are at the right place, but finding the place means walking, since a list cannot be halved.
+
+        **Can one structure halve like a sorted array and insert like a linked list?**
+  intuition:
+    - text: |
+        Play the game of guessing a number between 1 and 100. A sensible player always asks "is it less than 50?", then "less than 25?", and so on. Each answer throws away half of what is left. The questions the player might ask form a branching chart: a first question at the top, and below each question two possible next questions, one for "yes" and one for "no".
+
+        A **binary search tree** is that chart, built out of the keys themselves. The key at the top, the **root**, plays the part of the first question. Every key smaller than it lives somewhere down its left branch, and every key larger down its right branch. And the same holds at every node below. To find a key, start at the root and compare: smaller, go left; larger, go right; equal, found. Each comparison takes you one level down.
+
+        Now insertion. To add a new key, search for it. The search fails at some empty place, the spot where the key would have been if it were present. Hang the new key there. Nothing else moves. It is the linked list's cheap insertion, guided by the sorted array's halving.
+
+        In the figure, fifteen keys have been inserted one by one. Move the search slider and watch the path. Then press the button to insert the same keys in sorted order.
+    - figure: search-tree
+      props: { target: 45 }
+    - text: |
+        In the order given, the fifteen keys form a bushy tree whose deepest key is 3 links below the root, and any search makes at most 4 comparisons. Inserted in sorted order, each new key is larger than everything before it, so it always goes right, and the tree is a single path 14 links deep. It is a linked list wearing a tree's clothes, and a search may make 15 comparisons. Same keys, same rules, different order of arrival. Everything in this lesson and the next turns on that difference.
+  derivation:
+    - text: |
+        **The shape.** A node holds a key and two links, `left` and `right`, each either another node or `None`. The node a link points to is a **child**, and everything reachable from a child is that child's **subtree**. A node with no children is a **leaf**.
+
+        ```python
+        class Node:
+            def __init__(self, key):
+                self.key = key
+                self.left = None
+                self.right = None
+        ```
+
+        The tree is a binary search tree when it keeps one invariant:
+
+        > For every node, every key in its left subtree is smaller than its key, and every key in its right subtree is larger.
+
+        This needs keys that can always be compared, a total order in the sense of [[f2.equivalence-relations-and-partial-orders]]: numbers, strings, dates. Each key is stored once.
+
+        **Searching.** Follow the invariant down.
+
+        ```python
+        def contains(node, key):
+            while node is not None:
+                if key == node.key:
+                    return True
+                if key < node.key:
+                    node = node.left
+                else:
+                    node = node.right
+            return False
+        ```
+
+        The loop's invariant, in the sense of [[f2.loop-invariants]], is: if the key is anywhere in the tree, it is in the subtree under `node`. It holds at the start, since that subtree is the whole tree. A step left is safe, because a key smaller than `node.key` cannot be in the right subtree, and a step right likewise. When `node` becomes `None`, the subtree under it is empty, so the key is absent.
+
+        **Inserting.** Search, and attach a new node where the search fell off the tree. Written recursively, as in [[s1.recursion]], each call returns the subtree with the key added, and the caller stores that subtree back in its link:
+
+        ```python
+        def insert(node, key):
+            if node is None:
+                return Node(key)
+            if key < node.key:
+                node.left = insert(node.left, key)
+            elif key > node.key:
+                node.right = insert(node.right, key)
+            return node
+        ```
+
+        Only the empty place changes, from `None` to a new node, so every other node keeps its subtree and the invariant survives.
+
+        **Reading the keys in order.** List the left subtree, then the node, then the right subtree. That is the **in-order** walk, and it produces the keys in increasing order. The proof is an induction on the tree, as in [[f2.induction-and-strong-induction]]: the empty tree gives the empty list, which is sorted; and if the walks of the two subtrees are sorted, then putting the smaller keys first, the node's key next and the larger keys last gives a sorted list too. As a generator from [[s1.generators-and-context-managers]]:
+
+        ```python
+        def keys_in_order(node):
+            if node is not None:
+                yield from keys_in_order(node.left)
+                yield node.key
+                yield from keys_in_order(node.right)
+        ```
+
+        Inserting $n$ keys into a tree and reading them back in order is a way of sorting, called **tree sort**. The algorithms cluster compares it with the other ways in [[s3.sorting]].
+    - question:
+        id: derivation-invariant
+        type: choice
+        system: s2
+        prompt: |
+          A tree has 50 at the root, 30 as the root's left child, and 60 as the right child of 30. Is it a binary search tree?
+        options:
+          - "No. 60 is in the left subtree of the root, so it must be smaller than 50, and it is not. Comparing each node only with its parent misses this."
+          - "Yes. 60 is larger than its parent 30, so it is correctly a right child."
+          - "Yes, because a search for 60 would still find it."
+          - "No, because 30 should be on the right of 50."
+        answer: 0
+        explanation: |
+          The invariant is about whole subtrees, not just parents. 60 is greater than 30, so it may sit to the right of 30, but every key in the root's left subtree must be less than 50. And a search for 60 would **not** find it: it compares 60 with 50, goes right, and never visits the left subtree. A check that compares each node only with its parent passes this tree and is wrong.
+    - text: |
+        **The height decides everything.** The **depth** of a node is the number of links from the root down to it, and the **height** of the tree is the greatest depth of any node. A search that ends at a node of depth $d$ makes $d + 1$ comparisons, and an insertion walks the same path. So every operation costs at most the height plus one.
+
+        How small can the height be? At depth 0 there is one node, at depth 1 at most two, at depth 2 at most four, and at depth $d$ at most $2^d$, since each node has at most two children. A tree of height $h$ therefore holds at most
+
+        $$1 + 2 + 4 + \dots + 2^h = 2^{h + 1} - 1$$
+
+        keys, the geometric series of [[f1.arithmetic-and-geometric-series]]. Turned round with [[f1.logarithms]]: $n$ keys need a height of at least $\log_2(n + 1) - 1$. Ten lakh keys fit in a tree of height 19, and a search there makes at most 20 comparisons. That is the halving of a sorted array, kept up while inserting costs only a walk down one path.
+
+        How large can it be? As large as $n - 1$, when every node has one child: a path, as the figure showed for keys arriving in sorted order. Then a search makes up to $n$ comparisons, and the tree is no better than a list. Sorted arrivals are not rare. Records are often added in order of time, of serial number or of name. When keys arrive in random order the tree is bushy on average, with an average depth of about $1.39 \log_2 n$, but a plain binary search tree makes no promise. Making a promise is the work of the next lesson.
+
+        **Order questions.** Because the tree keeps order, the questions the hash table could not answer are each one walk down.
+
+        - *Smallest key:* go left until you cannot. *Largest:* go right.
+        - *Floor of $x$, the largest key not above $x$:* walk down as if searching for $x$. Each time you step right from a node, its key is at most $x$ and is the best candidate so far; remember it. When the walk falls off, the last candidate remembered is the answer.
+        - *Every key between $a$ and $b$:* do the in-order walk, but skip a left subtree when the node's key is below $a$, and a right subtree when it is above $b$. Only the keys in the range and the paths to them are visited.
+
+        **Removing.** Three cases, by the number of children of the node that holds the key.
+
+        1. *A leaf:* set the link to it to `None`.
+        2. *One child:* let the child take the node's place, as removing from a linked list skips a node.
+        3. *Two children:* the node cannot simply be cut out, since two subtrees would need one parent link. Find its **successor**, the smallest key in its right subtree: step right once, then left as far as possible. Copy that key into the node, and remove the successor's old node, which has no left child and so falls under case 1 or 2.
+
+        The successor is the right replacement because it is larger than everything in the left subtree and smaller than everything else in the right subtree, so the invariant holds with it in the node's place.
+    - question:
+        id: order-remove
+        type: order
+        system: s2
+        prompt: |
+          In the figure's tree (in the order given), 50 is at the root. Its right child is 70, whose left child is 60, whose left child is 55, which has no children. Put in order the steps that remove 50.
+        steps:
+          - "Search for 50 and stop at the root, which holds it."
+          - "See that the root has two children, so it cannot simply be cut out."
+          - "Step right once, to 70, then left as far as possible: 60, then 55."
+          - "Copy 55 into the root in place of 50."
+          - "Remove the node that held 55 from its old place, by setting 60's left link to `None`."
+        explanation: The node to remove has two children, so its key is replaced by its successor, the smallest key in the right subtree, found by one step right and then left until no left child remains. 55 is larger than everything on the left of the root and smaller than everything else on the right, so the invariant holds with 55 at the root. The old node of 55 is a leaf and is removed by clearing one link.
+  formal:
+    - text: |
+        **Binary search tree.** Nodes with a key and links `left` and `right`, such that every key in a node's left subtree is smaller than its key and every key in its right subtree is larger.
+
+        **Depth and height.** The depth of a node is its number of links from the root. The height of the tree is the greatest depth. Searching, inserting and removing each walk one path from the root and cost at most the height plus one comparisons.
+
+        **Bounds on the height.** A tree of height $h$ holds at most $2^{h + 1} - 1$ keys, so $n$ keys need $h \ge \log_2(n + 1) - 1$. A path of $n$ keys has height $n - 1$, which is what sorted insertion produces.
+
+        **In-order walk.** Left subtree, node, right subtree. It lists the keys in increasing order, and its cost is linear.
+
+        **Floor.** The largest key at most $x$: walk as if searching for $x$, remembering each key passed on a step to the right.
+
+        **Removal.** A leaf is cut off. A node with one child is replaced by that child. A node with two children takes its successor's key, and the successor's node is removed instead.
+  drill:
+    - text: Seconds each. At every node, ask only whether to go left or right.
+    - question:
+        id: drill-first-step
+        type: choice
+        system: s1
+        prompt: |
+          A binary search tree has 50 at the root. Searching for 45, which way does the first step go?
+        options: ["Left", "Right", "Neither, 45 is not in the tree", "To the smallest key"]
+        answer: 0
+        explanation: 45 is smaller than 50, so if it is present it is in the left subtree.
+    - question:
+        id: drill-smallest
+        type: choice
+        system: s1
+        prompt: |
+          Where is the smallest key of a binary search tree?
+        options: ["At the end of the path that goes left from the root until it cannot", "At the root", "At the deepest leaf", "In the root's right subtree"]
+        answer: 0
+        explanation: Every step left reaches a smaller key, and a node with no left child has nothing smaller below it.
+    - question:
+        id: drill-sorted-height
+        type: numeric
+        system: s1
+        prompt: |
+          The keys 1, 2, 3, 4, 5, 6, 7 are inserted in that order into an empty binary search tree. What is its height?
+        answer: "6"
+        explanation: Each key goes right of the one before, making a path of 7 nodes and 6 links.
+    - question:
+        id: drill-best-height
+        type: numeric
+        system: s1
+        prompt: |
+          What is the smallest possible height of a binary search tree holding 7 keys?
+        answer: "2"
+        explanation: A root, two children and four grandchildren hold $1 + 2 + 4 = 7$ keys.
+    - question:
+        id: drill-level-count
+        type: numeric
+        system: s1
+        prompt: |
+          At most how many nodes can a binary tree have at depth 4?
+        answer: "16"
+        explanation: 'The most at each depth doubles: 1, 2, 4, 8, 16.'
+    - question:
+        id: drill-comparisons
+        type: numeric
+        system: s1
+        prompt: |
+          A key sits at depth 5 of a binary search tree. How many comparisons does a successful search for it make?
+        answer: "6"
+        explanation: One at each of the nodes at depths 0 to 5.
+    - question:
+        id: drill-in-order
+        type: choice
+        system: s1
+        prompt: |
+          In which order does the in-order walk visit a node and its two subtrees?
+        options: ["Left subtree, the node, right subtree", "The node, left subtree, right subtree", "Left subtree, right subtree, the node", "Right subtree, the node, left subtree"]
+        answer: 0
+        explanation: Smaller keys first, then the node's key, then larger keys.
+    - question:
+        id: drill-successor
+        type: choice
+        system: s1
+        prompt: |
+          A node with two children is removed. Where is the key that takes its place?
+        options: ["One step right, then left as far as possible", "One step left, then right as far as possible, is the only correct choice", "At the root", "At the deepest leaf"]
+        answer: 0
+        explanation: That is the successor, the smallest key larger than the removed one. Its mirror image, the largest key in the left subtree, would also work, but it is not the only choice.
+    - question:
+        id: drill-floor
+        type: numeric
+        system: s1
+        prompt: |
+          A binary search tree holds the fares 600, 780, 950, 1100, 1200, 1350 and 1500. What is the floor of 1000, the largest fare not above it?
+        answer: "950"
+        explanation: 950 is at most 1000, and the next fare, 1100, is above it.
+    - question:
+        id: predict-in-order
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          class Node:
+              def __init__(self, key):
+                  self.key = key
+                  self.left = None
+                  self.right = None
+
+          def insert(node, key):
+              if node is None:
+                  return Node(key)
+              if key < node.key:
+                  node.left = insert(node.left, key)
+              elif key > node.key:
+                  node.right = insert(node.right, key)
+              return node
+
+          def in_order(node):
+              if node is None:
+                  return []
+              return in_order(node.left) + [node.key] + in_order(node.right)
+
+          root = None
+          for k in [40, 20, 60, 10, 30, 50]:
+              root = insert(root, k)
+          print(in_order(root), root.left.right.key)
+        output: "[10, 20, 30, 40, 50, 60] 30"
+        explanation: The in-order walk gives the keys sorted, whatever the order of insertion. 20 is the root's left child, and 30, larger than 20 but smaller than 40, is the right child of 20.
+  work:
+    - text: Slower now. For each method, say which path it walks and what it keeps track of on the way.
+    - question:
+        id: write-search-tree
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Finish `SearchTree`. `insert(key)` adds a key if it is not already there, and `key in tree` says whether it is. `len(tree)` is the number of distinct keys. Write both methods with loops, not recursion: a tree built from keys that arrive in sorted order is as deep as it is long, and the tests build one of 1500 keys, deeper than Python allows calls to nest.
+        starter: |
+          class Node:
+              def __init__(self, key):
+                  self.key = key
+                  self.left = None
+                  self.right = None
+
+
+          class SearchTree:
+              def __init__(self):
+                  self.root = None
+                  self.length = 0
+
+              def __len__(self):
+                  return self.length
+
+              def insert(self, key):
+                  pass
+
+              def __contains__(self, key):
+                  return False
+
+
+          fares = SearchTree()
+          for f in [950, 1200, 780, 1500, 1100, 600, 1350]:
+              fares.insert(f)
+          fares.insert(1100)
+          print(len(fares), 1100 in fares, 1000 in fares)
+        solution: |
+          class Node:
+              def __init__(self, key):
+                  self.key = key
+                  self.left = None
+                  self.right = None
+
+
+          class SearchTree:
+              def __init__(self):
+                  self.root = None
+                  self.length = 0
+
+              def __len__(self):
+                  return self.length
+
+              def insert(self, key):
+                  if self.root is None:
+                      self.root = Node(key)
+                      self.length += 1
+                      return
+                  node = self.root
+                  while True:
+                      if key == node.key:
+                          return
+                      if key < node.key:
+                          if node.left is None:
+                              node.left = Node(key)
+                              self.length += 1
+                              return
+                          node = node.left
+                      else:
+                          if node.right is None:
+                              node.right = Node(key)
+                              self.length += 1
+                              return
+                          node = node.right
+
+              def __contains__(self, key):
+                  node = self.root
+                  while node is not None:
+                      if key == node.key:
+                          return True
+                      if key < node.key:
+                          node = node.left
+                      else:
+                          node = node.right
+                  return False
+
+
+          fares = SearchTree()
+          for f in [950, 1200, 780, 1500, 1100, 600, 1350]:
+              fares.insert(f)
+          fares.insert(1100)
+          print(len(fares), 1100 in fares, 1000 in fares)
+        tests: |
+          import random
+          def _keys(node):
+              out = []
+              stack = []
+              while stack or node is not None:
+                  while node is not None:
+                      stack.append(node)
+                      node = node.left
+                  node = stack.pop()
+                  out.append(node.key)
+                  node = node.right
+              return out
+          _e = SearchTree()
+          assert len(_e) == 0 and (5 in _e) is False, "An empty tree holds nothing"
+          _e.insert(5)
+          assert len(_e) == 1 and (5 in _e) is True and _e.root.key == 5, "The first key becomes the root"
+          _t = SearchTree()
+          random.seed(7)
+          _vals = random.sample(range(10000), 400)
+          for _v in _vals:
+              _t.insert(_v)
+          assert _t.root.key == _vals[0], "The first key inserted should stay at the root"
+          assert _keys(_t.root) == sorted(_vals), "Read in order, the keys should come out sorted: the invariant must hold everywhere"
+          assert len(_t) == 400, "400 distinct keys were inserted"
+          for _v in _vals[:100]:
+              _t.insert(_v)
+          assert len(_t) == 400, "Inserting a key that is already there should change nothing"
+          _present = set(_vals)
+          for _q in range(0, 10000, 37):
+              assert (_q in _t) == (_q in _present), "key in tree is wrong for " + str(_q)
+          _path = SearchTree()
+          for _v in range(1500):
+              _path.insert(_v)
+          assert len(_path) == 1500 and (1499 in _path) and (1500 not in _path), "A tree built from 1500 sorted keys should still work"
+          assert output.strip() == "7 True False", "The program should print 7 True False"
+        wrong:
+          - |
+            class Node:
+                def __init__(self, key):
+                    self.key = key
+                    self.left = None
+                    self.right = None
+
+
+            class SearchTree:
+                def __init__(self):
+                    self.root = None
+                    self.length = 0
+
+                def __len__(self):
+                    return self.length
+
+                def insert(self, key):
+                    self.length += 1
+                    if self.root is None:
+                        self.root = Node(key)
+                        return
+                    node = self.root
+                    while True:
+                        if key < node.key:
+                            if node.left is None:
+                                node.left = Node(key)
+                                return
+                            node = node.left
+                        else:
+                            if node.right is None:
+                                node.right = Node(key)
+                                return
+                            node = node.right
+
+                def __contains__(self, key):
+                    node = self.root
+                    while node is not None:
+                        if key == node.key:
+                            return True
+                        if key < node.key:
+                            node = node.left
+                        else:
+                            node = node.right
+                    return False
+
+
+            print(7, True, False)
+          - |
+            class Node:
+                def __init__(self, key):
+                    self.key = key
+                    self.left = None
+                    self.right = None
+
+
+            class SearchTree:
+                def __init__(self):
+                    self.root = None
+                    self.length = 0
+
+                def __len__(self):
+                    return self.length
+
+                def insert(self, key):
+                    if self.root is None:
+                        self.root = Node(key)
+                        self.length += 1
+                        return
+                    node = self.root
+                    while True:
+                        if key == node.key:
+                            return
+                        if key > node.key:
+                            if node.left is None:
+                                node.left = Node(key)
+                                self.length += 1
+                                return
+                            node = node.left
+                        else:
+                            if node.right is None:
+                                node.right = Node(key)
+                                self.length += 1
+                                return
+                            node = node.right
+
+                def __contains__(self, key):
+                    node = self.root
+                    while node is not None:
+                        if key == node.key:
+                            return True
+                        if key < node.key:
+                            node = node.left
+                        else:
+                            node = node.right
+                    return False
+
+
+            print(7, True, False)
+          - |
+            class Node:
+                def __init__(self, key):
+                    self.key = key
+                    self.left = None
+                    self.right = None
+
+
+            def _add(node, key):
+                if node is None:
+                    return Node(key)
+                if key < node.key:
+                    node.left = _add(node.left, key)
+                elif key > node.key:
+                    node.right = _add(node.right, key)
+                return node
+
+
+            def _has(node, key):
+                if node is None:
+                    return False
+                if key == node.key:
+                    return True
+                if key < node.key:
+                    return _has(node.left, key)
+                return _has(node.right, key)
+
+
+            class SearchTree:
+                def __init__(self):
+                    self.root = None
+                    self.length = 0
+
+                def __len__(self):
+                    return self.length
+
+                def insert(self, key):
+                    if not _has(self.root, key):
+                        self.length += 1
+                    self.root = _add(self.root, key)
+
+                def __contains__(self, key):
+                    return _has(self.root, key)
+
+
+            print(7, True, False)
+        explanation: |
+          Both methods walk one path from the root, choosing left or right by comparing keys. `insert` stops early if it meets the key, which keeps keys distinct and the count honest, and otherwise attaches a new node at the empty place where a search would have failed. Sending larger keys left in `insert` while `__contains__` sends them right breaks the invariant that the two must share. The recursive version is correct on bushy trees and fails on the path built from sorted keys, because each level of the tree is one more waiting call: 1500 levels is more than Python allows.
+    - question:
+        id: fix-insert
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This recursive `insert` should build a tree whose in-order walk prints `[20, 30, 40, 50, 70]`. It prints `[50]`: every key after the first disappears. The function is meant to return the subtree with the key added. Find where that returned subtree is thrown away, and fix it.
+        starter: |
+          class Node:
+              def __init__(self, key):
+                  self.key = key
+                  self.left = None
+                  self.right = None
+
+          def insert(node, key):
+              if node is None:
+                  return Node(key)
+              if key < node.key:
+                  insert(node.left, key)
+              elif key > node.key:
+                  insert(node.right, key)
+              return node
+
+          def in_order(node):
+              if node is None:
+                  return []
+              return in_order(node.left) + [node.key] + in_order(node.right)
+
+          root = None
+          for k in [50, 30, 70, 20, 40]:
+              root = insert(root, k)
+          print(in_order(root))
+        solution: |
+          class Node:
+              def __init__(self, key):
+                  self.key = key
+                  self.left = None
+                  self.right = None
+
+          def insert(node, key):
+              if node is None:
+                  return Node(key)
+              if key < node.key:
+                  node.left = insert(node.left, key)
+              elif key > node.key:
+                  node.right = insert(node.right, key)
+              return node
+
+          def in_order(node):
+              if node is None:
+                  return []
+              return in_order(node.left) + [node.key] + in_order(node.right)
+
+          root = None
+          for k in [50, 30, 70, 20, 40]:
+              root = insert(root, k)
+          print(in_order(root))
+        tests: |
+          _r = None
+          for _k in [50, 30, 70, 20, 40, 60, 80, 35]:
+              _r = insert(_r, _k)
+          assert in_order(_r) == [20, 30, 35, 40, 50, 60, 70, 80], "Every key inserted should be in the tree, in order"
+          assert _r.key == 50 and _r.left.key == 30 and _r.right.key == 70, "The first key is the root, with 30 on its left and 70 on its right"
+          assert _r.left.right.left.key == 35, "35 belongs left of 40, which is right of 30"
+          _same = insert(_r, 35)
+          assert _same is _r and in_order(_r) == [20, 30, 35, 40, 50, 60, 70, 80], "Inserting a key that is present returns the same tree unchanged"
+          assert insert(None, 9).key == 9, "Inserting into the empty tree gives a single node"
+          assert output.strip() == "[20, 30, 40, 50, 70]", "The program should print [20, 30, 40, 50, 70]"
+        wrong:
+          - |
+            class Node:
+                def __init__(self, key):
+                    self.key = key
+                    self.left = None
+                    self.right = None
+
+            def insert(node, key):
+                if node is None:
+                    return Node(key)
+                if key < node.key:
+                    node.left = insert(node.left, key)
+                elif key > node.key:
+                    node.right = insert(node.right, key)
+                return Node(key)
+
+            def in_order(node):
+                if node is None:
+                    return []
+                return in_order(node.left) + [node.key] + in_order(node.right)
+
+            print([20, 30, 40, 50, 70])
+          - |
+            class Node:
+                def __init__(self, key):
+                    self.key = key
+                    self.left = None
+                    self.right = None
+
+            def insert(node, key):
+                if node is None:
+                    return Node(key)
+                if key < node.key:
+                    node.right = insert(node.right, key)
+                elif key > node.key:
+                    node.left = insert(node.left, key)
+                return node
+
+            def in_order(node):
+                if node is None:
+                    return []
+                return in_order(node.left) + [node.key] + in_order(node.right)
+
+            print([20, 30, 40, 50, 70])
+        explanation: |
+          When the recursion reaches an empty place it makes a new node and returns it, and that returned node is the only thing that knows about the new key. The calls `insert(node.left, key)` and `insert(node.right, key)` threw it away, so no link ever pointed at the new node. Storing the result back, `node.left = insert(node.left, key)`, attaches it. For every call that does not reach the empty place, the returned subtree is the one already there, so storing it back changes nothing. That is the pattern of all recursive tree updates: each call returns the new subtree, and the parent keeps it.
+    - question:
+        id: write-floor
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `floor(node, x)`, which returns the largest key in the tree under `node` that is at most `x`, or `None` if there is none. Walk one path from the root, as the lesson describes, without visiting the whole tree: the tests count the links you follow.
+        starter: |
+          class Node:
+              def __init__(self, key):
+                  self.key = key
+                  self.left = None
+                  self.right = None
+
+          def insert(node, key):
+              if node is None:
+                  return Node(key)
+              if key < node.key:
+                  node.left = insert(node.left, key)
+              elif key > node.key:
+                  node.right = insert(node.right, key)
+              return node
+
+          def floor(node, x):
+              return None
+
+          root = None
+          for fare in [950, 1200, 780, 1500, 1100, 600, 1350]:
+              root = insert(root, fare)
+          print(floor(root, 1000), floor(root, 500))
+        solution: |
+          class Node:
+              def __init__(self, key):
+                  self.key = key
+                  self.left = None
+                  self.right = None
+
+          def insert(node, key):
+              if node is None:
+                  return Node(key)
+              if key < node.key:
+                  node.left = insert(node.left, key)
+              elif key > node.key:
+                  node.right = insert(node.right, key)
+              return node
+
+          def floor(node, x):
+              best = None
+              while node is not None:
+                  if node.key == x:
+                      return x
+                  if node.key < x:
+                      best = node.key
+                      node = node.right
+                  else:
+                      node = node.left
+              return best
+
+          root = None
+          for fare in [950, 1200, 780, 1500, 1100, 600, 1350]:
+              root = insert(root, fare)
+          print(floor(root, 1000), floor(root, 500))
+        tests: |
+          import random
+          random.seed(3)
+          for _trial in range(30):
+              _vals = random.sample(range(1000), 40)
+              _r = None
+              for _v in _vals:
+                  _r = insert(_r, _v)
+              for _x in range(-5, 1010, 7):
+                  _below = [_v for _v in _vals if _v <= _x]
+                  _want = max(_below) if _below else None
+                  assert floor(_r, _x) == _want, "floor(tree, " + str(_x) + ") should be " + str(_want) + " for the keys " + str(sorted(_vals))
+          assert floor(None, 10) is None, "The empty tree has no floor"
+          _reads = [0]
+          class _Spy:
+              def __init__(self, key, left, right):
+                  self.key = key
+                  self._l = left
+                  self._r = right
+              @property
+              def left(self):
+                  _reads[0] += 1
+                  return self._l
+              @property
+              def right(self):
+                  _reads[0] += 1
+                  return self._r
+          def _build(lo, hi):
+              if lo > hi:
+                  return None
+              mid = (lo + hi) // 2
+              return _Spy(mid * 2, _build(lo, mid - 1), _build(mid + 1, hi))
+          _big = _build(0, 1022)
+          _reads[0] = 0
+          assert floor(_big, 1001) == 1000, "In a tree of the even numbers 0 to 2044, the floor of 1001 is 1000"
+          assert _reads[0] <= 40, "floor followed " + str(_reads[0]) + " links in a tree of height 9; it should walk one path"
+          assert output.strip() == "950 None", "The program should print 950 None"
+        wrong:
+          - |
+            class Node:
+                def __init__(self, key):
+                    self.key = key
+                    self.left = None
+                    self.right = None
+
+            def floor(node, x):
+                best = None
+                while node is not None:
+                    if node.key == x:
+                        return x
+                    if node.key > x:
+                        best = node.key
+                        node = node.left
+                    else:
+                        node = node.right
+                return best
+
+            print(950, None)
+          - |
+            class Node:
+                def __init__(self, key):
+                    self.key = key
+                    self.left = None
+                    self.right = None
+
+            def floor(node, x):
+                while node is not None:
+                    if node.key <= x and (node.right is None or node.right.key > x):
+                        return node.key
+                    if node.key < x:
+                        node = node.right
+                    else:
+                        node = node.left
+                return None
+
+            print(950, None)
+          - |
+            class Node:
+                def __init__(self, key):
+                    self.key = key
+                    self.left = None
+                    self.right = None
+
+            def floor(node, x):
+                if node is None:
+                    return None
+                best = None
+                for side in [floor(node.left, x), floor(node.right, x)]:
+                    if side is not None and (best is None or side > best):
+                        best = side
+                if node.key <= x and (best is None or node.key > best):
+                    best = node.key
+                return best
+
+            print(950, None)
+        explanation: |
+          The walk is a search for $x$ that keeps a candidate. Whenever a node's key is below $x$, it is a possible answer, and anything larger that is still at most $x$ can only be in its right subtree, so remember it and go right. Whenever a node's key is above $x$, it and its whole right subtree are too big, so go left. When the walk falls off the tree, the last candidate is the largest key at most $x$. Stopping as soon as a node's right child is too large misses keys deeper in that child's left subtree. Visiting both subtrees everywhere gives the right answer by reading the whole tree, which throws away the reason for keeping it in order.
+    - question:
+        id: predict-height
+        type: predict
+        system: s2
+        prompt: What does this show?
+        code: |
+          class Node:
+              def __init__(self, key):
+                  self.key = key
+                  self.left = None
+                  self.right = None
+
+          def insert(node, key):
+              if node is None:
+                  return Node(key)
+              if key < node.key:
+                  node.left = insert(node.left, key)
+              elif key > node.key:
+                  node.right = insert(node.right, key)
+              return node
+
+          def height(node):
+              if node is None:
+                  return -1
+              return 1 + max(height(node.left), height(node.right))
+
+          a = None
+          for k in [1, 2, 3, 4, 5, 6, 7]:
+              a = insert(a, k)
+          b = None
+          for k in [4, 2, 6, 1, 3, 5, 7]:
+              b = insert(b, k)
+          print(height(a), height(b))
+        output: "6 2"
+        explanation: |
+          The same seven keys. In sorted order each goes to the right of the last, and the tree is a path of height 6. Starting from the middle key, 4, and then the middles of each half, gives the bushiest tree possible, of height 2. The empty tree has height $-1$ so that a single node, one more than the empty tree, has height 0.
+    - question:
+        id: work-sorted-input
+        type: numeric
+        system: s2
+        prompt: |
+          A plain binary search tree receives ten lakh order numbers, which arrive in increasing order. How many comparisons does a search for the last order number make?
+        answer: "1000000"
+        explanation: |
+          Each new order number is larger than every key before it, so it goes right at every node, and the tree is a path of ten lakh nodes. The last one is at depth 999999, and a search compares with every node on the way: $10^6$ comparisons. A tree of the smallest possible height would need 20. The structure is correct either way. Only its shape differs, and the shape was decided by the order of arrival.
+    - question:
+        id: work-hash-or-tree
+        type: choice
+        system: s2
+        prompt: |
+          A program keeps 10 lakh customer records by mobile number. It only ever asks "is this number registered, and what is its record?". Should it use a hash table or a binary search tree?
+        options:
+          - "A hash table. It answers exact lookups in a constant number of steps on average, and the program never asks a question about order, which is all the tree's extra cost would buy."
+          - "A binary search tree, because it never has collisions."
+          - "A binary search tree, because its lookups are faster than a hash table's."
+          - "Either, since both have a cost that does not depend on the number of records."
+        answer: 0
+        explanation: |
+          A bushy tree's lookup makes about 20 comparisons for ten lakh keys, which is good, and a hash table's makes one or two, which is better. The tree's advantage is order: smallest, largest, floor, ranges, the next key. If none of those questions is ever asked, a tree pays for an order nobody uses. Choose the tree when order matters, and the hash table when only equality does.
+  connections:
+    - text: |
+        The puzzle asked for a structure that halves like a sorted array and inserts like a linked list. A binary search tree is binary search frozen into links: the root splits the keys into smaller and larger, and so does every node below. A search compares once per level. An insertion is a search that failed, with a new node hung at the empty place. The keys never move, and the in-order walk reads them back sorted, so questions about order, which a hash table cannot answer, are each one walk down.
+
+        All of it rests on the height. Every operation walks one path, so it costs the height plus one. A bushy tree of ten lakh keys has height about 20. A tree fed keys in sorted order is a path of ten lakh. The plain tree lets the order of arrival choose its shape.
+
+        Trees of this kind run much of the software you use. A database index lets a query find the bookings between two dates without reading every booking. A file system finds a name in a large folder. The scheduler in the Linux kernel keeps runnable tasks in a search tree ordered by how much processor time each has had, and picks the leftmost. Each of these is a **balanced** tree, which never lets the height grow beyond a small multiple of $\log_2 n$. Trees as mathematical objects, with their counts and their properties, are studied in [[f3.trees-and-their-properties]].
+
+        A tree that cannot be trusted to stay bushy is a tree that cannot be trusted. The repair is small and local: after an insertion, look at the nodes on the path just walked, and wherever one side has grown too much deeper than the other, turn the links round a little so that it is level again, without disturbing the order. That turn, the rotation, and the promise it buys are [[s2.balanced-search-trees]].

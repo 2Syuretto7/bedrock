@@ -1,0 +1,756 @@
+concept: s2.union-find
+minutes: 90
+claim: You can keep a collection of items split into groups that only ever merge, answer whether two items are in the same group and merge two groups in a few steps each, by storing each group as a tree of parent pointers, joining the smaller tree under the larger and compressing paths, prove that joining by size keeps every tree's height at most log2 n, and use the structure to count connected pieces and detect cycles as edges arrive.
+recalls: [s2.graphs-and-their-representations]
+uses: [f2.equivalence-relations-and-partial-orders, f2.induction-and-strong-induction, f2.loop-invariants, f1.logarithms, s2.arrays-and-dynamic-arrays, s2.balanced-search-trees, s1.classes-and-objects, s0.lists-and-tuples, s0.loops, s0.functions]
+leads: [f3.counting-with-products-and-sums, f3.graph-theory-basics, s3.minimum-spanning-trees, s3.amortised-analysis, s3.breadth-first-and-depth-first-search]
+starter: |
+  # Scratch space. Villages 0 to 7, and new roads opening one at a time.
+  # Every village carries the label of its connected piece,
+  # and each new road relabels one whole piece.
+  label = list(range(8))
+  renamed = 0
+
+  for a, b in [(0, 1), (1, 2), (2, 3), (4, 5), (5, 6), (3, 6), (6, 7)]:
+      old = label[a]
+      new = label[b]
+      if old != new:
+          for village in range(8):
+              if label[village] == old:
+                  label[village] = new
+                  renamed += 1
+
+  print(label, "renamed:", renamed)
+  print("can 0 reach 7?", label[0] == label[7])
+parts:
+  recall:
+    - text: |
+        [[s2.graphs-and-their-representations]] ended with a question that seemed to need a search of the whole graph: can these two nodes reach each other? Today it is answered in a few steps, provided edges are only ever added. Three quick pulls first.
+  puzzle:
+    - text: |
+        A state is building all-weather roads to connect its villages, under a rural roads scheme, and a new road opens somewhere every day. There are 40,000 villages. After each opening, the planning office is asked, many times over: can a lorry now get from this village to that one by road?
+
+        Searching the road network from one village, as the algorithms cluster will teach, can cross the whole state, and doing it for every question is far too slow. The starter tries something cleverer. Each village carries the label of its connected piece, so the question is one comparison of labels. But a new road between two pieces must relabel every village of one of them, and the starter checks every village to find them: with 40,000 villages that is 40,000 checks for every road, and the relabelling itself can touch half the state.
+
+        So one operation is cheap and the other is not. Asking is a single comparison; joining is a sweep.
+
+        **Can both operations, "are these two in the same piece?" and "join these two pieces", be made to cost only a few steps each, however many villages there are?**
+  intuition:
+    - text: |
+        Think of business groups. Every company is either independent or owned by another company, which may itself be owned by a third, and so on up to a company that nobody owns: the head of the group. To find which group a company belongs to, follow "owned by" upwards until you reach a company that nobody owns. Two companies are in the same group exactly when they lead to the same head.
+
+        Now two groups merge. Nobody rewrites the records of every company in both groups. One head simply buys the other head, and a single line in a register changes. Every company in the bought group still reaches its old head, and that head now leads on, one step further, to the new one.
+
+        Two habits keep this fast. When groups merge, let the **smaller** group's head be bought by the larger's, so that the long chains of ownership stay in the big group and only the few companies of the small group get one step further from the top. And when you have traced a company all the way up to its head, write the head's name directly into the records of every company you passed, so that next time each of them is one step from the top.
+
+        The figure shows eight items joined by seven joins, each group a tree of pointers to its head. Step through the joins, then switch to joining the smaller tree under the larger, and watch the height of the tallest tree.
+    - figure: union-find
+      props: { find: 0 }
+    - text: |
+        Joining without looking at size, the seven joins built a tree of height 5, and finding 0's head followed five pointers, through 1, 2, 3, 6 and 7. Joining the smaller tree under the larger, the same joins built trees no taller than 2, and every item reaches its head in at most two steps.
+  derivation:
+    - text: |
+        **What is being kept.** "Can reach by road" is an equivalence relation on villages, in the sense of [[f2.equivalence-relations-and-partial-orders]]: every village reaches itself, reaching goes both ways, and if $a$ reaches $b$ and $b$ reaches $c$ then $a$ reaches $c$. So the villages fall into **classes**, the connected pieces, and every village is in exactly one. A **union-find** structure, also called a disjoint-set structure, keeps such a partition of items $0$ to $n - 1$ under two operations:
+
+        - `find(x)` returns a **representative** of the class of $x$, the same item for every member of the class, so that $x$ and $y$ are in the same class exactly when `find(x) == find(y)`.
+        - `union(a, b)` merges the classes of $a$ and $b$ into one.
+
+        The starter is the first attempt, a label for every item: `find` is one look, and `union` relabels a whole class. Joining $n$ items into one class one item at a time, in the worst order, relabels $1 + 2 + \dots + (n - 1)$ items, which is quadratic.
+
+        **Trees of pointers.** Keep instead a list `parent`, in which each item points to another item of its class, and the pointers lead up a tree to a **root** that points to itself. The root is the representative.
+
+        ```python
+        parent = list(range(8))
+
+        def find(x):
+            while parent[x] != x:
+                x = parent[x]
+            return x
+
+        def union(a, b):
+            parent[find(a)] = find(b)
+        ```
+
+        At the start every item is its own root, a class of one. `union` changes **one** pointer, the root of $a$'s tree, which now points to the root of $b$'s tree, so every member of $a$'s class now leads to $b$'s root. Pointing $a$ itself at $b$ would not do: $a$ would leave its old class behind instead of bringing it along.
+
+        `find` costs one step for each level it climbs, so its cost is the height of the tree. And nothing limits the height. The joins (0, 1), (1, 2), (2, 3) and so on build a single path, and a `find` from its bottom walks all $n - 1$ links. We have made `union` cheap by making `find` expensive.
+
+        **Joining by size.** Keep, for each root, the number of items in its tree. In `union`, point the root of the **smaller** tree at the root of the larger, breaking ties either way.
+
+        *Claim: then no tree ever has height more than $\log_2 n$.* Follow one item $x$. Its depth, the number of links from $x$ up to its root, increases only when $x$'s root is pointed at another root, and then by exactly 1. Joining by size means this happens only when $x$'s tree is no larger than the tree it joins, so the merged tree is at least **twice** the size of $x$'s old tree. So each time $x$ gets one link deeper, the size of $x$'s tree at least doubles. It starts at 1 and can never exceed $n$, so it can double at most $\log_2 n$ times, by [[f1.logarithms]]. Hence every depth is at most $\log_2 n$, and `find` follows at most about 20 links among ten lakh items. As an invariant, in the manner of [[f2.loop-invariants]] and [[f2.induction-and-strong-induction]]: *the tree containing $x$ has at least $2^{\text{depth}(x)}$ items.*
+
+        This is the same bargain as the balanced trees of [[s2.balanced-search-trees]]: a cheap local rule, applied at every change, that keeps every tree short for ever.
+    - question:
+        id: derivation-doubling
+        type: choice
+        system: s2
+        prompt: |
+          With joining by size, why does an item's tree at least double in size every time the item gets one link further from its root?
+        options:
+          - "The item gets deeper only when its root is pointed at another root, which joining by size allows only when the other tree is at least as large, so the merged tree has at least twice the items."
+          - "Because every union doubles the number of items in the structure."
+          - "Because the item's own pointer is changed to point two levels higher."
+          - "It does not; the size grows by one each time."
+        answer: 0
+        explanation: |
+          Depth grows only when a whole tree is hung beneath another root, and only the smaller tree, or an equal one, is ever hung beneath. If the item's tree had $s$ items, the other had at least $s$, so together they have at least $2s$. A tree cannot grow beyond $n$ items, so an item can be pushed down at most $\log_2 n$ times.
+    - text: |
+        **Compressing paths.** One more habit makes the structure almost unbelievably fast. Every `find` walks from $x$ up to the root. Having found the root, walk the same path again and point every item on it **directly** at the root. The walk costs twice as much this once, and every later `find` from any of those items costs one step.
+
+        ```python
+        class DisjointSets:
+            def __init__(self, n):
+                self.parent = list(range(n))
+                self.tree_size = [1] * n
+                self.sets = n
+
+            def find(self, x):
+                root = x
+                while self.parent[root] != root:
+                    root = self.parent[root]
+                while self.parent[x] != root:
+                    following = self.parent[x]
+                    self.parent[x] = root
+                    x = following
+                return root
+
+            def union(self, a, b):
+                ra = self.find(a)
+                rb = self.find(b)
+                if ra == rb:
+                    return False
+                if self.tree_size[ra] > self.tree_size[rb]:
+                    ra, rb = rb, ra
+                self.parent[ra] = rb
+                self.tree_size[rb] += self.tree_size[ra]
+                self.sets -= 1
+                return True
+        ```
+
+        The second loop must save `self.parent[x]` before overwriting it, or it loses the way up. `tree_size` is only kept up to date at roots, which are the only places it is read. `sets` counts the classes, one fewer after each successful union. And `union` returns `False` when $a$ and $b$ were **already** in the same class, which turns out to be useful in its own right.
+
+        With both joining by size and path compression, a long run of operations costs, on average, a number of steps per operation that grows with $n$ so slowly that the growing part is at most 4 for any $n$ smaller than the number of atoms in the universe. Robert Tarjan proved this in 1975. The proof is hard, and rests on averaging the cost over a whole sequence of operations, which is the idea of [[s3.amortised-analysis]]. In practice, treat each operation as costing a constant.
+    - question:
+        id: order-compress
+        type: order
+        system: s2
+        prompt: |
+          The list `parent` is `[1, 2, 3, 4, 4]`, a single path from 0 up to the root 4. Put the steps of `find(0)`, with path compression, in order.
+        steps:
+          - "First walk: from 0 follow the pointers to 1, 2, 3 and 4, and stop at 4, which points to itself. The root is 4."
+          - "Second walk: at 0, save its parent 1, point 0 straight at 4, and move to 1."
+          - "At 1, save its parent 2, point 1 at 4, and move to 2."
+          - "At 2, save its parent 3, point 2 at 4, and move to 3."
+          - "At 3, the parent is already 4, so stop and return 4, leaving parent as [4, 4, 4, 4, 4]."
+        explanation: The first walk finds the root without changing anything. The second walks the same path and repoints each item at the root, saving each old parent first so as not to lose the way. Afterwards every item on the path is one step from the root, so the four links walked this time will never be walked again.
+    - text: |
+        **What it is used for.**
+
+        - **Connected pieces as edges arrive.** Each new edge is a `union`, each question a pair of `find`s, and `sets` is the number of pieces at any moment. This is the puzzle's road network.
+        - **Detecting a cycle.** When `union(a, b)` returns `False`, $a$ and $b$ were already connected, so the new edge closes a loop. A network designer who wants no redundant links, or a program checking that a graph is a tree, asks exactly this.
+        - **Cheapest networks.** To connect every village at the least total cost, consider the possible roads from cheapest to dearest, and build each one unless its two ends are already connected. That rule, checked with union-find, gives the cheapest network of all, as [[s3.minimum-spanning-trees]] will prove.
+        - **Grouping.** Pixels of an image that touch and share a colour, records that refer to the same person under different spellings, and data points closer than some distance can all be grouped by joining pairs and reading off the classes.
+
+        Union-find has one firm limit: classes can merge but never split. If a road is washed away, the structure cannot tell whether the two halves are still connected by some other route, and the only general remedy is to rebuild from the remaining roads.
+  formal:
+    - text: |
+        **Union-find (disjoint sets).** A partition of the items $0, \dots, n - 1$ into classes, with `find(x)`, a representative of $x$'s class, and `union(a, b)`, which merges two classes.
+
+        **Representation.** A list `parent` in which each class is a tree of pointers ending at a root with `parent[r] == r`. `find` climbs to the root; `union` points one root at the other.
+
+        **Joining by size.** Point the root of the smaller tree at the root of the larger. Invariant: the tree containing $x$ has at least $2^{\text{depth}(x)}$ items, so every height is at most $\log_2 n$.
+
+        **Path compression.** After a `find`, point every item on the path directly at the root.
+
+        **Cost.** With both, a sequence of $m$ operations costs a number of steps that grows only a hair faster than $m$; for any practical $n$, each operation is effectively constant.
+
+        **Uses.** Connected pieces under added edges, cycle detection (`union` finds both ends already together), the cheapest connecting network, grouping. Classes cannot be split.
+  drill:
+    - text: Seconds each. Climb the pointers to a root.
+    - question:
+        id: drill-root
+        type: numeric
+        system: s1
+        prompt: |
+          `parent` is `[1, 1, 1, 2, 4, 4]`. What is the root of 3?
+        answer: "1"
+        explanation: 3 points to 2, 2 points to 1, and 1 points to itself.
+    - question:
+        id: drill-sets
+        type: numeric
+        system: s1
+        prompt: |
+          `parent` is `[1, 1, 1, 2, 4, 4]`. How many classes are there?
+        answer: "2"
+        explanation: One class for each root, an item that points to itself. 1 and 4 do, so the classes are {0, 1, 2, 3} and {4, 5}.
+    - question:
+        id: drill-after-unions
+        type: numeric
+        system: s1
+        prompt: |
+          Ten items start in classes of their own. Four unions each merge two different classes. How many classes remain?
+        answer: "6"
+        explanation: Each union that merges two different classes reduces the count by one.
+    - question:
+        id: drill-height
+        type: numeric
+        system: s1
+        prompt: |
+          1024 items are joined by size, without path compression. At most how many links can any `find` follow?
+        answer: "10"
+        explanation: Every height is at most $\log_2 1024 = 10$.
+    - question:
+        id: drill-false
+        type: choice
+        system: s1
+        prompt: |
+          While adding the roads of a network one by one, `union(a, b)` returns `False`. What does that tell you?
+        options: ["a and b were already connected, so this road closes a loop", "a and b are now connected for the first time", "a or b does not exist", "The union failed and should be retried"]
+        answer: 0
+        explanation: '`union` returns `False` when both ends already have the same root. The new road joins two villages that could already reach each other, so it makes a cycle.'
+    - question:
+        id: drill-wrong-pointer
+        type: choice
+        system: s1
+        prompt: |
+          Why does `union(a, b)` change the parent of $a$'s **root**, and not the parent of $a$ itself?
+        options: ["Changing the root brings the whole of a's class along; changing a alone would separate a from the rest of its class", "Because a may not exist", "Because the root is always a smaller number", "It makes no difference which is changed"]
+        answer: 0
+        explanation: Every member of $a$'s class leads up to its root. Repointing the root makes all of them lead on to $b$'s root. Repointing $a$ moves $a$ alone and leaves the others where they were.
+    - question:
+        id: predict-plain
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          parent = list(range(6))
+
+          def root(x):
+              while parent[x] != x:
+                  x = parent[x]
+              return x
+
+          for a, b in [(0, 1), (2, 3), (1, 3), (4, 5)]:
+              parent[root(a)] = root(b)
+          print(parent, root(0), root(4))
+        output: "[1, 3, 3, 3, 5, 5] 3 5"
+        explanation: (0, 1) points 0 at 1, and (2, 3) points 2 at 3. For (1, 3), the root of 1 is 1 and the root of 3 is 3, so 1 is pointed at 3. (4, 5) points 4 at 5. 0 then climbs to 1 and on to 3, and 4 to 5.
+    - question:
+        id: predict-compress
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          parent = [1, 2, 3, 3, 3]
+
+          def find(x):
+              root = x
+              while parent[root] != root:
+                  root = parent[root]
+              while parent[x] != root:
+                  following = parent[x]
+                  parent[x] = root
+                  x = following
+              return root
+
+          print(find(0), parent)
+        output: "3 [3, 3, 3, 3, 3]"
+        explanation: The first loop climbs from 0 through 1 and 2 to 3, the root. The second repoints 0 and 1 at 3, and stops at 2, whose parent is already 3. 4 was already pointing at 3.
+  work:
+    - text: Slower now. After every operation, say which pointers changed, and which roots the items now lead to.
+    - question:
+        id: write-disjoint-sets
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Complete `find` and `union`. `find(x)` returns the root of `x`'s tree and points every item on the path directly at it. `union(a, b)` merges the two classes by pointing the root of the smaller tree at the root of the larger, keeps `tree_size` right at the roots, takes one off `sets`, and returns `True`; if `a` and `b` already share a root it changes nothing and returns `False`. The tests check the heights of the trees, so a plain union that ignores size will not pass.
+        starter: |
+          class DisjointSets:
+              def __init__(self, n):
+                  self.parent = list(range(n))
+                  self.tree_size = [1] * n
+                  self.sets = n
+
+              def find(self, x):
+                  return x
+
+              def union(self, a, b):
+                  return False
+
+          villages = DisjointSets(8)
+          for a, b in [(0, 1), (1, 2), (2, 3), (4, 5), (5, 6), (3, 6), (6, 7)]:
+              villages.union(a, b)
+          print(villages.sets, villages.find(0) == villages.find(7), villages.union(2, 5))
+        solution: |
+          class DisjointSets:
+              def __init__(self, n):
+                  self.parent = list(range(n))
+                  self.tree_size = [1] * n
+                  self.sets = n
+
+              def find(self, x):
+                  root = x
+                  while self.parent[root] != root:
+                      root = self.parent[root]
+                  while self.parent[x] != root:
+                      following = self.parent[x]
+                      self.parent[x] = root
+                      x = following
+                  return root
+
+              def union(self, a, b):
+                  ra = self.find(a)
+                  rb = self.find(b)
+                  if ra == rb:
+                      return False
+                  if self.tree_size[ra] > self.tree_size[rb]:
+                      ra, rb = rb, ra
+                  self.parent[ra] = rb
+                  self.tree_size[rb] += self.tree_size[ra]
+                  self.sets -= 1
+                  return True
+
+          villages = DisjointSets(8)
+          for a, b in [(0, 1), (1, 2), (2, 3), (4, 5), (5, 6), (3, 6), (6, 7)]:
+              villages.union(a, b)
+          print(villages.sets, villages.find(0) == villages.find(7), villages.union(2, 5))
+        tests: |
+          import random
+          def _depth(ds, x):
+              _d = 0
+              while ds.parent[x] != x:
+                  x = ds.parent[x]
+                  _d += 1
+              return _d
+          random.seed(37)
+          for _trial in range(120):
+              _n = random.randint(1, 30)
+              _ds = DisjointSets(_n)
+              _label = list(range(_n))
+              for _step in range(random.randint(0, 40)):
+                  _a = random.randrange(_n)
+                  _b = random.randrange(_n)
+                  if random.random() < 0.5:
+                      _want = _label[_a] != _label[_b]
+                      _got = _ds.union(_a, _b)
+                      assert _got == _want, "union(" + str(_a) + ", " + str(_b) + ") should return " + str(_want)
+                      if _want:
+                          _old = _label[_a]
+                          _label = [_label[_b] if _l == _old else _l for _l in _label]
+                  else:
+                      assert (_ds.find(_a) == _ds.find(_b)) == (_label[_a] == _label[_b]), "find(" + str(_a) + ") and find(" + str(_b) + ") should " + ("" if _label[_a] == _label[_b] else "not ") + "be equal"
+                  assert _ds.sets == len(set(_label)), "sets should be " + str(len(set(_label))) + ", not " + str(_ds.sets)
+              for _x in range(_n):
+                  _r = _ds.find(_x)
+                  assert _ds.parent[_r] == _r, "find should return a root, an item that points to itself"
+                  assert _ds.tree_size[_r] == _label.count(_label[_x]), "tree_size at a root should be the number of items in its class"
+          _ds = DisjointSets(1024)
+          for _i in range(1023):
+              _ds.union(_i, _i + 1)
+          _tallest = max(_depth(_ds, _x) for _x in range(1024))
+          assert _tallest <= 10, "After joining 0 to 1, 1 to 2, and so on up to 1023, a tree is " + str(_tallest) + " links tall; joining the smaller tree under the larger keeps it at most 10"
+          _ds = DisjointSets(8)
+          for _a, _b in [(0, 1), (2, 3), (0, 2), (4, 5), (6, 7), (4, 6), (0, 4)]:
+              _ds.union(_a, _b)
+          _deep = max(range(8), key=lambda _x: _depth(_ds, _x))
+          _path = [_deep]
+          while _ds.parent[_path[-1]] != _path[-1]:
+              _path.append(_ds.parent[_path[-1]])
+          assert len(_path) >= 3, "Joining pairs, then pairs of pairs, should give a tree more than one link tall"
+          _ds.find(_deep)
+          assert all(_ds.parent[_p] == _path[-1] for _p in _path), "After find(" + str(_deep) + "), every item on its path should point straight at the root"
+          assert output.strip() == "1 True False", "The program should print 1 True False"
+        wrong:
+          - |
+            class DisjointSets:
+                def __init__(self, n):
+                    self.parent = list(range(n))
+                    self.tree_size = [1] * n
+                    self.sets = n
+
+                def find(self, x):
+                    root = x
+                    while self.parent[root] != root:
+                        root = self.parent[root]
+                    while self.parent[x] != root:
+                        following = self.parent[x]
+                        self.parent[x] = root
+                        x = following
+                    return root
+
+                def union(self, a, b):
+                    ra = self.find(a)
+                    rb = self.find(b)
+                    if ra == rb:
+                        return False
+                    self.parent[ra] = rb
+                    self.tree_size[rb] += self.tree_size[ra]
+                    self.sets -= 1
+                    return True
+
+            print(1, True, False)
+          - |
+            class DisjointSets:
+                def __init__(self, n):
+                    self.parent = list(range(n))
+                    self.tree_size = [1] * n
+                    self.sets = n
+
+                def find(self, x):
+                    while self.parent[x] != x:
+                        x = self.parent[x]
+                    return x
+
+                def union(self, a, b):
+                    ra = self.find(a)
+                    rb = self.find(b)
+                    if ra == rb:
+                        return False
+                    if self.tree_size[ra] > self.tree_size[rb]:
+                        ra, rb = rb, ra
+                    self.parent[ra] = rb
+                    self.tree_size[rb] += self.tree_size[ra]
+                    self.sets -= 1
+                    return True
+
+            print(1, True, False)
+          - |
+            class DisjointSets:
+                def __init__(self, n):
+                    self.parent = list(range(n))
+                    self.tree_size = [1] * n
+                    self.sets = n
+
+                def find(self, x):
+                    root = x
+                    while self.parent[root] != root:
+                        root = self.parent[root]
+                    while self.parent[x] != root:
+                        following = self.parent[x]
+                        self.parent[x] = root
+                        x = following
+                    return root
+
+                def union(self, a, b):
+                    ra = self.find(a)
+                    rb = self.find(b)
+                    if self.tree_size[ra] > self.tree_size[rb]:
+                        ra, rb = rb, ra
+                    self.parent[ra] = rb
+                    self.tree_size[rb] += self.tree_size[ra]
+                    self.sets -= 1
+                    return True
+
+            print(1, True, False)
+        explanation: |
+          `find` climbs once to discover the root and once more to repoint the path, saving each parent before overwriting it. `union` works on **roots**: find both, and if they are the same there is nothing to merge, so report `False` and leave the counts alone; merging a class with itself would point a root at itself, double its `tree_size` and wrongly reduce `sets`. Otherwise hang the smaller tree beneath the larger root and add its size there. Without the size rule, joining 0 to 1, 1 to 2 and so on builds a single path of 1023 links, since each `find` in those unions starts at a root and so never compresses anything.
+    - question:
+        id: fix-union-roots
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          Villages 0 to 5 get the roads (0, 1), (2, 1), (0, 3) and (4, 5). Villages 2 and 3 are now connected, through 1 and 0, so the program should print `2 True`: two pieces, and 2 can reach 3. It prints `2 False`. Find the fault and fix it.
+        starter: |
+          class DisjointSets:
+              def __init__(self, n):
+                  self.parent = list(range(n))
+                  self.tree_size = [1] * n
+                  self.sets = n
+
+              def find(self, x):
+                  root = x
+                  while self.parent[root] != root:
+                      root = self.parent[root]
+                  while self.parent[x] != root:
+                      following = self.parent[x]
+                      self.parent[x] = root
+                      x = following
+                  return root
+
+              def union(self, a, b):
+                  if self.find(a) == self.find(b):
+                      return False
+                  if self.tree_size[a] > self.tree_size[b]:
+                      a, b = b, a
+                  self.parent[a] = b
+                  self.tree_size[b] += self.tree_size[a]
+                  self.sets -= 1
+                  return True
+
+          villages = DisjointSets(6)
+          for a, b in [(0, 1), (2, 1), (0, 3), (4, 5)]:
+              villages.union(a, b)
+          print(villages.sets, villages.find(2) == villages.find(3))
+        solution: |
+          class DisjointSets:
+              def __init__(self, n):
+                  self.parent = list(range(n))
+                  self.tree_size = [1] * n
+                  self.sets = n
+
+              def find(self, x):
+                  root = x
+                  while self.parent[root] != root:
+                      root = self.parent[root]
+                  while self.parent[x] != root:
+                      following = self.parent[x]
+                      self.parent[x] = root
+                      x = following
+                  return root
+
+              def union(self, a, b):
+                  ra = self.find(a)
+                  rb = self.find(b)
+                  if ra == rb:
+                      return False
+                  if self.tree_size[ra] > self.tree_size[rb]:
+                      ra, rb = rb, ra
+                  self.parent[ra] = rb
+                  self.tree_size[rb] += self.tree_size[ra]
+                  self.sets -= 1
+                  return True
+
+          villages = DisjointSets(6)
+          for a, b in [(0, 1), (2, 1), (0, 3), (4, 5)]:
+              villages.union(a, b)
+          print(villages.sets, villages.find(2) == villages.find(3))
+        tests: |
+          import random
+          random.seed(41)
+          for _trial in range(150):
+              _n = random.randint(2, 20)
+              _ds = DisjointSets(_n)
+              _label = list(range(_n))
+              for _step in range(random.randint(1, 30)):
+                  _a = random.randrange(_n)
+                  _b = random.randrange(_n)
+                  _ds.union(_a, _b)
+                  if _label[_a] != _label[_b]:
+                      _old = _label[_a]
+                      _label = [_label[_b] if _l == _old else _l for _l in _label]
+                  for _x in range(_n):
+                      for _y in range(_n):
+                          assert (_ds.find(_x) == _ds.find(_y)) == (_label[_x] == _label[_y]), "After union(" + str(_a) + ", " + str(_b) + "), " + str(_x) + " and " + str(_y) + " should " + ("" if _label[_x] == _label[_y] else "not ") + "be together"
+                  assert _ds.sets == len(set(_label)), "sets should be " + str(len(set(_label)))
+          assert output.strip() == "2 True", "The program should print 2 True"
+        wrong:
+          - |
+            class DisjointSets:
+                def __init__(self, n):
+                    self.parent = list(range(n))
+                    self.tree_size = [1] * n
+                    self.sets = n
+
+                def find(self, x):
+                    root = x
+                    while self.parent[root] != root:
+                        root = self.parent[root]
+                    while self.parent[x] != root:
+                        following = self.parent[x]
+                        self.parent[x] = root
+                        x = following
+                    return root
+
+                def union(self, a, b):
+                    ra = self.find(a)
+                    rb = self.find(b)
+                    if ra == rb:
+                        return False
+                    if self.tree_size[ra] > self.tree_size[rb]:
+                        ra, rb = rb, ra
+                    self.parent[a] = rb
+                    self.tree_size[rb] += self.tree_size[ra]
+                    self.sets -= 1
+                    return True
+
+            print(2, True)
+        explanation: |
+          `union` compared roots correctly, but then repointed `a` itself rather than `a`'s root. On the third road, 0 had already been hung beneath 1, along with 2. Repointing 0 at 3 moved 0 alone into 3's class and left 1 and 2 behind, so 2 and 3 were never joined, though the count of pieces still went down. Find both roots, and change the pointer and the size at the roots only: then a whole class moves at once.
+    - question:
+        id: write-extra-roads
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Roads open in the order given. Write `extra_roads(n, roads)`, which returns the positions in `roads`, counting from 0, of the roads that joined two villages that could already reach each other. Use the `DisjointSets` class given.
+        starter: |
+          class DisjointSets:
+              def __init__(self, n):
+                  self.parent = list(range(n))
+                  self.tree_size = [1] * n
+                  self.sets = n
+
+              def find(self, x):
+                  root = x
+                  while self.parent[root] != root:
+                      root = self.parent[root]
+                  while self.parent[x] != root:
+                      following = self.parent[x]
+                      self.parent[x] = root
+                      x = following
+                  return root
+
+              def union(self, a, b):
+                  ra = self.find(a)
+                  rb = self.find(b)
+                  if ra == rb:
+                      return False
+                  if self.tree_size[ra] > self.tree_size[rb]:
+                      ra, rb = rb, ra
+                  self.parent[ra] = rb
+                  self.tree_size[rb] += self.tree_size[ra]
+                  self.sets -= 1
+                  return True
+
+          def extra_roads(n, roads):
+              return []
+
+          print(extra_roads(6, [(0, 1), (1, 2), (0, 2), (3, 4), (4, 5), (2, 3), (5, 1)]))
+        solution: |
+          class DisjointSets:
+              def __init__(self, n):
+                  self.parent = list(range(n))
+                  self.tree_size = [1] * n
+                  self.sets = n
+
+              def find(self, x):
+                  root = x
+                  while self.parent[root] != root:
+                      root = self.parent[root]
+                  while self.parent[x] != root:
+                      following = self.parent[x]
+                      self.parent[x] = root
+                      x = following
+                  return root
+
+              def union(self, a, b):
+                  ra = self.find(a)
+                  rb = self.find(b)
+                  if ra == rb:
+                      return False
+                  if self.tree_size[ra] > self.tree_size[rb]:
+                      ra, rb = rb, ra
+                  self.parent[ra] = rb
+                  self.tree_size[rb] += self.tree_size[ra]
+                  self.sets -= 1
+                  return True
+
+          def extra_roads(n, roads):
+              villages = DisjointSets(n)
+              extra = []
+              for position, (a, b) in enumerate(roads):
+                  if not villages.union(a, b):
+                      extra.append(position)
+              return extra
+
+          print(extra_roads(6, [(0, 1), (1, 2), (0, 2), (3, 4), (4, 5), (2, 3), (5, 1)]))
+        tests: |
+          import random
+          random.seed(43)
+          for _trial in range(150):
+              _n = random.randint(1, 15)
+              _roads = [(random.randrange(_n), random.randrange(_n)) for _ in range(random.randint(0, 25))]
+              _label = list(range(_n))
+              _want = []
+              for _i, (_a, _b) in enumerate(_roads):
+                  if _label[_a] == _label[_b]:
+                      _want.append(_i)
+                  else:
+                      _old = _label[_a]
+                      _label = [_label[_b] if _l == _old else _l for _l in _label]
+              _got = extra_roads(_n, _roads)
+              assert _got == _want, "For " + str(_n) + " villages and roads " + str(_roads) + ", the extra roads are at " + str(_want) + ", not " + str(_got)
+          assert extra_roads(3, []) == [], "With no roads there are no extra roads"
+          assert output.strip() == "[2, 6]", "The program should print [2, 6]"
+        wrong:
+          - |
+            def extra_roads(n, roads):
+                seen = set()
+                extra = []
+                for position, (a, b) in enumerate(roads):
+                    if a in seen and b in seen:
+                        extra.append(position)
+                    seen.add(a)
+                    seen.add(b)
+                return extra
+
+            print([2, 6])
+          - |
+            class DisjointSets:
+                def __init__(self, n):
+                    self.parent = list(range(n))
+                    self.tree_size = [1] * n
+                    self.sets = n
+
+                def find(self, x):
+                    while self.parent[x] != x:
+                        x = self.parent[x]
+                    return x
+
+                def union(self, a, b):
+                    ra = self.find(a)
+                    rb = self.find(b)
+                    if ra == rb:
+                        return False
+                    self.parent[ra] = rb
+                    self.sets -= 1
+                    return True
+
+            def extra_roads(n, roads):
+                villages = DisjointSets(n)
+                extra = []
+                for position, (a, b) in enumerate(roads):
+                    villages.union(a, b)
+                    if villages.find(a) == villages.find(b):
+                        extra.append(position)
+                return extra
+
+            print([2, 6])
+        explanation: |
+          A road is extra exactly when its two villages already share a root before it opens, and `union` reports precisely that by returning `False`. Checking afterwards is too late, since after any union the two ends are always together. Asking only whether both villages have been seen before is not enough either: in the example, the road (2, 3) at position 5 joins two villages that have both been seen, but they were in different pieces until then. The extra roads here are (0, 2), which closes the triangle 0, 1, 2, and (5, 1), which closes the loop 1, 2, 3, 4, 5.
+    - question:
+        id: work-relabel
+        type: numeric
+        system: s2
+        prompt: |
+          The labelling method of the starter joins 1000 villages with the roads (0, 1), (1, 2), (2, 3), and so on up to (998, 999), each time relabelling the whole piece of the road's first village. How many relabellings are made in all?
+        answer: "499500"
+        explanation: |
+          The road $(i, i + 1)$ finds village $i$ in a piece of $i + 1$ villages, 0 to $i$, and relabels all of them. That is $1 + 2 + \dots + 999 = 999 \cdot 1000 / 2 = 499{,}500$, quadratic in the number of villages. Union-find by size makes the same 999 joins with at most two `find`s each, every one at most 10 links long, and in fact each of these joins hangs a single new village beneath the big tree's root.
+    - question:
+        id: work-cheapest
+        type: choice
+        system: s2
+        prompt: |
+          A district must connect all its villages by road at the least total cost. Engineers list every possible road with its cost and consider them from cheapest to dearest. Which rule, checked with union-find, decides whether to build each road?
+        options:
+          - "Build it unless its two villages are already connected, that is, unless their finds are equal."
+          - "Build it if either of its villages has no road yet."
+          - "Build every road that costs less than the average."
+          - "Build it only if it does not change the number of pieces."
+        answer: 0
+        explanation: |
+          A road between villages that can already reach each other adds cost and no new connection, and it would close a loop. Any other road joins two pieces, and taking the cheapest such road at each step turns out to give the cheapest network overall, a fact the algorithms cluster will prove. Requiring that a village has no road yet would refuse roads needed to join two pieces whose villages all have roads already.
+    - question:
+        id: work-split
+        type: choice
+        system: s2
+        prompt: |
+          A flood washes away one road. Why can union-find not simply undo that road's union?
+        options:
+          - "The two ends may still be connected by another route, and the trees of pointers record only which villages are together, not which roads hold them together."
+          - "Because the road's union returned False."
+          - "Because path compression made the tree too short."
+          - "It can: point the road's first village back at itself."
+        answer: 0
+        explanation: |
+          A class records that villages are connected, not why. The tree's pointers do not follow the roads; after joining by size and compressing paths, a village may point straight at a root many roads away. Whether the class must split depends on whether some other route survives, which needs the roads themselves and a search. Repointing one village at itself would split off that village, along with any villages whose pointers happen to pass through it, and neither has anything to do with which side of the broken road each village is on.
+  connections:
+    - text: |
+        The puzzle asked for a way to answer "same piece?" and to join two pieces, each in a few steps. Union-find stores each piece as a tree of pointers ending at a root, its representative. A question is two climbs to the roots; a join repoints one root. Joining the smaller tree under the larger keeps every tree at most $\log_2 n$ tall, because an item gets deeper only when its tree at least doubles, and compressing paths flattens trees as they are used, until each operation costs, on average, a handful of steps for any $n$ that could ever exist. The 40,000 villages need a few steps per question, not 40,000.
+
+        That completes the data structures cluster. You can now choose, for each job, how to store things: arrays and dynamic arrays for position, linked lists for cheap splicing, stacks and queues for order of arrival, hash tables for lookup by key, balanced search trees for order, heaps for the most urgent, tries for beginnings, graphs for connections, and union-find for growing groups. Each answers some questions cheaply by refusing to answer others, and each keeps an invariant that every operation restores before it returns.
+
+        Every lesson also raised a counting question you answered by hand: how many links a list of $n$ items needs, how many keys can collide, how many keys an AVL tree of height $h$ must hold, how many nodes a trie of PIN codes has, how many edges a graph can have. The next cluster makes counting a subject of its own, with rules that settle such questions exactly, and later tools for growth that make the words constant, logarithmic, linear and quadratic precise. It begins with the two simplest rules of all: [[f3.counting-with-products-and-sums]].

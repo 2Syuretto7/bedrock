@@ -1,0 +1,772 @@
+concept: s2.stacks-and-queues
+minutes: 100
+claim: You can say what a stack and a queue promise, build each so that every operation costs a constant number of steps, including a queue in a fixed array that wraps round, and choose between them by asking which item must be dealt with next, as in matching brackets, evaluating an expression and finding the span of a share price.
+recalls: [s2.linked-lists]
+uses: [s2.arrays-and-dynamic-arrays, s1.recursion, s1.classes-and-objects, s1.special-methods, s1.exceptions, s1.modules-and-imports, f2.loop-invariants, s0.expressions, s0.strings, s0.dictionaries-and-sets, s0.lists-and-tuples, s0.loops, s0.functions, s0.booleans-and-conditionals]
+leads: [s2.hash-tables, s2.heaps-and-priority-queues, s2.graphs-and-their-representations, s3.breadth-first-and-depth-first-search, s3.amortised-analysis]
+starter: |
+  # Scratch space. Count the brackets in each line. Do the counts tell you which lines are well formed?
+  lines = ["f(a[1], {2: (3)})", "([)]", "(()", "())("]
+
+  for text in lines:
+      counts = [len([c for c in text if c == b]) for b in "()[]{}"]
+      print(text, counts)
+parts:
+  recall:
+    - text: |
+        [[s2.linked-lists]] ended by noticing that an array is cheap to change at its end, a linked list at its head, and a linked list with a tail at both its head and its end. Many programs need nothing more than that. Three quick pulls first.
+  puzzle:
+    - text: |
+        A code editor tells you, as you type, whether your brackets are well formed. Four lines to judge:
+
+        | Line | Well formed? |
+        | --- | --- |
+        | `f(a[1], {2: (3)})` | yes |
+        | `([)]` | no |
+        | `(()` | no |
+        | `())(` | no |
+
+        The obvious method is to count. Run the starter: it counts each kind of bracket. The third line is caught, with two `(` and one `)`. But the second and fourth lines have perfectly equal counts and are still wrong. In `([)]` the round bracket is closed while a square one is still open inside it. In `())(` a bracket is closed before it was opened.
+
+        Counting is not enough. As you read along the line, you need to remember something about the brackets you have passed.
+
+        **What exactly must you remember? And when a closing bracket arrives, which of the remembered brackets must it match?**
+
+        The answer is a way of organising memory so simple that it hardly seems like a data structure. It is also how your own function calls have been kept track of all along.
+  intuition:
+    - text: |
+        Read `f(a[1], {2: (3)})` slowly. You meet `(`, then `[`. Now `]` arrives. Which opener must it match? Not the first one you saw. The **most recent** one that is still open. Brackets nest, so whatever opened last must close first.
+
+        So keep the openers in a pile. Each new opener goes on top. A closer is compared with the top of the pile, and if they match, the top is taken off. You never look at anything but the top. At the end the pile must be empty.
+
+        A pile that you add to and take from only at the top is a **stack**. The steel plates at a wedding buffet are one: the plate put on last is the first one taken. Last in, first out.
+
+        Now a different job. Requests reach a server faster than it can answer them. They must wait, and fairness says that the one that has waited longest is served next. That is the line at a railway ticket counter: join at the back, leave from the front. It is a **queue**. First in, first out.
+
+        Both hold a collection of items, and both let you do only two things, add one and remove one. The entire difference is **which** item comes out. Try it.
+    - figure: stack-queue
+      props: { items: 3 }
+    - text: |
+        With A, B, C added in that order, the stack gives them back as C, B, A, reversed. The queue gives them back as A, B, C, in the order they came. Add and remove in a mixed sequence and the two orders part company quickly.
+  derivation:
+    - text: |
+        **The stack.** A stack supports two operations and promises one thing about them.
+
+        | Operation | Meaning |
+        | --- | --- |
+        | **push** | add an item |
+        | **pop** | remove and return the item most recently pushed and not yet popped |
+
+        A third, **peek**, looks at that item without removing it.
+
+        A Python list is already a good stack, and [[s2.arrays-and-dynamic-arrays]] says why. Treat the **end** of the list as the top. Then push is `append` and pop is `pop()`, both at the end of an array, where nothing moves: constant cost, averaged over the occasional move to a bigger block. Peek is `stack[-1]`. Had you used the front as the top, every push and pop would move every item. The idea is the same. Only the choice of end differs.
+
+        **Matching brackets.** Here is the method from the intuition, made exact.
+
+        ```python
+        def balanced(text):
+            closes = {")": "(", "]": "[", "}": "{"}
+            stack = []
+            for c in text:
+                if c in "([{":
+                    stack.append(c)
+                elif c in closes:
+                    if len(stack) == 0 or stack.pop() != closes[c]:
+                        return False
+            return len(stack) == 0
+        ```
+
+        Follow it on `([)]`. Push `(`, push `[`. Then `)` arrives, and the top is `[`, which is not its partner: `False`. On `())(`, push `(`, pop it for the first `)`, and then the second `)` finds the stack empty: `False`. On `(()`, the line ends with one `(` still on the stack: `False`. The three ways a line can be wrong are the three places the function refuses. Its invariant is that the stack holds exactly the openers read so far that are not yet closed, newest on top. Each character costs a constant number of steps, so the whole check is linear in the length of the line.
+
+        **The call stack is a stack.** In [[s1.recursion]] you watched calls pile up and unwind. A function that calls another must wait, and the one called last finishes first. Python keeps the waiting calls on a stack, which is where the name came from. So any recursive function can be rewritten as a loop with a stack of your own, holding the work still to be done. Here is the total of a nested list without recursion:
+
+        ```python
+        def total(nested):
+            stack = [nested]
+            result = 0
+            while len(stack) > 0:
+                item = stack.pop()
+                if type(item) == list:
+                    for part in item:
+                        stack.append(part)
+                else:
+                    result += item
+            return result
+        ```
+
+        Whatever is popped is either a number, which is added, or a list, whose parts are pushed to be dealt with later. The stack holds exactly the work not yet done.
+
+        **The queue.** A queue also supports two operations.
+
+        | Operation | Meaning |
+        | --- | --- |
+        | **enqueue** | add an item at the back |
+        | **dequeue** | remove and return the item that has waited longest |
+
+        A Python list makes a poor queue. Items join at one end and leave from the other, and one of those ends is the front of the array, where `pop(0)` moves every remaining item. The linked list with a tail from [[s2.linked-lists]] fits exactly: join at the tail, leave from the head, both constant. In practice you will use `collections.deque`, a double-ended queue, which adds and removes at **both** ends in constant time.
+
+        ```python
+        from collections import deque
+
+        line = deque()
+        line.append("Asha")
+        line.append("Ravi")
+        print(line.popleft(), len(line))
+        ```
+
+        This shows `Asha 1`. Use `append` to join at the back and `popleft` to leave from the front. A deque used with `append` and `pop` is a stack, so it serves as either.
+
+        **A queue in a fixed array.** Sometimes there is no room to grow: a keyboard's buffer, a network card, an audio driver. Each has a fixed block of $m$ slots, and items arrive and leave for ever. Keep two numbers: `front`, the slot of the oldest item, and `length`, how many items there are. The items sit in slots `front`, `front + 1`, and so on, **wrapping round** to slot 0 after slot $m - 1$. In symbols, item $k$ of the queue is in slot $(\text{front} + k) \bmod m$, using the remainder from [[s0.expressions]]. Enqueue writes into slot $(\text{front} + \text{length}) \bmod m$ and adds 1 to `length`. Dequeue reads slot `front`, moves `front` on to $(\text{front} + 1) \bmod m$, and subtracts 1. Nothing ever moves, and no slot is wasted. This is a **ring buffer**: picture the slots bent into a circle, with the queue chasing its own tail round it.
+    - question:
+        id: derivation-ring
+        type: numeric
+        system: s2
+        prompt: |
+          A ring buffer has 8 slots, numbered 0 to 7. Its oldest item is in slot 6 and it holds 5 items. Into which slot does the next enqueue write?
+        answer: "3"
+        explanation: |
+          The items occupy slots 6, 7, 0, 1 and 2, wrapping round after slot 7. The next free slot is $(6 + 5) \bmod 8 = 3$. Without the remainder the answer would be slot 11, which does not exist, and that is exactly the bug that a ring buffer written without `%` has.
+    - text: |
+        **Choosing between them.** The only question is which item should be dealt with next.
+
+        | If the next item to handle is | Use | Examples |
+        | --- | --- | --- |
+        | the most recent one | a stack | brackets, undo, function calls, the back button |
+        | the oldest one | a queue | requests to a server, print jobs, orders waiting in a kitchen |
+
+        The choice shapes whole algorithms. Explore a maze keeping the places still to visit on a stack, and you plunge down one corridor as far as it goes before trying another. Keep them in a queue and you spread out evenly, reaching everything one step away before anything two steps away. Same loop, different container, and a completely different search, which the algorithms cluster takes up in [[s3.breadth-first-and-depth-first-search]].
+
+        **Evaluating an expression.** A calculator can be built on a stack. Write the expression with each operator **after** its two operands: $(3 + 4) \times 2$ becomes `3 4 + 2 *`. This is called **postfix** notation. It needs no brackets and no rules of precedence. Read it left to right:
+
+        - a number is pushed;
+        - an operator pops two numbers, combines them, and pushes the result.
+
+        For `3 4 + 2 *`: push 3, push 4. The `+` pops 4 and 3 and pushes 7. Push 2. The `*` pops 2 and 7 and pushes 14. At the end the stack holds the answer alone. For subtraction the order of the pops matters: the first number popped is the **second** operand.
+    - question:
+        id: order-postfix
+        type: order
+        system: s2
+        prompt: Put the stack's contents in the order they occur while evaluating the postfix expression `5 1 2 + -`, starting after the first token.
+        steps:
+          - "`[5]`"
+          - "`[5, 1]`"
+          - "`[5, 1, 2]`"
+          - "`[5, 3]`"
+          - "`[2]`"
+        explanation: The three numbers are pushed in turn. The plus pops 2 and 1 and pushes 3. The minus pops 3, then 5, and computes 5 − 3, because the first number popped is the second operand. The result, 2, is left alone on the stack.
+    - text: |
+        **A stack that throws things away.** Here is a question a share-trading app answers for every day of a stock's history. The **span** of a day is the number of consecutive days, ending with that day, on which the closing price was at most that day's close. For closes of 100, 80, 60, 70, 60, 75 and 85 rupees the spans are 1, 1, 1, 2, 1, 4 and 6. The 75 looks back over 60, 70 and 60 and stops at 80.
+
+        The direct method looks back from each day until it meets a higher close. On a price that rises every day it looks all the way back every time, and the total is quadratic.
+
+        A stack does better. Keep the days that could still stop some later day's look-back. Once a close of 75 has arrived, the earlier days with closes of 60 and 70 can never stop anyone again, because any later day that gets past 75 gets past them too. So throw them away. The stack holds days whose closes **decrease** from bottom to top. For each new day, pop every day whose close is at most today's. Whatever is left on top, if anything, is the nearest earlier day with a higher close, and the span is the distance to it. Then push today.
+
+        One pass can pop many days, so a single step looks costly. But follow one day through the whole run: it is pushed once, and popped at most once. So $n$ days cost at most about $2n$ pushes and pops in all, which is linear. That way of counting, by following each item through its life instead of bounding each step, comes back in [[s3.amortised-analysis]].
+  formal:
+    - text: |
+        **Stack.** A collection with push and pop, where pop returns the item most recently pushed and not yet popped: last in, first out. With a Python list, push is `append` and pop is `pop()`, each constant.
+
+        **Queue.** A collection with enqueue and dequeue, where dequeue returns the item enqueued earliest and not yet dequeued: first in, first out. With a linked list that keeps a head and a tail, or with `collections.deque` using `append` and `popleft`, each is constant. With a Python list, `pop(0)` is linear.
+
+        **Ring buffer.** A queue in $m$ fixed slots with `front` and `length`. Item $k$ is in slot $(\text{front} + k) \bmod m$. Enqueue writes slot $(\text{front} + \text{length}) \bmod m$; dequeue reads slot `front` and sets $\text{front} \leftarrow (\text{front} + 1) \bmod m$.
+
+        **Balanced brackets.** A text is balanced exactly when, reading left to right with a stack of openers, every closer matches the top of the stack, which is then popped, and the stack is empty at the end.
+
+        **Postfix evaluation.** Push numbers. For an operator, pop $b$, then pop $a$, and push $a \mathbin{\text{op}} b$.
+
+        **Monotonic stack.** A stack kept in decreasing order by popping everything not larger than each new item before pushing it. Each item is pushed and popped at most once, so $n$ items cost linear time in all.
+  drill:
+    - text: Seconds each. Ask one thing every time. Which item comes out next?
+    - question:
+        id: drill-stack-pop
+        type: numeric
+        system: s1
+        prompt: |
+          1, 2 and 3 are pushed on a stack in that order. What does the first pop return?
+        answer: "3"
+        explanation: Last in, first out.
+    - question:
+        id: drill-queue-dequeue
+        type: numeric
+        system: s1
+        prompt: |
+          1, 2 and 3 are enqueued in that order. What does the first dequeue return?
+        answer: "1"
+        explanation: First in, first out.
+    - question:
+        id: drill-stack-mixed
+        type: numeric
+        system: s1
+        prompt: |
+          On an empty stack: push 4, push 7, pop, push 9, pop, pop. What does the **last** pop return?
+        answer: "4"
+        explanation: The first pop returns 7, the second 9, and 4 has been at the bottom throughout.
+    - question:
+        id: drill-queue-mixed
+        type: numeric
+        system: s1
+        prompt: |
+          On an empty queue: enqueue 4, enqueue 7, dequeue, enqueue 9, dequeue, dequeue. What does the **last** dequeue return?
+        answer: "9"
+        explanation: The items leave in the order they arrived, 4, 7, 9.
+    - question:
+        id: drill-balanced-one
+        type: choice
+        system: s1
+        prompt: |
+          Is `([)]` balanced?
+        options: ["No, the round bracket closes while the square one is still open", "Yes, the counts are equal", "No, it has too many brackets", "Yes, every opener has a closer somewhere"]
+        answer: 0
+        explanation: When the round closer arrives, the top of the stack is a square opener.
+    - question:
+        id: drill-balanced-two
+        type: choice
+        system: s1
+        prompt: |
+          Is `{[()]}()` balanced?
+        options: ["Yes", "No, it ends with an extra pair", "No, the nesting is too deep", "No, the kinds are mixed"]
+        answer: 0
+        explanation: Each closer matches the most recent open bracket, and the stack is empty at the end.
+    - question:
+        id: drill-depth
+        type: numeric
+        system: s1
+        prompt: |
+          While checking `((()))`, what is the largest number of items the stack holds at once?
+        answer: "3"
+        explanation: Three openers are pushed before the first closer arrives.
+    - question:
+        id: drill-postfix
+        type: numeric
+        system: s1
+        prompt: |
+          What is the value of the postfix expression `3 4 + 2 *`?
+        answer: "14"
+        explanation: 3 + 4 is 7, and 7 × 2 follows.
+    - question:
+        id: drill-postfix-minus
+        type: numeric
+        system: s1
+        prompt: |
+          What is the value of the postfix expression `9 4 -`?
+        answer: "5"
+        explanation: The first number popped, 4, is the second operand, so the result is 9 − 4.
+    - question:
+        id: drill-ring-slot
+        type: numeric
+        system: s1
+        prompt: |
+          A ring buffer has 5 slots. Its oldest item is in slot 3. After one dequeue, in which slot is the oldest item?
+        answer: "4"
+        explanation: The front moves on by one, $(3 + 1) \bmod 5 = 4$.
+    - question:
+        id: drill-ring-wrap
+        type: numeric
+        system: s1
+        prompt: |
+          A ring buffer has 5 slots. Its oldest item is in slot 4. After one dequeue, in which slot is the oldest item?
+        answer: "0"
+        explanation: $(4 + 1) \bmod 5 = 0$. The front wraps round to the first slot.
+    - question:
+        id: drill-cost
+        type: choice
+        system: s1
+        prompt: |
+          A Python list of $n$ items is used as a queue, with `append` and `pop(0)`. How does the cost of one dequeue grow with $n$?
+        options: ["Linearly", "It is constant", "Logarithmically", "Quadratically"]
+        answer: 0
+        explanation: Removing position 0 of an array moves every remaining item.
+    - question:
+        id: drill-which
+        type: choice
+        system: s1
+        prompt: |
+          An editor's undo must reverse the most recent change first. Which structure holds the changes?
+        options: ["A stack", "A queue", "A ring buffer", "A set"]
+        answer: 0
+        explanation: The most recent change is the first to be undone.
+    - question:
+        id: predict-stack
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          stack = []
+          stack.append(1)
+          stack.append(2)
+          stack.pop()
+          stack.append(3)
+          print(stack.pop(), stack)
+        output: "3 [1]"
+        explanation: After 1 and 2 are pushed, 2 is popped, and 3 is pushed on top of 1. The final pop returns 3 and leaves [1].
+    - question:
+        id: predict-deque
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          from collections import deque
+
+          queue = deque([1, 2, 3])
+          queue.append(4)
+          print(queue.popleft(), queue.popleft(), list(queue))
+        output: "1 2 [3, 4]"
+        explanation: "`popleft` removes from the front, so 1 and then 2 leave. The 4 joined at the back and is still waiting behind 3."
+  work:
+    - text: Slower now. For each problem, say what the container holds and what its top or front means.
+    - question:
+        id: write-balanced
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `balanced(text)`. Return `True` exactly when the round, square and curly brackets in `text` are well formed: every closer matches the most recent bracket still open, and nothing is left open at the end. Ignore every other character.
+        starter: |
+          def balanced(text):
+              # Replace the next line with your own.
+              return True
+
+          print(balanced("f(a[1], {2: (3)})"), balanced("([)]"))
+        solution: |
+          def balanced(text):
+              closes = {")": "(", "]": "[", "}": "{"}
+              stack = []
+              for c in text:
+                  if c in "([{":
+                      stack.append(c)
+                  elif c in closes:
+                      if len(stack) == 0 or stack.pop() != closes[c]:
+                          return False
+              return len(stack) == 0
+
+          print(balanced("f(a[1], {2: (3)})"), balanced("([)]"))
+        tests: |
+          assert balanced("f(a[1], {2: (3)})") is True, "f(a[1], {2: (3)}) is well formed"
+          assert balanced("([)]") is False, "In ([)] the round bracket closes while the square one is still open"
+          assert balanced("(()") is False, "In (() one bracket is never closed"
+          assert balanced("())(") is False, "In ())( a bracket is closed before it is opened"
+          assert balanced("") is True, "A text with no brackets is well formed"
+          assert balanced("no brackets here") is True, "A text with no brackets is well formed"
+          assert balanced("{[()]}()") is True, "{[()]}() is well formed"
+          assert balanced("]") is False, "A closer with nothing open is not well formed"
+          assert balanced("(]") is False, "A round opener cannot be closed by a square closer"
+          assert balanced("((((((((((") is False, "Ten openers and no closers"
+          assert balanced("()" * 500) is True, "A thousand brackets in matched pairs"
+          assert balanced("[(])") is False, "In [(]) the square bracket closes while the round one is still open"
+          assert output.strip() == "True False", "The program should print True False"
+        wrong:
+          - |
+            def balanced(text):
+                closes = {")": "(", "]": "[", "}": "{"}
+                stack = []
+                for c in text:
+                    if c in "([{":
+                        stack.append(c)
+                    elif c in closes:
+                        if len(stack) == 0 or stack.pop() != closes[c]:
+                            return False
+                return True
+
+            print(True, False)
+          - |
+            def balanced(text):
+                closes = {")": "(", "]": "[", "}": "{"}
+                stack = []
+                for c in text:
+                    if c in "([{":
+                        stack.append(c)
+                    elif c in closes:
+                        if len(stack) == 0:
+                            return False
+                        stack.pop()
+                return len(stack) == 0
+
+            print(True, False)
+          - |
+            def balanced(text):
+                closes = {")": "(", "]": "[", "}": "{"}
+                stack = []
+                for c in text:
+                    if c in "([{":
+                        stack.append(c)
+                    elif c in closes:
+                        if len(stack) == 0 or stack[0] != closes[c]:
+                            return False
+                        stack = stack[1:]
+                return len(stack) == 0
+
+            print(True, False)
+        explanation: |
+          The stack holds the brackets that are open and not yet closed, the most recent on top. An opener is pushed. A closer must find a partner of its own kind on top, and there are two ways for it to fail: the stack is empty, or the top is the wrong kind. At the end, anything still on the stack was never closed. Each of the three checks catches a different mistake, and leaving out any one lets a bad line through. Matching against the oldest opener instead of the newest turns the stack into a queue, which is the wrong order for nesting.
+    - question:
+        id: write-postfix
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `evaluate(tokens)`. `tokens` is a list making up a valid postfix expression: each token is a whole number, or one of the strings `"+"`, `"-"`, `"*"`. Return the value of the expression.
+        starter: |
+          def evaluate(tokens):
+              # Replace the next line with your own.
+              return 0
+
+          print(evaluate([3, 4, "+", 2, "*"]), evaluate([9, 4, "-"]))
+        solution: |
+          def evaluate(tokens):
+              stack = []
+              for token in tokens:
+                  if token == "+" or token == "-" or token == "*":
+                      b = stack.pop()
+                      a = stack.pop()
+                      if token == "+":
+                          stack.append(a + b)
+                      elif token == "-":
+                          stack.append(a - b)
+                      else:
+                          stack.append(a * b)
+                  else:
+                      stack.append(token)
+              return stack.pop()
+
+          print(evaluate([3, 4, "+", 2, "*"]), evaluate([9, 4, "-"]))
+        tests: |
+          assert evaluate([3, 4, "+", 2, "*"]) == 14, "3 4 + 2 * is (3 + 4) * 2 = 14"
+          assert evaluate([9, 4, "-"]) == 5, "9 4 - is 9 - 4 = 5"
+          assert evaluate([7]) == 7, "A single number is its own value"
+          assert evaluate([5, 1, 2, "+", "-"]) == 2, "5 1 2 + - is 5 - (1 + 2) = 2"
+          assert evaluate([2, 3, 4, "*", "+"]) == 14, "2 3 4 * + is 2 + 3 * 4 = 14"
+          assert evaluate([2, 3, "+", 4, "*"]) == 20, "2 3 + 4 * is (2 + 3) * 4 = 20"
+          assert evaluate([10, 2, 3, "-", "-"]) == 11, "10 2 3 - - is 10 - (2 - 3) = 11"
+          assert evaluate([0, 6, "-"]) == -6, "0 6 - is 0 - 6 = -6"
+          assert evaluate([1, 2, "+", 3, 4, "+", "*"]) == 21, "1 2 + 3 4 + * is (1 + 2) * (3 + 4) = 21"
+          assert output.strip() == "14 5", "The program should print 14 5"
+        wrong:
+          - |
+            def evaluate(tokens):
+                stack = []
+                for token in tokens:
+                    if token == "+" or token == "-" or token == "*":
+                        a = stack.pop()
+                        b = stack.pop()
+                        if token == "+":
+                            stack.append(a + b)
+                        elif token == "-":
+                            stack.append(a - b)
+                        else:
+                            stack.append(a * b)
+                    else:
+                        stack.append(token)
+                return stack.pop()
+
+            print(14, 5)
+          - |
+            def evaluate(tokens):
+                stack = []
+                for token in tokens:
+                    if token == "+" or token == "-" or token == "*":
+                        a = stack[0]
+                        b = stack[1]
+                        stack = stack[2:]
+                        if token == "+":
+                            stack.append(a + b)
+                        elif token == "-":
+                            stack.append(a - b)
+                        else:
+                            stack.append(a * b)
+                    else:
+                        stack.append(token)
+                return stack.pop()
+
+            print(14, 5)
+        explanation: |
+          The stack holds the values computed and not yet used. A number is such a value and is pushed. An operator uses the two most recent values and replaces them by one. Because the stack returns the most recent first, the first pop yields the **second** operand, so for subtraction pop `b`, then `a`, and compute `a - b`. Taking the operands from the front of the list turns the stack into a queue and pairs up the wrong numbers as soon as an expression nests. Each token costs a constant number of steps, so evaluation is linear in the number of tokens.
+    - question:
+        id: fix-ring
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A bank's token display keeps the waiting tokens in this ring buffer of 3 slots. The program should print `101 102` and then `103 104 105`. It prints `101 102` and then stops with an `IndexError`. The invariant says that the oldest item is always in a slot from 0 to 2. Find the line that breaks it, and fix it.
+        starter: |
+          class RingQueue:
+              def __init__(self, capacity):
+                  self.slots = [None] * capacity
+                  self.capacity = capacity
+                  self.front = 0
+                  self.length = 0
+
+              def enqueue(self, value):
+                  if self.length == self.capacity:
+                      raise IndexError("the queue is full")
+                  back = (self.front + self.length) % self.capacity
+                  self.slots[back] = value
+                  self.length += 1
+
+              def dequeue(self):
+                  if self.length == 0:
+                      raise IndexError("the queue is empty")
+                  value = self.slots[self.front]
+                  self.slots[self.front] = None
+                  self.front = self.front + 1
+                  self.length -= 1
+                  return value
+
+
+          tokens = RingQueue(3)
+          for t in [101, 102, 103]:
+              tokens.enqueue(t)
+          print(tokens.dequeue(), tokens.dequeue())
+          tokens.enqueue(104)
+          tokens.enqueue(105)
+          print(tokens.dequeue(), tokens.dequeue(), tokens.dequeue())
+        solution: |
+          class RingQueue:
+              def __init__(self, capacity):
+                  self.slots = [None] * capacity
+                  self.capacity = capacity
+                  self.front = 0
+                  self.length = 0
+
+              def enqueue(self, value):
+                  if self.length == self.capacity:
+                      raise IndexError("the queue is full")
+                  back = (self.front + self.length) % self.capacity
+                  self.slots[back] = value
+                  self.length += 1
+
+              def dequeue(self):
+                  if self.length == 0:
+                      raise IndexError("the queue is empty")
+                  value = self.slots[self.front]
+                  self.slots[self.front] = None
+                  self.front = (self.front + 1) % self.capacity
+                  self.length -= 1
+                  return value
+
+
+          tokens = RingQueue(3)
+          for t in [101, 102, 103]:
+              tokens.enqueue(t)
+          print(tokens.dequeue(), tokens.dequeue())
+          tokens.enqueue(104)
+          tokens.enqueue(105)
+          print(tokens.dequeue(), tokens.dequeue(), tokens.dequeue())
+        tests: |
+          _q = RingQueue(3)
+          _out = []
+          for _round in range(10):
+              _q.enqueue(_round)
+              _q.enqueue(_round + 100)
+              for _ in range(2):
+                  _out.append(_q.dequeue())
+                  assert 0 <= _q.front < 3, "After every dequeue, front should be a slot number from 0 to 2"
+          assert _out == [_v for _r in range(10) for _v in [_r, _r + 100]], "Items should leave in the order they arrived, however many times the slots wrap round"
+          _f = RingQueue(2)
+          _f.enqueue(1)
+          _f.enqueue(2)
+          try:
+              _f.enqueue(3)
+              assert False, "Enqueueing into a full ring buffer should raise IndexError"
+          except IndexError:
+              pass
+          assert _f.dequeue() == 1, "The oldest item leaves first"
+          _f.enqueue(3)
+          assert _f.dequeue() == 2 and _f.dequeue() == 3, "After wrapping, items should still leave in order"
+          try:
+              _f.dequeue()
+              assert False, "Dequeueing from an empty ring buffer should raise IndexError"
+          except IndexError:
+              pass
+          assert output.split() == ["101", "102", "103", "104", "105"], "The program should print 101 102, then 103 104 105"
+        wrong:
+          - |
+            class RingQueue:
+                def __init__(self, capacity):
+                    self.slots = [None] * capacity
+                    self.capacity = capacity
+                    self.front = 0
+                    self.length = 0
+
+                def enqueue(self, value):
+                    if self.length == self.capacity:
+                        raise IndexError("the queue is full")
+                    back = (self.front + self.length) % self.capacity
+                    self.slots[back] = value
+                    self.length += 1
+
+                def dequeue(self):
+                    if self.length == 0:
+                        raise IndexError("the queue is empty")
+                    if self.front == self.capacity:
+                        self.front = 0
+                    value = self.slots[self.front]
+                    self.slots[self.front] = None
+                    self.front = self.front + 1
+                    self.length -= 1
+                    return value
+
+
+            print(101, 102)
+            print(103, 104, 105)
+          - |
+            class RingQueue:
+                def __init__(self, capacity):
+                    self.slots = [None] * capacity
+                    self.capacity = capacity
+                    self.front = 0
+                    self.length = 0
+
+                def enqueue(self, value):
+                    if self.length == self.capacity:
+                        raise IndexError("the queue is full")
+                    back = (self.front + self.length) % self.capacity
+                    self.slots[back] = value
+                    self.length += 1
+
+                def dequeue(self):
+                    if self.length == 0:
+                        raise IndexError("the queue is empty")
+                    value = self.slots[self.front]
+                    self.slots[self.front] = None
+                    self.front = (self.front + 1) % self.capacity
+                    return value
+
+
+            print(101, 102)
+            print(103, 104, 105)
+        explanation: |
+          `enqueue` wraps the back round with `% self.capacity`, but `dequeue` let `front` run on past the last slot. After two dequeues `front` was 2; the third set it to 3, and the next read of `self.slots[3]` failed, though the items 104 and 105 were safely in slots 0 and 1. Both ends of the queue must wrap the same way, so `front` becomes `(self.front + 1) % self.capacity`. Checking for the wrap **before** the step instead of after it lets `front` sit at 3 between calls, which breaks the invariant even if the next call repairs it. And forgetting to reduce `length` makes the queue believe it is full when it is not.
+    - question:
+        id: write-spans
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `spans(closes)`. `closes` is a sequence of daily closing prices. Return the list of spans: for each day, the number of consecutive days ending with that day on which the close was at most that day's close. Use a stack of earlier days, as in the lesson, so that the whole run is linear: the tests count how many times you read from `closes`.
+        starter: |
+          def spans(closes):
+              # Replace the next line with your own.
+              return [1 for _ in range(len(closes))]
+
+          print(spans([100, 80, 60, 70, 60, 75, 85]))
+        solution: |
+          def spans(closes):
+              result = []
+              stack = []
+              for i in range(len(closes)):
+                  while stack and closes[stack[-1]] <= closes[i]:
+                      stack.pop()
+                  if stack:
+                      result.append(i - stack[-1])
+                  else:
+                      result.append(i + 1)
+                  stack.append(i)
+              return result
+
+          print(spans([100, 80, 60, 70, 60, 75, 85]))
+        tests: |
+          assert spans([100, 80, 60, 70, 60, 75, 85]) == [1, 1, 1, 2, 1, 4, 6], "The example from the lesson"
+          assert spans([]) == [], "No days, no spans"
+          assert spans([50]) == [1], "The first day's span is 1"
+          assert spans([10, 20, 30]) == [1, 2, 3], "A price that rises every day looks all the way back"
+          assert spans([30, 20, 10]) == [1, 1, 1], "A price that falls every day has spans of 1"
+          assert spans([5, 5, 5]) == [1, 2, 3], "Equal closes count: the span includes days at most today's close"
+          class _Closes:
+              def __init__(self, values):
+                  self.values = values
+                  self.reads = 0
+              def __len__(self):
+                  return len(self.values)
+              def __getitem__(self, i):
+                  self.reads += 1
+                  return self.values[i]
+          _rising = _Closes(list(range(2000)))
+          assert spans(_rising) == list(range(1, 2001)), "A rising price of 2000 days"
+          assert _rising.reads <= 16000, "On a rising price the reads from closes should grow in proportion to the days, not look back every time"
+          _mixed = _Closes([(_k * 37) % 101 for _k in range(2000)])
+          spans(_mixed)
+          assert _mixed.reads <= 16000, "The reads from closes should grow in proportion to the days"
+          assert output.strip() == "[1, 1, 1, 2, 1, 4, 6]", "The program should print [1, 1, 1, 2, 1, 4, 6]"
+        wrong:
+          - |
+            def spans(closes):
+                result = []
+                for i in range(len(closes)):
+                    j = i
+                    while j >= 0 and closes[j] <= closes[i]:
+                        j -= 1
+                    result.append(i - j)
+                return result
+
+            print([1, 1, 1, 2, 1, 4, 6])
+          - |
+            def spans(closes):
+                result = []
+                stack = []
+                for i in range(len(closes)):
+                    while stack and closes[stack[-1]] < closes[i]:
+                        stack.pop()
+                    if stack:
+                        result.append(i - stack[-1])
+                    else:
+                        result.append(i + 1)
+                    stack.append(i)
+                return result
+
+            print([1, 1, 1, 2, 1, 4, 6])
+          - |
+            def spans(closes):
+                result = []
+                stack = []
+                for i in range(len(closes)):
+                    while stack and closes[stack[-1]] <= closes[i]:
+                        stack.pop()
+                    if stack:
+                        result.append(i - stack[-1])
+                    else:
+                        result.append(1)
+                    stack.append(i)
+                return result
+
+            print([1, 1, 1, 2, 1, 4, 6])
+        explanation: |
+          The stack holds the days that could still stop a later look-back, with closes decreasing from bottom to top. A new day first pops every day whose close is at most its own, since those can never stop anyone again. What remains on top is the nearest earlier day with a strictly higher close, and the span is the distance to it; with nothing left, the span reaches back to day 0 and is $i + 1$. Each day is pushed once and popped at most once, so the reads grow in proportion to the days. Looking back day by day gives the same answers but reads quadratically often on a rising price. Popping only strictly smaller closes stops at an equal close, which the definition says should be counted.
+    - question:
+        id: work-two-stacks
+        type: choice
+        system: s2
+        prompt: |
+          A queue is built from two stacks, `inbox` and `outbox`. Enqueue pushes onto `inbox`. Dequeue pops from `outbox`, but if `outbox` is empty it first pops **every** item from `inbox` and pushes each onto `outbox`. Does this behave as a queue, and what does it cost?
+        options:
+          - "Yes. Moving reverses the order, so the oldest item ends on top of `outbox`. One dequeue can move many items, but each item is pushed, moved and popped once in its life, so $n$ operations cost a number of steps linear in $n$."
+          - "No. Each stack reverses the order, so the items come out newest first."
+          - "Yes, and every dequeue costs a constant number of steps, because only one item is popped."
+          - "Yes, but $n$ operations cost a number of steps quadratic in $n$, because a dequeue may move every item."
+        answer: 0
+        explanation: |
+          A stack reverses order, and reversing twice restores it: the first item pushed onto `inbox` is at its bottom, so it is the last moved and lands on top of `outbox`, ready to leave first. Items already in `outbox` are older than everything in `inbox`, so they rightly leave first. A single dequeue can be expensive, moving the whole of `inbox`. But follow one item through its life: pushed once onto `inbox`, moved once, popped once. That bounds the total, as with the spans. A dequeue that moves a crore of items is still a slow moment, which matters to code with a deadline on every call.
+    - question:
+        id: work-recursion-depth
+        type: choice
+        system: s2
+        prompt: |
+          A recursive function that walks a linked list of 10 lakh nodes, calling itself once for each node, fails in Python with "maximum recursion depth exceeded". A loop does not. Why?
+        options:
+          - "Each waiting call keeps a frame on the call stack, so the depth of the call stack equals the length of the list, and Python refuses to let it grow past about a thousand frames. A loop keeps no waiting calls."
+          - "Recursion is always slower than a loop, and Python stops slow programs."
+          - "The linked list is too long to fit in memory."
+          - "Recursive functions cannot follow links."
+        answer: 0
+        explanation: |
+          Recursion uses the call stack as its memory of what remains to be done: each call waiting for a deeper one holds a frame. Python caps the height of that stack, to turn runaway recursion into an error instead of a crash. Recursion that halves its problem is only about 20 deep for 10 lakh items and is safe. Recursion that goes one step deeper for each item is as deep as the data is long. When that is too deep, keep the pending work on a stack of your own, as in the lesson, or use a plain loop.
+  connections:
+    - text: |
+        The puzzle asked what you must remember to check brackets, when counting fails. You must remember the brackets still open, in order, and a closer must match the most recent of them. A pile that you add to and take from only at the top holds exactly that. It is a stack, and the three ways a line can be malformed are the three ways the check can fail.
+
+        A stack returns the newest item and a queue the oldest. That is the whole difference, and it decided how each should be built. An array is cheap at its end, so a Python list is a ready-made stack. A queue works at both ends, so it needs a linked list with a tail, a deque, or, when the room is fixed, a ring buffer whose positions wrap round. In each, every operation costs a constant number of steps. The span of a share price showed a subtler use: a stack that throws away what can never matter again, costing little in total though one step may pop many items.
+
+        These two containers turn up everywhere. Your browser's back button is a stack of pages. A web server's waiting requests, the jobs on a printer and the orders in a restaurant kitchen are queues. Every operating system keeps queues of processes waiting for their turn on a processor, and every network card has a ring buffer of packets.
+
+        The next lessons need them too. When the next item to handle is neither the newest nor the oldest but the **most urgent**, you need a priority queue, built in [[s2.heaps-and-priority-queues]]. And keeping pending work on a stack or on a queue gives the two great ways of exploring a graph, in [[s3.breadth-first-and-depth-first-search]], once graphs themselves are stored in [[s2.graphs-and-their-representations]].
+
+        First, a different question about collections. A stack and a queue hand you an item of **their** choosing. Often you want a particular one: is this word in the dictionary, what is the balance for this account number? A list must search item by item. A Python `dict` answers at once, however much it holds. The next lesson builds one from an array, which can jump to any position, and short linked lists, to hold what collides: [[s2.hash-tables]].
