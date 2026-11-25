@@ -113,7 +113,7 @@ test("laptop: a lesson is graded, remembers progress, and leads to one that buil
   const stairs = page.getByRole("figure").filter({ hasText: "Sum of the first n whole numbers" });
   await expect(stairs).toContainText("4 × 5 ÷ 2 = 10");
   for (let i = 0; i < 6; i++) await stairs.getByRole("button", { name: "Increase n" }).click();
-  await expect(stairs).toContainText("1 + 2 + … + 10 is the blue staircase: 55 squares.");
+  await expect(stairs).toContainText("1 + 2 + … + 10 is the shaded staircase: 55 squares.");
   const series = page.getByRole("figure").filter({ hasText: "Partial sums of a geometric series" });
   await expect(series).toContainText("r = 0.5. The sum of the first 6 terms is 1.97. The totals close in on 1 ÷ (1 − r) = 2: the series converges.");
   await series.getByRole("slider", { name: "ratio r" }).fill("1");

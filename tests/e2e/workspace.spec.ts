@@ -2,6 +2,8 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 const FIRST_RUN = 90_000; // The first run also downloads and starts Python.
+// A test must outlive its slowest wait, or the 30 s default cuts the first run short.
+test.describe.configure({ timeout: FIRST_RUN + 30_000 });
 
 async function openCode(page: Page, project: string) {
   if (project === "phone") await page.getByRole("button", { name: "Code", exact: true }).click();
