@@ -3193,6 +3193,59 @@ function PascalTriangle(props: Props) {
   );
 }
 
+/** Items dropped into boxes, either spread as evenly as possible or scattered, with the fullest box never holding fewer than the items divided by the boxes, rounded up. */
+function Pigeonholes(props: Props) {
+  const [items, setItems] = useState(clamp(Math.round(num(props.items, 13)), 1, 24));
+  const [boxes, setBoxes] = useState(clamp(Math.round(num(props.boxes, 12)), 1, 12));
+  const [scatter, setScatter] = useState(0);
+  const mix = (i: number) => Math.floor((((scatter * 7919 + i * 104729 + 13) * 2654435761) % 4294967296) / 65536);
+  const place = Array.from({ length: items }, (_, i) => (scatter === 0 ? i % boxes : mix(i) % boxes));
+  const counts = Array.from({ length: boxes }, (_, b) => place.filter((p) => p === b).length);
+  const most = Math.max(...counts);
+  const bound = Math.ceil(items / boxes);
+  const width = 420 / boxes;
+  return (
+    <Frame
+      title="The pigeonhole principle"
+      summary={`${plural(items, "item")} in ${plural(boxes, "box", "boxes")}, ${scatter === 0 ? "spread as evenly as possible" : "dropped at random"}. The counts are ${counts.join(", ")}, so the fullest box holds ${most}. However the items are placed, some box holds at least ${items} ÷ ${boxes} rounded up, which is ${bound}${
+        bound >= 2 ? ", so at least two items always share a box" : ", so it is possible for no two items to share a box"
+      }.`}
+      controls={
+        <>
+          <Stepper label="items" value={items} onChange={setItems} min={1} max={24} />
+          <Stepper label="boxes" value={boxes} onChange={setBoxes} min={1} max={12} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setScatter(scatter + 1)}>
+            Drop them at random
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" disabled={scatter === 0} onClick={() => setScatter(0)}>
+            Spread them evenly
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`${plural(items, "item")} in ${plural(boxes, "box", "boxes")}, the fullest holding ${most}`}>
+        {counts.map((count, b) => {
+          const x = 10 + b * width;
+          return (
+            <g key={b}>
+              <rect x={x + 2} y={30} width={width - 4} height={190} className={count === most ? "fig-ghost" : "fig-fill"} fill="none" />
+              {Array.from({ length: count }, (_, j) => (
+                <circle key={j} cx={x + width / 2} cy={208 - j * Math.min(20, 180 / Math.max(most, 1))} r={Math.min(8, width / 2 - 4)} className={count === most ? "fig-accent" : "fig-fill"} />
+              ))}
+              <text x={x + width / 2} y={240} textAnchor="middle" className="fig-small">
+                {count}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="20" className="fig-small">
+          {`fullest box: ${most}; at least ${bound} guaranteed`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -4476,6 +4529,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "union-find": UnionFind,
   "choice-tree": ChoiceTree,
   "pascal-triangle": PascalTriangle,
+  pigeonholes: Pigeonholes,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
