@@ -42,6 +42,13 @@ export async function migrate(databaseUrl: string, log: (m: string) => void = co
 
 if (process.argv[1] && process.argv[1].endsWith("migrate.ts")) {
   const url = databaseUrl();
+  // On Vercel a build without its database or the tutor's key must fail, so that a preview which deploys
+  // successfully has applied its migrations to its own database branch and can reach the tutor.
+  const missing = process.env.VERCEL ? [url ? null : "DATABASE_URL", process.env.ANTHROPIC_API_KEY ? null : "ANTHROPIC_API_KEY"].filter(Boolean) : [];
+  if (missing.length) {
+    console.error(`This Vercel deployment has no ${missing.join(" or ")}. Set it in the project's environment variables.`);
+    process.exit(1);
+  }
   if (!url) {
     // Local builds without a database still need to succeed.
     console.log("DATABASE_URL is not set; skipping migrations.");

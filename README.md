@@ -40,6 +40,8 @@ npm run dev
 | `npm run e2e` | Builds the app and runs browser tests at laptop, tablet and phone sizes |
 | `LIVE_URL=... npm run e2e` | Read-only smoke test of the deployed site |
 
+Every pull request gets a Vercel preview with its own Neon database branch. The build applies the migrations to that branch, and on Vercel it fails if `DATABASE_URL` or `ANTHROPIC_API_KEY` is missing, so a preview that deploys successfully has a migrated database and the tutor's key. Previews stay behind Vercel's login; nothing merges unless that deployment and CI both pass. After each deployment to main, `.github/workflows/production.yml` runs the live smoke test against the public site.
+
 ## Mini-capstones
 
 A mini-capstone closes a cluster. It is one small project in stages that needs several of the cluster's lessons at once, and it teaches nothing new. Learn gives it straight after the lesson that finishes the cluster. One lives at `content/capstones/<cluster>.yaml`, and its questions use the same format and checks as a lesson's.
