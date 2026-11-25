@@ -43,6 +43,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "call-stack": z.strictObject({ n: z.number().optional() }),
   "growth-rates": z.strictObject({ n: z.number().optional() }),
   "truth-table": z.strictObject({ p: z.boolean().optional(), q: z.boolean().optional() }),
+  "full-adder": z.strictObject({ a: z.boolean().optional(), b: z.boolean().optional(), carry: z.boolean().optional() }),
   "dominoes": z.strictObject({ base: z.boolean().optional(), gap: z.number().optional() }),
   "remainder-classes": z.strictObject({ modulus: z.number().optional(), number: z.number().optional() }),
   "quantifier-grid": z.strictObject({ pattern: z.number().optional() }),

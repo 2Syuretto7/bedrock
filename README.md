@@ -20,7 +20,7 @@ Bedrock is an independent copy of [Axiom](https://github.com/2Syuretto7/axiom) w
 
 Every cluster requires the one before it on the route, so Learn walks all 583 lessons as one chain, each lesson listing the one before it as a direct prerequisite. `tests/unit/graph.test.ts` walks the whole graph as if every lesson were written and fails if the chain breaks, if a lesson cannot be reached, or if the order of clusters changes. Some lessons also require an earlier idea from another cluster, so that hashing, for example, returns in consistent hashing, hash joins and caches. The route, cluster by cluster, is in [ROADMAP.md](ROADMAP.md).
 
-Written so far: F0, number sense for engineers, nine lessons in `content/lessons/f0/`; S0, first programs, ten lessons in `content/lessons/s0/`; H0, bits and data representation, eight lessons in `content/lessons/h0/`; F1, algebra and functions, ten lessons in `content/lessons/f1/`; and S1, Python proper, ten lessons in `content/lessons/s1/`; each with its mini-capstone in `content/capstones/`.
+Written so far: F0, number sense for engineers, nine lessons in `content/lessons/f0/`; S0, first programs, ten lessons in `content/lessons/s0/`; H0, bits and data representation, eight lessons in `content/lessons/h0/`; F1, algebra and functions, ten lessons in `content/lessons/f1/`; S1, Python proper, ten lessons in `content/lessons/s1/`; and F2, logic, sets and proof, ten lessons in `content/lessons/f2/`; each with its mini-capstone in `content/capstones/`.
 
 ## Run locally
 

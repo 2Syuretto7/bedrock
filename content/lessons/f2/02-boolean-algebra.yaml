@@ -1,0 +1,842 @@
+concept: f2.boolean-algebra
+minutes: 100
+claim: You can compute with 1 and 0 under and, or and not, simplify a condition with the laws of Boolean algebra the way you simplify an expression, write a formula for any truth table as a sum of products, use exclusive or and NAND, count the Boolean functions of n inputs, and derive the formulas for a circuit that adds binary numbers.
+recalls: [f2.propositions-and-connectives]
+uses: [s0.booleans-and-conditionals, s0.loops, s0.functions, s0.lists-and-tuples, h0.binary-and-hexadecimal, h0.unsigned-integers-and-fixed-widths, h0.bitwise-operations-and-masks, f0.powers-of-two, f1.variables-and-expressions, s1.comprehensions-and-iterators]
+leads: [f2.quantifiers-and-their-negation, f2.sets-and-set-operations, h1.logic-gates, h1.adders-and-the-alu]
+starter: |
+  # Scratch space. True and False behave like 1 and 0 under & (and), | (or) and ^ (exclusive or).
+  for x in [0, 1]:
+      for y in [0, 1]:
+          print(x, y, x & y, x | y, x ^ y)
+parts:
+  recall:
+    - text: |
+        [[f2.propositions-and-connectives]] settled every question by brute force: write out all the rows, then compare two columns. On the way it met a handful of equivalences, De Morgan's laws and the two distributive laws among them, each checked by its own table. Those few laws belong to a complete algebra, as dependable as the arithmetic of numbers, and today you learn to calculate in it. Three quick pulls first.
+  puzzle:
+    - text: |
+        A hotel in Shimla takes bookings online. The rule that confirms a booking was written by three programmers over six years, each adding a case, and today it reads:
+
+        ```python
+        if (member and not blocked) or (member and blocked and override) or (not member and override and member):
+            confirm(booking)
+        ```
+
+        `member` says that the guest belongs to the hotel's loyalty scheme, `blocked` that the dates are held for a wedding party, and `override` that a manager has approved an exception. Nobody on the present team dares to touch the line. Two questions, before reading on. **Is there a shorter condition that confirms exactly the same bookings?** And **how would you convince a nervous colleague that it is exactly the same**, and not merely the same on the cases you happened to try?
+
+        The second question you can already answer. There are three Booleans, so $2^3 = 8$ combinations, and the `equivalent` function from the last lesson checks all eight. That settles any proposed replacement. But it does not produce one. A truth table is a judge, not an inventor: you have to guess the shorter form first.
+
+        Here is a guess, and the reasoning behind it. The third clause asks for `not member` and `member` at the same time, which can never happen, so it never fires: delete it. The first two clauses both need `member`, so take it outside, as you would take the common factor $a$ out of $ab + ac$. What is left says: either the dates are not blocked, or they are blocked and a manager has overridden. And "not blocked, or blocked and overridden" is the same as "not blocked, or overridden". If the dates are not blocked, the first half already succeeds. If they are blocked, the first half fails, and the second half needs only the override, since "blocked" is now known. So the whole line is
+
+        ```python
+        if member and (not blocked or override):
+            confirm(booking)
+        ```
+
+        Every step in that paragraph was a small algebraic move. A contradiction was replaced by "false", a common factor was taken out, and a condition that was already known was dropped. **Are there laws for these moves, as reliable as the laws of arithmetic, so that a condition can be simplified on paper and trusted without a table?** There are. A truth table on 30 Booleans has over a hundred crore rows, and the algebra does not care how many variables there are.
+  intuition:
+    - text: |
+        Write 1 for true and 0 for false, and look at what the connectives become.
+
+        **"And" is multiplication.** A product of 0s and 1s is 1 only when every factor is 1, and a single 0 makes the whole product 0, just as a single false part makes an "and" false: $1 \cdot 1 = 1$, $1 \cdot 0 = 0$, $0 \cdot 0 = 0$.
+
+        **"Not" is subtraction from 1.** $1 - 1 = 0$ and $1 - 0 = 1$.
+
+        **"Or" is nearly addition.** $0 + 0 = 0$, $0 + 1 = 1$ and $1 + 0 = 1$ are all correct. Only $1 + 1$ goes wrong: arithmetic says 2, and "true or true" is plain true. So "or" is addition that stops at 1. It is the larger of the two values.
+
+        An electrician sees the same thing in wires. Two switches **in series**, one after the other on the same wire, let current through only when both are closed. That is "and": an electric geyser heats only when the switch on the wall is on and its thermostat says the water is still cold. Two switches **in parallel**, side by side, let current through when either is closed. That is "or": a doorbell with one button at the gate and another at the door rings if either is pressed, and if a visitor and a child press both at once it rings just the same. Two presses do not make a louder bell. That is $1 + 1 = 1$.
+
+        George Boole, a self-taught English mathematician, published *The Laws of Thought* in 1854, treating logic as an algebra on 0 and 1. For eighty years it was a curiosity for logicians. Then in 1937 Claude Shannon, a 21-year-old student at MIT, showed in his master's thesis that circuits of relays and switches obey exactly Boole's laws, so a circuit could be designed and simplified on paper before it was built. Every chip made since has been designed in this algebra.
+
+        From here on the lesson uses the notation engineers use.
+
+        | Logic | Python | Boolean algebra |
+        | --- | --- | --- |
+        | $\neg x$ | `not x` | $\overline{x}$ |
+        | $x \land y$ | `x and y` | $xy$, or $x \cdot y$ |
+        | $x \lor y$ | `x or y` | $x + y$ |
+
+        Keep one warning in mind: $+$ now means "or", so $1 + 1 = 1$. The reward for this notation is that most habits of school algebra still work. You multiply out brackets, take out common factors and cancel. Most habits, not all of them, and the exceptions are the interesting part.
+  derivation:
+    - text: |
+        **The laws.** Here are the laws of Boolean algebra. Each holds for every value of every letter, and each can be checked by trying $0$ and $1$ for each letter, which is a truth table of two, four or eight rows.
+
+        | Law | With $\cdot$ | With $+$ |
+        | --- | --- | --- |
+        | Identity | $x \cdot 1 = x$ | $x + 0 = x$ |
+        | Annihilation | $x \cdot 0 = 0$ | $x + 1 = 1$ |
+        | Idempotence | $x x = x$ | $x + x = x$ |
+        | Complement | $x \overline{x} = 0$ | $x + \overline{x} = 1$ |
+        | Commutative | $xy = yx$ | $x + y = y + x$ |
+        | Associative | $(xy)z = x(yz)$ | $(x + y) + z = x + (y + z)$ |
+        | Distributive | $x(y + z) = xy + xz$ | $x + yz = (x + y)(x + z)$ |
+        | Absorption | $x(x + y) = x$ | $x + xy = x$ |
+        | De Morgan | $\overline{xy} = \overline{x} + \overline{y}$ | $\overline{x + y} = \overline{x}\,\overline{y}$ |
+
+        To these add **double negation**, $\overline{\overline{x}} = x$.
+
+        Read them as sentences and most are plain sense. $x + 1 = 1$: anything or true is true. $xx = x$: saying a thing twice adds nothing. $x\overline{x} = 0$: a statement and its denial cannot both hold, which is the contradiction of the last lesson. $x + \overline{x} = 1$: one of them must hold, which is the tautology.
+
+        Now compare them with ordinary arithmetic, the habits you bring from school. Identity, $x \cdot 0 = 0$, the commutative and associative laws and the first distributive law are all true of ordinary numbers too, so the familiar moves are safe. Three laws are new.
+
+        - $x + 1 = 1$ is false for ordinary numbers, except when $x = 0$.
+        - $xx = x$ holds for ordinary numbers only when $x$ is 0 or 1. That is exactly why it holds here: there are no other values.
+        - The second distributive law, $x + yz = (x + y)(x + z)$, fails badly in arithmetic. With 2, 3 and 4, the left side is $2 + 12 = 14$ and the right side is $5 \times 6 = 30$. In Boolean algebra "or" spreads over "and" just as "and" spreads over "or".
+
+        Absorption is the first law that saves work in real code. $x + xy = x$ says that `is_admin or (is_admin and is_owner)` is just `is_admin`. If `is_admin` holds, the whole condition holds. If it fails, the second part fails with it.
+
+        **Laws from laws.** Each law can be checked by a table, but a table has to be drawn again for every new statement. The point of an algebra is that new laws follow from old ones by calculation. Here is absorption, derived with every step named:
+
+        $$x + xy = x \cdot 1 + xy = x(1 + y) = x \cdot 1 = x.$$
+
+        The steps are identity, then the first distributive law to take out $x$, then annihilation ($1 + y = 1$), then identity again. The second distributive law can be derived the same way, by multiplying out the right side:
+
+        $$(x + y)(x + z) = xx + xz + yx + yz = x + xz + xy + yz = x(1 + z + y) + yz = x \cdot 1 + yz = x + yz.$$
+
+        Idempotence turned $xx$ into $x$, then $x$ was taken out of three terms, and annihilation swallowed the bracket.
+
+        One more law finishes the puzzle. It has no standard name, so call it **redundancy**:
+
+        $$\overline{x} + xy = \overline{x} + y.$$
+
+        By the second distributive law, $\overline{x} + xy = (\overline{x} + x)(\overline{x} + y) = 1 \cdot (\overline{x} + y) = \overline{x} + y$. In words: "not $x$, or else $x$ and $y$". By the time you reach the second branch you already know that $x$ holds, so saying it again adds nothing. In code, `not ready or (ready and valid)` is `not ready or valid`.
+
+        **The puzzle, by algebra.** Write $m$, $b$ and $o$ for member, blocked and override. The condition is
+
+        $$m\overline{b} + mbo + \overline{m}om.$$
+
+        The third term rearranges to $(m\overline{m})o = 0 \cdot o = 0$, by the commutative law, complement and annihilation, and adding 0 changes nothing. In the first two terms, take out $m$ and apply redundancy with $b$ for $x$ and $o$ for $y$:
+
+        $$m\overline{b} + mbo = m(\overline{b} + bo) = m(\overline{b} + o).$$
+
+        That is `member and (not blocked or override)`. Four lines, each step a named law, and the result is guaranteed for all eight combinations without trying a single one. A check that costs nothing should still be run, and you will run it. But the algebra found the answer, and the table only confirms it.
+    - question:
+        id: simplify-pair
+        type: choice
+        system: s2
+        prompt: |
+          Simplify $(x + y)(x + \overline{y})$.
+        options: ['$x$', '$y$', '$x + y$', '$1$']
+        answer: 0
+        explanation: |
+          Read it with the second distributive law backwards: $(x + y)(x + \overline{y}) = x + y\overline{y} = x + 0 = x$. Or multiply out: $xx + x\overline{y} + yx + y\overline{y} = x + x\overline{y} + xy + 0 = x(1 + \overline{y} + y) = x$. In words: "$x$ or $y$, and also $x$ or not $y$". Whatever $y$ is, one of the two brackets leans on $x$ alone.
+    - text: |
+        **Duality.** Look down the two columns of the table of laws. Every law in the right column is the law beside it with $\cdot$ and $+$ exchanged and $0$ and $1$ exchanged. That is no accident, and De Morgan's laws are the reason.
+
+        Take the law $x \cdot 1 = x$, which holds for every $x$. Since it holds for every $x$, it holds for $\overline{x}$: $\overline{x} \cdot 1 = \overline{x}$. Now negate both sides: $\overline{\overline{x} \cdot 1} = x$. De Morgan turns the left side into $\overline{\overline{x}} + \overline{1}$, which is $x + 0$. So $x + 0 = x$, which is the law's partner. The same moves work on any law. Replace each letter by its complement, negate both sides, and push the negation inwards with De Morgan's laws, which turns every product into a sum and every sum into a product, while the complement turns 1 into 0 and 0 into 1. The result is the **principle of duality**: if a statement is a law of Boolean algebra, then so is its **dual**, the statement with $\cdot$ and $+$ exchanged and $0$ and $1$ exchanged.
+
+        So half of the table came free. And the strange second distributive law turns out to be the dual of the familiar first one. Ordinary arithmetic has no duality, because $+$ and $\times$ do not play matching roles there, and that is why the second law looks so wrong at first.
+
+        **From any table to a formula.** The puzzle went from a formula to a simpler formula. Often the work runs the other way: you know what the output must be in every row, and you need a formula. Take the staircase light found in nearly every Indian house with an upper floor, with one switch at the foot of the stairs and another at the top. Flip either one and the light changes. Write $a$ and $b$ for "the lower switch is up" and "the upper switch is up". Say the electrician wired it so that the light is off when both are down. Then one flip turns it on, and a second flip, of either switch, turns it off again:
+
+        | $a$ | $b$ | light |
+        | --- | --- | --- |
+        | 0 | 0 | 0 |
+        | 0 | 1 | 1 |
+        | 1 | 0 | 1 |
+        | 1 | 1 | 0 |
+
+        Here is a method that always works. For each row whose output is 1, write the product of all the inputs, each **plain** if it is 1 in that row and **barred** if it is 0. The row $a = 0$, $b = 1$ gives $\overline{a}b$. That product is 1 in that row and in no other, since it demands $a = 0$ and $b = 1$ together. A product like this, with every input appearing once, is called a **minterm**. The row $a = 1$, $b = 0$ gives $a\overline{b}$. Now join the minterms of all the 1-rows with "or":
+
+        $$\text{light} = \overline{a}b + a\overline{b}.$$
+
+        This sum is 1 exactly when one of its minterms is 1, which happens exactly in the rows where the output should be 1. Such a formula is called a **sum of products**.
+
+        The method never fails. So **every** Boolean function, of any number of inputs, can be written using only "and", "or" and "not", and the three are called **complete**. (A function that is never 1 has no minterms at all. Write it as $x\overline{x}$.)
+
+        **How many functions are there?** A Boolean function of $n$ inputs is fixed by its output column. That column has $2^n$ rows, and each row can be 0 or 1 independently, so there are
+
+        $$2^{2^n}$$
+
+        functions of $n$ inputs. With one input there are $2^2 = 4$: always 0, always 1, $x$ itself and $\overline{x}$. With two inputs there are $2^4 = 16$, and the last lesson met several of them by name: and, or, implies, if and only if. With three there are $2^8 = 256$. With five there are $2^{32}$, about 429 crore. A sum of products can need as many as $2^n$ minterms, which is why simplifying formulas matters. Every term saved is circuitry saved.
+
+        **Exclusive or.** The staircase function has a name of its own, **exclusive or**, written $a \oplus b$: true when exactly one of the two is true. In Python it is `^`, which you met in [[h0.bitwise-operations-and-masks]] working on every bit of a number at once. On `True` and `False` it works one value at a time. Its laws come straight from its table:
+
+        - $x \oplus 0 = x$ and $x \oplus 1 = \overline{x}$. Exclusive or with 1 flips a value. This is why either switch changes the light, whatever the other is doing.
+        - $x \oplus x = 0$. Anything cancels itself.
+        - $x \oplus y = y \oplus x$, and $(x \oplus y) \oplus z = x \oplus (y \oplus z)$.
+
+        So exclusive or is addition without the carry: $1 \oplus 1 = 0$, the last digit of $1 + 1 = 10$ in binary. A chain $x_1 \oplus x_2 \oplus \dots \oplus x_n$ is 1 exactly when an **odd** number of the $x_i$ are 1, since each 1 flips the running value and each 0 leaves it alone. That count is called the **parity**. A corridor with three switches for one light, any of which changes it, is wired as $a \oplus b \oplus c$.
+
+        Because $x \oplus x = 0$, exclusive or undoes itself: $(m \oplus k) \oplus k = m \oplus (k \oplus k) = m \oplus 0 = m$. Apply a key $k$ to a message $m$ and you get something unreadable. Apply the same key again and the message comes back. A disk array uses the same fact. It stores, besides several data disks, one extra disk holding the exclusive or of all of them, and if any one disk dies, the exclusive or of the survivors rebuilds it.
+    - question:
+        id: fix-corridor-light
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A long verandah has one light and three switches, one at each end and one in the middle. They are wired so that flipping **any one** switch changes the light, and the light is off when all three switches are down. `light(a, b, c)` takes three Booleans, `True` for a switch that is up. A colleague reasoned "the light is on when some switch is up but not all of them". The function is wrong in four of the eight rows. Fix it.
+        starter: |
+          def light(a, b, c):
+              some = a or b or c
+              every = a and b and c
+              return some and not every
+
+          print(light(True, True, False))
+        solution: |
+          def light(a, b, c):
+              return a ^ b ^ c
+
+          print(light(True, True, False))
+        tests: |
+          assert light(False, False, False) == False, "All three down: the light is off"
+          assert light(True, False, False) == True, "One switch up: one flip from off, so on"
+          assert light(False, True, False) == True, "One switch up: one flip from off, so on"
+          assert light(False, False, True) == True, "One switch up: one flip from off, so on"
+          assert light(True, True, False) == False, "Two switches up: two flips from off, so off again"
+          assert light(True, False, True) == False, "Two switches up: two flips from off, so off again"
+          assert light(False, True, True) == False, "Two switches up: two flips from off, so off again"
+          assert light(True, True, True) == True, "All three up: three flips from off, so on"
+          assert output.strip() == "False", "The program should print False for two switches up"
+        wrong:
+          - |
+            def light(a, b, c):
+                return a != b
+
+            print(light(True, True, False))
+          - |
+            def light(a, b, c):
+                return a ^ b or c
+
+            print(light(True, True, False))
+          - |
+            def light(a, b, c):
+                some = a or b or c
+                every = a and b and c
+                return some and not every
+
+            print(False)
+        explanation: |
+          Each flip changes the light, so the light is on exactly when an **odd** number of switches are up: one or three. That is the parity $a \oplus b \oplus c$. The colleague's rule agrees with parity when zero or one switch is up and gets every other row wrong. With two up it says "on", though two flips from off lead back to off. With all three up it says "off", though three flips lead to on. Note the precedence trap in one tempting answer: `a ^ b or c` means `(a ^ b) or c`, because `^` binds more tightly than `or`.
+    - text: |
+        **One gate is enough.** Three operations are complete. Remarkably, one is. **NAND**, "not and", is $\overline{xy}$: it is 0 only when both inputs are 1. Everything else can be built from it.
+
+        - **Not.** $\overline{x} = \overline{xx}$, by idempotence. So NOT $x$ is NAND($x$, $x$): one gate.
+        - **And.** $xy = \overline{\overline{xy}}$. That is a NAND followed by the NOT just built: two gates.
+        - **Or.** By De Morgan, $x + y = \overline{\overline{x}\,\overline{y}}$, which is NAND($\overline{x}$, $\overline{y}$). Make $\overline{x}$ and $\overline{y}$ with one gate each and join them with a third: three gates.
+
+        Since "and", "or" and "not" can express every function, so can NAND alone. By duality, **NOR**, $\overline{x + y}$, is complete on its own too. This is more than a curiosity. In the transistor circuits of today's chips, the cheapest gates to make are exactly these inverting ones, and an AND gate is in fact built as a NAND followed by a NOT. The computer that guided Apollo 11 to the Moon in 1969 was built almost entirely from copies of a single chip, each holding two NOR gates.
+
+        **Adding in binary.** Now the algebra can design something real. In [[h0.binary-and-hexadecimal]] you added binary numbers column by column. Take one column at a time.
+
+        The rightmost column adds two bits, $a$ and $b$. The total is 0, 1 or 2, which in binary is a **sum bit** to write down and a **carry** to pass to the next column:
+
+        | $a$ | $b$ | total | carry | sum |
+        | --- | --- | --- | --- | --- |
+        | 0 | 0 | 0 | 0 | 0 |
+        | 0 | 1 | 1 | 0 | 1 |
+        | 1 | 0 | 1 | 0 | 1 |
+        | 1 | 1 | 2 | 1 | 0 |
+
+        The sum column is exclusive or and the carry column is "and": $s = a \oplus b$ and $c = ab$. This little circuit is a **half adder**.
+
+        Every later column has three bits to add: $a$, $b$ and the carry $c$ that came in from the right. The total is 0 to 3, again a sum bit and a carry:
+
+        | $a$ | $b$ | $c$ | total | carry out | sum |
+        | --- | --- | --- | --- | --- | --- |
+        | 0 | 0 | 0 | 0 | 0 | 0 |
+        | 0 | 0 | 1 | 1 | 0 | 1 |
+        | 0 | 1 | 0 | 1 | 0 | 1 |
+        | 0 | 1 | 1 | 2 | 1 | 0 |
+        | 1 | 0 | 0 | 1 | 0 | 1 |
+        | 1 | 0 | 1 | 2 | 1 | 0 |
+        | 1 | 1 | 0 | 2 | 1 | 0 |
+        | 1 | 1 | 1 | 3 | 1 | 1 |
+
+        The sum bit is 1 when the total is odd, which is when an odd number of inputs are 1: the parity, $s = a \oplus b \oplus c$. The carry is 1 when the total is at least 2, which is when **at least two** of the three are 1. Two of three can be $a$ and $b$, or $b$ and $c$, or $c$ and $a$:
+
+        $$c_{\text{out}} = ab + bc + ca.$$
+
+        This is the **majority** function: it outputs whatever most of its inputs say. A circuit computing $s$ and $c_{\text{out}}$ is a **full adder**.
+
+        Circuit designers usually write the carry differently, to share a gate with the sum. Start from the majority and take out $c$: $ab + c(a + b)$. Now $a + b$ is "at least one", and "at least one" is "exactly one, or both": $a + b = (a \oplus b) + ab$. So
+
+        $$ab + c(a + b) = ab + c(a \oplus b) + abc = ab + c(a \oplus b),$$
+
+        where the last step is absorption: $ab + abc = ab$. The circuit computes $x = a \oplus b$ once, uses it for the sum, $x \oplus c$, and for the carry, $ab + xc$. Set the three inputs in the figure and follow the 1s through the gates. Find the input in which a carry passes through from the right, and the one in which $a$ and $b$ carry on their own.
+    - figure: full-adder
+      props: { a: true, b: true, carry: false }
+    - text: |
+        To add two 8-bit numbers, chain eight full adders, with the carry out of each column wired into the carry in of the next and a carry of 0 into the first. The carries ripple from right to left, one column at a time, as they do on paper. And the carry out of the last column has nowhere to go. This is the overflow of [[h0.unsigned-integers-and-fixed-widths]] seen from inside: an 8-bit adder computing $200 + 100$ keeps the eight sum bits, which make $44$, and drops the carry that was worth $256$.
+    - question:
+        id: fix-full-adder-carry
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `full_adder(a, b, c)` adds three bits, each 0 or 1, and returns `(sum_bit, carry)`. The sum bit is right. The carry is wrong in exactly one of the eight rows. Find that row by asking when the carry should be 1, and fix the formula.
+        starter: |
+          def full_adder(a, b, c):
+              s = a ^ b ^ c
+              carry = (a & b) | (b & c)
+              return s, carry
+
+          print(full_adder(1, 0, 1))
+        solution: |
+          def full_adder(a, b, c):
+              s = a ^ b ^ c
+              carry = (a & b) | (b & c) | (c & a)
+              return s, carry
+
+          print(full_adder(1, 0, 1))
+        tests: |
+          assert full_adder(0, 0, 0) == (0, 0), "0 + 0 + 0 = 0"
+          assert full_adder(0, 0, 1) == (1, 0), "0 + 0 + 1 = 1: sum 1, no carry"
+          assert full_adder(0, 1, 0) == (1, 0), "0 + 1 + 0 = 1: sum 1, no carry"
+          assert full_adder(1, 0, 0) == (1, 0), "1 + 0 + 0 = 1: sum 1, no carry"
+          assert full_adder(0, 1, 1) == (0, 1), "0 + 1 + 1 = 2 = binary 10: sum 0, carry 1"
+          assert full_adder(1, 1, 0) == (0, 1), "1 + 1 + 0 = 2 = binary 10: sum 0, carry 1"
+          assert full_adder(1, 0, 1) == (0, 1), "1 + 0 + 1 = 2 = binary 10: the carry must be 1 when a and c are both 1"
+          assert full_adder(1, 1, 1) == (1, 1), "1 + 1 + 1 = 3 = binary 11: sum 1, carry 1"
+          assert output.strip() == "(0, 1)", "The program should print (0, 1)"
+        wrong:
+          - |
+            def full_adder(a, b, c):
+                s = a ^ b ^ c
+                carry = (a & b) | c
+                return s, carry
+
+            print(full_adder(1, 0, 1))
+          - |
+            def full_adder(a, b, c):
+                s = a ^ b ^ c
+                carry = (a | b) & c
+                return s, carry
+
+            print(full_adder(1, 0, 1))
+          - |
+            def full_adder(a, b, c):
+                s = a ^ b ^ c
+                carry = a & b & c
+                return s, carry
+
+            print(full_adder(1, 0, 1))
+        explanation: |
+          The carry is 1 when at least two of the three bits are 1, and there are three ways to pick two: $ab + bc + ca$. The starter left out $ca$, so the one row where only $a$ and $c$ are 1 lost its carry, and $1 + 0 + 1$ came out as 0 instead of binary 10. The designers' form, `(a & b) | (c & (a ^ b))`, is equally right. You derived above that the two are equal.
+  formal:
+    - text: |
+        **Boolean algebra** works on the values 0 and 1 with three operations: the **product** $xy$ ("and"), the **sum** $x + y$ ("or", so that $1 + 1 = 1$) and the **complement** $\overline{x}$ ("not").
+
+        | Law | With $\cdot$ | With $+$ |
+        | --- | --- | --- |
+        | Identity | $x \cdot 1 = x$ | $x + 0 = x$ |
+        | Annihilation | $x \cdot 0 = 0$ | $x + 1 = 1$ |
+        | Idempotence | $xx = x$ | $x + x = x$ |
+        | Complement | $x\overline{x} = 0$ | $x + \overline{x} = 1$ |
+        | Commutative | $xy = yx$ | $x + y = y + x$ |
+        | Associative | $(xy)z = x(yz)$ | $(x + y) + z = x + (y + z)$ |
+        | Distributive | $x(y + z) = xy + xz$ | $x + yz = (x + y)(x + z)$ |
+        | Absorption | $x(x + y) = x$ | $x + xy = x$ |
+        | De Morgan | $\overline{xy} = \overline{x} + \overline{y}$ | $\overline{x + y} = \overline{x}\,\overline{y}$ |
+
+        Also $\overline{\overline{x}} = x$ (double negation) and $\overline{x} + xy = \overline{x} + y$ (redundancy).
+
+        **Duality.** The **dual** of a statement exchanges $\cdot$ with $+$ and $0$ with $1$. If a statement is a law, its dual is a law.
+
+        **Sum of products.** A **minterm** on $n$ variables is a product containing each variable once, plain or complemented. It equals 1 in exactly one row of the truth table. Every Boolean function equals the sum of the minterms of the rows in which it is 1. Hence $\{\cdot, +, \overline{\phantom{x}}\}$ is **complete**: it expresses every Boolean function. There are $2^{2^n}$ Boolean functions of $n$ variables.
+
+        **Exclusive or.** $x \oplus y = x\overline{y} + \overline{x}y$, true when exactly one input is true. It is commutative and associative, with $x \oplus 0 = x$, $x \oplus 1 = \overline{x}$ and $x \oplus x = 0$. The chain $x_1 \oplus \dots \oplus x_n$ is 1 exactly when an odd number of the $x_i$ are 1.
+
+        **NAND and NOR.** $\text{NAND}(x, y) = \overline{xy}$ and $\text{NOR}(x, y) = \overline{x + y}$. Each is complete on its own: $\overline{x} = \text{NAND}(x, x)$, $xy = \overline{\text{NAND}(x, y)}$ and $x + y = \text{NAND}(\overline{x}, \overline{y})$.
+
+        **Adders.** A **half adder** adds two bits: sum $a \oplus b$, carry $ab$. A **full adder** adds two bits and a carry in $c$: sum $a \oplus b \oplus c$, carry out $ab + bc + ca = ab + c(a \oplus b)$, the **majority** of the three. A chain of $n$ full adders, each passing its carry to the next, adds two $n$-bit numbers.
+  drill:
+    - text: Seconds each. Remember that $+$ means "or" and that there are only two values.
+    - question:
+        id: drill-one-plus-one
+        type: choice
+        system: s1
+        prompt: |
+          In Boolean algebra, what is $1 + 1$?
+        options: ['0', '1', '2', '10']
+        answer: 1
+        explanation: Here $+$ is "or", and true or true is true. The 10 belongs to binary arithmetic, where the 1 is a carry.
+    - question:
+        id: drill-annihilation
+        type: choice
+        system: s1
+        prompt: |
+          What is $x + 1$?
+        options: ['$x$', '$1$', '$\overline{x}$', 'It cannot be simplified']
+        answer: 1
+        explanation: Anything or true is true, whatever $x$ is.
+    - question:
+        id: drill-complement
+        type: choice
+        system: s1
+        prompt: |
+          What is $x\overline{x}$?
+        options: ['$0$', '$1$', '$x$', '$\overline{x}$']
+        answer: 0
+        explanation: A value and its complement are never both 1, so their product is always 0.
+    - question:
+        id: drill-absorption
+        type: choice
+        system: s1
+        prompt: |
+          Simplify $x + xy$.
+        options: ['$x$', '$y$', '$xy$', '$x + y$']
+        answer: 0
+        explanation: Absorption. If $x$ is 1 the sum is 1, and if $x$ is 0 then $xy$ is 0 too, so the sum always equals $x$.
+    - question:
+        id: drill-dual
+        type: choice
+        system: s1
+        prompt: |
+          What is the dual of the law $x(y + z) = xy + xz$?
+        options: ['$x + yz = (x + y)(x + z)$', '$x(y + z) = (x + y)(x + z)$', '$x + yz = xy + xz$', '$\overline{x}(\overline{y} + \overline{z}) = \overline{x}\,\overline{y} + \overline{x}\,\overline{z}$']
+        answer: 0
+        explanation: Exchange every $\cdot$ with $+$, on both sides. The familiar distributive law turns into the strange one, and both are laws.
+    - question:
+        id: drill-de-morgan
+        type: choice
+        system: s1
+        prompt: |
+          Which equals $\overline{x + y}$?
+        options: ['$\overline{x} + \overline{y}$', '$\overline{x}\,\overline{y}$', '$xy$', '$\overline{x}y$']
+        answer: 1
+        explanation: Complement each part and swap the operation. "Neither $x$ nor $y$" is "not $x$ and not $y$".
+    - question:
+        id: drill-minterm
+        type: choice
+        system: s1
+        prompt: |
+          Which product is 1 in the row $a = 1$, $b = 0$, $c = 1$ and in no other row?
+        options: ['$a\overline{b}c$', '$\overline{a}b\overline{c}$', '$ac$', '$a + \overline{b} + c$']
+        answer: 0
+        explanation: A minterm takes each input plain where it is 1 and barred where it is 0. $ac$ is also 1 in the row $a = b = c = 1$, so it picks out two rows.
+    - question:
+        id: drill-xor-one
+        type: choice
+        system: s1
+        prompt: |
+          What is $x \oplus 1$?
+        options: ['$x$', '$\overline{x}$', '$0$', '$1$']
+        answer: 1
+        explanation: Exclusive or with 1 flips the value. That is why either staircase switch always changes the light.
+    - question:
+        id: drill-count-functions
+        type: numeric
+        system: s1
+        prompt: |
+          How many different Boolean functions of 2 inputs are there?
+        answer: "16"
+        explanation: |
+          The table has $2^2 = 4$ rows, and each row's output can be 0 or 1 on its own: $2^4 = 16$.
+    - question:
+        id: predict-xor
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(True ^ False, True ^ True, 6 ^ 3)
+        output: "True False 5"
+        explanation: |
+          On Booleans `^` is exclusive or, so `True ^ True` is `False`. On whole numbers it works on each bit position: 110 and 011 differ in the first and last places, giving 101, which is 5.
+    - question:
+        id: predict-parity
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          p = 0
+          for bit in [1, 0, 1, 1, 0, 1]:
+              p ^= bit
+          print(p)
+        output: "0"
+        explanation: Each 1 flips `p` and each 0 leaves it alone. There are four 1s, an even number of flips, so `p` ends where it began.
+    - question:
+        id: predict-nand
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def nand(x, y):
+              return not (x and y)
+
+          print(nand(True, True), nand(nand(False, False), nand(True, True)))
+        output: "False True"
+        explanation: |
+          NAND is 0 only when both inputs are 1, so the first is `False`. In the second, `nand(False, False)` is `True` and `nand(True, True)` is `False`, and `nand(True, False)` is `True`. The second expression is the three-gate OR of `False` and `True`.
+  work:
+    - text: Slower now. Before you simplify, name each part with a letter. Before you trust a simplification, check it on every row.
+    - question:
+        id: work-simplify-implication
+        type: choice
+        system: s2
+        prompt: |
+          Simplify the sum of products $\overline{a}\,\overline{b} + \overline{a}b + ab$.
+        options: ['$\overline{a} + b$', '$a + b$', '$\overline{a}$', '$\overline{a}b$']
+        answer: 0
+        explanation: |
+          The first two minterms share $\overline{a}$: $\overline{a}(\overline{b} + b) = \overline{a} \cdot 1 = \overline{a}$. Then $\overline{a} + ab = \overline{a} + b$ by redundancy. The three minterms are the rows 00, 01 and 11, which are the rows where $a \Rightarrow b$ is true. So you have re-derived the last lesson's $P \Rightarrow Q \equiv \neg P \lor Q$ by algebra.
+    - question:
+        id: work-majority
+        type: choice
+        system: s2
+        prompt: |
+          A committee of three, $a$, $b$ and $c$, passes a motion when at least two vote yes. Which formula is 1 exactly when the motion passes?
+        options: ['$ab + bc + ca$', '$a \oplus b \oplus c$', '$abc$', '$a + b + c$']
+        answer: 0
+        explanation: |
+          "At least two" means some pair both voted yes, and there are three pairs. This is the majority function, the same formula as the carry of a full adder. $a \oplus b \oplus c$ is 1 for one yes vote, $abc$ needs all three, and $a + b + c$ needs only one.
+    - question:
+        id: work-parity-minterms
+        type: numeric
+        system: s2
+        prompt: |
+          Write $a \oplus b \oplus c$ as a sum of products, one minterm for each row in which it is 1. How many minterms are there?
+        answer: "4"
+        explanation: |
+          It is 1 when an odd number of inputs are 1. Three rows have exactly one 1, and one row has all three, so there are 4 minterms: $a\overline{b}\,\overline{c} + \overline{a}b\overline{c} + \overline{a}\,\overline{b}c + abc$. Parity has no shorter sum of products. No two of its 1-rows differ in a single input, so no pair of minterms combines, and that is part of why exclusive or is expensive to build.
+    - question:
+        id: predict-xor-swap
+        type: predict
+        system: s2
+        prompt: What does this show?
+        code: |
+          x, y = 12, 5
+          x = x ^ y
+          y = x ^ y
+          x = x ^ y
+          print(x, y)
+        output: "5 12"
+        explanation: |
+          After the first line `x` holds $12 \oplus 5$. The second gives `y` the value $(12 \oplus 5) \oplus 5 = 12$, since $5 \oplus 5 = 0$. The third gives `x` the value $(12 \oplus 5) \oplus 12 = 5$. The values are swapped with no third variable, purely because exclusive or undoes itself.
+    - question:
+        id: write-rows
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `rows(n)`. It returns the list of all $2^n$ rows of a truth table on $n$ inputs. Each row is a tuple of $n$ bits, 0 or 1, and the rows come in counting order: row $i$ is the binary numeral of $i$ written with $n$ digits, most significant first. So `rows(2)` is `[(0, 0), (0, 1), (1, 0), (1, 1)]`. The bit $j$ places from the right of $i$ is `(i >> j) & 1`. The program prints the table for three inputs with the parity of each row.
+        starter: |
+          def rows(n):
+              # Replace the next line with your own.
+              return []
+
+          for row in rows(3):
+              print(row, row[0] ^ row[1] ^ row[2])
+        solution: |
+          def rows(n):
+              table = []
+              for i in range(2 ** n):
+                  table.append(tuple((i >> (n - 1 - j)) & 1 for j in range(n)))
+              return table
+
+          for row in rows(3):
+              print(row, row[0] ^ row[1] ^ row[2])
+        tests: |
+          assert rows(1) == [(0,), (1,)], "One input gives two rows, (0,) and (1,)"
+          assert rows(2) == [(0, 0), (0, 1), (1, 0), (1, 1)], "Two inputs: four rows in counting order, most significant bit first"
+          assert len(rows(3)) == 8, "Three inputs give 2 ** 3 = 8 rows"
+          assert rows(3)[6] == (1, 1, 0), "Row 6 is 110 in binary"
+          assert rows(3)[1] == (0, 0, 1), "Row 1 is 001: the most significant bit comes first"
+          assert len(rows(10)) == 1024, "Ten inputs give 1024 rows"
+          assert rows(10)[1023] == (1, 1, 1, 1, 1, 1, 1, 1, 1, 1), "The last row of ten inputs is all ones"
+          assert len(set(rows(4))) == 16, "Every row should be different"
+          assert rows(0) == [()], "Zero inputs give one empty row, since 2 ** 0 = 1"
+          assert output.splitlines()[0] == "(0, 0, 0) 0", "The first line should be (0, 0, 0) 0"
+          assert output.splitlines()[7] == "(1, 1, 1) 1", "The last line should be (1, 1, 1) 1"
+        wrong:
+          - |
+            def rows(n):
+                table = []
+                for i in range(2 ** n):
+                    table.append(tuple((i >> j) & 1 for j in range(n)))
+                return table
+
+            for row in rows(3):
+                print(row, row[0] ^ row[1] ^ row[2])
+          - |
+            def rows(n):
+                table = []
+                for i in range(2 * n):
+                    table.append(tuple((i >> (n - 1 - j)) & 1 for j in range(n)))
+                return table
+
+            for row in rows(3):
+                print(row, row[0] ^ row[1] ^ row[2])
+          - |
+            def rows(n):
+                table = []
+                for i in range(2 ** n - 1):
+                    table.append(tuple((i >> (n - 1 - j)) & 1 for j in range(n)))
+                return table
+
+            for row in rows(3):
+                print(row, row[0] ^ row[1] ^ row[2])
+          - |
+            def rows(n):
+                table = []
+                for i in range(2 ** n):
+                    table.append(tuple((i >> (n - j)) & 1 for j in range(n)))
+                return table
+
+            for row in rows(3):
+                print(row, row[0] ^ row[1] ^ row[2])
+        explanation: |
+          The rows of a truth table are just the numbers from 0 to $2^n - 1$ written in binary, which is why the table has $2^n$ rows. Shifting `i` right by $n - 1 - j$ places brings bit $j$, counted from the left, to the end, and `& 1` keeps only that bit. With `rows` in hand, checking any equivalence on $n$ Booleans is a single loop over `rows(n)`.
+    - question:
+        id: write-from-nand
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Below, `nand` is the only gate you are given, and it records every use. Write `not_(x)`, `and_(x, y)` and `or_(x, y)` using **only** calls to `nand`, with no `not`, `and` or `or` of your own, and with as few calls as the lesson's constructions: one for `not_`, two for `and_` and three for `or_`. The program prints the truth table of `or_`.
+        starter: |
+          uses = []
+
+          def nand(x, y):
+              uses.append((x, y))
+              return not (x and y)
+
+          def not_(x):
+              # Replace the next line with your own.
+              return x
+
+          def and_(x, y):
+              # Replace the next line with your own.
+              return x
+
+          def or_(x, y):
+              # Replace the next line with your own.
+              return x
+
+          for x in [False, True]:
+              for y in [False, True]:
+                  print(x, y, or_(x, y))
+        solution: |
+          uses = []
+
+          def nand(x, y):
+              uses.append((x, y))
+              return not (x and y)
+
+          def not_(x):
+              return nand(x, x)
+
+          def and_(x, y):
+              return not_(nand(x, y))
+
+          def or_(x, y):
+              return nand(not_(x), not_(y))
+
+          for x in [False, True]:
+              for y in [False, True]:
+                  print(x, y, or_(x, y))
+        tests: |
+          assert not_(True) == False, "not_(True) should be False"
+          assert not_(False) == True, "not_(False) should be True"
+          assert [and_(x, y) for x in [False, True] for y in [False, True]] == [False, False, False, True], "and_ should be True only when both are True"
+          assert [or_(x, y) for x in [False, True] for y in [False, True]] == [False, True, True, True], "or_ should be False only when both are False"
+          _start = len(uses)
+          not_(True)
+          assert len(uses) - _start == 1, "not_ should use nand exactly once"
+          _start = len(uses)
+          and_(True, False)
+          assert len(uses) - _start == 2, "and_ should use nand exactly twice: one NAND, then NOT built from one NAND"
+          _start = len(uses)
+          or_(False, True)
+          assert len(uses) - _start == 3, "or_ should use nand exactly three times: NOT x, NOT y, then NAND of the two"
+          assert output.splitlines() == ["False False False", "False True True", "True False True", "True True True"], "The program should print the truth table of or_"
+        wrong:
+          - |
+            uses = []
+
+            def nand(x, y):
+                uses.append((x, y))
+                return not (x and y)
+
+            def not_(x):
+                return nand(x, x)
+
+            def and_(x, y):
+                return not_(nand(x, y))
+
+            def or_(x, y):
+                return nand(x, y)
+
+            for x in [False, True]:
+                for y in [False, True]:
+                    print(x, y, or_(x, y))
+          - |
+            uses = []
+
+            def nand(x, y):
+                uses.append((x, y))
+                return not (x and y)
+
+            def not_(x):
+                return nand(x, x)
+
+            def and_(x, y):
+                return nand(nand(x, y), nand(x, y))
+
+            def or_(x, y):
+                return nand(not_(x), not_(y))
+
+            for x in [False, True]:
+                for y in [False, True]:
+                    print(x, y, or_(x, y))
+          - |
+            uses = []
+
+            def nand(x, y):
+                uses.append((x, y))
+                return not (x and y)
+
+            def not_(x):
+                return nand(x, x)
+
+            def and_(x, y):
+                return not_(nand(x, y))
+
+            def or_(x, y):
+                return not_(and_(not_(x), not_(y)))
+
+            for x in [False, True]:
+                for y in [False, True]:
+                    print(x, y, or_(x, y))
+          - |
+            uses = []
+
+            def nand(x, y):
+                uses.append((x, y))
+                return not (x and y)
+
+            def not_(x):
+                return nand(x, x)
+
+            def and_(x, y):
+                return nand(not_(x), not_(y))
+
+            def or_(x, y):
+                return not_(nand(x, y))
+
+            for x in [False, True]:
+                for y in [False, True]:
+                    print(x, y, or_(x, y))
+        explanation: |
+          NOT is a NAND with both inputs tied together, because $\overline{xx} = \overline{x}$. AND is a NAND whose output is flipped back by that NOT. OR comes from De Morgan: $x + y = \overline{\overline{x}\,\overline{y}}$, so flip both inputs and NAND them. Writing `nand(nand(x, y), nand(x, y))` for AND gives the right answers with three gates, because it builds the same NAND twice. Building OR as NOT of the AND of the two NOTs is also correct, and costs five.
+    - question:
+        id: write-ripple-add
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          `full_adder(a, b, c)` below is correct: it adds three bits and returns `(sum_bit, carry)`, and it records each use, as a chip has one adder for each bit. Write `add(x, y, width)`, which adds two whole numbers of `width` bits the way a processor does. Go bit by bit from the least significant, feeding bit `i` of `x`, bit `i` of `y` and the carry so far into a full adder, with a carry of 0 into the first. Return `(total, carry_out)`, where `total` is the number made of the `width` sum bits and `carry_out` is the carry out of the last adder. It must call `full_adder` exactly `width` times.
+        starter: |
+          adders = []
+
+          def full_adder(a, b, c):
+              adders.append((a, b, c))
+              return a ^ b ^ c, (a & b) | (b & c) | (c & a)
+
+          def add(x, y, width):
+              # Replace the next line with your own.
+              return 0, 0
+
+          print(add(200, 100, 8))
+        solution: |
+          adders = []
+
+          def full_adder(a, b, c):
+              adders.append((a, b, c))
+              return a ^ b ^ c, (a & b) | (b & c) | (c & a)
+
+          def add(x, y, width):
+              total = 0
+              carry = 0
+              for i in range(width):
+                  s, carry = full_adder((x >> i) & 1, (y >> i) & 1, carry)
+                  total |= s << i
+              return total, carry
+
+          print(add(200, 100, 8))
+        tests: |
+          assert add(5, 3, 4) == (8, 0), "0101 + 0011 = 1000, with no carry out of four bits"
+          assert add(200, 100, 8) == (44, 1), "200 + 100 = 300 does not fit in 8 bits: the sum bits make 44 and the carry out, worth 256, is 1"
+          assert add(255, 1, 8) == (0, 1), "255 + 1 carries through all eight columns and out of the top"
+          assert add(0, 0, 8) == (0, 0), "0 + 0 = 0"
+          assert add(1, 1, 1) == (0, 1), "One bit: 1 + 1 = binary 10"
+          assert all(add(x, y, 4) == ((x + y) % 16, (x + y) // 16) for x in range(16) for y in range(16)), "Every pair of 4-bit numbers should add correctly"
+          _start = len(adders)
+          add(6, 3, 4)
+          assert adders[_start] == (0, 1, 0), "The first adder gets bit 0 of each number, 0 and 1, and a carry in of 0"
+          assert adders[_start + 1] == (1, 1, 0), "The second adder gets bit 1 of each number, 1 and 1, and the carry from the first, 0"
+          _start = len(adders)
+          add(12345, 54321, 16)
+          assert len(adders) - _start == 16, "A 16-bit add should use exactly 16 full adders"
+          assert output.strip() == "(44, 1)", "The program should print (44, 1)"
+        wrong:
+          - |
+            adders = []
+
+            def full_adder(a, b, c):
+                adders.append((a, b, c))
+                return a ^ b ^ c, (a & b) | (b & c) | (c & a)
+
+            def add(x, y, width):
+                total = 0
+                carry = 0
+                for i in range(width):
+                    s, carry = full_adder((x >> i) & 1, (y >> i) & 1, 0)
+                    total |= s << i
+                return total, carry
+
+            print(add(200, 100, 8))
+          - |
+            adders = []
+
+            def full_adder(a, b, c):
+                adders.append((a, b, c))
+                return a ^ b ^ c, (a & b) | (b & c) | (c & a)
+
+            def add(x, y, width):
+                total = 0
+                carry = 0
+                for i in range(width):
+                    s, carry = full_adder((x >> i) & 1, (y >> i) & 1, carry)
+                    total |= s << (width - 1 - i)
+                return total, carry
+
+            print(add(200, 100, 8))
+          - |
+            adders = []
+
+            def full_adder(a, b, c):
+                adders.append((a, b, c))
+                return a ^ b ^ c, (a & b) | (b & c) | (c & a)
+
+            def add(x, y, width):
+                return (x + y) % 2 ** width, (x + y) >> width
+
+            print(add(200, 100, 8))
+          - |
+            adders = []
+
+            def full_adder(a, b, c):
+                adders.append((a, b, c))
+                return a ^ b ^ c, (a & b) | (b & c) | (c & a)
+
+            def add(x, y, width):
+                total = 0
+                carry = 0
+                for i in range(width - 1):
+                    s, carry = full_adder((x >> i) & 1, (y >> i) & 1, carry)
+                    total |= s << i
+                return total, carry
+
+            print(add(200, 100, 8))
+        explanation: |
+          Each pass of the loop is one column of written addition. `(x >> i) & 1` picks out bit `i`, the full adder produces that column's sum bit and the carry for the next column, and `total |= s << i` puts the sum bit back in place `i`. The carry is the only thing passed from one column to the next. That is why the columns must be done in order, and why a long addition built this way is slow: the top bit cannot be known until a carry has had the chance to ripple all the way up. Using Python's own `+` gives the right numbers, but it is not the circuit, and the count of adders shows it.
+  connections:
+    - text: |
+        Boolean algebra is the working mathematics of digital hardware. Every gate in a processor computes one of the functions of this lesson, and the software that turns a hardware design into a chip spends much of its effort on what you did by hand in the puzzle: finding a smaller formula with the same truth table, since every term saved is circuitry, power and delay saved. You will build gates from transistors in [[h1.logic-gates]]. In [[h1.adders-and-the-alu]] the full adder grows into the arithmetic unit of a processor, with a cleverer way of finding the carries than waiting for them to ripple.
+
+        It is also the mathematics of the operators in [[h0.bitwise-operations-and-masks]]. `x & y`, `x | y`, `x ^ y` and `~x` apply this lesson's operations to every bit position at once, so a single instruction does 64 of them. Every law here is a law about masks: `x & ~x` is 0, `x | (x & y)` is `x`, and `x ^ x` is 0, which is why compilers often clear a register by taking its exclusive or with itself.
+
+        The same laws will return in a third notation. In [[f2.sets-and-set-operations]], "and" becomes the members two sets share, "or" the members of either, "not" the members left out, 0 the empty set and 1 everything, and every law in the table above stays true. Machine learning has its own echo. A single artificial neuron is a threshold gate: it outputs 1 when a weighted sum of its inputs passes a threshold. With weights 1, 1 and 1 and threshold 2, it computes the majority function, the carry of a full adder. No choice of weights makes a single neuron compute exclusive or, the sum bit.
+
+        The algebra has a limit, and it is the same as the truth table's. It handles statements built from a fixed, finite list of propositions. "Every term of the sequence is positive" speaks about infinitely many terms at once, and no finite product can say it. The next lesson adds the two symbols that can, "for all" and "there exists", and De Morgan's laws are waiting there in a larger form: [[f2.quantifiers-and-their-negation]].

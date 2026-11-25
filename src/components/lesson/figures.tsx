@@ -1496,12 +1496,14 @@ function GrowthRates(props: Props) {
   );
 }
 
-function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ label, value, onChange, bits = false }: { label: string; value: boolean; onChange: (v: boolean) => void; bits?: boolean }) {
+  const shown = bits ? (value ? "1" : "0") : value ? "T" : "F";
+  // A digit is read out as text, so a bit's button names it, or its spoken name would not match what it shows.
   return (
     <span className="fig-stepper">
       <span className="label">{label}</span>
-      <button type="button" className="q-move" aria-label={`Switch ${label}`} aria-pressed={value} onClick={() => onChange(!value)}>
-        {value ? "T" : "F"}
+      <button type="button" className="q-move" aria-label={bits ? `Switch ${label}, ${shown}` : `Switch ${label}`} aria-pressed={value} onClick={() => onChange(!value)}>
+        {shown}
       </button>
     </span>
   );
@@ -1560,6 +1562,80 @@ function TruthTable(props: Props) {
             </g>
           );
         })}
+      </svg>
+    </Frame>
+  );
+}
+
+/** A full adder: two exclusive ors make the sum bit, and two ands and an or make the carry. */
+function FullAdder(props: Props) {
+  const [a, setA] = useState(props.a !== false);
+  const [b, setB] = useState(props.b !== false);
+  const [c, setC] = useState(props.carry === true);
+  const bit = (v: boolean) => (v ? 1 : 0);
+  const x = a !== b;
+  const both = a && b;
+  const passed = x && c;
+  const sum = x !== c;
+  const carry = both || passed;
+  const total = bit(a) + bit(b) + bit(c);
+  const wire = (v: boolean) => (v ? "fig-accent-line" : "fig-line");
+  const gates: { label: string; x: number; y: number; on: boolean }[] = [
+    { label: "a ⊕ b", x: 96, y: 56, on: x },
+    { label: "a ∧ b", x: 96, y: 136, on: both },
+    { label: "x ⊕ c", x: 236, y: 30, on: sum },
+    { label: "x ∧ c", x: 236, y: 196, on: passed },
+    { label: "∨", x: 330, y: 160, on: carry },
+  ];
+  const why = carry
+    ? both
+      ? "a and b are both 1, so they carry on their own."
+      : "a and b differ, so x is 1, and the carry coming in passes through."
+    : x
+      ? "Nothing carries: a and b differ, but no carry comes in to join them."
+      : both
+        ? ""
+        : "Nothing carries: a and b are not both 1, and x is 0, so no carry passes through.";
+  return (
+    <Frame
+      title="A full adder"
+      summary={`a is ${bit(a)}, b is ${bit(b)} and the carry in is ${bit(c)}. They add to ${total}, which is ${total.toString(2).padStart(2, "0")} in binary: sum bit ${bit(sum)}, carry out ${bit(carry)}. x = a ⊕ b is ${bit(x)}, and the sum bit is x ⊕ c. ${why}`}
+      controls={
+        <>
+          <Toggle label="a" value={a} onChange={setA} bits />
+          <Toggle label="b" value={b} onChange={setB} bits />
+          <Toggle label="carry in" value={c} onChange={setC} bits />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`A full adder built from gates, adding ${bit(a)}, ${bit(b)} and a carry of ${bit(c)} to give sum ${bit(sum)} and carry ${bit(carry)}`}>
+        <text x="4" y="38" className="fig-small">a = {bit(a)}</text>
+        <text x="4" y="108" className="fig-small">b = {bit(b)}</text>
+        <text x="4" y="214" className="fig-small">carry in c = {bit(c)}</text>
+        <path d="M 4 50 H 60 V 146 H 96 M 60 66 H 96" fill="none" className={wire(a)} />
+        <path d="M 4 120 H 78 V 166 H 96 M 78 120 V 86 H 96" fill="none" className={wire(b)} />
+        <path d="M 4 226 H 236 M 218 226 V 60 H 236" fill="none" className={wire(c)} />
+        <path d="M 172 76 H 200 V 40 H 236 M 200 76 V 206 H 236" fill="none" className={wire(x)} />
+        <text x="174" y="68" className="fig-small">x={bit(x)}</text>
+        <path d="M 172 156 H 318 V 170 H 330" fill="none" className={wire(both)} />
+        <path d="M 312 216 H 318 V 190 H 330" fill="none" className={wire(passed)} />
+        <path d="M 312 50 H 404" fill="none" className={wire(sum)} />
+        <path d="M 390 180 H 404" fill="none" className={wire(carry)} />
+        {gates.map((g) => (
+          <g key={g.label}>
+            <rect x={g.x} y={g.y} width={g.label === "∨" ? 60 : 76} height="40" rx="6" className={g.on ? "fig-accent" : "fig-fill"} />
+            <text x={g.x + (g.label === "∨" ? 30 : 38)} y={g.y + 26} textAnchor="middle" className="fig-mono" style={{ fontSize: 15, fill: g.on ? "var(--bg)" : "var(--text)" }}>
+              {g.label}
+            </text>
+          </g>
+        ))}
+        <text x="420" y="34" textAnchor="middle" className="fig-small">sum</text>
+        <text x="420" y="57" textAnchor="middle" className="fig-mono">{bit(sum)}</text>
+        <text x="418" y="164" textAnchor="middle" className="fig-small">carry</text>
+        <text x="420" y="187" textAnchor="middle" className="fig-mono">{bit(carry)}</text>
+        <text x="220" y="268" textAnchor="middle" className="fig-small">
+          {bit(a)} + {bit(b)} + {bit(c)} = {total} = binary {total.toString(2).padStart(2, "0")}: carry {bit(carry)}, sum {bit(sum)}
+        </text>
       </svg>
     </Frame>
   );
@@ -3813,6 +3889,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "call-stack": CallStack,
   "growth-rates": GrowthRates,
   "truth-table": TruthTable,
+  "full-adder": FullAdder,
   dominoes: Dominoes,
   "remainder-classes": RemainderClasses,
   "quantifier-grid": QuantifierGrid,
