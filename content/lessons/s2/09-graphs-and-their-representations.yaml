@@ -1,0 +1,573 @@
+concept: s2.graphs-and-their-representations
+minutes: 90
+claim: You can describe a network as a graph of nodes and edges, directed or not and weighted or not, count its edges from its degrees, store it as an edge list, an adjacency matrix or adjacency lists and say what each costs in space and in answering each question, and answer questions about neighbours and neighbours of neighbours from the right representation.
+recalls: [s2.tries]
+uses: [s2.hash-tables, s2.arrays-and-dynamic-arrays, s2.linked-lists, f2.relations-and-functions-between-sets, f2.sets-and-set-operations, s1.comprehensions-and-iterators, s0.dictionaries-and-sets, s0.lists-and-tuples, s0.loops, s0.functions]
+leads: [s2.union-find, f3.graph-theory-basics, f3.trees-and-their-properties, s3.breadth-first-and-depth-first-search, s3.shortest-paths, s3.topological-sort, s3.minimum-spanning-trees]
+starter: |
+  # Scratch space. Six friends in a hostel, and who is friends with whom.
+  friends = {
+      "Asha": ["Bilal", "Chitra"],
+      "Bilal": ["Asha", "Chitra", "Dev"],
+      "Chitra": ["Asha", "Bilal", "Esha"],
+      "Dev": ["Bilal", "Esha", "Farhan"],
+      "Esha": ["Chitra", "Dev", "Farhan"],
+      "Farhan": ["Dev", "Esha"],
+  }
+
+  # Who might Asha know? Friends of Asha's friends who are not already Asha's friends.
+  suggest = []
+  for friend in friends["Asha"]:
+      for other in friends[friend]:
+          if other != "Asha" and other not in friends["Asha"] and other not in suggest:
+              suggest.append(other)
+  print(suggest)
+parts:
+  recall:
+    - text: |
+        [[s2.tries]] stored words as paths from a root, and like every structure in this cluster it had exactly one route from the top to each item. Today the routes run in every direction, round in loops, with no top at all. Three quick pulls first.
+  puzzle:
+    - text: |
+        A messaging app in India has 50 crore users, and each has about a hundred contacts. Three questions are asked of it all day:
+
+        1. Is Kabir in Meena's contacts?
+        2. Who are all of Meena's contacts?
+        3. Whom might Meena know? Suggest the people who share the most contacts with Meena but are not yet among them.
+
+        One way to store "who is in whose contacts" is a vast table with a row and a column for every user, holding a 1 where the two are connected. The first question is then one look. But the table has $5 \times 10^8 \times 5 \times 10^8 = 2.5 \times 10^{17}$ cells. At one bit a cell that is over 31,000 terabytes, almost all of it recording that two strangers are strangers.
+
+        The other way is to keep, for each user, the list of their contacts. That is $5 \times 10^8 \times 100 = 5 \times 10^{10}$ entries, a five-millionth of the table. But now the first question means reading through Meena's list.
+
+        **How should a network be stored so that the questions you will ask are cheap, without paying for every pair that is not connected?** And what exactly does each question cost in each form?
+  intuition:
+    - text: |
+        An old road atlas of India has, at the back, a triangle of numbers: the distance by road between every pair of major cities. Find Chennai's row and Kolkata's column, and the number is there at once. It is quick to read and it covers every pair, but it grows with the square of the number of cities. A hundred cities need about five thousand numbers, even though most pairs have no direct road at all.
+
+        A railway timetable is organised the other way. Under each station it lists the stations the trains go to next. To see whether Itarsi is next to Bhopal you read Bhopal's short list. The book grows with the number of connections, not with the square of the number of stations.
+
+        And the railway also keeps a third record: a register of every stretch of track, one line per stretch, Bhopal to Itarsi, Itarsi to Nagpur, and so on. It is the plainest record of all, and the slowest to ask anything of.
+
+        These three are the three standard ways to store a network: a **matrix**, **lists of neighbours**, and a **list of edges**. The figure shows one small network stored as a table and as lists. Step through the nodes and compare each node's row with its list.
+    - figure: graph-storage
+      props: { node: 3 }
+    - text: |
+        C's row in the table has three 1s, under A, B and E, and C's list holds the same three names. The table spends 36 entries to record 8 edges. Sixteen of them are 1, because each edge is recorded from both of its ends, and the lists hold exactly those 16 names and nothing else. Make the edges one-way and each edge is recorded once: the table loses its mirror symmetry, and a node's list holds only the nodes it points to.
+  derivation:
+    - text: |
+        **Graphs.** A **graph** is a set $V$ of **nodes**, also called vertices, and a set $E$ of **edges**, each joining two nodes. In an **undirected** graph an edge has no direction, like a friendship or a two-way road. In a **directed** graph each edge, often called an arrow, goes from one node to another, like "follows" on a social site, a one-way street or a link from one web page to another. In a **weighted** graph each edge also carries a number, such as a distance, a fare or a time.
+
+        In the language of [[f2.relations-and-functions-between-sets]], a directed graph is just a relation on $V$: the set of pairs $(u, v)$ with an arrow from $u$ to $v$. An undirected graph is a symmetric relation, since if $u$ is joined to $v$ then $v$ is joined to $u$. We will assume no node is joined to itself and no two nodes are joined twice, which is the usual meaning of a **simple** graph.
+
+        Two nodes joined by an edge are **neighbours**, and the number of a node's neighbours is its **degree**. In a directed graph a node has an **out-degree**, the arrows leaving it, and an **in-degree**, the arrows arriving. A **path** is a sequence of nodes each joined to the next, its length is the number of edges crossed, and a path that returns to its start without reusing an edge is a **cycle**. An undirected graph is **connected** if every two nodes are joined by some path. The lists and trees of this cluster are graphs of special shapes: a tree is a connected graph with no cycle, which [[f3.trees-and-their-properties]] studies in depth.
+
+        **Counting edges from degrees.** Add up the degrees of all the nodes of an undirected graph. Each edge has two ends, and adds 1 to the degree of each, so each edge is counted exactly twice:
+
+        $$\sum_{v \in V} \deg(v) = 2\lvert E \rvert.$$
+
+        This is called the handshake lemma: at a wedding reception, the number of hands shaken, summed over every guest, is twice the number of handshakes. It has a surprising consequence. The sum is even, so the number of nodes with an **odd** degree must be even. Nobody can arrange a party where exactly one guest shakes an odd number of hands.
+
+        How many edges can a simple undirected graph on $n$ nodes have? Each node can be joined to at most $n - 1$ others, and the degrees then sum to $n(n - 1)$, so $\lvert E \rvert \le n(n - 1)/2$. A graph whose number of edges is near this is **dense**. Most real graphs are **sparse**: each node has a few neighbours, a hundred contacts out of 50 crore users, so the number of edges grows roughly in step with $n$, not with $n^2$. More of this counting, and much else about graphs, comes in [[f3.graph-theory-basics]].
+    - question:
+        id: derivation-handshake
+        type: numeric
+        system: s2
+        prompt: |
+          A network has 12 computers, and each is cabled directly to exactly 3 others. How many cables are there?
+        answer: "18"
+        explanation: |
+          The degrees add up to $12 \cdot 3 = 36$, and each cable is counted once from each end, so there are $36 / 2 = 18$ cables. Notice that 12 computers with 3 cables each is possible, but 11 computers with 3 cables each is not: the degrees would sum to 33, which is odd.
+    - text: |
+        **Three representations.** Here is the graph of the figure, with A to F standing for the six friends of the starter, in each form.
+
+        An **edge list** is a list of pairs:
+
+        ```python
+        edges = [("A", "B"), ("A", "C"), ("B", "C"), ("B", "D"),
+                 ("C", "E"), ("D", "E"), ("D", "F"), ("E", "F")]
+        ```
+
+        It takes room in proportion to $\lvert E \rvert$. To ask anything of it, such as the neighbours of C, you must read every pair. It is the natural form for a graph read from a file, and the right input for the method of the next lesson.
+
+        An **adjacency matrix** numbers the nodes $0$ to $n - 1$ and keeps an $n \times n$ table in which the entry in row $i$ and column $j$ is 1 if node $i$ is joined to node $j$, and 0 otherwise. For an undirected graph the table is symmetric about its diagonal.
+
+        ```python
+        names = ["A", "B", "C", "D", "E", "F"]
+        place = {}
+        for i, name in enumerate(names):
+            place[name] = i
+        matrix = [[0] * 6 for _ in range(6)]
+        for a, b in edges:
+            matrix[place[a]][place[b]] = 1
+            matrix[place[b]][place[a]] = 1
+        ```
+
+        Each row must be a separate list, which is why the comprehension builds a fresh `[0] * 6` for every row. Whether two nodes are joined is one look, at an address worked out as in [[s2.arrays-and-dynamic-arrays]]. But the table takes $n^2$ entries whatever the number of edges, and listing one node's neighbours means reading its whole row of $n$ entries to find the few that are 1.
+
+        **Adjacency lists** keep, for each node, the collection of its neighbours. A dictionary from each node to a list does it, or to a set, from [[s0.dictionaries-and-sets]], if the question "are these two joined?" is common:
+
+        ```python
+        links = {}
+        for name in names:
+            links[name] = set()
+        for a, b in edges:
+            links[a].add(b)
+            links[b].add(a)
+        ```
+
+        Every node appears as a key, even one with no neighbours, so that asking for its neighbours gives an empty set rather than an error. The lists hold $2\lvert E \rvert$ names for an undirected graph, by the handshake lemma, and the dictionary has $n$ keys, so the room taken grows with $n + \lvert E \rvert$.
+
+        | Question | Edge list | Adjacency matrix | Adjacency lists (sets) |
+        | --- | --- | --- | --- |
+        | room taken | $\lvert E \rvert$ | $n^2$ | $n + \lvert E \rvert$ |
+        | are $u$ and $v$ joined? | $\lvert E \rvert$ steps | one look | one look, on average |
+        | the neighbours of $u$ | $\lvert E \rvert$ steps | $n$ steps | $\deg(u)$ steps |
+        | add an edge | one step | one step | one step, on average |
+        | visit every edge | $\lvert E \rvert$ steps | $n^2$ steps | $n + \lvert E \rvert$ steps |
+
+        The last row is the one that matters most for the algorithms cluster. Searching a graph, finding shortest routes, ordering tasks: each visits every edge, so with lists they cost about $n + \lvert E \rvert$ steps, and with a matrix about $n^2$, which for a sparse graph is enormously more. So adjacency lists are the default, and the matrix is the choice for a dense graph, or when "are these two joined?" is nearly the only question. The matrix returns in linear algebra, where multiplying it by itself counts the paths between nodes.
+    - question:
+        id: derivation-row-cost
+        type: choice
+        system: s2
+        prompt: |
+          A road network has 10 lakh junctions, and each junction meets about 4 roads. Why is listing one junction's neighbours so much slower with an adjacency matrix than with adjacency lists?
+        options:
+          - "The matrix must read the junction's whole row, 10 lakh entries, to find the 4 that are 1; the list holds just the 4 neighbours."
+          - "The matrix stores each road twice, so it has twice as much to read."
+          - "Looking up an entry of a matrix takes logarithmic time."
+          - "It is not slower; both read 4 entries."
+        answer: 0
+        explanation: |
+          A matrix row has one entry for every junction, joined or not, so finding the neighbours means scanning $n$ entries. Adjacency lists hold only what exists, so the work is the degree. For a sparse graph that is the difference between 10 lakh steps and 4, at every junction a route planner visits. The matrix stores each road twice as well, but so do undirected lists; that is not where the difference lies.
+    - text: |
+        **Directed and weighted graphs.** For a directed graph, keep each node's **out**-neighbours: `follows["Ravi"]` lists the people Ravi follows. Asking whom Ravi follows is then cheap, but asking who follows Ravi means reading every list. If that question matters, keep a second dictionary of in-neighbours, the **reverse** graph, and update both together. For a weighted graph, map each neighbour to its weight with a dictionary of dictionaries:
+
+        ```python
+        roads = {
+            "Pune": {"Mumbai": 150, "Nashik": 210},
+            "Mumbai": {"Pune": 150, "Surat": 280},
+            "Nashik": {"Pune": 210},
+            "Surat": {"Mumbai": 280},
+        }
+        print(roads["Mumbai"]["Surat"])
+        ```
+
+        A weighted matrix stores the weight in place of the 1, with some special value, such as `None`, for "no edge".
+
+        **Graphs that are never stored.** Sometimes the neighbours of a node can be **worked out** whenever they are needed, and then nothing need be stored at all. The squares of a chessboard form a graph in which a knight's square is joined to the squares it can jump to. The positions of a puzzle, such as a Rubik's cube, form a graph in which each position is joined to those one twist away. The cube has more than $4 \times 10^{19}$ positions, far too many to store, yet a function `neighbours(position)` describes the graph completely. Such an **implicit graph** can still be searched, as you will see in [[s3.breadth-first-and-depth-first-search]].
+
+        **Questions one or two steps away.** With neighbours stored as sets, the operations of [[f2.sets-and-set-operations]] answer local questions directly. The **mutual friends** of two people are the intersection of their neighbour sets. The **friends of friends** of $u$ are the union of the neighbour sets of $u$'s neighbours, less $u$ and $u$'s own friends. Counting, for each friend of a friend, how many of $u$'s friends lead to them gives exactly the "people you may know" ranking of the puzzle. The cost is the sum of the degrees of $u$'s neighbours, a hundred lists of about a hundred, so about ten thousand steps, whatever the size of the whole network.
+
+        Questions about paths of any length, such as "can I get from here to there at all?" or "what is the shortest route?", need a search that may cross the whole graph, which is the business of [[s3.breadth-first-and-depth-first-search]], [[s3.shortest-paths]], [[s3.topological-sort]] and [[s3.minimum-spanning-trees]]. But one such question, whether two nodes are connected, has a remarkable answer when edges are only ever added and never removed, and it is the subject of the next lesson.
+  formal:
+    - text: |
+        **Graph.** A set $V$ of nodes and a set $E$ of edges. Undirected: each edge is an unordered pair of distinct nodes. Directed: each edge is an ordered pair. Weighted: each edge carries a number.
+
+        **Degree.** The number of neighbours of a node. In an undirected graph, $\sum_{v} \deg(v) = 2\lvert E \rvert$, so the number of odd-degree nodes is even, and a simple graph has $\lvert E \rvert \le n(n - 1)/2$.
+
+        **Edge list.** The edges as pairs. Room $\lvert E \rvert$.
+
+        **Adjacency matrix.** An $n \times n$ table with entry 1 where nodes $i$ and $j$ are joined. Room $n^2$; "joined?" in one look; neighbours in $n$ steps.
+
+        **Adjacency lists.** For each node, its neighbours. Room $n + \lvert E \rvert$; neighbours of $u$ in $\deg(u)$ steps; with sets, "joined?" in one look on average. The usual choice for sparse graphs.
+  drill:
+    - text: Seconds each. Count ends, rows and lists.
+    - question:
+        id: drill-degree-sum
+        type: numeric
+        system: s1
+        prompt: |
+          An undirected graph has 9 edges. What do the degrees of all its nodes add up to?
+        answer: "18"
+        explanation: Each edge adds 1 to the degree of each of its two ends.
+    - question:
+        id: drill-max-edges
+        type: numeric
+        system: s1
+        prompt: |
+          At most how many edges can a simple undirected graph on 10 nodes have?
+        answer: "45"
+        explanation: $10 \cdot 9 / 2 = 45$, when every node is joined to every other.
+    - question:
+        id: drill-matrix-size
+        type: numeric
+        system: s1
+        prompt: |
+          How many entries has the adjacency matrix of a graph with 7 nodes?
+        answer: "49"
+        explanation: One for every ordered pair of nodes, $7 \times 7$, whether or not they are joined.
+    - question:
+        id: drill-list-size
+        type: numeric
+        system: s1
+        prompt: |
+          An undirected graph has 7 nodes and 10 edges, stored as adjacency lists. How many names do the lists hold in all?
+        answer: "20"
+        explanation: Each edge appears in the lists of both its ends.
+    - question:
+        id: drill-odd
+        type: choice
+        system: s1
+        prompt: |
+          Which of these could be the degrees of the nodes of an undirected graph?
+        options: ["3, 3, 2, 2", "3, 2, 2, 2", "3, 3, 3, 2", "1, 2, 2, 2"]
+        answer: 0
+        explanation: The degrees must add up to an even number, twice the number of edges. Only 3, 3, 2, 2 does, adding to 10 for 5 edges; for example, two nodes joined to each other and to both of the other two, which are not joined to each other.
+    - question:
+        id: drill-symmetric
+        type: choice
+        system: s1
+        prompt: |
+          Why is the adjacency matrix of an undirected graph symmetric, with the entry in row $i$, column $j$ equal to the one in row $j$, column $i$?
+        options: ["If $i$ is joined to $j$, then $j$ is joined to $i$", "Because every node has the same degree", "Because the nodes are numbered in order", "It is not; only directed graphs have symmetric matrices"]
+        answer: 0
+        explanation: An undirected edge has no direction, so it is recorded in both places.
+    - question:
+        id: drill-out-degree
+        type: numeric
+        system: s1
+        prompt: |
+          A directed graph has arrows A to B, A to C, B to C, C to A and D to C. What is the in-degree of C?
+        answer: "3"
+        explanation: Arrows arrive at C from A, B and D. Its out-degree is 1, the arrow to A.
+    - question:
+        id: predict-build
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          edges = [("Pune", "Mumbai"), ("Pune", "Nashik"), ("Mumbai", "Surat")]
+          links = {}
+          for a, b in edges:
+              if a not in links:
+                  links[a] = []
+              if b not in links:
+                  links[b] = []
+              links[a].append(b)
+              links[b].append(a)
+          print(links["Mumbai"], len(links))
+        output: "['Pune', 'Surat'] 4"
+        explanation: Mumbai is joined to Pune by the first pair and to Surat by the third, in that order. Four different cities appear, so the dictionary has four keys.
+    - question:
+        id: predict-followers
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          follows = {"Ravi": ["Meena", "Kabir"], "Meena": ["Kabir"], "Kabir": ["Ravi"], "Tara": ["Kabir", "Meena"]}
+          followers = {}
+          for person in follows:
+              followers[person] = 0
+          for person in follows:
+              for other in follows[person]:
+                  followers[other] += 1
+          print(followers["Kabir"], followers["Tara"])
+        output: "3 0"
+        explanation: Kabir appears in the lists of Ravi, Meena and Tara, so three people follow Kabir. Tara appears in nobody's list. Counting in-degrees meant reading every list, because the lists record only who each person follows.
+  work:
+    - text: Slower now. For each representation, say what it costs in room, and what each question costs to answer.
+    - question:
+        id: write-adjacency
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `adjacency(nodes, edges)` for an undirected graph. `nodes` lists every node, and `edges` is a list of pairs. Return a dictionary that maps **every** node, including any with no edges, to the set of its neighbours.
+        starter: |
+          def adjacency(nodes, edges):
+              return {}
+
+          links = adjacency(["A", "B", "C", "D", "E", "F", "G"],
+                            [("A", "B"), ("A", "C"), ("B", "C"), ("B", "D"),
+                             ("C", "E"), ("D", "E"), ("D", "F"), ("E", "F")])
+          print(sorted(links["C"]), sorted(links["G"]), sum(len(links[n]) for n in links))
+        solution: |
+          def adjacency(nodes, edges):
+              links = {}
+              for node in nodes:
+                  links[node] = set()
+              for a, b in edges:
+                  links[a].add(b)
+                  links[b].add(a)
+              return links
+
+          links = adjacency(["A", "B", "C", "D", "E", "F", "G"],
+                            [("A", "B"), ("A", "C"), ("B", "C"), ("B", "D"),
+                             ("C", "E"), ("D", "E"), ("D", "F"), ("E", "F")])
+          print(sorted(links["C"]), sorted(links["G"]), sum(len(links[n]) for n in links))
+        tests: |
+          import random
+          random.seed(23)
+          for _trial in range(100):
+              _n = random.randint(1, 9)
+              _nodes = [str(_i) for _i in range(_n)]
+              _pairs = [(_a, _b) for _a in _nodes for _b in _nodes if _a < _b]
+              _edges = random.sample(_pairs, random.randint(0, len(_pairs)))
+              _got = adjacency(_nodes, _edges)
+              assert sorted(_got) == sorted(_nodes), "Every node should be a key, including those with no edges: expected keys " + str(sorted(_nodes)) + ", got " + str(sorted(_got))
+              for _v in _nodes:
+                  _want = set([_b for _a, _b in _edges if _a == _v] + [_a for _a, _b in _edges if _b == _v])
+                  assert set(_got[_v]) == _want, "With edges " + str(_edges) + ", node " + _v + " should have neighbours " + str(sorted(_want)) + ", not " + str(sorted(_got[_v]))
+          _g = adjacency(["X", "Y"], [("X", "Y")])
+          assert isinstance(_g["X"], set), "Map each node to a set of neighbours"
+          assert output.strip() == "['A', 'B', 'E'] [] 16", "The program should print ['A', 'B', 'E'] [] 16"
+        wrong:
+          - |
+            def adjacency(nodes, edges):
+                links = {}
+                for node in nodes:
+                    links[node] = set()
+                for a, b in edges:
+                    links[a].add(b)
+                return links
+
+            print(['A', 'B', 'E'], [], 16)
+          - |
+            def adjacency(nodes, edges):
+                links = {}
+                for a, b in edges:
+                    if a not in links:
+                        links[a] = set()
+                    if b not in links:
+                        links[b] = set()
+                    links[a].add(b)
+                    links[b].add(a)
+                return links
+
+            print(['A', 'B', 'E'], [], 16)
+        explanation: |
+          Start by giving every node an empty set, so that a node with no edges, like G, is still present and has no neighbours rather than being missing. Then each undirected edge must be recorded from both of its ends, or half the neighbours are lost. The neighbour sets then hold 16 names for the 8 edges, twice as many, as the handshake lemma says they must.
+    - question:
+        id: fix-matrix
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `matrix(names, edges)` should build the adjacency matrix of an undirected graph. For the path A, B, C, D it should print four different rows, starting `[0, 1, 0, 0]`. It prints `[1, 1, 1, 1]` four times. Find the fault and fix it.
+        starter: |
+          def matrix(names, edges):
+              n = len(names)
+              place = {}
+              for i, name in enumerate(names):
+                  place[name] = i
+              table = [[0] * n] * n
+              for a, b in edges:
+                  table[place[a]][place[b]] = 1
+                  table[place[b]][place[a]] = 1
+              return table
+
+          for row in matrix(["A", "B", "C", "D"], [("A", "B"), ("B", "C"), ("C", "D")]):
+              print(row)
+        solution: |
+          def matrix(names, edges):
+              n = len(names)
+              place = {}
+              for i, name in enumerate(names):
+                  place[name] = i
+              table = [[0] * n for _ in range(n)]
+              for a, b in edges:
+                  table[place[a]][place[b]] = 1
+                  table[place[b]][place[a]] = 1
+              return table
+
+          for row in matrix(["A", "B", "C", "D"], [("A", "B"), ("B", "C"), ("C", "D")]):
+              print(row)
+        tests: |
+          import random
+          random.seed(29)
+          for _trial in range(60):
+              _n = random.randint(1, 7)
+              _names = [chr(65 + _i) for _i in range(_n)]
+              _pairs = [(_a, _b) for _a in _names for _b in _names if _a < _b]
+              _edges = random.sample(_pairs, random.randint(0, len(_pairs)))
+              _t = matrix(_names, _edges)
+              assert len(_t) == _n and all(len(_r) == _n for _r in _t), "The matrix should have " + str(_n) + " rows of " + str(_n) + " entries"
+              for _i in range(_n):
+                  for _j in range(_n):
+                      _want = 1 if (_names[_i], _names[_j]) in _edges or (_names[_j], _names[_i]) in _edges else 0
+                      assert _t[_i][_j] == _want, "With edges " + str(_edges) + ", the entry for " + _names[_i] + " and " + _names[_j] + " should be " + str(_want)
+          _t = matrix(["A", "B", "C"], [])
+          _t[0][1] = 5
+          assert _t[1][1] == 0, "Each row should be a separate list: changing one row changed another"
+          assert output.strip() == "[0, 1, 0, 0]\n[1, 0, 1, 0]\n[0, 1, 0, 1]\n[0, 0, 1, 0]", "The program should print the four rows of the path A, B, C, D"
+        wrong:
+          - |
+            def matrix(names, edges):
+                n = len(names)
+                place = {}
+                for i, name in enumerate(names):
+                    place[name] = i
+                row = [0] * n
+                table = []
+                for _ in range(n):
+                    table.append(row)
+                for a, b in edges:
+                    table[place[a]][place[b]] = 1
+                    table[place[b]][place[a]] = 1
+                return table
+
+            print([0, 1, 0, 0])
+            print([1, 0, 1, 0])
+            print([0, 1, 0, 1])
+            print([0, 0, 1, 0])
+          - |
+            def matrix(names, edges):
+                n = len(names)
+                place = {}
+                for i, name in enumerate(names):
+                    place[name] = i
+                table = [[0] * n for _ in range(n)]
+                for a, b in edges:
+                    table[place[a]][place[b]] = 1
+                return table
+
+            print([0, 1, 0, 0])
+            print([1, 0, 1, 0])
+            print([0, 1, 0, 1])
+            print([0, 0, 1, 0])
+        explanation: |
+          `[[0] * n] * n` makes **one** row and a list holding $n$ references to that same row, just as two names can refer to one list. Every write, to any row, lands in the same list, so all four rows show every 1 ever written. The comprehension `[[0] * n for _ in range(n)]` evaluates `[0] * n` afresh for each row, making $n$ separate lists. Appending the same row object $n$ times has the same fault. Each undirected edge must also be written in both places, or the table loses its symmetry.
+    - question:
+        id: write-suggest
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `suggestions(friends, person)`. `friends` maps each person to the set of their friends, and friendship goes both ways. Return the friends of `person`'s friends who are neither `person` nor already `person`'s friends, ranked by how many of `person`'s friends they are friends with, most first. Break ties alphabetically.
+        starter: |
+          def suggestions(friends, person):
+              return []
+
+          friends = {
+              "Asha": {"Bilal", "Chitra", "Dev"},
+              "Bilal": {"Asha", "Esha", "Farhan"},
+              "Chitra": {"Asha", "Esha", "Gopal"},
+              "Dev": {"Asha", "Esha"},
+              "Esha": {"Bilal", "Chitra", "Dev"},
+              "Farhan": {"Bilal"},
+              "Gopal": {"Chitra"},
+          }
+          print(suggestions(friends, "Asha"), suggestions(friends, "Farhan"))
+        solution: |
+          def suggestions(friends, person):
+              mutual = {}
+              for friend in friends[person]:
+                  for other in friends[friend]:
+                      if other != person and other not in friends[person]:
+                          mutual[other] = mutual.get(other, 0) + 1
+              ranked = sorted((-count, name) for name, count in mutual.items())
+              return [name for _, name in ranked]
+
+          friends = {
+              "Asha": {"Bilal", "Chitra", "Dev"},
+              "Bilal": {"Asha", "Esha", "Farhan"},
+              "Chitra": {"Asha", "Esha", "Gopal"},
+              "Dev": {"Asha", "Esha"},
+              "Esha": {"Bilal", "Chitra", "Dev"},
+              "Farhan": {"Bilal"},
+              "Gopal": {"Chitra"},
+          }
+          print(suggestions(friends, "Asha"), suggestions(friends, "Farhan"))
+        tests: |
+          import random
+          random.seed(31)
+          for _trial in range(150):
+              _n = random.randint(2, 9)
+              _people = ["P" + str(_i) for _i in range(_n)]
+              _g = {}
+              for _p in _people:
+                  _g[_p] = set()
+              for _a in _people:
+                  for _b in _people:
+                      if _a < _b and random.random() < 0.35:
+                          _g[_a].add(_b)
+                          _g[_b].add(_a)
+              _who = random.choice(_people)
+              _counts = {}
+              for _f in _g[_who]:
+                  for _o in _g[_f]:
+                      if _o != _who and _o not in _g[_who]:
+                          _counts[_o] = _counts.get(_o, 0) + 1
+              _want = [_name for _c, _name in sorted((-_c, _name) for _name, _c in _counts.items())]
+              _got = suggestions(_g, _who)
+              assert _got == _want, "For " + _who + " in " + str({_k: sorted(_v) for _k, _v in _g.items()}) + ", the suggestions should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "['Esha', 'Farhan', 'Gopal'] ['Asha', 'Esha']", "The program should print ['Esha', 'Farhan', 'Gopal'] ['Asha', 'Esha']"
+        wrong:
+          - |
+            def suggestions(friends, person):
+                mutual = {}
+                for friend in friends[person]:
+                    for other in friends[friend]:
+                        if other != person:
+                            mutual[other] = mutual.get(other, 0) + 1
+                ranked = sorted((-count, name) for name, count in mutual.items())
+                return [name for _, name in ranked]
+
+            print(['Esha', 'Farhan', 'Gopal'], ['Asha', 'Esha'])
+          - |
+            def suggestions(friends, person):
+                mutual = {}
+                for friend in friends[person]:
+                    for other in friends[friend]:
+                        if other != person and other not in friends[person]:
+                            mutual[other] = mutual.get(other, 0) + 1
+                return sorted(mutual)
+
+            print(['Esha', 'Farhan', 'Gopal'], ['Asha', 'Esha'])
+          - |
+            def suggestions(friends, person):
+                mutual = {}
+                for friend in friends[person]:
+                    for other in friends[friend]:
+                        if other not in friends[person]:
+                            mutual[other] = mutual.get(other, 0) + 1
+                ranked = sorted((-count, name) for name, count in mutual.items())
+                return [name for _, name in ranked]
+
+            print(['Esha', 'Farhan', 'Gopal'], ['Asha', 'Esha'])
+        explanation: |
+          Walk two steps: for each friend, for each of that friend's friends. Every time you arrive at someone, one more of `person`'s friends knows them, so count arrivals in a dictionary. Skip `person`, whom every friend leads back to, and anyone already a friend. To rank, sort pairs whose first item is the **negated** count, so that larger counts come first, and whose second is the name, which breaks ties alphabetically. The work is the sum of the degrees of `person`'s friends, however large the whole network.
+    - question:
+        id: work-space
+        type: numeric
+        system: s2
+        prompt: |
+          A network has 1 crore users, and each has exactly 100 friends. The adjacency matrix has one entry for every ordered pair of users; the adjacency lists hold one name for each friend of each user. How many times more entries has the matrix than the lists?
+        answer: "100000"
+        explanation: |
+          The matrix has $(10^7)^2 = 10^{14}$ entries. The lists hold $10^7 \times 100 = 10^9$ names. The matrix is larger by $10^{14} / 10^9 = 10^5$, a factor of a lakh, and all of the difference is entries saying that two people are not friends.
+    - question:
+        id: work-which-form
+        type: choice
+        system: s2
+        prompt: |
+          An airline's computer holds 200 airports, and there is a direct flight between almost every pair. Nearly every question it is asked is "is there a direct flight from X to Y?", millions of times a day. Which representation fits best?
+        options:
+          - "An adjacency matrix: with almost every pair joined it wastes little room, and each question is one look."
+          - "An edge list, because it is the simplest."
+          - "Adjacency lists, because they are always the better choice."
+          - "No stored representation: work out the flights each time from a function."
+        answer: 0
+        explanation: |
+          This graph is dense, with close to $200 \cdot 199 / 2 = 19{,}900$ edges, so the matrix's $40{,}000$ entries are mostly 1s and waste little room. And the question asked is exactly the one a matrix answers in one look. Adjacency sets would also answer it quickly, but lists would need a scan, and an edge list would need a scan of everything. Adjacency lists are the usual choice for sparse graphs, not for every graph.
+    - question:
+        id: work-followers
+        type: choice
+        system: s2
+        prompt: |
+          A photo-sharing site stores, for each user, the set of accounts that user follows. A new feature must show any user, instantly, who follows them. What should the site do?
+        options:
+          - "Also store, for each user, the set of their followers, the reverse graph, and update both sets whenever someone follows or unfollows."
+          - "Read every user's set of follows each time the feature is used."
+          - "Switch to an adjacency matrix of all users."
+          - "Make the graph undirected, so that following becomes mutual."
+        answer: 0
+        explanation: |
+          With out-sets only, finding followers means reading every user's set, which touches the whole network for one question. Keeping the in-sets as well doubles the room, $2\lvert E \rvert$ names in all, and makes each follow or unfollow two updates, but answers the question in steps proportional to the number of followers. A matrix of every user would be impossibly large for a sparse graph, and making following mutual would change what the site means.
+  connections:
+    - text: |
+        The puzzle asked how to store a network so that its questions are cheap without paying for every unconnected pair. A graph can be stored three ways. An edge list is the plainest and answers nothing quickly. An adjacency matrix answers "are these two joined?" in one look but takes room for every pair, $n^2$, and needs $n$ steps to list anyone's neighbours. Adjacency lists, a dictionary from each node to the set of its neighbours, take room in proportion to $n + \lvert E \rvert$ and list a node's neighbours in steps proportional to its degree; with sets they answer "joined?" in one look on average too. For the messaging app's sparse network of 50 crore users the lists are the only sensible choice, and "people you may know" is a walk of two steps through them.
+
+        The handshake lemma, that the degrees add up to twice the number of edges, is the first theorem of graph theory, and the reason adjacency lists hold $2\lvert E \rvert$ names. Graphs model roads and railways, friendships and followers, web pages and their links, tasks and what they depend on, molecules, circuits, and the layers of a neural network. Most of the algorithms cluster is about searching them, which [[s3.breadth-first-and-depth-first-search]] begins.
+
+        One question about a graph can be answered without any search, if the graph only ever gains edges. Villages are linked by new roads one at a time, and after each new road someone asks: can these two villages now reach each other? Searching the whole road network after every new road is far too slow. The next lesson keeps, for each village, a pointer towards a representative of its connected piece, and answers in a few steps: [[s2.union-find]].

@@ -2872,6 +2872,184 @@ function Trie(props: Props) {
   );
 }
 
+const STORE_SPOTS: Record<string, Spot> = { A: [36, 70], B: [126, 40], C: [84, 150], D: [196, 106], E: [146, 206], F: [204, 196] };
+const STORE_NAMES = Object.keys(STORE_SPOTS);
+const STORE_EDGES: [string, string][] = [
+  ["A", "B"],
+  ["A", "C"],
+  ["B", "C"],
+  ["B", "D"],
+  ["C", "E"],
+  ["D", "E"],
+  ["D", "F"],
+  ["E", "F"],
+];
+
+/** One small graph stored two ways, as a table of 0s and 1s and as a list of neighbours for each node, with one node's row and list picked out. */
+function GraphStorage(props: Props) {
+  const [directed, setDirected] = useState(props.directed === true);
+  const [at, setAt] = useState(clamp(Math.round(num(props.node, 3)), 1, STORE_NAMES.length) - 1);
+  const joined = (a: string, b: string) => STORE_EDGES.some(([p, q]) => (p === a && q === b) || (!directed && p === b && q === a));
+  const table = STORE_NAMES.map((a) => STORE_NAMES.map((b) => (joined(a, b) ? 1 : 0)));
+  const lists = STORE_NAMES.map((a) => STORE_NAMES.filter((b) => joined(a, b)));
+  const name = STORE_NAMES[at];
+  const mine = lists[at];
+  const ones = table.flat().filter((v) => v === 1).length;
+  const into = STORE_NAMES.filter((b) => joined(b, name));
+  const entries = STORE_NAMES.length ** 2;
+  return (
+    <Frame
+      title="A graph as a table and as lists"
+      summary={`The graph has ${STORE_NAMES.length} nodes and ${STORE_EDGES.length} ${directed ? "arrows" : "edges"}. ${
+        directed
+          ? `${name} has arrows out to ${mine.length > 0 ? mine.join(", ") : "nowhere"} and arrows in from ${into.length > 0 ? into.join(", ") : "nowhere"}, so its out-degree is ${mine.length} and its in-degree is ${into.length}.`
+          : `${name} has degree ${mine.length}: its neighbours are ${mine.join(", ")}.`
+      } In the table, row ${name} has ${plural(mine.length, "1")} among its ${STORE_NAMES.length} entries. In the lists, ${name}'s list has ${plural(mine.length, "name")}. The whole table has ${entries} entries, of which ${ones} are 1${
+        directed ? ", one for each arrow" : ", two for each edge, since each edge is recorded from both ends"
+      }; the lists hold ${ones} names in all.`}
+      controls={
+        <>
+          <Stepper label="node" value={at + 1} onChange={(v) => setAt(v - 1)} min={1} max={STORE_NAMES.length} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setDirected(!directed)}>
+            {directed ? "Make the edges two-way" : "Make the edges one-way"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`A graph of ${STORE_NAMES.length} nodes beside its table of 0s and 1s, with node ${name}, its row and its list picked out`}>
+        {STORE_EDGES.map(([a, b]) => (
+          <Link key={a + b} from={STORE_SPOTS[a]} to={STORE_SPOTS[b]} arrow={directed} hot={a === name || (!directed && b === name)} />
+        ))}
+        {STORE_NAMES.map((n) => (
+          <Dot key={n} at={STORE_SPOTS[n]} name={n} mark={n === name ? "now" : mine.includes(n) ? "done" : "wait"} />
+        ))}
+        {STORE_NAMES.map((n, j) => (
+          <text key={"col" + n} x={258 + j * 28 + 12} y="30" textAnchor="middle" className="fig-small">
+            {n}
+          </text>
+        ))}
+        {table.map((row, i) => (
+          <g key={"row" + i}>
+            <text x="244" y={56 + i * 30} className="fig-small">
+              {STORE_NAMES[i]}
+            </text>
+            <Cells values={row} x={258} y={38 + i * 30} w={28} h={26} hot={i === at ? row.map((v, j) => (v === 1 ? j : -1)).filter((j) => j >= 0) : []} faint={i === at ? [] : row.map((_, j) => j)} />
+          </g>
+        ))}
+        {[0, 3].map((first) => (
+          <text key={"lists" + first} x="12" y={first === 0 ? 240 : 258} className="fig-small">
+            {STORE_NAMES.slice(first, first + 3)
+              .map((n, i) => `${n}: ${lists[first + i].join(" ") || "nothing"}`)
+              .join("     ")}
+          </text>
+        ))}
+        <text x="12" y="282" className="fig-mono">
+          {`${name}: [${mine.join(", ")}]`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const UNION_JOINS: [number, number][] = [
+  [0, 1],
+  [1, 2],
+  [2, 3],
+  [4, 5],
+  [5, 6],
+  [3, 6],
+  [6, 7],
+];
+
+/** Eight items joined into sets one pair at a time, each set a tree of pointers to a root, with or without joining the smaller tree under the larger, and the path a find follows. */
+function UnionFind(props: Props) {
+  const [joins, setJoins] = useState(clamp(Math.round(num(props.joins, UNION_JOINS.length)), 0, UNION_JOINS.length));
+  const [bySize, setBySize] = useState(props.bySize === true);
+  const [target, setTarget] = useState(clamp(Math.round(num(props.find, 0)), 0, 7));
+  const parent = Array.from({ length: 8 }, (_, i) => i);
+  const size = Array(8).fill(1) as number[];
+  const root = (x: number) => {
+    while (parent[x] !== x) x = parent[x];
+    return x;
+  };
+  for (const [a, b] of UNION_JOINS.slice(0, joins)) {
+    let [ra, rb] = [root(a), root(b)];
+    if (ra === rb) continue;
+    if (bySize && size[ra] > size[rb]) [ra, rb] = [rb, ra];
+    parent[ra] = rb;
+    size[rb] += size[ra];
+  }
+  const depth = (x: number) => {
+    let d = 0;
+    while (parent[x] !== x) {
+      x = parent[x];
+      d += 1;
+    }
+    return d;
+  };
+  const path = [target];
+  while (parent[path[path.length - 1]] !== path[path.length - 1]) path.push(parent[path[path.length - 1]]);
+  const roots = parent.map((p, i) => (p === i ? i : -1)).filter((i) => i >= 0);
+  const kids = (x: number) => parent.map((p, i) => (p === x && i !== x ? i : -1)).filter((i) => i >= 0);
+  const members = (r: number) => parent.map((_, i) => i).filter((i) => root(i) === r);
+  const tallest = Math.max(...parent.map((_, i) => depth(i)));
+  const rise = Math.min(44, 176 / Math.max(tallest, 1));
+  const spots = new Map<number, Spot>();
+  let column = 0;
+  const lay = (x: number, d: number): number => {
+    const below = kids(x);
+    let at: number;
+    if (below.length === 0) {
+      at = 30 + column * 54;
+      column += 1;
+    } else {
+      const xs = below.map((k) => lay(k, d + 1));
+      at = (xs[0] + xs[xs.length - 1]) / 2;
+    }
+    spots.set(x, [at, 26 + d * rise]);
+    return at;
+  };
+  roots.forEach((r) => lay(r, 0));
+  const shown = UNION_JOINS.slice(0, joins).map(([a, b]) => `(${a}, ${b})`);
+  return (
+    <Frame
+      title="Sets as trees of pointers"
+      summary={`${joins === 0 ? "No joins yet, so each of the 8 items is a set on its own." : `After ${plural(joins, "join")}, ${shown.join(", ")}, ${bySize ? "each pointing the root of the smaller tree at the root of the larger" : "each pointing the root of the first item's tree at the root of the second's"}, the 8 items form ${plural(roots.length, "set")}: ${roots.map((r) => `{${members(r).join(", ")}}`).join(", ")}.`} Each set is a tree whose root names it, and the list underneath holds parent[i], the item that i points to; a root points to itself. The tallest tree has height ${tallest}. find(${target}) follows ${plural(path.length - 1, "link")} from ${target}${path.length > 1 ? `, through ${path.slice(1).join(", ")}` : ""}, and reaches the root ${path[path.length - 1]}.`}
+      controls={
+        <>
+          <Stepper label="joins" value={joins} onChange={setJoins} min={0} max={UNION_JOINS.length} />
+          <Stepper label="find" value={target} onChange={setTarget} min={0} max={7} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setBySize(!bySize)}>
+            {bySize ? "Join without looking at size" : "Join the smaller under the larger"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 300" role="img" aria-label={`8 items in ${plural(roots.length, "set")}, drawn as trees of height at most ${tallest}, with the path of find(${target}) marked`}>
+        {parent.map((p, i) =>
+          p === i ? null : <Link key={"up" + i} from={spots.get(i)!} to={spots.get(p)!} arrow gap={14} hot={path.includes(i) && path.includes(p)} />,
+        )}
+        {parent.map((_, i) => {
+          const at = spots.get(i)!;
+          const on = path.includes(i);
+          return (
+            <g key={"item" + i}>
+              <circle cx={at[0]} cy={at[1]} r="12" className={on ? "fig-accent" : parent[i] === i ? "fig-fill" : "fig-ghost"} />
+              <text x={at[0]} y={at[1] + 4} textAnchor="middle" className="fig-small" style={{ fill: on ? "var(--bg)" : "var(--text)" }}>
+                {i}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="234" className="fig-small">
+          parent:
+        </text>
+        <Cells values={parent} x={12} y={242} w={52} h={28} hot={path.length > 1 ? path.slice(0, -1) : []} under={(i) => String(i)} />
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -4151,6 +4329,8 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   heap: Heap,
   "search-tree": SearchTree,
   trie: Trie,
+  "graph-storage": GraphStorage,
+  "union-find": UnionFind,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
