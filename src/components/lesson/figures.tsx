@@ -2631,6 +2631,129 @@ function Heap() {
   );
 }
 
+type TreeNode = { key: number; left: TreeNode | null; right: TreeNode | null; height: number };
+const levels = (t: TreeNode | null): number => (t ? t.height : 0);
+const treeNode = (key: number, left: TreeNode | null, right: TreeNode | null): TreeNode => ({ key, left, right, height: 1 + Math.max(levels(left), levels(right)) });
+const turnRight = (t: TreeNode) => treeNode(t.left!.key, t.left!.left, treeNode(t.key, t.left!.right, t.right));
+const turnLeft = (t: TreeNode) => treeNode(t.right!.key, treeNode(t.key, t.left, t.right!.left), t.right!.right);
+
+/** Inserts a key as a binary search tree does, and, if asked, restores the AVL balance on the way back up, counting the rotations. */
+function treeInsert(t: TreeNode | null, key: number, balance: boolean, turns: { count: number }): TreeNode {
+  if (!t) return treeNode(key, null, null);
+  if (key === t.key) return t;
+  let next = key < t.key ? treeNode(t.key, treeInsert(t.left, key, balance, turns), t.right) : treeNode(t.key, t.left, treeInsert(t.right, key, balance, turns));
+  if (!balance) return next;
+  const lean = levels(next.left) - levels(next.right);
+  if (lean > 1) {
+    if (key > next.left!.key) {
+      next = treeNode(next.key, turnLeft(next.left!), next.right);
+      turns.count += 1;
+    }
+    turns.count += 1;
+    return turnRight(next);
+  }
+  if (lean < -1) {
+    if (key < next.right!.key) {
+      next = treeNode(next.key, next.left, turnRight(next.right!));
+      turns.count += 1;
+    }
+    turns.count += 1;
+    return turnLeft(next);
+  }
+  return next;
+}
+
+const TREE_KEYS = [50, 30, 70, 20, 40, 60, 80, 35, 65, 10, 90, 45, 55, 75, 25];
+
+/** A binary search tree built by inserting keys one at a time, in the order given or in sorted order, with or without rebalancing, and the path a search takes. */
+function SearchTree(props: Props) {
+  const given = Array.isArray(props.keys) && props.keys.every((k) => typeof k === "number") && props.keys.length > 0 ? (props.keys as number[]).slice(0, 15) : TREE_KEYS;
+  const [count, setCount] = useState(clamp(Math.round(num(props.count, given.length)), 1, given.length));
+  const [sorted, setSorted] = useState(props.sorted === true);
+  const [balance, setBalance] = useState(props.balance === true);
+  const [target, setTarget] = useState(clamp(Math.round(num(props.target, 45) / 5) * 5, 0, 100));
+  const offerBalance = typeof props.balance === "boolean";
+  const order = sorted ? [...given.slice(0, count)].sort((a, b) => a - b) : given.slice(0, count);
+  const turns = { count: 0 };
+  let root: TreeNode | null = null;
+  for (const key of order) root = treeInsert(root, key, balance, turns);
+  const height = levels(root) - 1;
+  const path: number[] = [];
+  let node = root;
+  while (node && node.key !== target) {
+    path.push(node.key);
+    node = target < node.key ? node.left : node.right;
+  }
+  const found = node !== null;
+  if (node) path.push(node.key);
+  const placed: { key: number; at: Spot; parent: Spot | null }[] = [];
+  let column = 0;
+  const step = order.length > 1 ? 400 / (order.length - 1) : 0;
+  const rise = Math.min(48, 236 / Math.max(height, 1));
+  const lay = (t: TreeNode | null, depth: number, parent: Spot | null) => {
+    if (!t) return;
+    const index = placed.length;
+    placed.push({ key: t.key, at: [0, 0], parent });
+    lay(t.left, depth + 1, null);
+    const at: Spot = [order.length > 1 ? 20 + column * step : 220, 24 + depth * rise];
+    column += 1;
+    placed[index].at = at;
+    lay(t.right, depth + 1, null);
+  };
+  lay(root, 0, null);
+  const where = new Map(placed.map((p) => [p.key, p.at]));
+  const edges: { from: Spot; to: Spot; on: boolean }[] = [];
+  const collect = (t: TreeNode | null) => {
+    if (!t) return;
+    for (const child of [t.left, t.right]) {
+      if (child) {
+        edges.push({ from: where.get(t.key)!, to: where.get(child.key)!, on: path.includes(t.key) && path.includes(child.key) });
+        collect(child);
+      }
+    }
+  };
+  collect(root);
+  return (
+    <Frame
+      title="A binary search tree"
+      summary={`Inserting ${order.join(", ")} in that order${balance ? ", rebalancing after each insertion," : ""} gives a tree of height ${height}: its deepest key is ${plural(height, "link")} below the root${
+        balance ? `, and ${plural(turns.count, "rotation was", "rotations were")} needed along the way` : ""
+      }. Read from left to right, the keys are in increasing order. Searching for ${target} compares it with ${path.join(", ")} and ${found ? "finds it" : "reaches an empty place, so it is not in the tree"}: ${plural(path.length, "comparison")}.`}
+      controls={
+        <>
+          <Stepper label="keys" value={count} onChange={setCount} min={1} max={given.length} />
+          <Slider label="search for" value={target} onChange={setTarget} min={0} max={100} step={5} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setSorted(!sorted)}>
+            {sorted ? "Insert in the order given" : "Insert in sorted order"}
+          </button>
+          {offerBalance ? (
+            <button type="button" className="btn btn-secondary btn-small" onClick={() => setBalance(!balance)}>
+              {balance ? "Stop rebalancing" : "Rebalance after each insert"}
+            </button>
+          ) : null}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`A binary search tree of ${plural(order.length, "key")} with height ${height}, and the search path for ${target}`}>
+        {edges.map((edge, i) => (
+          <line key={i} x1={edge.from[0]} y1={edge.from[1]} x2={edge.to[0]} y2={edge.to[1]} className={edge.on ? "fig-accent-line" : "fig-axis"} />
+        ))}
+        {placed.map(({ key, at }) => {
+          const on = path.includes(key);
+          return (
+            <g key={key}>
+              <circle cx={at[0]} cy={at[1]} r="12" className={on ? "fig-accent" : "fig-fill"} />
+              <text x={at[0]} y={at[1] + 4} textAnchor="middle" className="fig-small" style={{ fill: on ? "var(--bg)" : "var(--text)" }}>
+                {key}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -3908,6 +4031,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "stack-queue": StackQueue,
   "hash-table": HashTable,
   heap: Heap,
+  "search-tree": SearchTree,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

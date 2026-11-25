@@ -1,0 +1,945 @@
+concept: s2.balanced-search-trees
+minutes: 100
+claim: You can rotate a binary search tree's links without disturbing its order, keep an AVL tree's heights within one of each other by rotating after each insertion, prove that such a tree's height grows only logarithmically with the number of keys, and say when a red-black tree or a B-tree is the better choice.
+recalls: [s2.binary-search-trees]
+uses: [f2.induction-and-strong-induction, f2.loop-invariants, f1.logarithms, f1.exponents-and-exponential-growth, s1.recursion, s1.classes-and-objects, s2.arrays-and-dynamic-arrays, s0.lists-and-tuples, s0.loops, s0.functions]
+leads: [s2.heaps-and-priority-queues, f3.recurrences, f3.trees-and-their-properties, s3.binary-search]
+starter: |
+  # Scratch space. The fewest keys an AVL tree of each height can hold.
+  fewest = [1, 2]
+  for h in range(2, 20):
+      fewest.append(1 + fewest[h - 1] + fewest[h - 2])
+  for h in [5, 10, 15, 19]:
+      print("height", h, "needs at least", fewest[h], "keys")
+parts:
+  recall:
+    - text: |
+        [[s2.binary-search-trees]] ended with a tree that the order of arrival can ruin: keys that arrive sorted turn it into a path, and every search walks the whole of it. Today the tree learns to repair its own shape as it grows. Three quick pulls first.
+  puzzle:
+    - text: |
+        A stock exchange keeps the buy orders for a share in a search tree ordered by price and time, so that it can find the best order at once and every order in a price range. Orders arrive all day, and their times only ever increase. Fed to a plain binary search tree in that order, the tree becomes a path, and by the afternoon a lookup that should take 20 comparisons takes a lakh.
+
+        You cannot shuffle the input, because the orders arrive one at a time and must be searchable the moment they arrive. You cannot rebuild the tree from scratch after each order, because that costs time in proportion to the number of orders, every time.
+
+        So the tree must fix itself as it goes, and the fixing must be cheap: no more work per insertion than the walk down the path that the insertion already does. And whatever it does to the shape, it must never break the order, or the tree stops being a search tree.
+
+        **Can a tree change its shape without changing its order? And what rule about its shape, cheap to keep, would guarantee a short height for ever?**
+  intuition:
+    - text: |
+        Thread beads on a string in order, 10, 20, 30, 40, 50, and hold the string up by the bead 10. Everything hangs down to one side, a path. Now pick the string up by the bead 30 instead. 10 and 20 hang on one side, 40 and 50 on the other. The beads have not moved along the string. Their order is untouched. Only the place you hold has changed, and with it the shape.
+
+        That is a **rotation**. It takes a node and its child and swaps which of them is on top, passing one subtree across from the child to the node so that everything stays in order. It changes three links. It never changes the in-order walk, so a search tree stays a search tree.
+
+        The second idea is a rule about shape that is easy to check locally: **at every node, the two subtrees may differ in height by at most one**. A shopkeeper's scale with two pans is allowed to tip a little, not a lot. Each insertion may tip some of the scales on the path it walked. Walking back up that path, a rotation at the first scale that tips too far levels it again.
+
+        The figure starts from the fifteen keys inserted in sorted order, with rebalancing on. Press the button to stop rebalancing and see the path come back. Then add keys one at a time with rebalancing on, and watch how few rotations each insertion needs.
+    - figure: search-tree
+      props: { sorted: true, balance: true, target: 45 }
+    - text: |
+        In sorted order with no rebalancing, the fifteen keys make a path of height 14. With a rotation wherever a node's subtrees differ by two, the same keys in the same order make the bushiest tree possible, of height 3, and a search for any key makes at most 4 comparisons. Eleven rotations did it: fewer than one for each insertion.
+  derivation:
+    - text: |
+        **A rotation.** Take a node $y$ whose left child is $x$. Call $x$'s subtrees $A$ and $B$, and $y$'s right subtree $C$. The search-tree invariant says the keys are ordered
+
+        $$A < x < B < y < C,$$
+
+        meaning every key in $A$ is less than $x$, and so on. A **right rotation** at $y$ makes $x$ the top of this part of the tree, with $y$ as its right child, and hands $B$ across to become $y$'s left subtree:
+
+        ```text
+              y                x
+             / \              / \
+            x   C    ==>     A   y
+           / \                  / \
+          A   B                B   C
+        ```
+
+        Read both shapes in order, left subtree before node before right subtree, and you get $A, x, B, y, C$ both times. The order is the same; only the shape differs. $A$ has moved up a level and $C$ down one. A **left rotation** is the mirror image, and undoes a right one.
+
+        ```python
+        def rotate_right(y):
+            x = y.left
+            y.left = x.right
+            x.right = y
+            update(y)
+            update(x)
+            return x
+        ```
+
+        Three links change, whatever the size of the tree, so a rotation costs a constant number of steps. Each node stores its own height, and `update` recomputes it from its children's: one more than the larger. The order of the two updates matters. After the rotation $y$ is below $x$, so $y$'s height must be correct before $x$'s is worked out from it. The function returns the new top, and the caller stores it in whichever link used to point at $y$, exactly as recursive insertion did in the last lesson.
+    - question:
+        id: derivation-rotation
+        type: choice
+        system: s2
+        prompt: |
+          In a right rotation at $y$, the subtree $B$, which was the right subtree of $y$'s left child $x$, becomes the left subtree of $y$. Why is that the right place for it?
+        options:
+          - "Every key in $B$ is greater than $x$ and less than $y$. After the rotation $y$ is the right child of $x$, so $y$'s left subtree is exactly the place for keys between $x$ and $y$."
+          - "$B$ is always empty in a rotation, so it can go anywhere."
+          - "It keeps the heights equal, and the order does not matter in a balanced tree."
+          - "$B$ must move up a level so that the tree becomes shorter."
+        answer: 0
+        explanation: |
+          Before the rotation $B$ sat to the right of $x$ and inside $y$'s left subtree, so its keys lie between $x$ and $y$. After it, the region between $x$ and $y$ is $y$'s left subtree, since everything there is right of $x$ and left of $y$. Putting $B$ anywhere else would break the invariant. $B$ stays at the same depth: it was two links below $y$'s old position and is two links below $x$'s new one.
+    - text: |
+        **The AVL rule.** In 1962 Georgy Adelson-Velsky and Evgenii Landis proposed this invariant, and trees that keep it are called **AVL trees**:
+
+        > At every node, the heights of the left and right subtrees differ by at most 1.
+
+        The empty tree counts as height $-1$, so a node with one child that is a leaf is fine, and a node with one child that has a child of its own is not.
+
+        **Why the rule keeps the height small.** Let $N(h)$ be the fewest keys an AVL tree of height $h$ can hold. A tree of height 0 is one node, and one of height 1 needs two, so $N(0) = 1$ and $N(1) = 2$. A tree of height $h$ has a root and two subtrees, one of height $h - 1$, and the other, by the rule, of height at least $h - 2$. The fewest keys come from making each subtree as thin as allowed:
+
+        $$N(h) = 1 + N(h - 1) + N(h - 2).$$
+
+        That gives 1, 2, 4, 7, 12, 20, 33, 54, and the starter prints more. Each term is more than the sum of the two before it, like the Fibonacci numbers, and grows exponentially in the sense of [[f1.exponents-and-exponential-growth]].
+
+        Here is a proof that is short enough to carry with you. Since $N(h - 1) \ge N(h - 2)$, the recurrence gives $N(h) > 2N(h - 2)$: going down two levels at least halves the count. By strong induction, as in [[f2.induction-and-strong-induction]], $N(h) \ge 2^{h / 2}$ for every $h$, since it holds at $h = 0$ and $h = 1$, and each step of two doubles. So a tree of $n$ keys and height $h$ has $n \ge 2^{h / 2}$, and taking logarithms as in [[f1.logarithms]],
+
+        $$h \le 2 \log_2 n.$$
+
+        A sharper count, using the golden ratio $1.618\ldots$ by which Fibonacci-like numbers grow, gives $h < 1.44 \log_2(n + 2)$. Ten lakh keys in an AVL tree have height at most 28, against 19 for the best possible tree and 9,99,999 for the worst plain one. Equations like the one for $N(h)$ get a lesson of their own in [[f3.recurrences]].
+
+        **Restoring the rule after an insertion.** Insert as in a plain tree. Only the nodes on the path from the root down to the new key have changed subtrees, so only their heights can change, and only they can break the rule. Walk back up that path, which the recursive `insert` does for free as its calls return, updating each height. At the first node whose subtrees differ by 2, call it $z$, the new key went down the taller side. There are four ways it can have done so.
+
+        | The new key went | Shape below $z$ | Repair |
+        | --- | --- | --- |
+        | left, then left | a line leaning left | one right rotation at $z$ |
+        | right, then right | a line leaning right | one left rotation at $z$ |
+        | left, then right | a bend | a left rotation at $z$'s left child, then a right rotation at $z$ |
+        | right, then left | a bend | a right rotation at $z$'s right child, then a left rotation at $z$ |
+
+        A line is straightened by one rotation. A bend must first be turned into a line, by rotating the child, and then straightened. After the repair, the subtree that $z$ headed has exactly the height it had **before** the insertion, so every node above it is as balanced as it was, and nothing more needs doing. An insertion therefore walks one path down, at most one path back up, and makes at most two rotations. Its cost is the height, which the rule keeps logarithmic. Removal is repaired the same way, though it may need a rotation at several nodes on the way up.
+    - question:
+        id: order-double
+        type: order
+        system: s2
+        prompt: |
+          An AVL tree holds 30, with 10 as its left child. Then 20 is inserted. Put the steps of the insertion and its repair in order.
+        steps:
+          - "Walk down: 20 is less than 30, go left; 20 is more than 10, go right; attach 20 as the right child of 10."
+          - "Walking back up, 10 now has a right subtree of height 0 and an empty left one, a difference of 1, which is allowed."
+          - "At 30, the left subtree has height 1 and the right is empty, a difference of 2: the rule is broken."
+          - "The key went left, then right, a bend, so first rotate left at 10, making 20 the left child of 30 with 10 below it."
+          - "Now the shape is a line leaning left, so rotate right at 30, making 20 the top with 10 and 30 as its children."
+        explanation: The insertion is a plain one, and the heights are checked on the way back up. 10 is still within the rule, and 30 is the first node to break it. The path from 30 went left and then right, so a single rotation at 30 would only make a bend leaning the other way. Rotating 10 first lines the three keys up, and the second rotation puts the middle key, 20, on top. The order 10, 20, 30 is kept throughout.
+    - text: |
+        **The whole insertion.** Each node now carries its own height beside its key and its two links. With a function that recomputes a node's height and repairs it if needed, insertion is the plain recursive insertion with one change: each call returns the **rebalanced** subtree.
+
+        ```python
+        class Node:
+            def __init__(self, key):
+                self.key = key
+                self.left = None
+                self.right = None
+                self.height = 0
+
+        def rebalance(node):
+            update(node)
+            lean = height(node.left) - height(node.right)
+            if lean > 1:
+                if height(node.left.left) < height(node.left.right):
+                    node.left = rotate_left(node.left)
+                return rotate_right(node)
+            if lean < -1:
+                if height(node.right.right) < height(node.right.left):
+                    node.right = rotate_right(node.right)
+                return rotate_left(node)
+            return node
+
+        def insert(node, key):
+            if node is None:
+                return Node(key)
+            if key < node.key:
+                node.left = insert(node.left, key)
+            elif key > node.key:
+                node.right = insert(node.right, key)
+            return rebalance(node)
+        ```
+
+        The test `height(node.left.left) < height(node.left.right)` asks whether the taller side bends inwards, and if so straightens it first.
+
+        **Other balanced trees.** The AVL rule is strict, and keeping it strictly costs rotations. Two other designs dominate in practice.
+
+        A **red-black tree** colours each node red or black, under two rules: a red node has no red child, and every path from a node down to an empty place passes the same number of black nodes. The rules allow one side to be up to twice as deep as the other, so the height is at most $2 \log_2(n + 1)$, a little taller than AVL, but insertions and removals need fewer rotations. Java's `TreeMap`, C++'s `std::map` and the Linux scheduler use red-black trees.
+
+        A **B-tree** gives up on two children. Each node holds many keys in sorted order, often hundreds, and has one more child than keys. Every leaf is at the same depth, and nodes split in two when they overflow. Why many keys? Because a database or a file system keeps its tree on disk or flash, where reading one block of memory costs far more than comparing the keys inside it. With a thousand children per node, three levels reach $1000^3$, a hundred crore keys, so any lookup reads three blocks. The address arithmetic of [[s2.arrays-and-dynamic-arrays]] does the searching inside a block. Nearly every database index you will ever use is a B-tree.
+
+        Python's standard library has no balanced tree. For a sorted collection it offers the `bisect` module, a halving search over a sorted list, met in [[s3.binary-search]], which is fine when insertions are rare. Third-party libraries fill the gap when they are not.
+  formal:
+    - text: |
+        **Rotation.** A right rotation at $y$ with left child $x$ makes $x$ the top, $y$ its right child, and $x$'s old right subtree $y$'s new left subtree. A left rotation is the mirror. Both keep the in-order sequence and change three links.
+
+        **AVL tree.** A binary search tree in which, at every node, the heights of the two subtrees differ by at most 1, with the empty tree of height $-1$.
+
+        **Height bound.** The fewest keys in an AVL tree of height $h$ satisfy $N(h) = 1 + N(h - 1) + N(h - 2)$, with $N(0) = 1$ and $N(1) = 2$. Since $N(h) > 2N(h - 2)$, $N(h) \ge 2^{h / 2}$, so $h \le 2 \log_2 n$. More precisely $h < 1.44 \log_2(n + 2)$.
+
+        **Insertion.** Insert as in a plain tree, then on the way back up update heights and, at the first node whose subtrees differ by 2, make one rotation for a line or two for a bend. Cost: proportional to the height, so logarithmic.
+
+        **Red-black tree.** Height at most $2 \log_2(n + 1)$, with fewer rotations than AVL.
+
+        **B-tree.** Many keys per node, all leaves at one depth. With $b$ children per node, the height is about $\log_b n$.
+  drill:
+    - text: Seconds each. Compare heights, and find the place the rule breaks.
+    - question:
+        id: drill-avl-ok
+        type: choice
+        system: s1
+        prompt: |
+          A node's left subtree has height 3 and its right subtree has height 1. Does the node keep the AVL rule?
+        options: ["No, the heights differ by 2", "Yes, both subtrees exist", "Yes, the left side may be taller", "Only if the node is the root"]
+        answer: 0
+        explanation: The rule allows a difference of at most 1.
+    - question:
+        id: drill-leaf-child
+        type: choice
+        system: s1
+        prompt: |
+          A node has a left child, which is a leaf, and no right child. Does it keep the AVL rule?
+        options: ["Yes: heights 0 and $-1$ differ by 1", "No: one side is empty", "No: a node must have two children", "Only if the child is a right child"]
+        answer: 0
+        explanation: The empty tree counts as height $-1$.
+    - question:
+        id: drill-fewest-3
+        type: numeric
+        system: s1
+        prompt: |
+          With $N(0) = 1$, $N(1) = 2$ and $N(h) = 1 + N(h - 1) + N(h - 2)$, what is $N(3)$, the fewest keys in an AVL tree of height 3?
+        answer: "7"
+        explanation: $N(2) = 1 + 2 + 1 = 4$, and $N(3) = 1 + 4 + 2 = 7$.
+    - question:
+        id: drill-links-changed
+        type: numeric
+        system: s1
+        prompt: |
+          How many links does one rotation change, in a tree of a lakh keys?
+        answer: "3"
+        explanation: The link to the subtree's top, the old top's child link, and the link that passes the middle subtree across. The size of the tree does not enter.
+    - question:
+        id: drill-line-or-bend
+        type: choice
+        system: s1
+        prompt: |
+          The rule breaks at $z$ after a key went right from $z$ and then right again. What repairs it?
+        options: ["One left rotation at $z$", "One right rotation at $z$", "A right rotation at $z$'s right child, then a left rotation at $z$", "Nothing; it is already balanced"]
+        answer: 0
+        explanation: Right then right is a line leaning right, straightened by one left rotation.
+    - question:
+        id: drill-bend
+        type: choice
+        system: s1
+        prompt: |
+          The rule breaks at $z$ after a key went left from $z$ and then right. What repairs it?
+        options: ["A left rotation at $z$'s left child, then a right rotation at $z$", "One right rotation at $z$", "One left rotation at $z$", "Two right rotations at $z$"]
+        answer: 0
+        explanation: A bend is first turned into a line, then straightened.
+    - question:
+        id: drill-in-order-kept
+        type: choice
+        system: s1
+        prompt: |
+          What does a rotation never change?
+        options: ["The order in which the in-order walk visits the keys", "The height of the subtree", "Which key is on top", "The depth of every key"]
+        answer: 0
+        explanation: That is why a rotation is allowed in a search tree at all.
+    - question:
+        id: drill-btree
+        type: numeric
+        system: s1
+        prompt: |
+          A B-tree's nodes each have 1000 children. At most how many levels of nodes must be read to find a key among 100 crore, that is $10^9$?
+        answer: "3"
+        explanation: $1000^3 = 10^9$.
+    - question:
+        id: predict-fewest
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          fewest = [1, 2]
+          for h in range(2, 6):
+              fewest.append(1 + fewest[h - 1] + fewest[h - 2])
+          print(fewest)
+        output: "[1, 2, 4, 7, 12, 20]"
+        explanation: Each entry is one more than the sum of the two before it.
+    - question:
+        id: predict-rotate
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          class Node:
+              def __init__(self, key, left, right):
+                  self.key = key
+                  self.left = left
+                  self.right = right
+
+          def rotate_right(y):
+              x = y.left
+              y.left = x.right
+              x.right = y
+              return x
+
+          y = Node(20, Node(10, Node(5, None, None), Node(15, None, None)), Node(30, None, None))
+          x = rotate_right(y)
+          print(x.key, x.left.key, x.right.key, x.right.left.key, x.right.right.key)
+        output: "10 5 20 15 30"
+        explanation: 10 rises to the top with 5 still on its left. 20 becomes its right child, and 15, which lay between 10 and 20, passes across to be 20's left child. In order the keys are still 5, 10, 15, 20, 30.
+  work:
+    - text: Slower now. For every change to the tree, say why the order survives and which heights must be recomputed.
+    - question:
+        id: write-rebalance
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          The rotations, the height helpers and the recursive `insert` are written for you. Write `rebalance(node)`: recompute the node's height, and if its subtrees' heights differ by more than 1, repair it with one rotation for a line or two for a bend, returning the new top of the subtree. Otherwise return the node itself. With it, inserting 1 to 15 in order should give a tree with 8 at the root and height 3.
+        starter: |
+          class Node:
+              def __init__(self, key):
+                  self.key = key
+                  self.left = None
+                  self.right = None
+                  self.height = 0
+
+          def height(node):
+              if node is None:
+                  return -1
+              return node.height
+
+          def update(node):
+              node.height = 1 + max(height(node.left), height(node.right))
+
+          def rotate_right(y):
+              x = y.left
+              y.left = x.right
+              x.right = y
+              update(y)
+              update(x)
+              return x
+
+          def rotate_left(x):
+              y = x.right
+              x.right = y.left
+              y.left = x
+              update(x)
+              update(y)
+              return y
+
+          def rebalance(node):
+              update(node)
+              return node
+
+          def insert(node, key):
+              if node is None:
+                  return Node(key)
+              if key < node.key:
+                  node.left = insert(node.left, key)
+              elif key > node.key:
+                  node.right = insert(node.right, key)
+              return rebalance(node)
+
+          root = None
+          for k in range(1, 16):
+              root = insert(root, k)
+          print(root.key, height(root))
+        solution: |
+          class Node:
+              def __init__(self, key):
+                  self.key = key
+                  self.left = None
+                  self.right = None
+                  self.height = 0
+
+          def height(node):
+              if node is None:
+                  return -1
+              return node.height
+
+          def update(node):
+              node.height = 1 + max(height(node.left), height(node.right))
+
+          def rotate_right(y):
+              x = y.left
+              y.left = x.right
+              x.right = y
+              update(y)
+              update(x)
+              return x
+
+          def rotate_left(x):
+              y = x.right
+              x.right = y.left
+              y.left = x
+              update(x)
+              update(y)
+              return y
+
+          def rebalance(node):
+              update(node)
+              lean = height(node.left) - height(node.right)
+              if lean > 1:
+                  if height(node.left.left) < height(node.left.right):
+                      node.left = rotate_left(node.left)
+                  return rotate_right(node)
+              if lean < -1:
+                  if height(node.right.right) < height(node.right.left):
+                      node.right = rotate_right(node.right)
+                  return rotate_left(node)
+              return node
+
+          def insert(node, key):
+              if node is None:
+                  return Node(key)
+              if key < node.key:
+                  node.left = insert(node.left, key)
+              elif key > node.key:
+                  node.right = insert(node.right, key)
+              return rebalance(node)
+
+          root = None
+          for k in range(1, 16):
+              root = insert(root, k)
+          print(root.key, height(root))
+        tests: |
+          import random
+          def _real(node):
+              if node is None:
+                  return -1
+              return 1 + max(_real(node.left), _real(node.right))
+          def _check(node):
+              if node is None:
+                  return True
+              if abs(_real(node.left) - _real(node.right)) > 1:
+                  return False
+              if node.height != _real(node):
+                  return False
+              return _check(node.left) and _check(node.right)
+          def _keys(node):
+              if node is None:
+                  return []
+              return _keys(node.left) + [node.key] + _keys(node.right)
+          def _build(keys):
+              r = None
+              for k in keys:
+                  r = insert(r, k)
+              return r
+          _t = _build([3, 1, 2])
+          assert _t.key == 2 and _check(_t), "Inserting 3, 1, 2 makes a bend; after repair 2 should be on top"
+          _t = _build([1, 3, 2])
+          assert _t.key == 2 and _check(_t), "Inserting 1, 3, 2 makes the mirror bend; after repair 2 should be on top"
+          _t = _build([3, 2, 1])
+          assert _t.key == 2 and _check(_t), "Inserting 3, 2, 1 makes a line; one rotation puts 2 on top"
+          _t = _build(range(1, 1001))
+          assert _check(_t) and _keys(_t) == list(range(1, 1001)), "Inserting 1 to 1000 in order should keep the AVL rule everywhere and the keys in order"
+          assert height(_t) <= 14, "An AVL tree of 1000 keys has height at most 14; yours has " + str(height(_t))
+          _t = _build(range(1000, 0, -1))
+          assert _check(_t) and height(_t) <= 14, "Inserting 1000 down to 1 should keep the AVL rule too"
+          random.seed(11)
+          _vals = random.sample(range(100000), 3000)
+          _t = _build(_vals)
+          assert _check(_t) and _keys(_t) == sorted(_vals), "3000 random keys should keep the AVL rule and stay in order"
+          assert output.strip() == "8 3", "The program should print 8 3"
+        wrong:
+          - |
+            class Node:
+                def __init__(self, key):
+                    self.key = key
+                    self.left = None
+                    self.right = None
+                    self.height = 0
+
+            def height(node):
+                if node is None:
+                    return -1
+                return node.height
+
+            def update(node):
+                node.height = 1 + max(height(node.left), height(node.right))
+
+            def rotate_right(y):
+                x = y.left
+                y.left = x.right
+                x.right = y
+                update(y)
+                update(x)
+                return x
+
+            def rotate_left(x):
+                y = x.right
+                x.right = y.left
+                y.left = x
+                update(x)
+                update(y)
+                return y
+
+            def rebalance(node):
+                update(node)
+                lean = height(node.left) - height(node.right)
+                if lean > 1:
+                    return rotate_right(node)
+                if lean < -1:
+                    return rotate_left(node)
+                return node
+
+            def insert(node, key):
+                if node is None:
+                    return Node(key)
+                if key < node.key:
+                    node.left = insert(node.left, key)
+                elif key > node.key:
+                    node.right = insert(node.right, key)
+                return rebalance(node)
+
+            print(8, 3)
+          - |
+            class Node:
+                def __init__(self, key):
+                    self.key = key
+                    self.left = None
+                    self.right = None
+                    self.height = 0
+
+            def height(node):
+                if node is None:
+                    return -1
+                return node.height
+
+            def update(node):
+                node.height = 1 + max(height(node.left), height(node.right))
+
+            def rotate_right(y):
+                x = y.left
+                y.left = x.right
+                x.right = y
+                update(y)
+                update(x)
+                return x
+
+            def rotate_left(x):
+                y = x.right
+                x.right = y.left
+                y.left = x
+                update(x)
+                update(y)
+                return y
+
+            def rebalance(node):
+                lean = height(node.left) - height(node.right)
+                if lean > 1:
+                    if height(node.left.left) < height(node.left.right):
+                        node.left = rotate_left(node.left)
+                    return rotate_right(node)
+                if lean < -1:
+                    if height(node.right.right) < height(node.right.left):
+                        node.right = rotate_right(node.right)
+                    return rotate_left(node)
+                return node
+
+            def insert(node, key):
+                if node is None:
+                    return Node(key)
+                if key < node.key:
+                    node.left = insert(node.left, key)
+                elif key > node.key:
+                    node.right = insert(node.right, key)
+                return rebalance(node)
+
+            print(8, 3)
+        explanation: |
+          First the node's height must be brought up to date, since the insertion below may have changed it, and every decision depends on it. Then the lean decides which side is too tall. Before rotating towards the short side, check whether the tall side bends inwards. If it does, a single rotation would only swap a bend for its mirror image, so straighten the child first. One rotation at the node then levels it. Leaving out the bend case passes sorted input, which only ever makes lines, and fails on 3, 1, 2. Forgetting to update the height first leaves every lean computed from stale numbers, and the tree is never repaired.
+    - question:
+        id: fix-height-order
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This AVL tree inserts 1 to 15 in order. It should print `8 3`, a root of 8 and height 3. It prints `12 9`, and the tree's true height is not 9 either: the stored heights have gone wrong, and every rebalancing decision built on them is wrong too. The fault is in the rotations. Find it and fix it.
+        starter: |
+          class Node:
+              def __init__(self, key):
+                  self.key = key
+                  self.left = None
+                  self.right = None
+                  self.height = 0
+
+          def height(node):
+              if node is None:
+                  return -1
+              return node.height
+
+          def update(node):
+              node.height = 1 + max(height(node.left), height(node.right))
+
+          def rotate_right(y):
+              x = y.left
+              y.left = x.right
+              x.right = y
+              update(x)
+              update(y)
+              return x
+
+          def rotate_left(x):
+              y = x.right
+              x.right = y.left
+              y.left = x
+              update(y)
+              update(x)
+              return y
+
+          def rebalance(node):
+              update(node)
+              lean = height(node.left) - height(node.right)
+              if lean > 1:
+                  if height(node.left.left) < height(node.left.right):
+                      node.left = rotate_left(node.left)
+                  return rotate_right(node)
+              if lean < -1:
+                  if height(node.right.right) < height(node.right.left):
+                      node.right = rotate_right(node.right)
+                  return rotate_left(node)
+              return node
+
+          def insert(node, key):
+              if node is None:
+                  return Node(key)
+              if key < node.key:
+                  node.left = insert(node.left, key)
+              elif key > node.key:
+                  node.right = insert(node.right, key)
+              return rebalance(node)
+
+          root = None
+          for k in range(1, 16):
+              root = insert(root, k)
+          print(root.key, height(root))
+        solution: |
+          class Node:
+              def __init__(self, key):
+                  self.key = key
+                  self.left = None
+                  self.right = None
+                  self.height = 0
+
+          def height(node):
+              if node is None:
+                  return -1
+              return node.height
+
+          def update(node):
+              node.height = 1 + max(height(node.left), height(node.right))
+
+          def rotate_right(y):
+              x = y.left
+              y.left = x.right
+              x.right = y
+              update(y)
+              update(x)
+              return x
+
+          def rotate_left(x):
+              y = x.right
+              x.right = y.left
+              y.left = x
+              update(x)
+              update(y)
+              return y
+
+          def rebalance(node):
+              update(node)
+              lean = height(node.left) - height(node.right)
+              if lean > 1:
+                  if height(node.left.left) < height(node.left.right):
+                      node.left = rotate_left(node.left)
+                  return rotate_right(node)
+              if lean < -1:
+                  if height(node.right.right) < height(node.right.left):
+                      node.right = rotate_right(node.right)
+                  return rotate_left(node)
+              return node
+
+          def insert(node, key):
+              if node is None:
+                  return Node(key)
+              if key < node.key:
+                  node.left = insert(node.left, key)
+              elif key > node.key:
+                  node.right = insert(node.right, key)
+              return rebalance(node)
+
+          root = None
+          for k in range(1, 16):
+              root = insert(root, k)
+          print(root.key, height(root))
+        tests: |
+          def _real(node):
+              if node is None:
+                  return -1
+              return 1 + max(_real(node.left), _real(node.right))
+          def _check(node):
+              if node is None:
+                  return True
+              if node.height != _real(node):
+                  return False
+              if abs(_real(node.left) - _real(node.right)) > 1:
+                  return False
+              return _check(node.left) and _check(node.right)
+          for _keys in [list(range(1, 200)), list(range(200, 0, -1)), [50, 20, 80, 10, 30, 25, 27, 26, 90, 85, 86]]:
+              _r = None
+              for _k in _keys:
+                  _r = insert(_r, _k)
+              assert _check(_r), "Every stored height should equal the true height, and every node should keep the AVL rule"
+          _y = Node(20)
+          _y.left = Node(10)
+          _y.left.left = Node(5)
+          update(_y.left)
+          update(_y)
+          _x = rotate_right(_y)
+          assert _x.key == 10 and _x.height == 1 and _x.right.height == 0, "After rotating 20, 10, 5 right, 10 is on top with height 1 and 20 below it with height 0"
+          assert output.strip() == "8 3", "The program should print 8 3"
+        wrong:
+          - |
+            class Node:
+                def __init__(self, key):
+                    self.key = key
+                    self.left = None
+                    self.right = None
+                    self.height = 0
+
+            def height(node):
+                if node is None:
+                    return -1
+                return node.height
+
+            def update(node):
+                node.height = 1 + max(height(node.left), height(node.right))
+
+            def rotate_right(y):
+                x = y.left
+                y.left = x.right
+                x.right = y
+                update(x)
+                return x
+
+            def rotate_left(x):
+                y = x.right
+                x.right = y.left
+                y.left = x
+                update(y)
+                return y
+
+            def rebalance(node):
+                update(node)
+                lean = height(node.left) - height(node.right)
+                if lean > 1:
+                    if height(node.left.left) < height(node.left.right):
+                        node.left = rotate_left(node.left)
+                    return rotate_right(node)
+                if lean < -1:
+                    if height(node.right.right) < height(node.right.left):
+                        node.right = rotate_right(node.right)
+                    return rotate_left(node)
+                return node
+
+            def insert(node, key):
+                if node is None:
+                    return Node(key)
+                if key < node.key:
+                    node.left = insert(node.left, key)
+                elif key > node.key:
+                    node.right = insert(node.right, key)
+                return rebalance(node)
+
+            print(8, 3)
+        explanation: |
+          A node's height is computed from its children's heights, so children must be brought up to date before their parent. After a right rotation, $y$ is the **child** of $x$. The starter updated $x$ first, using $y$'s old height, from when $y$ was on top and taller, and only then corrected $y$. So $x$'s stored height came out too large, and every lean computed above it was wrong. Updating $y$ first and then $x$ fixes it, and the same goes for the mirror rotation. Updating only the new top leaves the old one with its old, larger height.
+    - question:
+        id: write-checked-height
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A tree has been read back from a file, without its stored heights, and must be checked before anyone trusts it. Write `checked_height(node)`, which returns the height of the subtree under `node`, with $-1$ for the empty tree, when every node in it obeys the AVL rule, and `None` when any node in it breaks the rule. Visit each node once, working upwards from the children's answers: the tests count the links you follow.
+        starter: |
+          class Node:
+              def __init__(self, key, left, right):
+                  self.key = key
+                  self.left = left
+                  self.right = right
+
+          def checked_height(node):
+              return -1
+
+          leaf = Node(5, None, None)
+          good = Node(20, Node(10, leaf, None), Node(30, None, None))
+          bad = Node(20, Node(10, leaf, None), None)
+          print(checked_height(good), checked_height(bad))
+        solution: |
+          class Node:
+              def __init__(self, key, left, right):
+                  self.key = key
+                  self.left = left
+                  self.right = right
+
+          def checked_height(node):
+              if node is None:
+                  return -1
+              left = checked_height(node.left)
+              if left is None:
+                  return None
+              right = checked_height(node.right)
+              if right is None:
+                  return None
+              if left - right > 1 or right - left > 1:
+                  return None
+              return 1 + max(left, right)
+
+          leaf = Node(5, None, None)
+          good = Node(20, Node(10, leaf, None), Node(30, None, None))
+          bad = Node(20, Node(10, leaf, None), None)
+          print(checked_height(good), checked_height(bad))
+        tests: |
+          import random
+          def _h(n):
+              if n is None:
+                  return -1
+              return 1 + max(_h(n.left), _h(n.right))
+          def _ok(n):
+              if n is None:
+                  return True
+              return abs(_h(n.left) - _h(n.right)) <= 1 and _ok(n.left) and _ok(n.right)
+          def _random_tree(depth):
+              if depth < 0 or random.random() < 0.15:
+                  return None
+              return Node(random.randint(1, 99), _random_tree(depth - 1), _random_tree(depth - 1))
+          random.seed(11)
+          _seen = [0, 0]
+          for _trial in range(400):
+              _t = _random_tree(random.randint(0, 6))
+              _want = _h(_t) if _ok(_t) else None
+              _seen[0 if _want is None else 1] += 1
+              _got = checked_height(_t)
+              assert _got == _want, "For a tree of height " + str(_h(_t)) + " that " + ("obeys" if _want is not None else "breaks") + " the rule, checked_height gave " + str(_got)
+          assert _seen[0] > 20 and _seen[1] > 20
+          assert checked_height(None) == -1, "The empty tree has height -1"
+          _lop = Node(20, Node(10, Node(5, None, None), None), None)
+          _bush = Node(70, Node(60, Node(55, None, None), None), Node(80, None, None))
+          assert checked_height(Node(50, _lop, _bush)) is None, "At the root both subtrees have height 2, but the node 20 below it has a left subtree of height 1 and an empty right one, so the tree breaks the rule"
+          _reads = [0]
+          class _Spy:
+              def __init__(self, key, left, right):
+                  self.key = key
+                  self._l = left
+                  self._r = right
+              @property
+              def left(self):
+                  _reads[0] += 1
+                  return self._l
+              @property
+              def right(self):
+                  _reads[0] += 1
+                  return self._r
+          def _build(lo, hi):
+              if lo > hi:
+                  return None
+              mid = (lo + hi) // 2
+              return _Spy(mid, _build(lo, mid - 1), _build(mid + 1, hi))
+          _big = _build(1, 1023)
+          _reads[0] = 0
+          assert checked_height(_big) == 9, "The perfect tree of 1023 keys has height 9"
+          assert _reads[0] <= 2100, "checked_height followed " + str(_reads[0]) + " links in a tree of 1023 nodes; each node's two links should be read once"
+          assert output.strip() == "2 None", "The program should print 2 None"
+        wrong:
+          - |
+            class Node:
+                def __init__(self, key, left, right):
+                    self.key = key
+                    self.left = left
+                    self.right = right
+
+            def height(node):
+                if node is None:
+                    return -1
+                return 1 + max(height(node.left), height(node.right))
+
+            def checked_height(node):
+                if node is None:
+                    return -1
+                left = height(node.left)
+                right = height(node.right)
+                if left - right > 1 or right - left > 1:
+                    return None
+                return 1 + max(left, right)
+
+            print(2, None)
+          - |
+            class Node:
+                def __init__(self, key, left, right):
+                    self.key = key
+                    self.left = left
+                    self.right = right
+
+            def height(node):
+                if node is None:
+                    return -1
+                return 1 + max(height(node.left), height(node.right))
+
+            def checked_height(node):
+                if node is None:
+                    return -1
+                if checked_height(node.left) is None or checked_height(node.right) is None:
+                    return None
+                left = height(node.left)
+                right = height(node.right)
+                if left - right > 1 or right - left > 1:
+                    return None
+                return 1 + max(left, right)
+
+            print(2, None)
+        explanation: |
+          A node obeys the rule when its two subtrees' heights differ by at most 1, and a tree obeys it when every node does, so the check must reach every node, not just the root. The two questions, what is the height and is the rule kept, can be answered together. Ask each child for both at once: a number means the child's subtree is fine and has that height, and `None` means something below has already failed. If either child failed, the whole tree fails. Otherwise compare the two heights, and pass up one more than the larger. Each node is visited once, so the work grows in step with the number of nodes. Computing heights afresh at every node gives the same answers but visits each node once for every ancestor it has, about ten times over in a tree of a thousand keys. The same pattern, a recursive function that returns a summary of its subtree and lets the parent combine two summaries, will solve a great many tree problems.
+    - question:
+        id: work-fewest-5
+        type: numeric
+        system: s2
+        prompt: |
+          What is the fewest number of keys an AVL tree of height 5 can hold?
+        answer: "20"
+        explanation: |
+          From $N(0) = 1$ and $N(1) = 2$: $N(2) = 4$, $N(3) = 7$, $N(4) = 12$, $N(5) = 1 + 12 + 7 = 20$. So any AVL tree with fewer than 20 keys has height at most 4. Compare a plain tree, which reaches height 5 with only 6 keys in a path, and the best possible tree, which needs 32 keys to be forced up to height 5.
+    - question:
+        id: work-rotations-per-insert
+        type: choice
+        system: s2
+        prompt: |
+          Why does one AVL insertion never need more than two rotations, however large the tree?
+        options:
+          - "After the repair at the lowest node that broke the rule, that subtree has the same height it had before the insertion, so no node above it sees any change in its subtrees' heights."
+          - "Because an AVL tree's height is small, so there is never room for more."
+          - "Because only the root can ever break the rule."
+          - "Because each rotation fixes every node in the tree at once."
+        answer: 0
+        explanation: |
+          The insertion made one subtree one level taller, and that is what tipped $z$. The rotation, or pair of rotations, at $z$ brings that part of the tree back to its old height. Every node above $z$ saw its subtrees' heights go up by one and come straight back down, so it is exactly as balanced as before the insertion. Removal is different: shortening a subtree can tip nodes all the way up, so it may need a rotation at each level.
+    - question:
+        id: work-which-tree
+        type: choice
+        system: s2
+        prompt: |
+          A database keeps an index of 50 crore customer records on a flash drive, where reading one 16-kilobyte block costs far more than comparing every key inside it. Which tree should the index be?
+        options:
+          - "A B-tree whose nodes each fill one block with hundreds of keys, so that a lookup reads only three or four blocks."
+          - "An AVL tree, because its height is the smallest of any balanced tree."
+          - "A red-black tree, because it needs the fewest rotations."
+          - "A plain binary search tree, since the records arrive in random order."
+        answer: 0
+        explanation: |
+          Any binary tree of 50 crore keys has at least 29 levels, and each level may be a separate block to read, so 29 slow reads or more. A B-tree with a thousand children per node reaches 50 crore within three levels. The comparisons inside a block cost almost nothing next to fetching it. The best tree depends on what is expensive: comparisons and links in memory favour binary trees, block reads favour wide ones.
+  connections:
+    - text: |
+        The puzzle asked for a tree that repairs its own shape without breaking its order, cheaply. A rotation changes the shape and keeps the order, in three links. The AVL rule, that sibling subtrees differ in height by at most one, is checked locally, node by node, and after an insertion it is broken at no more than one place, repaired by one or two rotations. The rule cannot be kept by a tall thin tree: a tree of height $h$ needs at least $2^{h / 2}$ keys, so the height of $n$ keys is at most $2 \log_2 n$. Every search, insertion and removal costs logarithmic time, whatever order the keys arrive in.
+
+        Notice the method. A data structure states an invariant strong enough to guarantee its costs, and each operation restores the invariant before it returns. You met the method in [[f2.loop-invariants]] as a way to prove loops right. Here it is a way to design them.
+
+        Balanced trees are the ordered collections of the computing world. Red-black trees sit inside the standard libraries of Java and C++, and inside the Linux kernel, where they schedule processes and track memory. B-trees sit under almost every relational database and file system, chosen because they read few blocks. The counting behind the AVL bound is the start of a larger subject, the solving of recurrences, in [[f3.recurrences]].
+
+        A search tree keeps **all** its keys in order and can answer any question about order. Many programs need much less. A hospital's emergency ward, a router's packet queue and a program's event loop only ever ask one question: which waiting item is the most urgent? For that one question there is a structure that is simpler than a search tree, needs no links at all, and lives entirely inside an array: [[s2.heaps-and-priority-queues]].
