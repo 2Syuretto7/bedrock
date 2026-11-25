@@ -20,6 +20,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "arrow-map": z.strictObject({ inputs: z.number().optional(), outputs: z.number().optional(), plain: z.boolean().optional(), rule: z.number().optional() }),
   "inverse-line": z.strictObject({ intercept: z.number().optional(), slope: z.number().optional(), x: z.number().optional() }),
   "growth": z.strictObject({ start: z.number().optional() }),
+  "triangle-sum": z.strictObject({ n: z.number().optional() }),
   "partial-sums": z.strictObject({ ratio: z.number().optional(), terms: z.number().optional() }),
   "step-through": z.strictObject({
     program: z.enum(["concession", "deposit", "who-ate"]),

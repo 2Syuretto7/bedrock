@@ -103,3 +103,14 @@ test("the struct-padding figure shows where a record's padding goes, and how reo
   await expect(tap).toContainText("when at byte 1, 8 bytes. station at byte 9, 2 bytes. fare at byte 11, 4 bytes. Size 15 bytes: 15 of data and 0 of padding. when crosses from one 8-byte row into the next, so reading it takes two reads of memory.");
   await expect(tap.getByRole("button", { name: "Align the fields" })).toHaveAttribute("aria-pressed", "true");
 });
+
+test("the staircase figure adds 1 to n as half of a rectangle", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="triangle-sum"]').first().getByRole("figure");
+  await expect(figure).toContainText("1 + 2 + … + 4 is the staircase of shaded squares, row k holding k of them: 10 in all.");
+  await expect(figure.locator("rect")).toHaveCount(20);
+  await figure.getByRole("button", { name: "Increase n" }).click();
+  await expect(figure).toContainText("completes a rectangle 5 by 6 with 30 squares. So the staircase is half of it: 5 × 6 ÷ 2 = 15.");
+  await expect(figure.locator("rect")).toHaveCount(30);
+  await expect(figure.locator("rect.fig-accent")).toHaveCount(15);
+});
