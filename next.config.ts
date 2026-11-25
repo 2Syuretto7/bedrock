@@ -14,7 +14,7 @@ const nextConfig: NextConfig = {
   // Native module: must be loaded from node_modules at run time, not bundled.
   serverExternalPackages: ["@node-rs/argon2"],
   // Lessons and the concept graph are read from files at run time.
-  outputFileTracingIncludes: { "/learn": ["./content/**/*", "./graph/**/*"], "/map": ["./content/**/*", "./graph/**/*"], "/api/tutor": ["./content/**/*", "./graph/**/*"] },
+  outputFileTracingIncludes: { "/learn": ["./content/**/*", "./graph/**/*"], "/map": ["./content/**/*", "./graph/**/*"], "/api/tutor": ["./content/**/*", "./graph/**/*"], "/gallery": ["./content/**/*", "./graph/**/*"] },
   turbopack: {
     rules: {
       "*.css": {
