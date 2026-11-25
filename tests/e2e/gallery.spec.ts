@@ -129,3 +129,58 @@ test("the full adder adds three bits into a sum bit and a carry", async ({ page 
   await figure.getByRole("button", { name: "Switch b" }).click();
   await expect(figure).toContainText("They add to 1, which is 01 in binary: sum bit 1, carry out 0.");
 });
+
+test("the search tree shows the path a search takes, and how sorted input makes a path that rebalancing removes", async ({ page }) => {
+  await page.goto("/gallery");
+  const plain = page.locator('.gallery-item[data-figure="search-tree"]').first().getByRole("figure");
+  await expect(plain).toContainText("gives a tree of height 3: its deepest key is 3 links below the root.");
+  await expect(plain).toContainText("Searching for 45 compares it with 50, 30, 40, 45 and finds it: 4 comparisons.");
+  await plain.getByRole("button", { name: "Insert in sorted order" }).click();
+  await expect(plain).toContainText("gives a tree of height 14");
+  await expect(plain).toContainText("Searching for 45 compares it with 10, 20, 25, 30, 35, 40, 45 and finds it: 7 comparisons.");
+  const balanced = page.locator('.gallery-item[data-figure="search-tree"]').nth(1).getByRole("figure");
+  await expect(balanced).toContainText("rebalancing after each insertion, gives a tree of height 3: its deepest key is 3 links below the root, and 11 rotations were needed along the way.");
+  await balanced.getByRole("button", { name: "Stop rebalancing" }).click();
+  await expect(balanced).toContainText("gives a tree of height 14");
+});
+
+test("the trie follows one link per letter typed and finds the words below", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="trie"]').first().getByRole("figure");
+  await expect(figure).toContainText("The trie holds 7 words: TO, TEA, TEN, TENT, IN, INN, INK. It has 11 nodes, counting the root, for 20 letters in all");
+  await expect(figure).toContainText("Typing \u201cTE\u201d follows 2 links down from the root, one for each letter, and the words below the node it reaches are TEA, TEN, TENT.");
+  await figure.getByRole("button", { name: "Type N" }).click();
+  await expect(figure).toContainText("the words below the node it reaches are TEN, TENT.");
+  await figure.getByRole("button", { name: "Delete a letter" }).click();
+  await figure.getByRole("button", { name: "Delete a letter" }).click();
+  await figure.getByRole("button", { name: "Type O" }).click();
+  await figure.getByRole("button", { name: "Type N" }).click();
+  await expect(figure).toContainText("Typing \u201cTON\u201d finds no link for the letter \u201cN\u201d after \u201cTO\u201d, so no word begins with \u201cTON\u201d.");
+  await figure.getByRole("button", { name: "Decrease words" }).click();
+  await expect(figure).toContainText("The trie holds 6 words");
+  await expect(figure).toContainText("It has 10 nodes");
+});
+
+test("the graph-storage figure matches each node's row of the table with its list", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="graph-storage"]').first().getByRole("figure");
+  await expect(figure).toContainText("C has degree 3: its neighbours are A, B, E. In the table, row C has a 1 in 3 columns, A, B, E, and a 0 in the other 3.");
+  await expect(figure).toContainText("The whole table has 36 entries, of which 16 are 1, two for each edge");
+  await figure.getByRole("button", { name: "Make the edges one-way" }).click();
+  await expect(figure).toContainText("C has arrows out to E and arrows in from A, B, so its out-degree is 1 and its in-degree is 2.");
+  await expect(figure).toContainText("of which 8 are 1, one for each arrow");
+  await figure.getByRole("button", { name: "Increase node" }).click();
+  await expect(figure).toContainText("D has arrows out to E, F and arrows in from B");
+});
+
+test("the union-find figure keeps trees short by joining the smaller under the larger", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="union-find"]').first().getByRole("figure");
+  await expect(figure).toContainText("the 8 items form 1 set: {0, 1, 2, 3, 4, 5, 6, 7}.");
+  await expect(figure).toContainText("The tallest tree has height 5. find(0) follows 5 links from 0, through 1, 2, 3, 6, 7, and reaches the root 7.");
+  await figure.getByRole("button", { name: "Join the smaller under the larger" }).click();
+  await expect(figure).toContainText("The tallest tree has height 2. find(0) follows 1 link from 0, through 1, and reaches the root 1.");
+  for (let i = 0; i < 7; i++) await figure.getByRole("button", { name: "Decrease joins" }).click();
+  await expect(figure).toContainText("No joins yet, so each of the 8 items is a set on its own.");
+  await expect(figure).toContainText("find(0) follows 0 links from 0, and reaches the root 0.");
+});

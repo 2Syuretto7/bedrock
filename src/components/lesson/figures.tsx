@@ -2904,7 +2904,7 @@ function GraphStorage(props: Props) {
         directed
           ? `${name} has arrows out to ${mine.length > 0 ? mine.join(", ") : "nowhere"} and arrows in from ${into.length > 0 ? into.join(", ") : "nowhere"}, so its out-degree is ${mine.length} and its in-degree is ${into.length}.`
           : `${name} has degree ${mine.length}: its neighbours are ${mine.join(", ")}.`
-      } In the table, row ${name} has ${plural(mine.length, "1")} among its ${STORE_NAMES.length} entries. In the lists, ${name}'s list has ${plural(mine.length, "name")}. The whole table has ${entries} entries, of which ${ones} are 1${
+      } In the table, row ${name} has a 1 in ${plural(mine.length, "column")}${mine.length > 0 ? `, ${mine.join(", ")},` : ""} and a 0 in the other ${STORE_NAMES.length - mine.length}. In the lists, ${name}'s list holds ${plural(mine.length, "name")}. The whole table has ${entries} entries, of which ${ones} are 1${
         directed ? ", one for each arrow" : ", two for each edge, since each edge is recorded from both ends"
       }; the lists hold ${ones} names in all.`}
       controls={
@@ -2936,11 +2936,9 @@ function GraphStorage(props: Props) {
             <Cells values={row} x={258} y={38 + i * 30} w={28} h={26} hot={i === at ? row.map((v, j) => (v === 1 ? j : -1)).filter((j) => j >= 0) : []} faint={i === at ? [] : row.map((_, j) => j)} />
           </g>
         ))}
-        {[0, 3].map((first) => (
-          <text key={"lists" + first} x="12" y={first === 0 ? 240 : 258} className="fig-small">
-            {STORE_NAMES.slice(first, first + 3)
-              .map((n, i) => `${n}: ${lists[first + i].join(" ") || "nothing"}`)
-              .join("     ")}
+        {STORE_NAMES.map((n, i) => (
+          <text key={"list" + n} x={12 + (i % 3) * 76} y={i < 3 ? 240 : 258} className="fig-small">
+            {`${n}: ${lists[i].join(" ") || "nothing"}`}
           </text>
         ))}
         <text x="12" y="282" className="fig-mono">
@@ -3010,6 +3008,8 @@ function UnionFind(props: Props) {
     return at;
   };
   roots.forEach((r) => lay(r, 0));
+  const shift = (440 - (60 + (column - 1) * 54)) / 2;
+  for (const [item, at] of spots) spots.set(item, [at[0] + shift, at[1]]);
   const shown = UNION_JOINS.slice(0, joins).map(([a, b]) => `(${a}, ${b})`);
   return (
     <Frame
