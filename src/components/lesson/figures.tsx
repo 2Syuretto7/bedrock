@@ -2754,6 +2754,124 @@ function SearchTree(props: Props) {
   );
 }
 
+type TrieNode = { prefix: string; end: boolean; children: TrieNode[] };
+
+/** Builds a trie of the words, one node for each distinct beginning, with the children of each node in alphabetical order. */
+function buildTrie(words: string[]): TrieNode {
+  const root: TrieNode = { prefix: "", end: false, children: [] };
+  for (const word of words) {
+    let node = root;
+    for (const letter of word) {
+      let next = node.children.find((child) => child.prefix === node.prefix + letter);
+      if (!next) {
+        next = { prefix: node.prefix + letter, end: false, children: [] };
+        node.children.push(next);
+        node.children.sort((a, b) => (a.prefix < b.prefix ? -1 : 1));
+      }
+      node = next;
+    }
+    node.end = true;
+  }
+  return root;
+}
+
+const TRIE_WORDS = ["TO", "TEA", "TEN", "TENT", "IN", "INN", "INK"];
+const quoted = (text: string) => `\u201c${text}\u201d`;
+
+/** A trie built from a few words, with the path that typing a beginning follows and the words found below it. */
+function Trie(props: Props) {
+  const given =
+    Array.isArray(props.words) && props.words.length > 0 && props.words.every((w) => typeof w === "string" && /^[A-Z]{1,5}$/.test(w)) ? (props.words as string[]).slice(0, 8) : TRIE_WORDS;
+  const letters = [...new Set(given.join(""))].sort();
+  const start = typeof props.prefix === "string" ? [...props.prefix.toUpperCase()].filter((c) => letters.includes(c)).join("").slice(0, 5) : "";
+  const [count, setCount] = useState(clamp(Math.round(num(props.count, given.length)), 1, given.length));
+  const [typed, setTyped] = useState(start);
+  const words = given.slice(0, count);
+  const root = buildTrie(words);
+  const all: TrieNode[] = [];
+  const walk = (node: TrieNode) => {
+    all.push(node);
+    node.children.forEach(walk);
+  };
+  walk(root);
+  let reached: TrieNode | null = root;
+  for (const letter of typed) reached = reached?.children.find((child) => child.prefix === reached!.prefix + letter) ?? null;
+  const deepest = Math.max(...all.map((node) => node.prefix.length));
+  const rise = Math.min(52, 200 / Math.max(deepest, 1));
+  const place = new Map<string, Spot>();
+  let leaf = 0;
+  const leaves = all.filter((node) => node.children.length === 0).length;
+  const gap = leaves > 1 ? 380 / (leaves - 1) : 0;
+  const lay = (node: TrieNode): number => {
+    let x: number;
+    if (node.children.length === 0) {
+      x = leaves > 1 ? 30 + leaf * gap : 220;
+      leaf += 1;
+    } else {
+      const xs = node.children.map(lay);
+      x = (xs[0] + xs[xs.length - 1]) / 2;
+    }
+    place.set(node.prefix, [x, 26 + node.prefix.length * rise]);
+    return x;
+  };
+  lay(root);
+  const onPath = (prefix: string) => typed !== "" && typed.startsWith(prefix);
+  const found = reached ? all.filter((node) => node.end && node.prefix.startsWith(reached!.prefix)).map((node) => node.prefix) : [];
+  const total = words.reduce((sum, word) => sum + word.length, 0);
+  let matched = 0;
+  while (matched < typed.length && all.some((node) => node.prefix === typed.slice(0, matched + 1))) matched += 1;
+  const outcome =
+    typed === ""
+      ? "Nothing has been typed yet, so every word is below the root."
+      : reached
+        ? `Typing ${quoted(typed)} follows ${plural(typed.length, "link")} down from the root, one for each letter, and the words below the node it reaches are ${found.length > 0 ? found.join(", ") : "none"}.`
+        : `Typing ${quoted(typed)} finds no link for the letter ${quoted(typed[matched])} after ${matched === 0 ? "the root" : quoted(typed.slice(0, matched))}, so no word begins with ${quoted(typed)}.`;
+  return (
+    <Frame
+      title="A trie of words"
+      summary={`The trie holds ${plural(words.length, "word")}: ${words.join(", ")}. It has ${plural(all.length, "node")}, counting the root, for ${plural(total, "letter")} in all, because words that begin the same way share the nodes for that beginning. A ringed node ends a word. ${outcome}`}
+      controls={
+        <>
+          <Stepper label="words" value={count} onChange={setCount} min={1} max={given.length} />
+          {letters.map((letter) => (
+            <button key={letter} type="button" className="btn btn-secondary btn-small" aria-label={`Type ${letter}`} disabled={typed.length >= 5} onClick={() => setTyped(typed + letter)}>
+              {letter}
+            </button>
+          ))}
+          <button type="button" className="btn btn-secondary btn-small" disabled={typed === ""} onClick={() => setTyped(typed.slice(0, -1))}>
+            Delete a letter
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`A trie of ${plural(words.length, "word")} with ${plural(all.length, "node")}, and the path for ${typed === "" ? "nothing typed" : quoted(typed)}`}>
+        {all
+          .filter((node) => node.prefix !== "")
+          .map((node) => {
+            const parent = place.get(node.prefix.slice(0, -1))!;
+            return <Link key={"link" + node.prefix} from={parent} to={place.get(node.prefix)!} gap={13} hot={onPath(node.prefix)} />;
+          })}
+        {all.map((node) => {
+          const at = place.get(node.prefix)!;
+          const on = node.prefix === "" || onPath(node.prefix);
+          return (
+            <g key={"node" + node.prefix}>
+              {node.end ? <circle cx={at[0]} cy={at[1]} r="15" className="fig-guide" fill="none" /> : null}
+              <circle cx={at[0]} cy={at[1]} r="11" className={on ? "fig-accent" : "fig-fill"} />
+              <text x={at[0]} y={at[1] + 4} textAnchor="middle" className="fig-small" style={{ fill: on ? "var(--bg)" : "var(--text)" }}>
+                {node.prefix === "" ? "\u00b7" : node.prefix.slice(-1)}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="250" className="fig-small">
+          typed: {typed === "" ? "nothing yet" : typed}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -4032,6 +4150,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "hash-table": HashTable,
   heap: Heap,
   "search-tree": SearchTree,
+  trie: Trie,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

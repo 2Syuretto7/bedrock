@@ -63,6 +63,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "hash-table": z.strictObject({ buckets: z.number().optional(), keys: z.number().optional() }),
   "heap": z.strictObject({}),
   "search-tree": z.strictObject({ keys: z.array(z.number()).optional(), count: z.number().optional(), sorted: z.boolean().optional(), balance: z.boolean().optional(), target: z.number().optional() }),
+  "trie": z.strictObject({ words: z.array(z.string()).optional(), count: z.number().optional(), prefix: z.string().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
