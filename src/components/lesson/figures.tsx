@@ -290,6 +290,146 @@ function RatioTable(props: Props) {
   );
 }
 
+const SUPERSCRIPT: Record<string, string> = { "-": "⁻", "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹" };
+const tenTo = (k: number) => `10${String(k).replace(/./g, (c) => SUPERSCRIPT[c] ?? c)}`;
+/** Two significant figures, so a ratio reads as "about 30,000" and not as a long string of digits. */
+const roughly = (n: number) => {
+  if (n >= 100) {
+    const step = 10 ** (Math.floor(Math.log10(n)) - 1);
+    return group(Math.round(n / step) * step);
+  }
+  return String(Number(n.toPrecision(2)));
+};
+const seconds = (s: number) => {
+  if (s < 1e-6) return `${Number((s * 1e9).toPrecision(2))} nanoseconds`;
+  if (s < 1e-3) return `${Number((s * 1e6).toPrecision(2))} microseconds`;
+  if (s < 1) return `${Number((s * 1e3).toPrecision(2))} milliseconds`;
+  return `${group(s)} seconds`;
+};
+/** Written out, with the power of ten beside anything a reader would have to count the zeros of. */
+const withPower = (n: number, written: string) => (n >= 1e7 || n < 1e-3 ? `${written}, about ${roughly(n / 10 ** Math.floor(Math.log10(n)))} × ${tenTo(Math.floor(Math.log10(n)))}` : written);
+
+const LOG_SETS: Record<string, { title: string; show: (n: number) => string; items: { name: string; short: string; value: number }[] }> = {
+  bytes: {
+    title: "Sizes in bytes",
+    show: (n) => withPower(n, `${group(n)} ${n === 1 ? "byte" : "bytes"}`),
+    items: [
+      { name: "one letter of plain text", short: "a letter", value: 1 },
+      { name: "one SMS", short: "an SMS", value: 140 },
+      { name: "a page of plain text", short: "a page", value: 2_000 },
+      { name: "a phone photograph", short: "a photo", value: 3_000_000 },
+      { name: "an hour of HD video", short: "an hour of video", value: 3_000_000_000 },
+      { name: "a 1 TB laptop drive", short: "a drive", value: 1_000_000_000_000 },
+    ],
+  },
+  time: {
+    title: "Durations in seconds",
+    show: (n) => withPower(n, seconds(n)),
+    items: [
+      { name: "one clock tick of a 3 GHz processor", short: "a clock tick", value: 1 / 3e9 },
+      { name: "one read from main memory", short: "a memory read", value: 1e-7 },
+      { name: "a network round trip from Mumbai to Chennai", short: "a round trip", value: 0.02 },
+      { name: "a fast ball, from the bowler's hand to the bat", short: "a fast ball", value: 0.5 },
+      { name: "a day", short: "a day", value: 86_400 },
+      { name: "a year", short: "a year", value: 31_536_000 },
+    ],
+  },
+  counts: {
+    title: "Counts",
+    show: (n) => withPower(n, group(n)),
+    items: [
+      { name: "the players in a cricket team", short: "a team", value: 11 },
+      { name: "the students in a large school", short: "a school", value: 2_000 },
+      { name: "the crowd in a full Wankhede Stadium", short: "a stadium", value: 33_000 },
+      { name: "the people of the Mumbai region", short: "Mumbai", value: 20_000_000 },
+      { name: "the people of India", short: "India", value: 1_400_000_000 },
+      { name: "the UPI payments made in a month in 2025", short: "UPI, a month", value: 20_000_000_000 },
+    ],
+  },
+  money: {
+    title: "Amounts in rupees",
+    show: (n) => withPower(n, `₹${group(n)}`),
+    items: [
+      { name: "a cutting chai", short: "chai", value: 15 },
+      { name: "a basic smartphone", short: "a phone", value: 10_000 },
+      { name: "a small car", short: "a car", value: 6_00_000 },
+      { name: "a flat in a big city", short: "a flat", value: 1_00_00_000 },
+      { name: "a very large company's sales in a year", short: "a company", value: 1_00_000_00_00_000 },
+      { name: "the Union Budget for 2025–26", short: "the Budget", value: 50_00_000_00_00_000 },
+    ],
+  },
+};
+
+/** The same handful of quantities on an even scale and on a logarithmic one, where each equal step multiplies by ten. */
+function LogScale(props: Props) {
+  const set = LOG_SETS[String(props.set)] ?? LOG_SETS.bytes;
+  const n = set.items.length;
+  const [first, setFirst] = useState(clamp(num(props.first, 2), 1, n));
+  const [second, setSecond] = useState(clamp(num(props.second, n - 1), 1, n));
+  const [even, setEven] = useState(props.even === true);
+  const logs = set.items.map((item) => Math.log10(item.value));
+  const low = Math.floor(Math.min(...logs));
+  const high = Math.ceil(Math.max(...logs));
+  const largest = Math.max(...set.items.map((item) => item.value));
+  const x = (value: number) => 30 + 540 * (even ? value / largest : (Math.log10(value) - low) / (high - low));
+  // Few enough tick labels that each stays legible when the drawing is shrunk to a phone's width.
+  const every = Math.ceil((high - low) / 6);
+  const ticks = even
+    ? [0, 0.25, 0.5, 0.75, 1].map((f) => ({ at: 30 + 540 * f, label: ["0", "¼", "½", "¾", "the largest"][f * 4] }))
+    : Array.from({ length: high - low + 1 }, (_, i) => low + i).map((k) => ({ at: 30 + (540 * (k - low)) / (high - low), label: (k - low) % every === 0 ? tenTo(k) : "" }));
+  const [a, b] = [set.items[first - 1], set.items[second - 1]];
+  const [small, big] = a.value <= b.value ? [a, b] : [b, a];
+  const apart = Math.log10(big.value / small.value);
+  const crowded = set.items.filter((item) => item.value / largest < 0.01).length;
+  const times = big.value / small.value;
+  const capital = (text: string) => text[0].toUpperCase() + text.slice(1);
+  const summary = even
+    ? `On an even scale every equal step adds the same amount: each quarter of the line is a quarter of the largest, ${set.show(largest)}. ${crowded} of the ${n} quantities are under 1% of the largest, so they sit on top of one another at zero and cannot be told apart.`
+    : `${capital(a.name)}: ${set.show(a.value)}. ${capital(b.name)}: ${set.show(b.value)}. ${
+        a === b
+          ? "The same quantity, picked twice."
+          : `The larger is ${Number(apart.toFixed(1))} orders of magnitude above the smaller: about ${times >= 1e6 ? `${roughly(times / 10 ** Math.floor(Math.log10(times)))} × ${tenTo(Math.floor(Math.log10(times)))}` : roughly(times)} times as much.`
+      } On this scale every equal step multiplies by ten.`;
+  const anchor = (at: number) => (at < 110 ? "start" : at > 490 ? "end" : "middle");
+  return (
+    <Frame
+      title={`${set.title}, on ${even ? "an even" : "a logarithmic"} scale`}
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="first" value={first} onChange={setFirst} min={1} max={n} />
+          <Stepper label="second" value={second} onChange={setSecond} min={1} max={n} />
+          <button type="button" className="btn btn-secondary" aria-pressed={even} onClick={() => setEven(!even)}>
+            {even ? "Show the logarithmic scale" : "Show an even scale"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 600 190" role="img" aria-label={`${set.title} marked on ${even ? "an even" : "a logarithmic"} scale, with ${a.short} and ${b.short} picked out`}>
+        <line x1="30" y1="100" x2="570" y2="100" className="fig-axis" />
+        {ticks.map((tick) => (
+          <g key={tick.at}>
+            <line x1={tick.at} y1="94" x2={tick.at} y2="106" className="fig-axis" />
+            <text x={tick.at} y="178" textAnchor={anchor(tick.at)} className="fig-scale-tick">
+              {tick.label}
+            </text>
+          </g>
+        ))}
+        {set.items.map((item, i) => {
+          const picked = i === first - 1 || i === second - 1;
+          return <circle key={item.name} cx={x(item.value)} cy="100" r={picked ? 7 : 5} className={picked ? "fig-accent" : "fig-fill"} />;
+        })}
+        <text x={x(a.value)} y="74" textAnchor={anchor(x(a.value))} className="fig-scale-name">
+          {a.short}
+        </text>
+        <text x={x(b.value)} y={a === b ? "48" : "138"} textAnchor={anchor(x(b.value))} className="fig-scale-name">
+          {b.short}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const fmt = (n: number) => {
   const text = Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
   return text.replace("-", "−");
@@ -3138,6 +3278,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "fraction-bar": FractionBar,
   "powers-of-ten": PowersOfTen,
   "ratio-table": RatioTable,
+  "log-scale": LogScale,
   "plane-point": PlanePoint,
   "plane-line": PlaneLine,
   "plane-lines": PlaneLines,

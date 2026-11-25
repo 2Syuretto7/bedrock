@@ -20,6 +20,8 @@ Bedrock is an independent copy of [Axiom](https://github.com/2Syuretto7/axiom) w
 
 Every cluster requires the one before it on the route, so Learn walks all 583 lessons as one chain, each lesson listing the one before it as a direct prerequisite. `tests/unit/graph.test.ts` walks the whole graph as if every lesson were written and fails if the chain breaks, if a lesson cannot be reached, or if the order of clusters changes. Some lessons also require an earlier idea from another cluster, so that hashing, for example, returns in consistent hashing, hash joins and caches. The route, cluster by cluster, is in [ROADMAP.md](ROADMAP.md).
 
+Written so far: F0, number sense for engineers, nine lessons in `content/lessons/f0/` and its mini-capstone in `content/capstones/f0.yaml`.
+
 ## Run locally
 
 ```bash
@@ -45,6 +47,8 @@ Every pull request gets a Vercel preview with its own Neon database branch. The 
 ## Figures
 
 A lesson draws with `figure:` blocks. Each name is one of the interactive components in `src/components/lesson/figures.tsx`, and each has a strict props schema in `src/lib/lessons/figure-props.ts`. A misspelt prop, a wrong type or a value outside a figure's options fails `npm run lessons`, which also renders every placement on the server and fails if it does not draw.
+
+`/gallery` shows every figure placed in the real content, in the order Learn teaches them, so each can be checked at every screen size. It exists in local builds and Vercel previews only; production returns 404. The browser tests open it at laptop, tablet and phone sizes, check that every figure draws and describes its state, and run axe over the page.
 
 ## Mini-capstones
 

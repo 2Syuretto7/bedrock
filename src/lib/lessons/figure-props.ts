@@ -12,6 +12,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "fraction-bar": z.strictObject({ denominator: z.number().optional(), finer: z.number().optional(), numerator: z.number().optional() }),
   "powers-of-ten": z.strictObject({ start: z.number().optional() }),
   "ratio-table": z.strictObject({ a: z.number().optional(), b: z.number().optional(), first: z.string().min(1).optional(), second: z.string().min(1).optional(), start: z.number().optional() }),
+  "log-scale": z.strictObject({ set: z.enum(["bytes", "time", "counts", "money"]).optional(), first: z.number().int().min(1).max(6).optional(), second: z.number().int().min(1).max(6).optional(), even: z.boolean().optional() }),
   "plane-point": z.strictObject({ x: z.number().optional(), y: z.number().optional() }),
   "plane-line": z.strictObject({ intercept: z.number().optional(), slope: z.number().optional() }),
   "plane-lines": z.strictObject({ intercept: z.number().optional(), otherIntercept: z.number().optional(), otherSlope: z.number().optional(), slope: z.number().optional() }),

@@ -40,7 +40,7 @@ export default defineConfig({
         { name: "flow", testMatch: /flow\.spec\.ts/, use: { viewport: sizes.laptop } },
         ...Object.entries(sizes).map(([name, viewport]) => ({
           name,
-          testMatch: /(layout|workspace|tutor)\.spec\.ts/,
+          testMatch: /(layout|workspace|tutor|gallery)\.spec\.ts/,
           dependencies: ["flow"],
           use: { viewport, hasTouch: name !== "laptop", storageState: "test-results/.auth/learner.json" },
         })),
