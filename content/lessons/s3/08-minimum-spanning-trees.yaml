@@ -1,0 +1,748 @@
+concept: s3.minimum-spanning-trees
+minutes: 90
+claim: You can find the cheapest set of links that joins every node of a weighted graph, by Kruskal's method of taking links shortest first unless they close a loop, using union-find, or by Prim's method of growing one tree with a heap, explain why both are right with the cut property, tell a spanning tree apart from a tree of shortest routes, and stop Kruskal's method early to group nearby points into clusters.
+recalls: [s3.shortest-paths]
+uses: [s2.union-find, s2.heaps-and-priority-queues, s3.sorting, f3.trees-and-their-properties, f3.graph-theory-basics, f2.contrapositive-and-contradiction, s3.breadth-first-and-depth-first-search]
+leads: [s3.greedy-algorithms, s3.intractability-p-np-and-heuristics]
+starter: |
+  # Scratch space. Union-find answers "are these two towns already joined?"
+  parent = list(range(6))
+
+  def find(x):
+      while parent[x] != x:
+          x = parent[x]
+      return x
+
+  parent[find(0)] = find(2)
+  parent[find(2)] = find(1)
+  print(find(0) == find(1), find(0) == find(3))
+parts:
+  recall:
+    - text: |
+        [[s3.shortest-paths]] found the quickest route from one place to each of the others. A different question comes up just as often: not how to travel, but what to build. A telecom company laying fibre between villages, or an engineer joining the machines of a data centre, wants every point connected to every other, by some route, at the least total cost. Three quick pulls first.
+  puzzle:
+    - text: |
+        Five villages, P, Q, R, S and T, are to be joined by optical fibre so that every village can reach every other, possibly through others. Laying fibre between two villages costs, in lakh rupees:
+
+        | | Q | R | S | T |
+        | --- | --- | --- | --- | --- |
+        | **P** | 7 | 5 | 9 | – |
+        | **Q** | | 4 | – | 6 |
+        | **R** | | | 8 | 3 |
+        | **S** | | | | 2 |
+
+        A dash means no fibre can be laid between those two. **What is the least total cost, in lakh rupees, of joining all five villages?**
+  intuition:
+    - text: |
+        A set of links that joins all $n$ places with no loops is a **spanning tree**: a tree, in the sense of [[f3.trees-and-their-properties]], that reaches every node, so it has exactly $n - 1$ links. A loop would be wasted money, since dropping any one link of a loop leaves everything still joined. The cheapest spanning tree is the **minimum spanning tree**.
+
+        The obvious idea is greedy: buy the cheapest link first, then the next cheapest, and so on, skipping any link whose two ends are already joined, since it would only close a loop. Remarkably, that obvious idea is exactly right. The figure runs it on six towns, then shows a second method that grows one tree outwards from A, adding the cheapest link that reaches a new town.
+    - figure: spanning-tree
+      props: { method: kruskal, step: 0 }
+    - text: |
+        Shortest first, the method takes A–C 1, C–B 2, D–E 2 and E–F 3, skips A–B 4 because A and B are already joined through C, and takes B–D 5. Five roads now join all six towns for 13 in all, and every road after that would close a loop. Growing from A takes the same five roads in a different order, A–C, C–B, B–D, D–E, E–F. Both methods find the same cheapest tree.
+  derivation:
+    - text: |
+        **Not the shortest routes.** A spanning tree minimises the total length of road built, not the length of any one journey. With three towns where A–B and A–C have length 2 and B–C has length 1, the shortest routes from A use A–B and A–C, 4 in all, while the minimum spanning tree uses B–C and one of the others, 3 in all, and the journey from A to one town becomes 3 instead of 2. On the figure's towns the two trees happen to coincide; usually they do not.
+
+        **The cut property.** Why is taking the cheapest safe link right? Split the nodes into any two groups, a **cut**. Some link must cross the cut, or the two groups could not be joined. The claim: the cheapest link crossing a cut belongs to some minimum spanning tree.
+
+        The argument swaps one link for another, a proof by contradiction in the style of [[f2.contrapositive-and-contradiction]]. Let $e$ be the cheapest crossing link, and suppose a minimum spanning tree $T$ does not contain it. Adding $e$ to $T$ creates exactly one loop. The loop crosses the cut along $e$, and to come back it must cross again along some other link $e'$ of $T$. Removing $e'$ breaks the loop and leaves a spanning tree again. Since $e$ is the cheapest crossing link, $e$ costs no more than $e'$, so the new tree costs no more than $T$: it is also a minimum spanning tree, and it contains $e$. When all lengths differ, the swap would make $T$ strictly cheaper, so every minimum spanning tree contains $e$, and the minimum spanning tree is unique.
+    - question:
+        id: derivation-cut
+        type: numeric
+        system: s2
+        prompt: |
+          Four towns are split into the groups {A, B} and {C, D}. The roads crossing between the groups have lengths A–C 7, B–C 3 and B–D 5, and all road lengths in the graph are different. What is the length of the crossing road that every minimum spanning tree must contain?
+        answer: "3"
+        explanation: |
+          By the cut property, the cheapest road across any cut is in every minimum spanning tree when lengths are distinct: B–C, of length 3.
+    - text: |
+        **Kruskal's method.** Sort the links by length, as in [[s3.sorting]], and take each in turn unless its two ends are already joined. Each link taken is the cheapest crossing the cut between the group containing one of its ends and everything else, so the cut property says it is safe. The question "are these two ends already joined?" is exactly what union-find, from [[s2.union-find]], answers: `find` each end, and if the roots differ, take the link and join the two groups by linking one root to the other. The sort costs $O(E \log E)$, and the union-find work is nearly linear, so sorting dominates. The method stops once $n - 1$ links are taken.
+
+        **Prim's method.** Start from any node and grow one tree. Each step adds the cheapest link with exactly one end in the tree, which is the cheapest link crossing the cut between the tree and the rest, so it is safe too. A heap, from [[s2.heaps-and-priority-queues]], finds that link quickly: push `(length, node)` for every link out of each node added, pop the cheapest, and skip it if its node is already in the tree. It looks almost exactly like Dijkstra's algorithm, with one difference: the heap holds the length of the **last link**, not the distance from the start. Its cost is $O(E \log V)$.
+    - question:
+        id: derivation-tree-edges
+        type: numeric
+        system: s2
+        prompt: |
+          A data centre's 50 racks are to be joined by a minimum spanning tree of cables. How many cables does the tree have?
+        answer: "49"
+        explanation: |
+          A tree on $n$ nodes has $n - 1$ edges: 49 cables join 50 racks, whatever the costs.
+    - text: |
+        **Clustering.** Stopping Kruskal's method early is useful in itself. With $k$ groups left, the shops, customers or data points in each group are those joined by the cheapest links, and the shortest link between two different groups, called the **spacing**, is as large as any grouping into $k$ groups can make it. This is called **single-linkage clustering**: a delivery company can split its shops into $k$ zones so that shops in different zones are as far apart as possible.
+
+        **Greedy and right.** Both methods make the choice that looks best now and never undo it, the same short-sighted style as Dijkstra's algorithm. For spanning trees the cut property guarantees that short-sightedness costs nothing. That is unusual, and the next lesson asks when such greedy choices are safe in general.
+    - question:
+        id: order-kruskal
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of Kruskal's method in order.
+        steps:
+          - "Sort the links from shortest to longest."
+          - "Take the next link in sorted order and find the group of each of its ends."
+          - "If the groups differ, keep the link and join the two groups."
+          - "Stop once $n - 1$ links have been kept."
+        explanation: |
+          The links must be sorted before the next one can be taken, a link's groups must be found before deciding to keep it, and links are counted only as they are kept.
+  formal:
+    - text: |
+        **Spanning tree.** A set of $n - 1$ edges joining all $n$ nodes of a connected graph with no cycle. **Minimum spanning tree**: one of least total weight.
+
+        **Cut property.** For any partition of the nodes into two non-empty sets, a lightest edge crossing it lies in some minimum spanning tree; with distinct weights, the lightest crossing edge lies in every one, and the minimum spanning tree is unique.
+
+        **Kruskal.** Edges in increasing weight; keep an edge when its ends are in different union-find groups. $O(E \log E)$.
+
+        **Prim.** Grow from one node; repeatedly add the lightest edge leaving the tree, with a heap keyed on edge weight. $O(E \log V)$.
+
+        **Single-linkage clustering.** Kruskal stopped at $k$ components; the lightest edge between components, the spacing, is the largest possible over all partitions into $k$ groups.
+  drill:
+    - text: Seconds each. Count links, find cuts, spot loops.
+    - question:
+        id: drill-edges
+        type: numeric
+        system: s1
+        prompt: |
+          How many links does a spanning tree of 12 towns have?
+        answer: "11"
+        explanation: A tree on $n$ nodes has $n - 1$ edges.
+    - question:
+        id: drill-skip
+        type: choice
+        system: s1
+        prompt: |
+          Kruskal's method reaches a link whose two ends are already joined by links it has kept. What does it do?
+        options:
+          - "Skips it, because it would close a loop"
+          - "Keeps it, because it is the shortest left"
+          - "Keeps it and drops the longest link kept so far"
+          - "Stops"
+        answer: 0
+        explanation: Its ends are already joined, so adding it would only make a loop.
+    - question:
+        id: drill-triangle
+        type: numeric
+        system: s1
+        prompt: |
+          Three towns are joined by roads of lengths 2, 2 and 1. What is the total length of a minimum spanning tree?
+        answer: "3"
+        explanation: Keep the road of length 1 and one road of length 2; the other 2 would close the loop.
+    - question:
+        id: drill-heap-key
+        type: choice
+        system: s1
+        prompt: |
+          What does Prim's method store as the key of a node in its heap?
+        options:
+          - "The length of the link that would join the node to the tree"
+          - "The node's distance from the start"
+          - "The number of links out of the node"
+          - "The node's name"
+        answer: 0
+        explanation: Prim adds the cheapest link leaving the tree. The distance from the start is Dijkstra's key, not Prim's.
+    - question:
+        id: drill-unique
+        type: choice
+        system: s1
+        prompt: |
+          A connected graph's link lengths are all different. How many minimum spanning trees does it have?
+        options:
+          - "Exactly one"
+          - "Exactly two"
+          - "As many as it has nodes"
+          - "It depends on where Prim's method starts"
+        answer: 0
+        explanation: With distinct lengths, the cheapest link across every cut is in every minimum spanning tree, which pins down a single tree.
+    - question:
+        id: predict-sorted-links
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          links = [(4, "A", "B"), (1, "A", "C"), (2, "C", "B")]
+          print(sorted(links)[0], sorted(links)[-1])
+        output: "(1, 'A', 'C') (4, 'A', 'B')"
+        explanation: Tuples sort by their first part, the length, so A–C of length 1 comes first and A–B of length 4 last. Putting the length first is what lets Kruskal's method sort links with a plain `sorted`.
+    - question:
+        id: predict-find
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          parent = [0, 1, 2, 3]
+
+          def find(x):
+              while parent[x] != x:
+                  x = parent[x]
+              return x
+
+          parent[find(0)] = find(1)
+          parent[find(2)] = find(3)
+          print(find(0) == find(1), find(1) == find(2))
+        output: "True False"
+        explanation: 0 and 1 are joined, and 2 and 3 are joined, but nothing joins the two pairs yet.
+  work:
+    - text: Slower now. For each method, say which cut each kept link crosses, and what makes a link unsafe to keep.
+    - question:
+        id: fix-kruskal
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `mst_cost(n, roads)` should return the total length of a minimum spanning tree by Kruskal's method. The program should print `13 5`. It prints `13 14`. Find the fault and fix it.
+        starter: |
+          def mst_cost(n, roads):
+              # Towns are numbered 0 to n - 1, and roads is a list of (km, a, b). Return the total
+              # length of the cheapest set of roads that joins every town, assuming one exists.
+              parent = list(range(n))
+
+              def find(x):
+                  while parent[x] != x:
+                      x = parent[x]
+                  return x
+
+              total = 0
+              for km, a, b in sorted(roads):
+                  ra = find(a)
+                  rb = find(b)
+                  if ra != rb:
+                      parent[a] = b
+                      total += km
+              return total
+
+
+          roads = [(1, 0, 2), (2, 2, 1), (2, 3, 4), (3, 4, 5), (4, 0, 1), (5, 1, 3), (6, 3, 5), (8, 2, 3), (10, 2, 4)]
+          print(mst_cost(6, roads), mst_cost(4, [(1, 0, 1), (1, 2, 3), (9, 1, 2), (2, 0, 1), (2, 3, 2), (3, 0, 3)]))
+        solution: |
+          def mst_cost(n, roads):
+              # Towns are numbered 0 to n - 1, and roads is a list of (km, a, b). Return the total
+              # length of the cheapest set of roads that joins every town, assuming one exists.
+              parent = list(range(n))
+
+              def find(x):
+                  while parent[x] != x:
+                      x = parent[x]
+                  return x
+
+              total = 0
+              for km, a, b in sorted(roads):
+                  ra = find(a)
+                  rb = find(b)
+                  if ra != rb:
+                      parent[ra] = rb
+                      total += km
+              return total
+
+
+          roads = [(1, 0, 2), (2, 2, 1), (2, 3, 4), (3, 4, 5), (4, 0, 1), (5, 1, 3), (6, 3, 5), (8, 2, 3), (10, 2, 4)]
+          print(mst_cost(6, roads), mst_cost(4, [(1, 0, 1), (1, 2, 3), (9, 1, 2), (2, 0, 1), (2, 3, 2), (3, 0, 3)]))
+        tests: |
+          import random as _random
+
+
+          def _reference(_n, _roads):
+              _best = None
+              _m = len(_roads)
+              for _mask in range(1 << _m):
+                  _chosen = [_roads[_i] for _i in range(_m) if _mask >> _i & 1]
+                  if len(_chosen) != _n - 1:
+                      continue
+                  _label = list(range(_n))
+                  for _km, _a, _b in _chosen:
+                      _la = _label[_a]
+                      _lb = _label[_b]
+                      _label = [_lb if _x == _la else _x for _x in _label]
+                  if len(set(_label)) == 1:
+                      _cost = sum(_km for _km, _a, _b in _chosen)
+                      if _best is None or _cost < _best:
+                          _best = _cost
+              return _best
+
+
+          _rng = _random.Random(41)
+          _cases = [
+              (6, [(1, 0, 2), (2, 2, 1), (2, 3, 4), (3, 4, 5), (4, 0, 1), (5, 1, 3), (6, 3, 5), (8, 2, 3), (10, 2, 4)]),
+              (6, [(10, 2, 4), (8, 2, 3), (6, 3, 5), (5, 1, 3), (4, 0, 1), (3, 4, 5), (2, 3, 4), (2, 2, 1), (1, 0, 2)]),
+              (3, [(2, 0, 1), (2, 0, 2), (1, 1, 2)]),
+              (1, []),
+              (2, [(5, 0, 1), (3, 1, 0)]),
+              (4, [(1, 0, 1), (1, 2, 3), (9, 1, 2), (2, 0, 1), (2, 3, 2), (3, 0, 3)]),
+          ]
+          for _ in range(25):
+              _n = _rng.randint(2, 5)
+              _roads = [(_rng.randint(1, 9), _i, _i + 1) for _i in range(_n - 1)]
+              for _ in range(_rng.randint(0, 6)):
+                  _a = _rng.randint(0, _n - 1)
+                  _b = _rng.randint(0, _n - 1)
+                  if _a != _b:
+                      _roads.append((_rng.randint(1, 9), _a, _b))
+              _rng.shuffle(_roads)
+              _cases.append((_n, _roads))
+          for _n, _roads in _cases:
+              _want = 0 if _n == 1 else _reference(_n, _roads)
+              _got = mst_cost(_n, list(_roads))
+              assert _got == _want, "mst_cost(" + str(_n) + ", " + str(_roads) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "13 5", "The program should print 13 5"
+        wrong:
+          - |
+            def mst_cost(n, roads):
+                # Towns are numbered 0 to n - 1, and roads is a list of (km, a, b). Return the total
+                # length of the cheapest set of roads that joins every town, assuming one exists.
+                parent = list(range(n))
+
+                def find(x):
+                    while parent[x] != x:
+                        x = parent[x]
+                    return x
+
+                total = 0
+                for km, a, b in sorted(roads)[:n - 1]:
+                    total += km
+                return total
+
+
+            roads = [(1, 0, 2), (2, 2, 1), (2, 3, 4), (3, 4, 5), (4, 0, 1), (5, 1, 3), (6, 3, 5), (8, 2, 3), (10, 2, 4)]
+            print(mst_cost(6, roads), mst_cost(4, [(1, 0, 1), (1, 2, 3), (9, 1, 2), (2, 0, 1), (2, 3, 2), (3, 0, 3)]))
+          - |
+            def mst_cost(n, roads):
+                # Towns are numbered 0 to n - 1, and roads is a list of (km, a, b). Return the total
+                # length of the cheapest set of roads that joins every town, assuming one exists.
+                parent = list(range(n))
+
+                def find(x):
+                    while parent[x] != x:
+                        x = parent[x]
+                    return x
+
+                total = 0
+                for km, a, b in roads:
+                    ra = find(a)
+                    rb = find(b)
+                    if ra != rb:
+                        parent[ra] = rb
+                        total += km
+                return total
+
+
+            roads = [(1, 0, 2), (2, 2, 1), (2, 3, 4), (3, 4, 5), (4, 0, 1), (5, 1, 3), (6, 3, 5), (8, 2, 3), (10, 2, 4)]
+            print(mst_cost(6, roads), mst_cost(4, [(1, 0, 1), (1, 2, 3), (9, 1, 2), (2, 0, 1), (2, 3, 2), (3, 0, 3)]))
+          - |
+            def mst_cost(n, roads):
+                # Towns are numbered 0 to n - 1, and roads is a list of (km, a, b). Return the total
+                # length of the cheapest set of roads that joins every town, assuming one exists.
+                parent = list(range(n))
+
+                def find(x):
+                    while parent[x] != x:
+                        x = parent[x]
+                    return x
+
+                total = 0
+                for km, a, b in sorted(roads)[:n - 1]:
+                    ra = find(a)
+                    rb = find(b)
+                    if ra != rb:
+                        parent[ra] = rb
+                        total += km
+                return total
+
+
+            roads = [(1, 0, 2), (2, 2, 1), (2, 3, 4), (3, 4, 5), (4, 0, 1), (5, 1, 3), (6, 3, 5), (8, 2, 3), (10, 2, 4)]
+            print(mst_cost(6, roads), mst_cost(4, [(1, 0, 1), (1, 2, 3), (9, 1, 2), (2, 0, 1), (2, 3, 2), (3, 0, 3)]))
+        explanation: |
+          Joining two groups means linking one group's root to the other's: `parent[ra] = rb`. Linking the towns themselves, `parent[a] = b`, moves `a` out of its old group and leaves the rest of that group behind, so groups that should be joined stay apart and a later, longer road is kept. Taking the $n - 1$ shortest roads ignores loops; leaving the roads unsorted keeps whatever comes first; and looking only at the first $n - 1$ roads in sorted order misses later roads that are needed when earlier ones were skipped.
+    - question:
+        id: write-prim-cost
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `prim_cost(graph)` by Prim's method. `graph` maps each village to a list of `(neighbour, cost)` pairs, with every link listed in both directions. Return the least total cost of links that join every village, `0` for an empty graph, or `None` if some village cannot be joined at all.
+        starter: |
+          import heapq
+
+
+          def prim_cost(graph):
+              # graph maps each village to a list of (neighbour, cost) pairs, listed in both directions.
+              # Return the least total cost of links that join every village, or None if some village
+              # cannot be joined at all.
+              return 0
+
+
+          links = [("P", "Q", 7), ("P", "R", 5), ("P", "S", 9), ("Q", "R", 4), ("Q", "T", 6), ("R", "S", 8), ("R", "T", 3), ("S", "T", 2)]
+          graph = {v: [] for v in "PQRST"}
+          for a, b, cost in links:
+              graph[a].append((b, cost))
+              graph[b].append((a, cost))
+          print(prim_cost(graph), prim_cost({"X": [], "Y": []}))
+        solution: |
+          import heapq
+
+
+          def prim_cost(graph):
+              # graph maps each village to a list of (neighbour, cost) pairs, listed in both directions.
+              # Return the least total cost of links that join every village, or None if some village
+              # cannot be joined at all.
+              if len(graph) == 0:
+                  return 0
+              start = list(graph)[0]
+              in_tree = set()
+              heap = [(0, start)]
+              total = 0
+              while heap:
+                  cost, village = heapq.heappop(heap)
+                  if village not in in_tree:
+                      in_tree.add(village)
+                      total += cost
+                      for other, link in graph[village]:
+                          if other not in in_tree:
+                              heapq.heappush(heap, (link, other))
+              if len(in_tree) < len(graph):
+                  return None
+              return total
+
+
+          links = [("P", "Q", 7), ("P", "R", 5), ("P", "S", 9), ("Q", "R", 4), ("Q", "T", 6), ("R", "S", 8), ("R", "T", 3), ("S", "T", 2)]
+          graph = {v: [] for v in "PQRST"}
+          for a, b, cost in links:
+              graph[a].append((b, cost))
+              graph[b].append((a, cost))
+          print(prim_cost(graph), prim_cost({"X": [], "Y": []}))
+        tests: |
+          import random as _random
+
+
+          def _reference(_graph):
+              _names = list(_graph)
+              _label = {_x: _x for _x in _names}
+              _edges = sorted((_c, _a, _b) for _a in _graph for _b, _c in _graph[_a])
+              _total = 0
+              for _c, _a, _b in _edges:
+                  _la = _label[_a]
+                  _lb = _label[_b]
+                  if _la != _lb:
+                      _total += _c
+                      for _x in _names:
+                          if _label[_x] == _la:
+                              _label[_x] = _lb
+              if len(set(_label.values())) > 1:
+                  return None
+              return _total
+
+
+          _rng = _random.Random(43)
+          _cases = [{}, {"X": []}, {"X": [], "Y": []}]
+          _v = {_x: [] for _x in "PQRST"}
+          for _a, _b, _c in [("P", "Q", 7), ("P", "R", 5), ("P", "S", 9), ("Q", "R", 4), ("Q", "T", 6), ("R", "S", 8), ("R", "T", 3), ("S", "T", 2)]:
+              _v[_a].append((_b, _c))
+              _v[_b].append((_a, _c))
+          _cases.append(_v)
+          _cases.append({"A": [("B", 2), ("C", 2)], "B": [("A", 2), ("C", 1)], "C": [("A", 2), ("B", 1)]})
+          _cases.append({"A": [("B", 5), ("C", 1)], "B": [("A", 5), ("C", 1)], "C": [("A", 1), ("B", 1)]})
+          for _ in range(40):
+              _n = _rng.randint(1, 7)
+              _names = ["v" + str(_i) for _i in range(_n)]
+              _g = {_x: [] for _x in _names}
+              for _ in range(_rng.randint(0, 12)):
+                  _a = _rng.choice(_names)
+                  _b = _rng.choice(_names)
+                  if _a != _b:
+                      _c = _rng.randint(1, 9)
+                      _g[_a].append((_b, _c))
+                      _g[_b].append((_a, _c))
+              _cases.append(_g)
+          for _g in _cases:
+              _want = _reference(_g)
+              _got = prim_cost(_g)
+              assert _got == _want, "prim_cost(" + str(_g) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "14 None", "The program should print 14 None"
+        wrong:
+          - |
+            import heapq
+
+
+            def prim_cost(graph):
+                # graph maps each village to a list of (neighbour, cost) pairs, listed in both directions.
+                # Return the least total cost of links that join every village, or None if some village
+                # cannot be joined at all.
+                if len(graph) == 0:
+                    return 0
+                start = list(graph)[0]
+                in_tree = set()
+                heap = [(0, start)]
+                total = 0
+                while heap:
+                    cost, village = heapq.heappop(heap)
+                    if village not in in_tree:
+                        in_tree.add(village)
+                        total += cost
+                        for other, link in graph[village]:
+                            if other not in in_tree:
+                                heapq.heappush(heap, (cost + link, other))
+                if len(in_tree) < len(graph):
+                    return None
+                return total
+
+
+            links = [("P", "Q", 7), ("P", "R", 5), ("P", "S", 9), ("Q", "R", 4), ("Q", "T", 6), ("R", "S", 8), ("R", "T", 3), ("S", "T", 2)]
+            graph = {v: [] for v in "PQRST"}
+            for a, b, cost in links:
+                graph[a].append((b, cost))
+                graph[b].append((a, cost))
+            print(prim_cost(graph), prim_cost({"X": [], "Y": []}))
+          - |
+            import heapq
+
+
+            def prim_cost(graph):
+                # graph maps each village to a list of (neighbour, cost) pairs, listed in both directions.
+                # Return the least total cost of links that join every village, or None if some village
+                # cannot be joined at all.
+                if len(graph) == 0:
+                    return 0
+                start = list(graph)[0]
+                in_tree = set()
+                heap = [(0, start)]
+                total = 0
+                while heap:
+                    cost, village = heapq.heappop(heap)
+                    if village not in in_tree:
+                        in_tree.add(village)
+                        total += cost
+                        for other, link in graph[village]:
+                            if other not in in_tree:
+                                heapq.heappush(heap, (link, other))
+                return total
+
+
+            links = [("P", "Q", 7), ("P", "R", 5), ("P", "S", 9), ("Q", "R", 4), ("Q", "T", 6), ("R", "S", 8), ("R", "T", 3), ("S", "T", 2)]
+            graph = {v: [] for v in "PQRST"}
+            for a, b, cost in links:
+                graph[a].append((b, cost))
+                graph[b].append((a, cost))
+            print(prim_cost(graph), prim_cost({"X": [], "Y": []}))
+          - |
+            import heapq
+
+
+            def prim_cost(graph):
+                # graph maps each village to a list of (neighbour, cost) pairs, listed in both directions.
+                # Return the least total cost of links that join every village, or None if some village
+                # cannot be joined at all.
+                if len(graph) == 0:
+                    return 0
+                start = list(graph)[0]
+                in_tree = {start}
+                heap = [(0, start)]
+                total = 0
+                while heap:
+                    cost, village = heapq.heappop(heap)
+                    total += cost
+                    for other, link in graph[village]:
+                        if other not in in_tree:
+                            in_tree.add(other)
+                            heapq.heappush(heap, (link, other))
+                if len(in_tree) < len(graph):
+                    return None
+                return total
+
+
+            links = [("P", "Q", 7), ("P", "R", 5), ("P", "S", 9), ("Q", "R", 4), ("Q", "T", 6), ("R", "S", 8), ("R", "T", 3), ("S", "T", 2)]
+            graph = {v: [] for v in "PQRST"}
+            for a, b, cost in links:
+                graph[a].append((b, cost))
+                graph[b].append((a, cost))
+            print(prim_cost(graph), prim_cost({"X": [], "Y": []}))
+        explanation: |
+          The heap holds `(cost of the link, village)`, and a popped village not yet in the tree joins it along that link. Keying the heap on the cost so far, as Dijkstra does, adds up route lengths instead of link costs; forgetting the final check returns a total for only part of the villages; and putting a village in the tree when it is first reached fixes the first link found to it, even if a cheaper one turns up later.
+    - question:
+        id: write-zone-spacing
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A delivery company groups its shops into zones by joining the two closest shops in different zones, again and again, until `k` zones remain. Write `zone_spacing(n, roads, k)`, which returns the shortest road between two different zones at that point. Shops are numbered 0 to `n - 1`, `roads` is a list of `(km, a, b)` that joins every shop, and `k` is at least 2.
+        starter: |
+          def zone_spacing(n, roads, k):
+              # Shops are numbered 0 to n - 1 and roads is a list of (km, a, b) that joins every shop.
+              # Zones are formed by joining the two closest shops in different zones, again and
+              # again, until k zones remain (k >= 2). Return the shortest road between two
+              # different zones at that point.
+              return min(roads)[0]
+
+
+          roads = [(1, 0, 2), (2, 2, 1), (2, 3, 4), (3, 4, 5), (4, 0, 1), (5, 1, 3), (6, 3, 5), (8, 2, 3), (10, 2, 4)]
+          print(zone_spacing(6, roads, 2), zone_spacing(6, roads, 3))
+        solution: |
+          def zone_spacing(n, roads, k):
+              # Shops are numbered 0 to n - 1 and roads is a list of (km, a, b) that joins every shop.
+              # Zones are formed by joining the two closest shops in different zones, again and
+              # again, until k zones remain (k >= 2). Return the shortest road between two
+              # different zones at that point.
+              parent = list(range(n))
+
+              def find(x):
+                  while parent[x] != x:
+                      x = parent[x]
+                  return x
+
+              zones = n
+              for km, a, b in sorted(roads):
+                  ra = find(a)
+                  rb = find(b)
+                  if ra != rb:
+                      if zones == k:
+                          return km
+                      parent[ra] = rb
+                      zones -= 1
+              return None
+
+
+          roads = [(1, 0, 2), (2, 2, 1), (2, 3, 4), (3, 4, 5), (4, 0, 1), (5, 1, 3), (6, 3, 5), (8, 2, 3), (10, 2, 4)]
+          print(zone_spacing(6, roads, 2), zone_spacing(6, roads, 3))
+        tests: |
+          import random as _random
+
+
+          def _reference(_n, _roads, _k):
+              _zone = list(range(_n))
+              while len(set(_zone)) > _k:
+                  _best = None
+                  for _km, _a, _b in _roads:
+                      if _zone[_a] != _zone[_b] and (_best is None or _km < _best[0]):
+                          _best = (_km, _a, _b)
+                  _old = _zone[_best[1]]
+                  _new = _zone[_best[2]]
+                  _zone = [_new if _z == _old else _z for _z in _zone]
+              return min(_km for _km, _a, _b in _roads if _zone[_a] != _zone[_b])
+
+
+          _rng = _random.Random(47)
+          _figure = [(1, 0, 2), (2, 2, 1), (2, 3, 4), (3, 4, 5), (4, 0, 1), (5, 1, 3), (6, 3, 5), (8, 2, 3), (10, 2, 4)]
+          _cases = [(6, _figure, 2), (6, _figure, 3), (6, _figure, 4), (6, _figure, 6), (3, [(2, 0, 1), (9, 1, 2), (1, 0, 1)], 2)]
+          for _ in range(40):
+              _n = _rng.randint(2, 7)
+              _roads = [(_rng.randint(1, 20), _i, _i + 1) for _i in range(_n - 1)]
+              for _ in range(_rng.randint(0, 8)):
+                  _a = _rng.randint(0, _n - 1)
+                  _b = _rng.randint(0, _n - 1)
+                  if _a != _b:
+                      _roads.append((_rng.randint(1, 20), _a, _b))
+              _rng.shuffle(_roads)
+              _cases.append((_n, _roads, _rng.randint(2, _n)))
+          for _n, _roads, _k in _cases:
+              _want = _reference(_n, _roads, _k)
+              _got = zone_spacing(_n, list(_roads), _k)
+              assert _got == _want, "zone_spacing(" + str(_n) + ", " + str(_roads) + ", " + str(_k) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "5 3", "The program should print 5 3"
+        wrong:
+          - |
+            def zone_spacing(n, roads, k):
+                # Shops are numbered 0 to n - 1 and roads is a list of (km, a, b) that joins every shop.
+                # Zones are formed by joining the two closest shops in different zones, again and
+                # again, until k zones remain (k >= 2). Return the shortest road between two
+                # different zones at that point.
+                parent = list(range(n))
+
+                def find(x):
+                    while parent[x] != x:
+                        x = parent[x]
+                    return x
+
+                zones = n
+                last = None
+                for km, a, b in sorted(roads):
+                    ra = find(a)
+                    rb = find(b)
+                    if ra != rb and zones > k:
+                        parent[ra] = rb
+                        zones -= 1
+                        last = km
+                return last
+
+
+            roads = [(1, 0, 2), (2, 2, 1), (2, 3, 4), (3, 4, 5), (4, 0, 1), (5, 1, 3), (6, 3, 5), (8, 2, 3), (10, 2, 4)]
+            print(zone_spacing(6, roads, 2), zone_spacing(6, roads, 3))
+          - |
+            def zone_spacing(n, roads, k):
+                # Shops are numbered 0 to n - 1 and roads is a list of (km, a, b) that joins every shop.
+                # Zones are formed by joining the two closest shops in different zones, again and
+                # again, until k zones remain (k >= 2). Return the shortest road between two
+                # different zones at that point.
+                parent = list(range(n))
+
+                def find(x):
+                    while parent[x] != x:
+                        x = parent[x]
+                    return x
+
+                zones = n
+                for km, a, b in sorted(roads):
+                    ra = find(a)
+                    rb = find(b)
+                    if ra != rb:
+                        if zones == k + 1:
+                            return km
+                        parent[ra] = rb
+                        zones -= 1
+                return None
+
+
+            roads = [(1, 0, 2), (2, 2, 1), (2, 3, 4), (3, 4, 5), (4, 0, 1), (5, 1, 3), (6, 3, 5), (8, 2, 3), (10, 2, 4)]
+            print(zone_spacing(6, roads, 2), zone_spacing(6, roads, 3))
+          - |
+            def zone_spacing(n, roads, k):
+                # Shops are numbered 0 to n - 1 and roads is a list of (km, a, b) that joins every shop.
+                # Zones are formed by joining the two closest shops in different zones, again and
+                # again, until k zones remain (k >= 2). Return the shortest road between two
+                # different zones at that point.
+                parent = list(range(n))
+
+                def find(x):
+                    while parent[x] != x:
+                        x = parent[x]
+                    return x
+
+                zones = n
+                for km, a, b in sorted(roads):
+                    if zones == k:
+                        return km
+                    parent[find(a)] = find(b)
+                    zones -= 1
+                return None
+
+
+            roads = [(1, 0, 2), (2, 2, 1), (2, 3, 4), (3, 4, 5), (4, 0, 1), (5, 1, 3), (6, 3, 5), (8, 2, 3), (10, 2, 4)]
+            print(zone_spacing(6, roads, 2), zone_spacing(6, roads, 3))
+        explanation: |
+          This is Kruskal's method stopped early: join zones along roads shortest first, and once `k` zones remain, the next road between two different zones is the spacing. Returning the last road used to join is the longest join inside a zone, not the gap between zones; stopping at `k + 1` zones answers for one zone too many; and counting every road as a join, without checking that its ends lie in different zones, stops too soon.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Fibre costs in lakh rupees: P–Q 7, P–R 5, P–S 9, Q–R 4, Q–T 6, R–S 8, R–T 3, S–T 2, and no other pairs. What is the least total cost of joining all five villages?
+        answer: "14"
+        explanation: |
+          Shortest first: S–T 2, R–T 3, Q–R 4 and P–R 5 join all five villages with four links, for $2 + 3 + 4 + 5 = 14$ lakh. Every other link would close a loop.
+    - question:
+        id: work-tour
+        type: choice
+        system: s2
+        prompt: |
+          A salesperson must visit 30 towns and return home, and wants the shortest tour. Someone suggests building a minimum spanning tree of the towns. What is true?
+        options:
+          - "Its total length is a lower limit on the shortest tour, because removing one road from any tour leaves a spanning tree."
+          - "The minimum spanning tree is the shortest tour."
+          - "The shortest tour is always exactly twice the tree's length."
+          - "The two problems have nothing to do with each other."
+        answer: 0
+        explanation: |
+          A tour with one road removed is a path through every town, which is a spanning tree, so it is at least as long as the minimum spanning tree, and so is the tour. A tree is not a tour, since it branches and does not return home. Walking round the tree visits every town in at most twice its length, which is why the tree is a useful start for the tour problem rather than an answer to it.
+  connections:
+    - text: |
+        14 lakh rupees. Taking links shortest first gives S–T 2, R–T 3, Q–R 4, and then P–R 5, which brings in the last village; every remaining link joins villages already joined. The cut property guarantees nothing cheaper exists: each of those four links was the cheapest way across some division of the villages.
+
+        Kruskal's and Prim's methods are greedy, and here greed is provably right. [[s3.greedy-algorithms]] collects other problems where a simple rule of "take the best-looking choice now" is right, and shows the exchange argument that proves it, the same swap used for the cut property, along with problems where greed fails. And the last question's tour problem returns in [[s3.intractability-p-np-and-heuristics]]: no fast method is known for the shortest tour, but a tour built by walking round a minimum spanning tree is guaranteed to be at most twice the best when distances obey the triangle inequality.

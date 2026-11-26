@@ -5320,6 +5320,101 @@ function RecursionTree(props: Props) {
   );
 }
 
+type Road = [string, string, number];
+const roadName = ([a, b, length]: Road) => `${a}–${b} ${length}`;
+
+/** Kruskal's steps on the six towns: each road in order of length, taken unless it would close a loop. */
+function kruskalSteps(): { road: Road; taken: boolean }[] {
+  const group: Record<string, string> = Object.fromEntries(Object.keys(TOWNS).map((town) => [town, town]));
+  const find = (town: string): string => (group[town] === town ? town : find(group[town]));
+  return [...ROADS]
+    .sort((x, y) => x[2] - y[2])
+    .map((road) => {
+      const [ra, rb] = [find(road[0]), find(road[1])];
+      if (ra !== rb) group[ra] = rb;
+      return { road, taken: ra !== rb };
+    });
+}
+
+/** Prim's steps from A: each time, the shortest road with exactly one end in the tree. */
+function primSteps(): Road[] {
+  const inTree = new Set(["A"]);
+  const taken: Road[] = [];
+  while (inTree.size < Object.keys(TOWNS).length) {
+    const leaving = ROADS.filter(([a, b]) => inTree.has(a) !== inTree.has(b)).sort((x, y) => x[2] - y[2]);
+    const road = leaving[0];
+    taken.push(road);
+    inTree.add(road[0]);
+    inTree.add(road[1]);
+  }
+  return taken;
+}
+
+/** The cheapest set of roads joining six towns, found two ways: shortest roads first, or growing one tree. */
+function SpanningTree(props: Props) {
+  const [prim, setPrim] = useState(props.method === "prim");
+  const kruskal = kruskalSteps();
+  const grown = primSteps();
+  const most = prim ? grown.length : kruskal.length;
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, most));
+  const total = (roads: Road[]) => roads.reduce((s, r) => s + r[2], 0);
+  let summary: string;
+  let hot: Road[];
+  let faint: Road[] = [];
+  if (prim) {
+    hot = grown.slice(0, step);
+    const inTree = new Set(["A", ...hot.flatMap(([a, b]) => [a, b])]);
+    summary = `Prim's method from A, after ${plural(step, "road")} added. In the tree: ${[...inTree].sort().join(", ")}. Roads taken: ${hot.map(roadName).join(", ") || "none yet"}, ${total(hot)} in all. ${
+      step < grown.length ? `The shortest road with one end in the tree and one outside is ${roadName(grown[step])}, so it is added next.` : "Every town is joined, by 5 roads."
+    }`;
+  } else {
+    const seen = kruskal.slice(0, step);
+    hot = seen.filter((s) => s.taken).map((s) => s.road);
+    faint = seen.filter((s) => !s.taken).map((s) => s.road);
+    const next = kruskal[step];
+    summary = `Kruskal's method, after ${step} of ${kruskal.length} roads considered, shortest first. Taken: ${hot.map(roadName).join(", ") || "none yet"}, ${total(hot)} in all. ${
+      faint.length > 0 ? `Skipped, because each would close a loop: ${faint.map(roadName).join(", ")}. ` : ""
+    }${
+      hot.length === 5
+        ? "Five roads join all six towns, so the rest can only close loops."
+        : next
+          ? `Next to consider: ${roadName(next.road)}.`
+          : ""
+    }`;
+  }
+  const isIn = (list: Road[], road: Road) => list.some((r) => r[0] === road[0] && r[1] === road[1]);
+  return (
+    <Frame
+      title="The cheapest roads that join every town"
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="step" value={step} onChange={setStep} min={0} max={most} />
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => {
+              setPrim(!prim);
+              setStep(0);
+            }}
+          >
+            {prim ? "Switch to Kruskal's method" : "Switch to Prim's method"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`Six towns joined by nine roads with lengths, ${hot.length} of the roads taken`}>
+        {ROADS.map((road) => (
+          <Link key={road[0] + road[1]} from={TOWNS[road[0]]} to={TOWNS[road[1]]} label={road[2]} hot={isIn(hot, road)} faint={isIn(faint, road)} />
+        ))}
+        {Object.entries(TOWNS).map(([name, at]) => (
+          <Dot key={name} at={at} name={name} mark={hot.some(([a, b]) => a === name || b === name) || (prim && name === "A") ? "done" : "wait"} />
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -6630,6 +6725,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "ab-test": AbTest,
   "benchmark-runs": BenchmarkRuns,
   "recursion-tree": RecursionTree,
+  "spanning-tree": SpanningTree,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
