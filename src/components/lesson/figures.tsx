@@ -7509,6 +7509,75 @@ function StateFlags(props: Props) {
   );
 }
 
+const EU_FRAMES: [string, string][] = [
+  ["handle_request", "catches any Exception: logs it, answers 500"],
+  ["place_order", "catches CardDeclined and Timeout: tells the customer"],
+  ["charge_with_retries", "catches Timeout: tries again, at most 3 tries"],
+  ["gateway.charge", "talks to the payment gateway; may raise"],
+];
+const EU_CASES: Record<string, { label: string; raised: string; tries: number; caughtAt: number; outcome: string }> = {
+  declined: { label: "card declined", raised: "CardDeclined", tries: 1, caughtAt: 1, outcome: "Your card was declined. Please try another card." },
+  "timeout-once": { label: "one timeout", raised: "Timeout", tries: 2, caughtAt: 2, outcome: "Order placed. The second try went through, and the customer never knew." },
+  "timeout-thrice": { label: "three timeouts", raised: "Timeout", tries: 3, caughtAt: 1, outcome: "The payment service is not responding. You have not been charged; please try again." },
+  bug: { label: "bug: KeyError", raised: "KeyError", tries: 1, caughtAt: 0, outcome: "Something went wrong. (The KeyError and its traceback go to the log for an engineer.)" },
+};
+
+/** An exception travelling up a call stack until the first frame that handles that kind of error. */
+function ErrorUnwind(props: Props) {
+  const keys = Object.keys(EU_CASES);
+  const [kind, setKind] = useState(typeof props.error === "string" && keys.includes(props.error) ? props.error : "declined");
+  const c = EU_CASES[kind];
+  const recovered = kind === "timeout-once";
+  const unwound = recovered ? [] : [1, 2].filter((i) => i > c.caughtAt);
+  const gaveUp = kind === "timeout-thrice";
+  const summary = gaveUp
+    ? `gateway.charge raises Timeout on all 3 tries. charge_with_retries catches each one and tries again, then gives up after the third and raises the Timeout again. place_order catches it. The customer sees: ${c.outcome}`
+    : recovered
+    ? `gateway.charge raises Timeout on the first try. charge_with_retries catches it and tries again, and the second try succeeds, so nothing above it ever sees an error. The customer sees: ${c.outcome}`
+    : `gateway.charge raises ${c.raised}${c.tries > 1 ? ` on all ${c.tries} tries` : ""}. It travels up through ${[...unwound].reverse().map((i) => EU_FRAMES[i][0]).join(" and then ")}, ${unwound.length === 1 ? "which does not handle it" : "neither of which handles it"}, until ${EU_FRAMES[c.caughtAt][0]} catches it. The customer sees: ${c.outcome}`;
+  return (
+    <Frame
+      title="Where an error is handled"
+      summary={summary}
+      controls={
+        <>
+          {keys.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={kind === k} onClick={() => setKind(k)}>
+              {EU_CASES[k].label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 236" role="img" aria-label={recovered ? "Timeout handled by a retry" : `${c.raised} handled in ${EU_FRAMES[c.caughtAt][0]}`}>
+        {EU_FRAMES.map(([name, note], i) => {
+          const y = 8 + i * 42;
+          const catches = i === c.caughtAt;
+          const passed = unwound.includes(i);
+          const source = i === EU_FRAMES.length - 1;
+          return (
+            <g key={name}>
+              <rect x={8} y={y} width={444} height={34} rx={4} className={catches ? "fig-accent" : passed ? "fig-ghost" : "fig-fill"} style={passed ? { strokeDasharray: "4 4" } : undefined} />
+              <text x={18} y={y + 14} className="fig-small" style={{ fontWeight: 600, fill: catches ? "var(--bg)" : "var(--text)" }}>
+                {passed ? `${name}  (${gaveUp ? "retried, then gave up" : "passed through"})` : source ? `${name}  (raised here)` : name}
+              </text>
+              <text x={18} y={y + 28} className="fig-small" style={catches ? { fill: "var(--bg)" } : undefined}>
+                {note}
+              </text>
+            </g>
+          );
+        })}
+        <text x={8} y={196} className="fig-small" style={{ fill: "var(--text)" }}>
+          {`raised: ${c.raised} in gateway.charge${c.tries > 1 ? `, ${c.tries} tries` : ""}`}
+        </text>
+        <text x={8} y={216} className="fig-small" style={{ fill: "var(--text)" }}>
+          {recovered ? "handled: by the retry; the order goes through" : `handled: in ${EU_FRAMES[c.caughtAt][0]}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -8843,6 +8912,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "interface-swap": InterfaceSwap,
   "change-ripple": ChangeRipple,
   "state-flags": StateFlags,
+  "error-unwind": ErrorUnwind,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
