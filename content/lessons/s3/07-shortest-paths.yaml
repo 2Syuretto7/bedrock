@@ -1,0 +1,782 @@
+concept: s3.shortest-paths
+minutes: 95
+claim: You can find the shortest routes from one place to every other in a graph whose edges have lengths, by relaxing edges in topological order when there are no cycles, by Dijkstra's algorithm with a heap when no length is negative, and by Bellman and Ford's repeated passes when some are, which also detect a loop whose total is negative, and you can recover the route itself from the parents.
+recalls: [s3.topological-sort]
+uses: [s3.breadth-first-and-depth-first-search, s2.heaps-and-priority-queues, s2.graphs-and-their-representations, f3.graph-theory-basics, f2.loop-invariants, f2.contrapositive-and-contradiction, f1.logarithms, s0.dictionaries-and-sets]
+leads: [s3.minimum-spanning-trees, s3.greedy-algorithms, s3.dynamic-programming]
+starter: |
+  # Scratch space. A heap always gives back its smallest item first.
+  import heapq
+
+  heap = []
+  for item in [(30, "station"), (10, "market"), (50, "office")]:
+      heapq.heappush(heap, item)
+  while heap:
+      print(heapq.heappop(heap))
+parts:
+  recall:
+    - text: |
+        [[s3.topological-sort]] put tasks in an order that respects every arrow, and computed a project's earliest finish in one pass along that order. A road map is a graph too, but its edges have lengths, travel times or fares, and it has cycles, since roads lead back to where they started. Finding the shortest route on such a map is the problem every navigation app solves millions of times a day. Three quick pulls first.
+  puzzle:
+    - text: |
+        Buses in a small town take these times, in minutes, each in one direction only:
+
+        - home to market 10, home to station 30, home to office 50;
+        - market to station 15, market to office 40;
+        - station to office 20.
+
+        Changing buses takes no time. **What is the fewest minutes in which you can get from home to the office?**
+  intuition:
+    - text: |
+        Breadth-first search, from [[s3.breadth-first-and-depth-first-search]], found routes with the fewest edges. With lengths on the edges, the fewest edges is no longer the shortest route: the direct bus to the office is one ride, but not the quickest.
+
+        Imagine pouring water in at the start, with every road a pipe whose length is the time water takes to flow through it. The water reaches places in order of their true distance: the nearest place first, then the next nearest, and so on, and the moment it arrives somewhere, that arrival time is final. **Dijkstra's algorithm** simulates this. It keeps a best-known distance for every place, repeatedly takes the closest place not yet settled, declares its distance final, and checks whether going through it improves the best-known distance of its neighbours.
+
+        The figure runs it on six towns from A. Step through it and watch the best-known distances shrink as towns are settled.
+    - figure: shortest-path
+      props: { step: 0 }
+    - text: |
+        A is settled first, at 0, and offers B 4 and C 1. C is nearer, so it is settled next, and through C, B improves from 4 to 3. The towns are settled in the order A, C, B, D, E, F, at distances 0, 1, 3, 8, 10 and 13, and none of those numbers changes after its town is settled. The shortest route to F winds through every other town, A, C, B, D, E, F, because the short roads add up to less than the direct long ones.
+  derivation:
+    - text: |
+        **Relaxation.** Every algorithm in this lesson keeps a best-known distance $d(v)$ for each node, starting with 0 for the start and "not reached" for the rest, and improves it with one move. For an edge from $u$ to $v$ of length $w$:
+
+        $$\text{if } d(u) + w < d(v), \text{ set } d(v) = d(u) + w \text{ and the parent of } v \text{ to } u.$$
+
+        This is called **relaxing** the edge. A best-known distance is always the length of some real route, so it can only be too large, never too small. The algorithms differ in which edges they relax, and in what order. Following parents back from any node gives the route, as with breadth-first search.
+
+        **Graphs without cycles.** If the graph is a DAG, relax the edges out of each node in a topological order. When a node's turn comes, every edge into it has already been relaxed, so its distance is final. One pass, $\Theta(V + E)$, and it works even when some lengths are negative. The earliest-finish calculation of the last lesson was this pass, with "longest" in place of "shortest".
+    - question:
+        id: derivation-dag
+        type: numeric
+        system: s2
+        prompt: |
+          A DAG has edges S → A of length 2, S → B of length 5, A → B of length 1, A → C of length 6, and B → C of length 2. Relaxing in the topological order S, A, B, C, what is the shortest distance from S to C?
+        answer: "5"
+        explanation: |
+          S gives A 2 and B 5. A gives B $\min(5, 2 + 1) = 3$ and C 8. B gives C $\min(8, 3 + 2) = 5$. The route is S, A, B, C.
+    - text: |
+        **Dijkstra's algorithm.** When the graph has cycles but no negative lengths, settle nodes in order of distance. Keep every unsettled node's best-known distance; repeatedly settle the unsettled node with the smallest one, and relax the edges out of it.
+
+        **Why a settled distance is final.** The invariant, in the sense of [[f2.loop-invariants]], is that every settled node has its true distance. Suppose $x$ is about to be settled with best-known distance $d(x)$, and suppose, for a contradiction as in [[f2.contrapositive-and-contradiction]], that some route to $x$ is shorter. That route starts in the settled set and must leave it somewhere, by an edge to some unsettled node $y$. Its length up to $y$ is at least $d(y)$, since the edge into $y$ was relaxed when its settled end was settled, and $d(y) \ge d(x)$, since $x$ was chosen as the smallest. The rest of the route, from $y$ to $x$, has no negative lengths, so the whole route is at least $d(x)$. The contradiction shows the invariant holds.
+
+        **With a heap.** Finding the smallest unsettled distance by scanning every node costs $\Theta(V)$ each time. A heap from [[s2.heaps-and-priority-queues]] does better: push the pair `(distance, node)` whenever a distance improves, pop the smallest pair, and ignore a popped node that is already settled, since its pair was pushed before a later improvement. Each edge causes at most one push, so the total is $O((V + E) \log V)$. To find one route rather than all distances, stop when the goal is **popped**; when it is first pushed, a shorter route may still be on its way.
+    - question:
+        id: derivation-improved
+        type: numeric
+        system: s2
+        prompt: |
+          In the figure, roads A–B of length 4, A–C of length 1 and C–B of length 2 meet at B. B is first given the distance 4. What is its final distance from A?
+        answer: "3"
+        explanation: |
+          After C is settled at 1, relaxing C–B gives $1 + 2 = 3 < 4$, so B's distance improves to 3 before B is settled.
+    - text: |
+        **Negative lengths.** A cashback offer can make a fare negative, and then Dijkstra's argument fails: the rest of a route may lower its total. With A → B of length 2, A → C of length 3 and C → B of length −2, Dijkstra settles B at 2, but A, C, B costs 1. Worse, a **negative cycle**, a loop whose lengths add to less than zero, makes "shortest" meaningless, since going round again is always cheaper.
+
+        **Bellman and Ford's method** relaxes every edge, in any order, and repeats the whole pass $V - 1$ times. After pass $k$, every node whose shortest route has at most $k$ edges has its true distance, by induction on $k$. Without negative cycles, a shortest route never repeats a node, so it has at most $V - 1$ edges, and $V - 1$ passes suffice. One more pass that still improves something proves a negative cycle is reachable. The cost is $\Theta(VE)$, slower than Dijkstra's but correct for any lengths.
+
+        A classic use: with currency exchange rates as edges, a loop of exchanges that turns ₹100 into more than ₹100 is a loop whose rates multiply to more than 1. Taking $-\log$ of each rate, as in [[f1.logarithms]], turns the product into a sum and "more than 1" into "less than 0", so the profitable loop is exactly a negative cycle.
+
+        **Choosing.** All lengths equal: breadth-first search. No cycles: one pass in topological order. No negative lengths: Dijkstra. Negative lengths: Bellman and Ford. Shortest distances between every pair of nodes can be found by running one of these from each node, or by the Floyd and Warshall method in $\Theta(V^3)$.
+    - question:
+        id: order-dijkstra
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of Dijkstra's algorithm with a heap in order.
+        steps:
+          - "Set the start's distance to 0 and push it on the heap."
+          - "Pop the pair with the smallest distance, and skip it if its node is already settled."
+          - "Mark the popped node as settled."
+          - "Relax each edge out of it, pushing every neighbour whose distance improves."
+        explanation: |
+          Nothing can be popped until the start is pushed, a node must be popped before it is settled, and only a settled node's distance is final enough to relax its edges with.
+  formal:
+    - text: |
+        **Shortest distance.** $\delta(s, v)$, the least total length of a route from $s$ to $v$.
+
+        **Relax** $(u, v, w)$: if $d(u) + w < d(v)$, set $d(v) = d(u) + w$ and $\text{parent}(v) = u$. Always $d(v) \ge \delta(s, v)$.
+
+        **DAG.** Relax the edges out of each node in topological order: $\Theta(V + E)$, any lengths.
+
+        **Dijkstra.** Lengths $\ge 0$. Settle the unsettled node of least $d$, then relax its edges. Invariant: settled nodes have $d = \delta$. With a binary heap and skipped stale entries, $O((V + E) \log V)$.
+
+        **Bellman and Ford.** Relax every edge, $V - 1$ passes: $\Theta(VE)$, any lengths. An improvement in pass $V$ means a negative cycle is reachable from $s$.
+  drill:
+    - text: Seconds each. Relax, and choose the right tool.
+    - question:
+        id: drill-relax
+        type: numeric
+        system: s1
+        prompt: |
+          $d(u) = 7$, the edge from $u$ to $v$ has length 3, and $d(v) = 12$. What is $d(v)$ after relaxing the edge?
+        answer: "10"
+        explanation: $7 + 3 = 10 < 12$, so $d(v)$ becomes 10.
+    - question:
+        id: drill-passes
+        type: numeric
+        system: s1
+        prompt: |
+          A graph has 10 nodes and no negative cycle. How many passes of Bellman and Ford's method guarantee every distance is right?
+        answer: "9"
+        explanation: A shortest route repeats no node, so it has at most $10 - 1 = 9$ edges, and each pass fixes one more edge's worth.
+    - question:
+        id: drill-choose-metro
+        type: choice
+        system: s1
+        prompt: |
+          A metro map gives each link a travel time in minutes. Which method finds the quickest journeys from one station?
+        options:
+          - "Dijkstra's algorithm"
+          - "Breadth-first search"
+          - "Depth-first search"
+          - "Topological sort"
+        answer: 0
+        explanation: The times differ and none is negative, and the map has cycles. Breadth-first search would count stops, not minutes.
+    - question:
+        id: drill-negative
+        type: choice
+        system: s1
+        prompt: |
+          Some fares are negative because of cashback, and no loop of fares adds to less than zero. Which method is guaranteed correct?
+        options:
+          - "Bellman and Ford's method"
+          - "Dijkstra's algorithm"
+          - "Breadth-first search"
+          - "None of them"
+        answer: 0
+        explanation: Dijkstra's argument needs lengths of at least zero; Bellman and Ford's passes do not.
+    - question:
+        id: drill-stop
+        type: choice
+        system: s1
+        prompt: |
+          Dijkstra's algorithm is searching for one goal. When can it stop?
+        options:
+          - "When the goal is popped from the heap"
+          - "When the goal is first pushed on the heap"
+          - "When the heap holds the goal twice"
+          - "Only when the heap is empty"
+        answer: 0
+        explanation: Being popped means the goal is the nearest unsettled node, so its distance is final. When it is first pushed, a shorter route may still be found.
+    - question:
+        id: predict-heap-ties
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import heapq
+          h = []
+          heapq.heappush(h, (5, "D"))
+          heapq.heappush(h, (2, "B"))
+          heapq.heappush(h, (2, "A"))
+          print(heapq.heappop(h), heapq.heappop(h))
+        output: "(2, 'A') (2, 'B')"
+        explanation: Tuples compare by their first parts, and a tie is broken by the second, so `(2, 'A')` comes before `(2, 'B')`, and `(5, 'D')` stays in the heap.
+    - question:
+        id: predict-relax
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          d = {"A": 0, "B": 4, "C": 1}
+          for u, v, w in [("C", "B", 2), ("A", "B", 4)]:
+              if d[u] + w < d[v]:
+                  d[v] = d[u] + w
+          print(d["B"])
+        output: "3"
+        explanation: Relaxing C to B gives $1 + 2 = 3 < 4$. Relaxing A to B then gives $0 + 4 = 4$, which is not less than 3, so 3 stays.
+  work:
+    - text: Slower now. For each method, say which distances can still change, and which are final.
+    - question:
+        id: fix-dijkstra
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `shortest(graph, start)` should return the shortest distance from `start` to every town it can reach, on the six towns of the figure. The program should print `3 8 13`. It prints `4 9 15`. Find the fault and fix it.
+        starter: |
+          import heapq
+
+
+          def shortest(graph, start):
+              # graph maps each town to a list of (neighbour, km) pairs, with every km >= 0.
+              # Return a dictionary of the shortest distance from start to every town it can reach.
+              dist = {start: 0}
+              heap = [(0, start)]
+              done = set()
+              while heap:
+                  d, here = heapq.heappop(heap)
+                  if here not in done:
+                      done.add(here)
+                      for there, km in graph[here]:
+                          if there not in dist:
+                              dist[there] = d + km
+                              heapq.heappush(heap, (d + km, there))
+              return dist
+
+
+          roads = [("A", "B", 4), ("A", "C", 1), ("C", "B", 2), ("B", "D", 5), ("C", "D", 8), ("C", "E", 10), ("D", "E", 2), ("D", "F", 6), ("E", "F", 3)]
+          graph = {town: [] for town in "ABCDEF"}
+          for a, b, km in roads:
+              graph[a].append((b, km))
+              graph[b].append((a, km))
+          dist = shortest(graph, "A")
+          print(dist["B"], dist["D"], dist["F"])
+        solution: |
+          import heapq
+
+
+          def shortest(graph, start):
+              # graph maps each town to a list of (neighbour, km) pairs, with every km >= 0.
+              # Return a dictionary of the shortest distance from start to every town it can reach.
+              dist = {start: 0}
+              heap = [(0, start)]
+              done = set()
+              while heap:
+                  d, here = heapq.heappop(heap)
+                  if here not in done:
+                      done.add(here)
+                      for there, km in graph[here]:
+                          if there not in dist or d + km < dist[there]:
+                              dist[there] = d + km
+                              heapq.heappush(heap, (d + km, there))
+              return dist
+
+
+          roads = [("A", "B", 4), ("A", "C", 1), ("C", "B", 2), ("B", "D", 5), ("C", "D", 8), ("C", "E", 10), ("D", "E", 2), ("D", "F", 6), ("E", "F", 3)]
+          graph = {town: [] for town in "ABCDEF"}
+          for a, b, km in roads:
+              graph[a].append((b, km))
+              graph[b].append((a, km))
+          dist = shortest(graph, "A")
+          print(dist["B"], dist["D"], dist["F"])
+        tests: |
+          import random as _random
+
+
+          def _reference(_graph, _start):
+              _dist = {_start: 0}
+              for _ in range(len(_graph)):
+                  for _u in list(_dist):
+                      for _v, _w in _graph[_u]:
+                          if _v not in _dist or _dist[_u] + _w < _dist[_v]:
+                              _dist[_v] = _dist[_u] + _w
+              return _dist
+
+
+          _rng = _random.Random(21)
+          _towns = {_x: [] for _x in "ABCDEF"}
+          for _a, _b, _km in [("A", "B", 4), ("A", "C", 1), ("C", "B", 2), ("B", "D", 5), ("C", "D", 8), ("C", "E", 10), ("D", "E", 2), ("D", "F", 6), ("E", "F", 3)]:
+              _towns[_a].append((_b, _km))
+              _towns[_b].append((_a, _km))
+          _graphs = [_towns, {"X": []}, {"P": [("Q", 0)], "Q": [("P", 0)], "R": []}]
+          for _ in range(30):
+              _n = _rng.randint(1, 7)
+              _names = ["t" + str(_i) for _i in range(_n)]
+              _g = {_x: [] for _x in _names}
+              for _ in range(_rng.randint(0, 12)):
+                  _a = _rng.choice(_names)
+                  _b = _rng.choice(_names)
+                  if _a != _b:
+                      _w = _rng.randint(0, 9)
+                      _g[_a].append((_b, _w))
+                      _g[_b].append((_a, _w))
+              _graphs.append(_g)
+          for _g in _graphs:
+              for _start in _g:
+                  _want = _reference(_g, _start)
+                  _got = shortest(_g, _start)
+                  assert dict(_got) == _want, "shortest(" + str(_g) + ", " + repr(_start) + ") should be " + str(_want) + ", not " + str(dict(_got))
+          assert output.strip() == "3 8 13", "The program should print 3 8 13"
+        wrong:
+          - |
+            import heapq
+
+
+            def shortest(graph, start):
+                # graph maps each town to a list of (neighbour, km) pairs, with every km >= 0.
+                # Return a dictionary of the shortest distance from start to every town it can reach.
+                dist = {start: 0}
+                heap = [(0, start)]
+                done = set()
+                while heap:
+                    d, here = heap.pop(0)
+                    if here not in done:
+                        done.add(here)
+                        for there, km in graph[here]:
+                            if there not in dist or d + km < dist[there]:
+                                dist[there] = d + km
+                                heapq.heappush(heap, (d + km, there))
+                return dist
+
+
+            roads = [("A", "B", 4), ("A", "C", 1), ("C", "B", 2), ("B", "D", 5), ("C", "D", 8), ("C", "E", 10), ("D", "E", 2), ("D", "F", 6), ("E", "F", 3)]
+            graph = {town: [] for town in "ABCDEF"}
+            for a, b, km in roads:
+                graph[a].append((b, km))
+                graph[b].append((a, km))
+            dist = shortest(graph, "A")
+            print(dist["B"], dist["D"], dist["F"])
+          - |
+            import heapq
+
+
+            def shortest(graph, start):
+                # graph maps each town to a list of (neighbour, km) pairs, with every km >= 0.
+                # Return a dictionary of the shortest distance from start to every town it can reach.
+                dist = {start: 0}
+                heap = [(0, start)]
+                done = set()
+                while heap:
+                    d, here = heapq.heappop(heap)
+                    if here not in done:
+                        done.add(here)
+                        for there, km in graph[here]:
+                            if there not in dist or d + km < dist[there]:
+                                dist[there] = d + km
+                                heapq.heappush(heap, (km, there))
+                return dist
+
+
+            roads = [("A", "B", 4), ("A", "C", 1), ("C", "B", 2), ("B", "D", 5), ("C", "D", 8), ("C", "E", 10), ("D", "E", 2), ("D", "F", 6), ("E", "F", 3)]
+            graph = {town: [] for town in "ABCDEF"}
+            for a, b, km in roads:
+                graph[a].append((b, km))
+                graph[b].append((a, km))
+            dist = shortest(graph, "A")
+            print(dist["B"], dist["D"], dist["F"])
+          - |
+            import heapq
+
+
+            def shortest(graph, start):
+                # graph maps each town to a list of (neighbour, km) pairs, with every km >= 0.
+                # Return a dictionary of the shortest distance from start to every town it can reach.
+                dist = {}
+                heap = [(0, start)]
+                done = set()
+                while heap:
+                    d, here = heapq.heappop(heap)
+                    if here not in done:
+                        done.add(here)
+                        for there, km in graph[here]:
+                            if there not in dist or d + km < dist[there]:
+                                dist[there] = d + km
+                                heapq.heappush(heap, (d + km, there))
+                return dist
+
+
+            roads = [("A", "B", 4), ("A", "C", 1), ("C", "B", 2), ("B", "D", 5), ("C", "D", 8), ("C", "E", 10), ("D", "E", 2), ("D", "F", 6), ("E", "F", 3)]
+            graph = {town: [] for town in "ABCDEF"}
+            for a, b, km in roads:
+                graph[a].append((b, km))
+                graph[b].append((a, km))
+            dist = shortest(graph, "A")
+            print(dist["B"], dist["D"], dist["F"])
+        explanation: |
+          The first distance found for a town is not always the shortest: B is reached at 4 straight from A, and only later at 3 through C. A distance must be replaced whenever a shorter one turns up, which is relaxation. Taking pairs from the front of the list instead of the heap settles towns in the order they were found, not by distance; pushing the road's length instead of the total distance orders the heap by the wrong number; and leaving the start out of `dist` lets it be given a distance through its neighbours.
+    - question:
+        id: write-fastest-route
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `fastest_route(graph, start, goal)` for a graph whose links have travel times of at least 0, given as `(next stop, minutes)` pairs. Return `(minutes, route)` for a fastest route, where `route` lists the stops from `start` to `goal`, or `None` if `goal` cannot be reached.
+        starter: |
+          import heapq
+
+
+          def fastest_route(graph, start, goal):
+              # graph maps each stop to a list of (next stop, minutes) pairs, with minutes >= 0.
+              # Return (minutes, route) for a fastest route from start to goal, where route is the
+              # list of stops from start to goal, or None if goal cannot be reached.
+              return None
+
+
+          city = {
+              "home": [("market", 10), ("station", 30), ("office", 50)],
+              "market": [("station", 15), ("office", 40)],
+              "station": [("office", 20)],
+              "office": [],
+          }
+          print(fastest_route(city, "home", "office"), fastest_route(city, "office", "home"))
+        solution: |
+          import heapq
+
+
+          def fastest_route(graph, start, goal):
+              # graph maps each stop to a list of (next stop, minutes) pairs, with minutes >= 0.
+              # Return (minutes, route) for a fastest route from start to goal, where route is the
+              # list of stops from start to goal, or None if goal cannot be reached.
+              best = {start: 0}
+              parent = {start: None}
+              heap = [(0, start)]
+              done = set()
+              while heap:
+                  d, here = heapq.heappop(heap)
+                  if here == goal:
+                      route = []
+                      while here is not None:
+                          route.append(here)
+                          here = parent[here]
+                      route.reverse()
+                      return d, route
+                  if here not in done:
+                      done.add(here)
+                      for there, minutes in graph[here]:
+                          if there not in best or d + minutes < best[there]:
+                              best[there] = d + minutes
+                              parent[there] = here
+                              heapq.heappush(heap, (d + minutes, there))
+              return None
+
+
+          city = {
+              "home": [("market", 10), ("station", 30), ("office", 50)],
+              "market": [("station", 15), ("office", 40)],
+              "station": [("office", 20)],
+              "office": [],
+          }
+          print(fastest_route(city, "home", "office"), fastest_route(city, "office", "home"))
+        tests: |
+          import random as _random
+
+
+          def _reference(_graph, _start):
+              _dist = {_start: 0}
+              for _ in range(len(_graph)):
+                  for _u in list(_dist):
+                      for _v, _w in _graph[_u]:
+                          if _v not in _dist or _dist[_u] + _w < _dist[_v]:
+                              _dist[_v] = _dist[_u] + _w
+              return _dist
+
+
+          _rng = _random.Random(23)
+          _graphs = [
+              {"home": [("market", 10), ("station", 30), ("office", 50)], "market": [("station", 15), ("office", 40)], "station": [("office", 20)], "office": []},
+              {"a": [("b", 1), ("c", 5)], "b": [("c", 1)], "c": []},
+              {"x": []},
+          ]
+          for _ in range(40):
+              _n = _rng.randint(1, 7)
+              _names = ["s" + str(_i) for _i in range(_n)]
+              _g = {_x: [] for _x in _names}
+              for _ in range(_rng.randint(0, 14)):
+                  _a = _rng.choice(_names)
+                  _b = _rng.choice(_names)
+                  if _a != _b:
+                      _g[_a].append((_b, _rng.randint(0, 9)))
+              _graphs.append(_g)
+          for _g in _graphs:
+              for _start in _g:
+                  _dist = _reference(_g, _start)
+                  for _goal in _g:
+                      _got = fastest_route(_g, _start, _goal)
+                      _name = "fastest_route(" + str(_g) + ", " + repr(_start) + ", " + repr(_goal) + ")"
+                      if _goal not in _dist:
+                          assert _got is None, _name + " should be None, because the goal cannot be reached, not " + str(_got)
+                          continue
+                      assert _got is not None and len(_got) == 2, _name + " should be a pair (minutes, route), not " + str(_got)
+                      _minutes, _route = _got
+                      assert _minutes == _dist[_goal], _name + " should take " + str(_dist[_goal]) + " minutes, not " + str(_minutes)
+                      assert len(_route) > 0 and _route[0] == _start and _route[-1] == _goal, _name + " should give a route from " + repr(_start) + " to " + repr(_goal) + ", not " + str(_route)
+                      _total = 0
+                      for _i in range(len(_route) - 1):
+                          _legs = [_w for _v, _w in _g[_route[_i]] if _v == _route[_i + 1]]
+                          assert _legs, _name + " gave the route " + str(_route) + ", but there is no direct link from " + repr(_route[_i]) + " to " + repr(_route[_i + 1])
+                          _total += min(_legs)
+                      assert _total == _dist[_goal], _name + " gave the route " + str(_route) + ", which takes " + str(_total) + " minutes, not " + str(_dist[_goal])
+          assert output.strip() == "(45, ['home', 'market', 'station', 'office']) None", "The program should print (45, ['home', 'market', 'station', 'office']) None"
+        wrong:
+          - |
+            import heapq
+
+
+            def fastest_route(graph, start, goal):
+                # graph maps each stop to a list of (next stop, minutes) pairs, with minutes >= 0.
+                # Return (minutes, route) for a fastest route from start to goal, where route is the
+                # list of stops from start to goal, or None if goal cannot be reached.
+                best = {start: 0}
+                parent = {start: None}
+                heap = [(0, start)]
+                done = set()
+                while heap:
+                    d, here = heapq.heappop(heap)
+                    if here == goal:
+                        route = []
+                        while here is not None:
+                            route.append(here)
+                            here = parent[here]
+                        return d, route
+                    if here not in done:
+                        done.add(here)
+                        for there, minutes in graph[here]:
+                            if there not in best or d + minutes < best[there]:
+                                best[there] = d + minutes
+                                parent[there] = here
+                                heapq.heappush(heap, (d + minutes, there))
+                return None
+
+
+            city = {
+                "home": [("market", 10), ("station", 30), ("office", 50)],
+                "market": [("station", 15), ("office", 40)],
+                "station": [("office", 20)],
+                "office": [],
+            }
+            print(fastest_route(city, "home", "office"), fastest_route(city, "office", "home"))
+          - |
+            import heapq
+
+
+            def fastest_route(graph, start, goal):
+                # graph maps each stop to a list of (next stop, minutes) pairs, with minutes >= 0.
+                # Return (minutes, route) for a fastest route from start to goal, where route is the
+                # list of stops from start to goal, or None if goal cannot be reached.
+                best = {start: 0}
+                parent = {start: None}
+                heap = [(0, start)]
+                done = set()
+                while heap:
+                    d, here = heapq.heappop(heap)
+                    if here == goal:
+                        route = []
+                        while here is not None:
+                            route.append(here)
+                            here = parent[here]
+                        route.reverse()
+                        return d, route
+                    if here not in done:
+                        done.add(here)
+                        for there, minutes in graph[here]:
+                            if there not in parent:
+                                parent[there] = here
+                            if there not in best or d + minutes < best[there]:
+                                best[there] = d + minutes
+                                heapq.heappush(heap, (d + minutes, there))
+                return None
+
+
+            city = {
+                "home": [("market", 10), ("station", 30), ("office", 50)],
+                "market": [("station", 15), ("office", 40)],
+                "station": [("office", 20)],
+                "office": [],
+            }
+            print(fastest_route(city, "home", "office"), fastest_route(city, "office", "home"))
+          - |
+            import heapq
+
+
+            def fastest_route(graph, start, goal):
+                # graph maps each stop to a list of (next stop, minutes) pairs, with minutes >= 0.
+                # Return (minutes, route) for a fastest route from start to goal, where route is the
+                # list of stops from start to goal, or None if goal cannot be reached.
+                best = {start: 0}
+                parent = {start: None}
+                heap = [(0, start)]
+                done = set()
+                if start == goal:
+                    return 0, [start]
+                while heap:
+                    d, here = heapq.heappop(heap)
+                    if here not in done:
+                        done.add(here)
+                        for there, minutes in graph[here]:
+                            if there not in best or d + minutes < best[there]:
+                                best[there] = d + minutes
+                                parent[there] = here
+                                heapq.heappush(heap, (d + minutes, there))
+                                if there == goal:
+                                    route = []
+                                    stop = there
+                                    while stop is not None:
+                                        route.append(stop)
+                                        stop = parent[stop]
+                                    route.reverse()
+                                    return best[there], route
+                return None
+
+
+            city = {
+                "home": [("market", 10), ("station", 30), ("office", 50)],
+                "market": [("station", 15), ("office", 40)],
+                "station": [("office", 20)],
+                "office": [],
+            }
+            print(fastest_route(city, "home", "office"), fastest_route(city, "office", "home"))
+        explanation: |
+          Dijkstra's algorithm with a parent recorded every time a distance improves; when the goal is popped its distance is final, and following parents back and reversing gives the route. Forgetting to reverse gives the route backwards; keeping the first parent found keeps the parent of a route that was later beaten; and returning as soon as the goal is pushed returns the direct 50-minute bus before the 45-minute route has been found.
+    - question:
+        id: write-cheapest
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `cheapest(stops, fares, start)`. Each fare is `(from_stop, to_stop, rupees)`, and a fare can be negative when cashback pays more than the ticket costs. Return a dictionary of the cheapest total from `start` to every stop it can reach, or `None` if a loop of fares reachable from `start` adds up to less than zero.
+        starter: |
+          def cheapest(stops, fares, start):
+              # fares is a list of (from_stop, to_stop, rupees); a fare can be negative when a
+              # cashback offer pays more than the ticket costs. Return a dictionary of the cheapest
+              # total from start to every stop it can reach, or None if some reachable loop of
+              # fares adds up to less than zero, so that riding round it forever gets ever cheaper.
+              return {start: 0}
+
+
+          stops = ["P", "Q", "R", "S"]
+          fares = [("P", "Q", 40), ("P", "R", 100), ("Q", "R", 50), ("R", "S", -70), ("Q", "S", 30)]
+          print(cheapest(stops, fares, "P"), cheapest(stops, fares + [("S", "Q", 10)], "P"))
+        solution: |
+          def cheapest(stops, fares, start):
+              # fares is a list of (from_stop, to_stop, rupees); a fare can be negative when a
+              # cashback offer pays more than the ticket costs. Return a dictionary of the cheapest
+              # total from start to every stop it can reach, or None if some reachable loop of
+              # fares adds up to less than zero, so that riding round it forever gets ever cheaper.
+              cost = {start: 0}
+              for _ in range(len(stops) - 1):
+                  for a, b, rupees in fares:
+                      if a in cost and (b not in cost or cost[a] + rupees < cost[b]):
+                          cost[b] = cost[a] + rupees
+              for a, b, rupees in fares:
+                  if a in cost and (b not in cost or cost[a] + rupees < cost[b]):
+                      return None
+              return cost
+
+
+          stops = ["P", "Q", "R", "S"]
+          fares = [("P", "Q", 40), ("P", "R", 100), ("Q", "R", 50), ("R", "S", -70), ("Q", "S", 30)]
+          print(cheapest(stops, fares, "P"), cheapest(stops, fares + [("S", "Q", 10)], "P"))
+        tests: |
+          import random as _random
+
+
+          def _reference(_stops, _fares, _start):
+              _cost = {_start: 0}
+              for _ in range(len(_stops) + 2):
+                  for _a, _b, _r in _fares:
+                      if _a in _cost and (_b not in _cost or _cost[_a] + _r < _cost[_b]):
+                          _cost[_b] = _cost[_a] + _r
+              _before = dict(_cost)
+              for _ in range(len(_stops) + 2):
+                  for _a, _b, _r in _fares:
+                      if _a in _cost and (_b not in _cost or _cost[_a] + _r < _cost[_b]):
+                          _cost[_b] = _cost[_a] + _r
+              return None if _cost != _before else _cost
+
+
+          _rng = _random.Random(31)
+          _base = [("P", "Q", 40), ("P", "R", 100), ("Q", "R", 50), ("R", "S", -70), ("Q", "S", 30)]
+          _cases = [
+              (["P", "Q", "R", "S"], _base, "P"),
+              (["P", "Q", "R", "S"], _base + [("S", "Q", 10)], "P"),
+              (["P", "Q", "R", "S"], _base + [("S", "Q", 30)], "P"),
+              (["A", "B", "C", "D", "E"], [("A", "B", 1), ("B", "C", 1), ("C", "D", 1), ("D", "E", 1)], "A"),
+              (["A", "B", "C", "D", "E"], [("D", "E", 1), ("C", "D", 1), ("B", "C", 1), ("A", "B", 1)], "A"),
+              (["A", "B", "C"], [("B", "C", -5), ("C", "B", -5)], "A"),
+              (["A"], [], "A"),
+          ]
+          for _ in range(40):
+              _n = _rng.randint(1, 6)
+              _names = ["s" + str(_i) for _i in range(_n)]
+              _fares = []
+              for _ in range(_rng.randint(0, 10)):
+                  _a = _rng.choice(_names)
+                  _b = _rng.choice(_names)
+                  if _a != _b:
+                      _fares.append((_a, _b, _rng.randint(-4, 9)))
+              _cases.append((_names, _fares, _names[0]))
+          for _stops, _fares, _start in _cases:
+              _want = _reference(_stops, _fares, _start)
+              _got = cheapest(list(_stops), list(_fares), _start)
+              _name = "cheapest(" + str(_stops) + ", " + str(_fares) + ", " + repr(_start) + ")"
+              if _want is None:
+                  assert _got is None, _name + " should be None, because a reachable loop of fares adds up to less than zero, not " + str(_got)
+              else:
+                  assert _got is not None and dict(_got) == _want, _name + " should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "{'P': 0, 'Q': 40, 'R': 90, 'S': 20} None", "The program should print {'P': 0, 'Q': 40, 'R': 90, 'S': 20} None"
+        wrong:
+          - |
+            def cheapest(stops, fares, start):
+                # fares is a list of (from_stop, to_stop, rupees); a fare can be negative when a
+                # cashback offer pays more than the ticket costs. Return a dictionary of the cheapest
+                # total from start to every stop it can reach, or None if some reachable loop of
+                # fares adds up to less than zero, so that riding round it forever gets ever cheaper.
+                cost = {start: 0}
+                for a, b, rupees in fares:
+                    if a in cost and (b not in cost or cost[a] + rupees < cost[b]):
+                        cost[b] = cost[a] + rupees
+                for a, b, rupees in fares:
+                    if a in cost and (b not in cost or cost[a] + rupees < cost[b]):
+                        return None
+                return cost
+
+
+            stops = ["P", "Q", "R", "S"]
+            fares = [("P", "Q", 40), ("P", "R", 100), ("Q", "R", 50), ("R", "S", -70), ("Q", "S", 30)]
+            print(cheapest(stops, fares, "P"), cheapest(stops, fares + [("S", "Q", 10)], "P"))
+          - |
+            def cheapest(stops, fares, start):
+                # fares is a list of (from_stop, to_stop, rupees); a fare can be negative when a
+                # cashback offer pays more than the ticket costs. Return a dictionary of the cheapest
+                # total from start to every stop it can reach, or None if some reachable loop of
+                # fares adds up to less than zero, so that riding round it forever gets ever cheaper.
+                cost = {start: 0}
+                for _ in range(len(stops) - 1):
+                    for a, b, rupees in fares:
+                        if a in cost and (b not in cost or cost[a] + rupees < cost[b]):
+                            cost[b] = cost[a] + rupees
+                return cost
+
+
+            stops = ["P", "Q", "R", "S"]
+            fares = [("P", "Q", 40), ("P", "R", 100), ("Q", "R", 50), ("R", "S", -70), ("Q", "S", 30)]
+            print(cheapest(stops, fares, "P"), cheapest(stops, fares + [("S", "Q", 10)], "P"))
+          - |
+            def cheapest(stops, fares, start):
+                # fares is a list of (from_stop, to_stop, rupees); a fare can be negative when a
+                # cashback offer pays more than the ticket costs. Return a dictionary of the cheapest
+                # total from start to every stop it can reach, or None if some reachable loop of
+                # fares adds up to less than zero, so that riding round it forever gets ever cheaper.
+                cost = {start: 0}
+                for _ in range(len(stops) - 1):
+                    for a, b, rupees in fares:
+                        if a in cost and b not in cost:
+                            cost[b] = cost[a] + rupees
+                return cost
+
+
+            stops = ["P", "Q", "R", "S"]
+            fares = [("P", "Q", 40), ("P", "R", 100), ("Q", "R", 50), ("R", "S", -70), ("Q", "S", 30)]
+            print(cheapest(stops, fares, "P"), cheapest(stops, fares + [("S", "Q", 10)], "P"))
+        explanation: |
+          Bellman and Ford: relax every fare, and repeat $V - 1$ times, enough for the longest route that repeats no stop; if one more pass still finds an improvement, a negative loop is reachable. A single pass is enough only when the fares happen to be listed in route order; skipping the final check returns ever-shrinking totals instead of `None`; and keeping the first total found ignores cheaper routes found later, which is the same mistake as in the first question.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Home to market 10, home to station 30, home to office 50, market to station 15, market to office 40, station to office 20, all in minutes and in one direction. What is the fewest minutes from home to the office?
+        answer: "45"
+        explanation: |
+          Home to market 10, market to station 15 more, so the station at 25, which beats the direct 30. From the station, the office is 20 more: 45, which beats the direct bus at 50 and the market's bus at $10 + 40 = 50$.
+    - question:
+        id: work-arbitrage
+        type: choice
+        system: s2
+        prompt: |
+          A trading desk has exchange rates between twenty currencies and wants to know whether some loop of exchanges turns ₹100 into more than ₹100. Which approach answers it?
+        options:
+          - "Give each exchange the length $-\\log(\\text{rate})$ and look for a negative cycle with Bellman and Ford's method."
+          - "Give each exchange the length rate and run Dijkstra's algorithm."
+          - "Run breadth-first search from rupees."
+          - "Sort the rates and multiply the largest ones."
+        answer: 0
+        explanation: |
+          A loop is profitable when its rates multiply to more than 1, which is when the sum of their logarithms is positive, so the sum of $-\log(\text{rate})$ is negative. Lengths of that kind can be negative, which rules out Dijkstra, and Bellman and Ford's extra pass finds exactly such loops. Breadth-first search ignores the rates, and the largest rates need not form a loop.
+  connections:
+    - text: |
+        45 minutes: home, market, station, office. The direct bus takes 50, and so does the route through the market alone, but the two short hops to the station, 25 minutes in all, beat the 30-minute bus there, and the last 20 minutes finish it. Dijkstra's algorithm would settle the market at 10, the station at 25 and the office at 45, in that order.
+
+        Dijkstra's algorithm makes the choice that looks best right now, the nearest unsettled node, and never revisits it. Algorithms that work that way are greedy, and [[s3.greedy-algorithms]] asks when such short-sighted choices are safe. [[s3.minimum-spanning-trees]] is the next case, where a greedy choice connects every town with the least total road rather than reaching each one by the shortest route. Bellman and Ford's passes, where each pass builds on the best routes of the one before, are a first example of [[s3.dynamic-programming]].
