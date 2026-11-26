@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { expectIconsServed } from "./icons";
 
 /**
  * Runs against a deployed site: production, and the preview of every pull request. Read-only: it never signs up or
@@ -29,4 +30,8 @@ test("security headers are present", async ({ request }) => {
   expect(headers["x-frame-options"]).toBe("DENY");
   expect(headers["x-content-type-options"]).toBe("nosniff");
   expect(headers["strict-transport-security"]).toContain("max-age");
+});
+
+test("the icons and the manifest are served, and the icon is the current one", async ({ page, request }) => {
+  await expectIconsServed(page, request);
 });

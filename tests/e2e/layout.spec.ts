@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { expectIconsServed } from "./icons";
 
 async function expectNoHorizontalScroll(page: Page) {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
@@ -49,6 +50,12 @@ test("the theme switch works and is remembered", async ({ page }) => {
   await page.reload();
   await expect(page.locator("html")).not.toHaveClass(/dark/);
   await expect(page.getByRole("button", { name: "Dark theme" })).toBeVisible();
+});
+
+test("the icons and the manifest are served without a session", async ({ browser }) => {
+  const context = await browser.newContext();
+  await expectIconsServed(await context.newPage(), context.request);
+  await context.close();
 });
 
 test("sign-in fits the screen and is accessible", async ({ browser }, info) => {
