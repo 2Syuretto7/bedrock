@@ -1,0 +1,561 @@
+concept: q0.joins
+minutes: 85
+claim: You can combine tables with inner, left, right and full joins on a condition, predict how many rows each produces, keep unmatched rows by putting conditions on the joined table in the join's condition rather than in where, find rows with no match through an anti-join, join a table to itself with aliases, and recognise when joining two one-to-many tables at once multiplies rows.
+recalls: [q0.selecting-and-filtering, f2.sets-and-set-operations]
+uses: [q0.relational-algebra, q0.tables-rows-and-keys, f3.counting-with-products-and-sums]
+leads: [q0.grouping-and-aggregation, q0.null-and-three-valued-logic, q3.nested-loop-joins]
+bridges:
+  f2.sets-and-set-operations: The logic cluster defined union, intersection and difference, and the Cartesian product of two sets, the set of all pairs with one element from each. A join is a subset of the product, the pairs that satisfy a condition, so its size can be anything from zero to the product's. Outer joins add back the elements of one side that appear in no pair, a set difference. The overlapping circles often drawn for joins mislead, because a join is about pairs, not about the elements of one set; this lesson pictures joins as products instead.
+starter: |
+  # Scratch space. Joins in SQLite.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.executescript("""
+      create table customers (id integer primary key, name text);
+      create table orders (id integer primary key, customer integer, amount integer);
+      insert into customers values (1, 'Asha'), (2, 'Bilal'), (3, 'Chitra');
+      insert into orders values (101, 1, 250), (102, 1, 480), (103, 3, 900);
+  """)
+  print(db.execute("select c.name, o.amount from customers c left join orders o on o.customer = c.id").fetchall())
+parts:
+  recall:
+    - text: |
+        [[q0.selecting-and-filtering]] asked questions of one table at a time. Real questions cross tables: which customers ordered this week, and from which store? This lesson combines tables by joining them, using the pairs of [[f2.sets-and-set-operations]], and covers what happens to rows that find no partner. Three quick pulls first.
+  puzzle:
+    - text: |
+        A food app keeps restaurants, their menu items and their reviews in three tables. Each item and each review refers to a restaurant by its id. An analyst wants each restaurant's number of reviews, and starts by joining restaurants to items and to reviews in one query, both on the restaurant's id.
+
+        One restaurant has 20 menu items and 30 reviews.
+
+        **How many rows does the join produce for that restaurant?**
+  intuition:
+    - text: |
+        A wedding caterer has a guest list and a list of meal choices sent in by guests, each choice naming the guest by number. To print place cards showing each guest with their meal, the caterer pairs each guest with the choices that name them. Most guests pair with one choice. Some never replied, and a decision is needed: leave them off the cards, or print their names with "meal not chosen"? And one choice names a guest number that is not on the list, perhaps a typing mistake: drop it, or print it with no name? Each answer is a different kind of **join**.
+
+        The figure joins a customers table to an orders table on the customer's id. Bilal and Dev have no orders, and order 104 names customer 5, who does not exist. Try each kind of join.
+    - figure: join-match
+      props: { kind: inner }
+    - text: |
+        The inner join keeps only matched pairs: Asha twice, because she has two orders, and Chitra once. A left join keeps every customer, giving Bilal and Dev a row each with NULL, SQL's marker for a missing value, in the order columns. A right join keeps every order instead, and a full join keeps everything from both sides. The matched rows are the same in all four; the kinds differ only in what they do with the leftovers.
+  derivation:
+    - text: |
+        **Inner joins.** `select … from customers c join orders o on o.customer = c.id` pairs each customer with each order whose `customer` column equals the customer's `id`. The letters `c` and `o` are **aliases**, short names for the tables used within the query, needed whenever two tables have columns of the same name. Logically the join is the product of the two tables filtered by the `on` condition, as in [[q0.relational-algebra]]; a database never builds the product, but the result is the same.
+
+        Most joins follow a reference: `orders.customer` holds a key of `customers`, as the primary keys of [[q0.tables-rows-and-keys]] intended. Joining along such a reference from the many side, each order to its one customer, gives one row per order. Joining from the one side, each customer to their orders, gives one row per matching pair, so a customer with five orders appears five times and a customer with none disappears.
+
+        **Outer joins.** `left join` keeps every row of the left table: those with matches appear once per match, and those without appear once, with NULL in every column of the right table. `right join` does the same for the right table, and `full outer join` for both. SQLite gained right and full joins in 2022; older code writes a right join as a left join with the tables swapped.
+    - question:
+        id: derivation-left-count
+        type: numeric
+        system: s2
+        prompt: |
+          A shop has 10 customers. Six of them have placed 15 orders between them, and every order names one of the 10 customers. How many rows does `customers left join orders` on the customer id return?
+        answer: "19"
+        explanation: |
+          Each of the 15 orders pairs with its one customer, giving 15 rows, and each of the 4 customers without orders adds one row padded with NULL: $15 + 4 = 19$.
+    - text: |
+        **Where the condition goes.** In a left join, a condition in the `on` clause decides which rows count as matches; a condition in `where` runs afterwards, on the joined rows. The difference matters for the padded rows. To list every customer with their November orders, `left join orders o on o.customer = c.id and o.placed >= '2026-11-01'` keeps customers with no November orders, padded with NULL. Moving the date test to `where` throws those rows away, because a NULL date is not after 1 November, and the query silently becomes an inner join.
+
+        **Rows with no match.** A left join followed by `where o.id is null` keeps exactly the left rows that found no partner: the customers who have never ordered. This is an **anti-join**, the set difference of [[f2.sets-and-set-operations]] written as a join. The test must be `is null`; `o.id = null` is never true, for reasons [[q0.null-and-three-valued-logic]] explains.
+    - question:
+        id: derivation-where
+        type: choice
+        system: s2
+        prompt: |
+          `select c.name, o.id from customers c left join orders o on o.customer = c.id where o.amount > 500` returns no customer who has only small orders or none. Why?
+        options:
+          - "The where clause runs after the join; padded rows have NULL amounts and fail it, so the left join behaves like an inner join."
+          - "Left joins never return customers without orders."
+          - "The on clause is wrong and must name the amount."
+          - "SQLite does not support left joins with a where clause."
+        answer: 0
+        explanation: |
+          A customer with no orders, or only small ones, ends up either as a padded row with a NULL amount or as rows with small amounts, and `where` removes all of them. Moving `o.amount > 500` into the `on` clause makes it part of what counts as a match, so such customers stay, padded with NULL.
+    - text: |
+        **Joining a table to itself.** Aliases let a table appear twice. `from riders a join riders b on a.store = b.store and a.name < b.name` pairs riders at the same store; `a.name < b.name` drops each rider paired with themselves and keeps one of each pair's two orderings.
+
+        **Other conditions.** The `on` condition can be any test, not only equality. Delivery fees that depend on the order's size can live in a table of bands, (low, high, fee), and `join fee_bands f on o.amount between f.low and f.high` gives each order its fee. Such joins are correct but harder for a database to run quickly, since it cannot simply look up equal values.
+
+        **Natural join, used with care.** `natural join` joins on every column name the two tables share, which is convenient until someone adds a `created_at` or `name` column to both tables and the join silently starts requiring those to match too. Naming the condition with `on`, or listing the shared columns with `using (store)`, keeps the query's meaning fixed when the tables change.
+
+        **Fan-out.** Joining one restaurant to its 20 items and its 30 reviews in the same query pairs every item with every review: 600 rows for that restaurant. Counting reviews from such a result counts each 20 times. When two one-to-many tables hang off the same row, join them separately, or count each before joining, as [[q0.grouping-and-aggregation]] will show. The row count of a join is the number of matching pairs, which by [[f3.counting-with-products-and-sums]] multiplies across independent one-to-many links.
+    - question:
+        id: order-anti-join
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of finding customers who have never ordered, with a left join, in order.
+        steps:
+          - "Left join customers to orders on the customer's id."
+          - "Customers with no orders come out as single rows with NULL in every order column."
+          - "Keep only the rows where the order's id is null."
+          - "Select the customer's name from those rows."
+        explanation: |
+          The padding exists only because of the left join, the null test picks out exactly the padded rows, and the names are taken from what is left.
+  formal:
+    - text: |
+        **Inner join.** `R join S on c` = the pairs $(r, s)$ with $c(r, s)$ true, $\sigma_c(R \times S)$.
+
+        **Left join.** The inner join, plus each row of $R$ with no partner, once, with NULL for every column of $S$. **Right join**: the same for $S$. **Full outer join**: both.
+
+        **Row count.** An inner join on a reference from the many side to a key gives one row per row of the many side whose reference exists. In general, the count is the number of matching pairs, from 0 to $|R| \cdot |S|$.
+
+        **Conditions.** In an outer join, `on` decides matches; `where` filters afterwards and removes padded rows that fail it.
+
+        **Anti-join.** `R left join S on c where S.key is null`: the rows of $R$ with no partner. **Self-join.** A table joined to itself under two aliases.
+  drill:
+    - text: Seconds each. Count pairs, then add the leftovers.
+    - question:
+        id: drill-inner
+        type: numeric
+        system: s1
+        prompt: |
+          3 customers have 2 orders each, and 2 customers have none. How many rows does the inner join of customers and orders return?
+        answer: "6"
+        explanation: One row per matching pair, $3 \times 2$; customers without orders vanish.
+    - question:
+        id: drill-left
+        type: numeric
+        system: s1
+        prompt: |
+          With the same tables, how many rows does the left join from customers return?
+        answer: "8"
+        explanation: The 6 pairs, plus one padded row for each of the 2 customers without orders.
+    - question:
+        id: drill-cross
+        type: numeric
+        system: s1
+        prompt: |
+          A join's condition is never true for any pair. How many rows does the inner join return?
+        answer: "0"
+        explanation: An inner join keeps only pairs that satisfy the condition.
+    - question:
+        id: drill-null-test
+        type: choice
+        system: s1
+        prompt: |
+          After a left join, which test finds the padded rows?
+        options:
+          - "o.id is null"
+          - "o.id = null"
+          - "o.id = 0"
+          - "o.id = ''"
+        answer: 0
+        explanation: "NULL is not a value that equals anything, even NULL, so only `is null` finds it."
+    - question:
+        id: drill-alias
+        type: choice
+        system: s1
+        prompt: |
+          Why does a self-join need aliases?
+        options:
+          - "So the two copies of the table, and their columns, can be told apart."
+          - "Because SQL forbids a table name appearing twice in any query."
+          - "To make the join faster."
+          - "So the result has no duplicate rows."
+        answer: 0
+        explanation: Without two names, `store = store` could not say which copy each column belongs to.
+    - question:
+        id: predict-inner
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("create table c (id, name); create table o (cust); insert into c values (1, 'Asha'), (2, 'Bilal'); insert into o values (1), (1), (3);")
+          print(db.execute("select count(*) from c join o on o.cust = c.id").fetchone())
+        output: "(2,)"
+        explanation: Asha matches both of her orders; Bilal matches none, and the order for customer 3 matches no one.
+    - question:
+        id: predict-left
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("create table c (id, name); create table o (cust, amount); insert into c values (1, 'Asha'), (2, 'Bilal'); insert into o values (1, 250);")
+          print(db.execute("select c.name, o.amount from c left join o on o.cust = c.id order by c.id").fetchall())
+        output: "[('Asha', 250), ('Bilal', None)]"
+        explanation: Bilal has no order, so the left join keeps him with NULL, which Python shows as None.
+  work:
+    - text: Slower now. Decide what happens to rows without a partner before writing the join.
+    - question:
+        id: fix-left-where
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The query should list every customer with each of their orders placed in November 2026 or later, in order of customer and then order, showing a customer with no such order once, with `None`. The program should print `[('Asha', 102), ('Bilal', None), ('Chitra', 104), ('Chitra', 105)]`. It prints `[('Asha', 102), ('Chitra', 104), ('Chitra', 105)]`. Find the fault and fix it.
+        starter: |
+          import sqlite3
+
+          query = """
+              select c.name, o.id
+              from customers c
+              left join orders o on o.customer = c.id
+              where o.placed >= '2026-11-01'
+              order by c.id, o.id
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table customers (id integer primary key, name text);
+              create table orders (id integer primary key, customer integer, placed text);
+              insert into customers values (1, 'Asha'), (2, 'Bilal'), (3, 'Chitra');
+              insert into orders values
+                  (101, 1, '2026-10-28 10:00'), (102, 1, '2026-11-03 19:30'),
+                  (103, 2, '2026-10-30 13:15'), (104, 3, '2026-11-12 08:45'), (105, 3, '2026-11-20 21:00');
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select c.name, o.id
+              from customers c
+              left join orders o on o.customer = c.id and o.placed >= '2026-11-01'
+              order by c.id, o.id
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table customers (id integer primary key, name text);
+              create table orders (id integer primary key, customer integer, placed text);
+              insert into customers values (1, 'Asha'), (2, 'Bilal'), (3, 'Chitra');
+              insert into orders values
+                  (101, 1, '2026-10-28 10:00'), (102, 1, '2026-11-03 19:30'),
+                  (103, 2, '2026-10-30 13:15'), (104, 3, '2026-11-12 08:45'), (105, 3, '2026-11-20 21:00');
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(97)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.executescript("create table customers (id integer primary key, name text); create table orders (id integer primary key, customer integer, placed text);")
+              _cs = [(_i, _n) for _i, _n in enumerate(_rng.sample(["Asha", "Bilal", "Chitra", "Dev", "Esha", "Farhan"], _rng.randint(1, 5)), 1)]
+              _os = [(100 + _k, _rng.randint(1, 6), _rng.choice(["2026-10-", "2026-11-"]) + str(_rng.randint(10, 28)) + " 12:00") for _k in range(_rng.randint(0, 8))]
+              _db.executemany("insert into customers values (?, ?)", _cs)
+              _db.executemany("insert into orders values (?, ?, ?)", _os)
+              _want = []
+              for _i, _n in _cs:
+                  _mine = sorted(_o[0] for _o in _os if _o[1] == _i and _o[2] >= "2026-11-01")
+                  _want += [(_n, _o) for _o in _mine] if _mine else [(_n, None)]
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For customers " + str(_cs) + " and orders " + str(_os) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('Asha', 102), ('Bilal', None), ('Chitra', 104), ('Chitra', 105)]", "The program should print [('Asha', 102), ('Bilal', None), ('Chitra', 104), ('Chitra', 105)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select c.name, o.id
+                from customers c
+                join orders o on o.customer = c.id and o.placed >= '2026-11-01'
+                order by c.id, o.id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table customers (id integer primary key, name text);
+                create table orders (id integer primary key, customer integer, placed text);
+                insert into customers values (1, 'Asha'), (2, 'Bilal'), (3, 'Chitra');
+                insert into orders values
+                    (101, 1, '2026-10-28 10:00'), (102, 1, '2026-11-03 19:30'),
+                    (103, 2, '2026-10-30 13:15'), (104, 3, '2026-11-12 08:45'), (105, 3, '2026-11-20 21:00');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select c.name, o.id
+                from customers c
+                left join orders o on o.customer = c.id
+                order by c.id, o.id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table customers (id integer primary key, name text);
+                create table orders (id integer primary key, customer integer, placed text);
+                insert into customers values (1, 'Asha'), (2, 'Bilal'), (3, 'Chitra');
+                insert into orders values
+                    (101, 1, '2026-10-28 10:00'), (102, 1, '2026-11-03 19:30'),
+                    (103, 2, '2026-10-30 13:15'), (104, 3, '2026-11-12 08:45'), (105, 3, '2026-11-20 21:00');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select c.name, o.id
+                from customers c
+                left join orders o on o.placed >= '2026-11-01'
+                order by c.id, o.id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table customers (id integer primary key, name text);
+                create table orders (id integer primary key, customer integer, placed text);
+                insert into customers values (1, 'Asha'), (2, 'Bilal'), (3, 'Chitra');
+                insert into orders values
+                    (101, 1, '2026-10-28 10:00'), (102, 1, '2026-11-03 19:30'),
+                    (103, 2, '2026-10-30 13:15'), (104, 3, '2026-11-12 08:45'), (105, 3, '2026-11-20 21:00');
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          The date test in `where` runs after the join and removes Bilal's padded row, whose date is NULL. In the `on` clause it decides which orders count as matches, and Bilal, with none, is kept once. An inner join drops him again; dropping the date test brings back October orders; and joining on the date alone pairs every customer with every November order.
+    - question:
+        id: write-never-ordered
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `query` so that it returns, in order of name, the names of customers who have never placed an order. Some orders may name customers who do not exist.
+        starter: |
+          import sqlite3
+
+          query = """
+              select c.name
+              from customers c
+              order by c.name
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table customers (id integer primary key, name text);
+              create table orders (id integer primary key, customer integer, amount integer);
+              insert into customers values (1, 'Asha'), (2, 'Bilal'), (3, 'Chitra'), (4, 'Dev');
+              insert into orders values (101, 1, 250), (102, 1, 480), (103, 3, 900), (104, 5, 120);
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select c.name
+              from customers c
+              left join orders o on o.customer = c.id
+              where o.id is null
+              order by c.name
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table customers (id integer primary key, name text);
+              create table orders (id integer primary key, customer integer, amount integer);
+              insert into customers values (1, 'Asha'), (2, 'Bilal'), (3, 'Chitra'), (4, 'Dev');
+              insert into orders values (101, 1, 250), (102, 1, 480), (103, 3, 900), (104, 5, 120);
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(101)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.executescript("create table customers (id integer primary key, name text); create table orders (id integer primary key, customer integer, amount integer);")
+              _cs = [(_i, _n) for _i, _n in enumerate(_rng.sample(["Asha", "Bilal", "Chitra", "Dev", "Esha", "Farhan"], _rng.randint(1, 6)), 1)]
+              _os = [(100 + _k, _rng.randint(1, 7), 100) for _k in range(_rng.randint(0, 8))]
+              _db.executemany("insert into customers values (?, ?)", _cs)
+              _db.executemany("insert into orders values (?, ?, ?)", _os)
+              _want = sorted((_n,) for _i, _n in _cs if not any(_o[1] == _i for _o in _os))
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For customers " + str(_cs) + " and orders " + str(_os) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('Bilal',), ('Dev',)]", "The program should print [('Bilal',), ('Dev',)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select c.name
+                from customers c
+                join orders o on o.customer = c.id
+                where o.id is null
+                order by c.name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table customers (id integer primary key, name text);
+                create table orders (id integer primary key, customer integer, amount integer);
+                insert into customers values (1, 'Asha'), (2, 'Bilal'), (3, 'Chitra'), (4, 'Dev');
+                insert into orders values (101, 1, 250), (102, 1, 480), (103, 3, 900), (104, 5, 120);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select c.name
+                from customers c
+                left join orders o on o.customer = c.id
+                where o.id = null
+                order by c.name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table customers (id integer primary key, name text);
+                create table orders (id integer primary key, customer integer, amount integer);
+                insert into customers values (1, 'Asha'), (2, 'Bilal'), (3, 'Chitra'), (4, 'Dev');
+                insert into orders values (101, 1, 250), (102, 1, 480), (103, 3, 900), (104, 5, 120);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select c.name
+                from customers c
+                left join orders o on o.customer <> c.id
+                where o.id is null
+                order by c.name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table customers (id integer primary key, name text);
+                create table orders (id integer primary key, customer integer, amount integer);
+                insert into customers values (1, 'Asha'), (2, 'Bilal'), (3, 'Chitra'), (4, 'Dev');
+                insert into orders values (101, 1, 250), (102, 1, 480), (103, 3, 900), (104, 5, 120);
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          A left join keeps every customer, and only those with no orders come out with NULL in the order's columns, which `o.id is null` picks out. An inner join has no padded rows to find; `o.id = null` is never true; and joining on `<>` pairs each customer with everyone else's orders, so only customers in a shop with no orders at all come out padded.
+    - question:
+        id: write-same-store
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `query` so that it returns every pair of riders who work at the same store, as `(name, name)` with the first name alphabetically before the second, each pair once, sorted by the first name and then the second.
+        starter: |
+          import sqlite3
+
+          query = """
+              select name, store
+              from riders
+              order by store, name
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table riders (id integer primary key, name text, store text);
+              insert into riders values (1, 'Asha', 'KOR'), (2, 'Bilal', 'IND'), (3, 'Chitra', 'KOR'), (4, 'Dev', 'KOR'), (5, 'Esha', 'HSR');
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select a.name, b.name
+              from riders a
+              join riders b on a.store = b.store and a.name < b.name
+              order by a.name, b.name
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table riders (id integer primary key, name text, store text);
+              insert into riders values (1, 'Asha', 'KOR'), (2, 'Bilal', 'IND'), (3, 'Chitra', 'KOR'), (4, 'Dev', 'KOR'), (5, 'Esha', 'HSR');
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(103)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table riders (id integer primary key, name text, store text)")
+              _rs = [(_i, _n, _rng.choice(["KOR", "IND", "HSR"])) for _i, _n in enumerate(_rng.sample(["Asha", "Bilal", "Chitra", "Dev", "Esha", "Farhan", "Gita"], _rng.randint(1, 7)), 1)]
+              _db.executemany("insert into riders values (?, ?, ?)", _rs)
+              _want = sorted((_a[1], _b[1]) for _a in _rs for _b in _rs if _a[2] == _b[2] and _a[1] < _b[1])
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For riders " + str(_rs) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('Asha', 'Chitra'), ('Asha', 'Dev'), ('Chitra', 'Dev')]", "The program should print [('Asha', 'Chitra'), ('Asha', 'Dev'), ('Chitra', 'Dev')]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select a.name, b.name
+                from riders a
+                join riders b on a.store = b.store and a.name <> b.name
+                order by a.name, b.name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table riders (id integer primary key, name text, store text);
+                insert into riders values (1, 'Asha', 'KOR'), (2, 'Bilal', 'IND'), (3, 'Chitra', 'KOR'), (4, 'Dev', 'KOR'), (5, 'Esha', 'HSR');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select a.name, b.name
+                from riders a
+                join riders b on a.store = b.store
+                order by a.name, b.name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table riders (id integer primary key, name text, store text);
+                insert into riders values (1, 'Asha', 'KOR'), (2, 'Bilal', 'IND'), (3, 'Chitra', 'KOR'), (4, 'Dev', 'KOR'), (5, 'Esha', 'HSR');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select a.name, b.name
+                from riders a
+                join riders b on a.id = b.id and a.name < b.name
+                order by a.name, b.name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table riders (id integer primary key, name text, store text);
+                insert into riders values (1, 'Asha', 'KOR'), (2, 'Bilal', 'IND'), (3, 'Chitra', 'KOR'), (4, 'Dev', 'KOR'), (5, 'Esha', 'HSR');
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          Two aliases of riders, joined on equal stores, give every ordered pair at each store, including each rider with themselves. `a.name < b.name` keeps exactly one ordering of each pair of different riders. `<>` keeps both orderings; no name condition keeps riders paired with themselves; and joining on id pairs each rider only with themselves, whom `<` then removes.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          A restaurant with 20 menu items and 30 reviews is joined to its items and its reviews in one query, both on the restaurant's id. How many rows does it produce?
+        answer: "600"
+        explanation: |
+          Each item pairs with each review of the same restaurant, $20 \times 30 = 600$ rows. Counting reviews in that result gives 600, twenty times the truth.
+    - question:
+        id: work-orphans
+        type: choice
+        system: s2
+        prompt: |
+          A report joins orders to customers with an inner join and totals the amounts. Finance says the total is below the sum of all orders. What is the likeliest cause?
+        options:
+          - "Some orders name customers that no longer exist, so the inner join drops them; a left join from orders, or a constraint preventing such orders, would keep the totals right."
+          - "Inner joins round amounts down."
+          - "Customers with several orders are counted once."
+          - "The join counts some orders twice."
+        answer: 0
+        explanation: |
+          An inner join keeps only matched pairs. An order whose customer row was deleted, or never existed, matches nothing and disappears from the total. Duplicated rows would raise the total, not lower it. The lasting fix is a foreign key constraint, which stops such orders from existing at all.
+  connections:
+    - text: |
+        600 rows, every item paired with every review. Counting reviews from them gives 600, not 30. The cure is to count each table separately and join the counts, which needs grouping, the subject of [[q0.grouping-and-aggregation]].
+
+        The padded rows of outer joins introduced NULL, which behaves unlike any ordinary value: `= null` is never true, and a NULL amount fails `amount > 500` without being small. [[q0.null-and-three-valued-logic]] gives the full rules. How a database actually finds matching pairs, without forming a product, starts with [[q3.nested-loop-joins]].

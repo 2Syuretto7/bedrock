@@ -5974,6 +5974,80 @@ function QueryOrder(props: Props) {
   );
 }
 
+const JM_CUSTOMERS: [number, string][] = [
+  [1, "Asha"],
+  [2, "Bilal"],
+  [3, "Chitra"],
+  [4, "Dev"],
+];
+const JM_ORDERS: [number, number, number][] = [
+  [101, 1, 250],
+  [102, 1, 480],
+  [103, 3, 900],
+  [104, 5, 120],
+];
+type JoinKind = "inner" | "left" | "right" | "full";
+const JOIN_KINDS: JoinKind[] = ["inner", "left", "right", "full"];
+
+/** Customers joined to orders by customer id, by each kind of join, with unmatched rows padded with NULL. */
+function JoinMatch(props: Props) {
+  const [kind, setKind] = useState<JoinKind>(JOIN_KINDS.includes(props.kind as JoinKind) ? (props.kind as JoinKind) : "inner");
+  const rows: SqlCell[][] = [];
+  for (const [id, name] of JM_CUSTOMERS) for (const [oid, cust, amount] of JM_ORDERS) if (cust === id) rows.push([name, oid, amount]);
+  const lonelyCustomers = JM_CUSTOMERS.filter(([id]) => !JM_ORDERS.some((o) => o[1] === id));
+  const lonelyOrders = JM_ORDERS.filter((o) => !JM_CUSTOMERS.some(([id]) => id === o[1]));
+  const matched = rows.length;
+  if (kind === "left" || kind === "full") for (const [, name] of lonelyCustomers) rows.push([name, null, null]);
+  if (kind === "right" || kind === "full") for (const [oid, , amount] of lonelyOrders) rows.push([null, oid, amount]);
+  const keepsCustomers = kind === "left" || kind === "full";
+  const keepsOrders = kind === "right" || kind === "full";
+  const what = {
+    inner: "only the pairs of a customer and an order placed by that customer",
+    left: "every customer, with each of their orders; a customer with no order appears once, with NULL for the order's columns",
+    right: "every order, with its customer; an order whose customer is missing appears with NULL for the customer's name",
+    full: "every matching pair, then every customer without an order and every order without a customer, each padded with NULL",
+  }[kind];
+  const show = (r: SqlCell[]) => r.map((v) => (v === null ? "NULL" : String(v))).join(" ");
+  const summary = `Customers ${kind} join orders on the customer's id: ${what}. ${plural(rows.length, "row")}, ${matched} of them matched pairs: ${rows.map(show).join("; ")}. Bilal and Dev have no orders, and order 104 names customer 5, who does not exist. In SQL: select c.name, o.id, o.amount from customers c ${kind === "full" ? "full outer" : kind} join orders o on o.customer = c.id.`;
+  return (
+    <Frame
+      title="Kinds of join"
+      summary={summary}
+      controls={
+        <>
+          {JOIN_KINDS.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={kind === k} onClick={() => setKind(k)}>
+              {`${k} join`}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 196" role="img" aria-label={`Customers ${kind} join orders, giving ${rows.length} rows`}>
+        <SqlTable
+          x={8}
+          y={22}
+          widths={[26, 56]}
+          head={["id", "name"]}
+          rows={JM_CUSTOMERS}
+          title="customers"
+          mark={(r) => (lonelyCustomers.some((c) => c[0] === JM_CUSTOMERS[r][0]) ? (keepsCustomers ? "fill" : "ghost") : undefined)}
+        />
+        <SqlTable
+          x={100}
+          y={22}
+          widths={[36, 40, 52]}
+          head={["id", "cust", "amount"]}
+          rows={JM_ORDERS}
+          title="orders"
+          mark={(r) => (lonelyOrders.some((o) => o[0] === JM_ORDERS[r][0]) ? (keepsOrders ? "fill" : "ghost") : undefined)}
+        />
+        <SqlTable x={250} y={22} widths={[60, 52, 60]} head={["name", "order", "amount"]} rows={rows} title="result" mark={(r) => (r >= matched ? "fill" : undefined)} />
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -7291,6 +7365,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "table-keys": TableKeys,
   "algebra-ops": AlgebraOps,
   "query-order": QueryOrder,
+  "join-match": JoinMatch,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
