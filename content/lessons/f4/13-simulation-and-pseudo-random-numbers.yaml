@@ -1,0 +1,622 @@
+concept: f4.simulation-and-pseudo-random-numbers
+minutes: 100
+claim: You can explain how a pseudo-random number generator turns a seed into a reproducible sequence, why every generator repeats and what its period is, recognise the weaknesses of a linear congruential generator and why Python's random module must not make secrets, estimate a chance by simulation and give its standard error, turn uniform draws into choices with given chances, whole numbers, continuous distributions and fair shuffles, and recognise modulo bias and the biased shuffle.
+recalls: [f4.the-law-of-large-numbers-and-the-central-limit-theorem]
+uses: [f4.the-law-of-large-numbers-and-the-central-limit-theorem, f4.the-birthday-problem-and-collisions, f4.continuous-distributions-and-densities, f4.common-discrete-distributions, f4.expectation-and-linearity, f4.independence, f3.modular-arithmetic, f3.the-pigeonhole-principle, f3.permutations-and-combinations, s1.modules-and-imports, s0.functions, s0.loops]
+leads: [f5.summaries-mean-median-and-percentiles, f5.sampling-and-estimators, f5.the-bootstrap, f7.checksums-and-error-detection]
+starter: |
+  # Scratch space. Six hundred students each press Start in one of 600 seconds.
+  import random
+
+  random.seed(1)
+  seconds = [random.randint(1, 600) for _ in range(600)]
+  print(len(seconds) - len(set(seconds)), "students start in a second someone else already used")
+parts:
+  recall:
+    - text: |
+        [[f4.the-law-of-large-numbers-and-the-central-limit-theorem]] showed that averages of independent trials settle at the mean, with fluctuations of size $\sigma/\sqrt{n}$ that look normal. This lesson turns that into a tool: when a chance is too tangled to compute, let a machine act out the experiment many times and count. First, though, a machine has to produce something that behaves like chance. Three quick pulls first.
+  puzzle:
+    - text: |
+        A coaching centre runs an online mock test. Each student gets a "random" paper of 30 questions drawn from a bank of 500. When a student presses Start, the program seeds Python's random number generator with the clock, in whole seconds, and then draws the 30 questions.
+
+        There are $\binom{500}{30}$ possible papers, a number with 49 digits, so the centre assures parents that no two students will ever see the same paper.
+
+        On Sunday, 600 students press Start at independent, uniformly random moments in the same ten-minute window.
+
+        **About how many pairs of students get identical papers?**
+  intuition:
+    - text: |
+        A computer does exactly what it is told, so it cannot toss a coin. What it can do is follow a rule that scrambles a number so thoroughly that the results look like chance. A **pseudo-random number generator** keeps a number called its **state**. Each time it is asked for a draw, it applies a fixed rule to the state and turns the new state into a number between 0 and 1. The **seed** is simply the starting state.
+
+        Two things follow at once. The same seed always gives the same sequence, which is a gift when a simulation has to be rerun or debugged. And the sequence holds no more surprise than the seed does: anyone who knows the rule and the seed knows every draw in advance.
+
+        The figure turns pairs of draws into points in a square and counts how many land inside the quarter circle of radius 1. The quarter circle covers $\pi/4$ of the square, so four times the fraction inside is an estimate of $\pi$. With the good generator, more points bring the estimate closer, at the speed the last lesson predicted. Then press the button for the poor generator, the tiny rule $x \to (5x + 1) \bmod 2048$, and look at the picture.
+    - figure: monte-carlo
+      props: { generator: good, points: 1000 }
+    - text: |
+        The poor generator's points fall on five parallel lines, and its estimate settles near 3.09 however many points are thrown. Each draw on its own is fine: the numbers are spread evenly between 0 and 1. The fault lies between draws. Each one is fixed by the one before through a simple rule, so the two numbers in a pair are far from independent. A good generator hides that dependence so well that no practical test finds it.
+
+        Using such draws to act out a random experiment many times and count the outcomes is called **simulation**, or the **Monte Carlo method**. Engineers use it to estimate the chance that a system of many parts survives a year, the time a queue takes to clear, or how often a statistical method errs, whenever a formula is out of reach.
+  derivation:
+    - text: |
+        **Linear congruential generators.** The oldest family of generators uses the arithmetic of [[f3.modular-arithmetic]]:
+
+        $$x_{k+1} = (a x_k + c) \bmod m, \qquad \text{output } x_k/m.$$
+
+        With $m = 16$, $a = 5$, $c = 3$ and seed $x_0 = 0$, the states are 3, 2, 13, 4, 7, 6, 1, 8, 11, 10, 5, 12, 15, 14, 9, 0, and then the same sixteen again.
+
+        **Every generator repeats.** The state can take only finitely many values, here 16. By [[f3.the-pigeonhole-principle]], among the first $m + 1$ states two must be equal, and since each state fixes the next, everything after the first repeat is a replay. The length of the cycle is the **period**. This example has the longest possible period, 16. The Hull and Dobell theorem says exactly when that happens: $x \to (ax + c) \bmod m$ has period $m$ for every seed if and only if $c$ and $m$ have no common factor, $a - 1$ is divisible by every prime that divides $m$, and $a - 1$ is divisible by 4 when $m$ is.
+
+        **A long period is not enough.** Look at the states above: odd, even, odd, even, for ever. With $a$ and $c$ odd, $x_{k+1} \equiv x_k + 1 \pmod 2$, so the lowest bit of this generator alternates, and `x % 2` would be a perfectly predictable coin. And as the figure showed, consecutive pairs fall on a few lines; in three dimensions, triples fall on a few planes. RANDU, a generator in wide use in the 1960s, put every triple of consecutive draws on one of just 15 planes, which cast doubt on the simulations that relied on it.
+    - question:
+        id: choice-full-period
+        type: choice
+        system: s2
+        prompt: |
+          The generator $x \to (ax + 3) \bmod 16$ should have period 16 for every seed. Which multiplier $a$ achieves that?
+        options:
+          - "$a = 7$"
+          - "$a = 9$"
+          - "$a = 11$"
+          - "$a = 15$"
+        answer: 1
+        explanation: |
+          $c = 3$ shares no factor with 16, and the only prime dividing 16 is 2. Because 4 divides 16, $a - 1$ must be divisible by 4. Only $a = 9$ works: $a - 1 = 8$. For 7, 11 and 15, $a - 1$ is 6, 10 and 14, all even but not multiples of 4.
+    - text: |
+        **What Python uses.** Python's `random` module uses the **Mersenne Twister**. Its state is 624 numbers of 32 bits, its period is $2^{19937} - 1$, a number with 6,002 digits, and its output passes the standard batteries of statistical tests, so it is a sound choice for simulation. It is not a sound choice for secrets. Each output gives away part of the state, and from 624 consecutive 32-bit outputs the whole state can be rebuilt and every future draw predicted. Passwords, tokens and keys need a **cryptographically secure** generator, which Python provides in its `secrets` module, fed by randomness the operating system gathers from hardware events.
+
+        **Seeds in practice.** `random.seed(2024)` fixes the starting state, so a simulation prints the same numbers on every run, and a bug that appears once appears every time. Without a seed, Python starts from the operating system's randomness, so runs differ. Seeding from the clock in whole seconds, as the coaching centre did, hands every student who starts in the same second the same seed.
+
+        **Estimating a chance.** To estimate $p = P(A)$, run $n$ independent trials and count those in which $A$ happens. The fraction $\hat{p}$ of hits is an average of $n$ indicators, each with mean $p$ and variance $p(1 - p)$, as in [[f4.common-discrete-distributions]]. So by the last lesson, $\hat{p}$ settles at $p$, its standard error is $\sqrt{p(1 - p)/n}$, and the range $\hat{p} \pm 2\sqrt{\hat{p}(1 - \hat{p})/n}$ catches $p$ about 95% of the time.
+
+        Two consequences shape how simulation is used. First, the error shrinks like $1/\sqrt{n}$: a hundred times as many trials buys one more correct digit. With 10,000 points, the figure's estimate of $\pi/4 \approx 0.785$ has standard error $\sqrt{0.785 \times 0.215/10{,}000} \approx 0.0041$, so $\pi$ itself is known only to about $\pm 0.03$. Simulation is a poor way to get many digits and an excellent way to get two digits of something no formula reaches. Second, the error depends on $n$ and $p$, not on how complicated each trial is: a simulation of a machine with a hundred parts is as accurate as one of a coin, for the same number of trials.
+
+        Rare events are the hard case. Relative to $p$, the standard error is $\sqrt{(1 - p)/(np)}$, roughly $1/\sqrt{np}$, so knowing a one-in-a-million chance to within 10% takes about 100 expected hits, which is 100 million trials.
+    - question:
+        id: derivation-trials
+        type: numeric
+        system: s2
+        prompt: |
+          A simulation estimates a chance close to one half. How many trials make its standard error 0.01?
+        answer: "2500"
+        explanation: |
+          $\sqrt{0.5 \times 0.5/n} = 0.01$ gives $0.25/n = 0.0001$, so $n = 2{,}500$.
+    - text: |
+        **Making other distributions.** A generator supplies uniform draws $U$ between 0 and 1. Everything else is built from them.
+
+        *Choices with given chances.* To pick outcome $i$ with chance $p_i$, cut the stretch from 0 to 1 into consecutive pieces of lengths $p_0, p_1, \dots$ and return the piece $U$ lands in: the first $i$ with $U < p_0 + \cdots + p_i$. $U$ lands in each piece with chance equal to its length, so outcome $i$ comes up with chance $p_i$.
+
+        *Whole numbers.* A tempting shortcut for a digit from 0 to 9 is to take a random byte, 0 to 255, and keep its remainder modulo 10. But 256 is not a multiple of 10. The remainders 0 to 5 each come from 26 bytes and 6 to 9 from only 25, a slant called **modulo bias**. `random.randint` avoids it by drawing again whenever a draw lands in the leftover part.
+
+        *Continuous distributions.* If $F$ is a continuous cdf with inverse $F^{-1}$, then $X = F^{-1}(U)$ has cdf $F$, because
+
+        $$P\bigl(F^{-1}(U) \le x\bigr) = P\bigl(U \le F(x)\bigr) = F(x).$$
+
+        This is the **inverse transform method**. For an exponential wait with rate $\lambda$, $F(x) = 1 - e^{-\lambda x}$, so $X = -\ln(1 - U)/\lambda$: the quantile function from [[f4.continuous-distributions-and-densities]], evaluated at a random point.
+
+        *Shuffles.* To put $n$ items in a uniformly random order, the **Fisher and Yates shuffle** fills the positions from the left: for each position $i$, it swaps in an item chosen uniformly from positions $i$ to $n - 1$. That makes $n \times (n - 1) \times \cdots \times 1 = n!$ equally likely sequences of choices, and each order comes from exactly one of them. The tempting version swaps each position with any position at all. It makes $n^n$ equally likely sequences; for $n = 3$ that is 27, which cannot be shared equally among 6 orders, so some orders must come up more often than others, as counting in [[f3.permutations-and-combinations]] shows.
+    - question:
+        id: order-simulation
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of a simulation that estimates a chance in order.
+        steps:
+          - "Seed the generator, so the run can be repeated exactly."
+          - "Write one trial that turns uniform draws into the random quantities and reports whether the event happened."
+          - "Run many independent trials and count the hits."
+          - "Report the fraction of hits together with its standard error, $\\sqrt{\\hat{p}(1 - \\hat{p})/n}$."
+        explanation: |
+          The seed comes first so that every later draw is reproducible. A trial is a function of draws; the count over many trials is an average of indicators; and an estimate without its standard error says nothing about how far to trust it.
+    - text: |
+        **In Python.** The figure's experiment, with 100,000 points:
+
+        ```python
+        import math
+        import random
+
+        random.seed(1)
+        n = 100000
+        inside = 0
+        for _ in range(n):
+            x, y = random.random(), random.random()
+            if x * x + y * y < 1:
+                inside += 1
+        share = inside / n
+        print(round(4 * share, 3), round(4 * math.sqrt(share * (1 - share) / n), 3))
+        ```
+
+        This prints `3.138 0.005`: an estimate of $\pi$ with a standard error of 0.005, and the true value 3.142 within one standard error of it.
+  formal:
+    - text: |
+        **Linear congruential generator.** $x_{k+1} = (a x_k + c) \bmod m$, with outputs $x_k/m$. Its period is at most $m$, and it equals $m$ for every seed if and only if $\gcd(c, m) = 1$, every prime dividing $m$ divides $a - 1$, and $4 \mid a - 1$ whenever $4 \mid m$.
+
+        **Period.** A generator with $s$ possible states repeats within $s$ draws.
+
+        **Monte Carlo estimate.** For independent trials with indicators $I_1, \dots, I_n$ of an event of chance $p$, $\hat{p} = \frac{1}{n}\sum I_j$ has $E[\hat{p}] = p$ and standard error $\sqrt{p(1 - p)/n}$, estimated by $\sqrt{\hat{p}(1 - \hat{p})/n}$.
+
+        **Discrete sampling.** For chances $p_0, \dots, p_{k-1}$ summing to 1, the index $\min\{i : U < p_0 + \cdots + p_i\}$ equals $i$ with chance $p_i$.
+
+        **Inverse transform.** If $U$ is uniform on $(0, 1)$ and $F$ is a continuous, strictly increasing cdf, then $F^{-1}(U)$ has cdf $F$.
+
+        **Fisher and Yates shuffle.** For $i = 0, \dots, n - 1$, swap position $i$ with a position chosen uniformly from $i, \dots, n - 1$. Each of the $n!$ orders results with chance $1/n!$.
+  drill:
+    - text: Seconds each. A state has finitely many values, an estimate's error shrinks like one over the square root of the trials, and every distribution starts as a uniform draw.
+    - question:
+        id: drill-period
+        type: numeric
+        system: s1
+        prompt: |
+          A generator's state is one 16-bit number. At most how many draws can it give before its sequence repeats?
+        answer: "65536"
+        explanation: $2^{16} = 65{,}536$ states, so the period is at most 65,536.
+    - question:
+        id: drill-se
+        type: numeric
+        system: s1
+        prompt: |
+          A simulation of 10,000 trials estimates a chance near one half. What is its standard error?
+        answer: "0.005"
+        explanation: $\sqrt{0.25/10{,}000} = 0.5/100 = 0.005$.
+    - question:
+        id: drill-digits
+        type: numeric
+        system: s1
+        prompt: |
+          To make a simulation's standard error 10 times smaller, by what factor must the number of trials grow?
+        answer: "100"
+        explanation: The error shrinks like $1/\sqrt{n}$, so $n$ must grow by $10^2$.
+    - question:
+        id: drill-inverse
+        type: numeric
+        system: s1
+        tolerance: "0.001"
+        prompt: |
+          A uniform draw is $U = 0.5$. What exponential wait with rate 2 does the inverse transform $-\ln(1 - U)/2$ give? Give a decimal to three places.
+        answer: "0.347"
+        explanation: $-\ln(0.5)/2 = 0.693/2 \approx 0.347$, the median of that exponential.
+    - question:
+        id: drill-seed
+        type: choice
+        system: s1
+        prompt: |
+          Why put `random.seed(2024)` at the top of a simulation?
+        options:
+          - "So every run draws the same numbers, and results and bugs can be reproduced."
+          - "So the numbers are more random."
+          - "So the generator never repeats."
+          - "So the draws are safe to use as passwords."
+        answer: 0
+        explanation: A seed fixes the starting state. It changes neither the quality nor the period of the generator, and a seeded sequence is the opposite of secret.
+    - question:
+        id: predict-lcg
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          x = 0
+          states = []
+          for _ in range(3):
+              x = (5 * x + 3) % 16
+              states.append(x)
+          print(states)
+        output: "[3, 2, 13]"
+        explanation: $5 \times 0 + 3 = 3$, $5 \times 3 + 3 = 18 \equiv 2$, and $5 \times 2 + 3 = 13$, all modulo 16.
+    - question:
+        id: predict-modulo
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          counts = [0] * 10
+          for byte in range(256):
+              counts[byte % 10] += 1
+          print(counts[0], counts[9])
+        output: "26 25"
+        explanation: The bytes 0 to 249 fill each remainder 25 times, and 250 to 255 add one more to the remainders 0 to 5. That is modulo bias.
+    - question:
+        id: predict-same-seed
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import random
+
+          random.seed(42)
+          first = random.random()
+          random.seed(42)
+          second = random.random()
+          print(first == second)
+        output: "True"
+        explanation: Seeding again restarts the generator from the same state, so the next draw is the same number.
+  work:
+    - text: Slower now. For each simulation, decide what one trial is, which draws it needs, and how far the answer can be trusted before reading any output.
+    - question:
+        id: fix-shuffle
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `shuffle(items, below)` should return the items in a uniformly random order, where `below(k)` returns a random whole number from 0 to `k - 1`, each equally likely. The program shuffles `"abc"` 60,000 times and prints how often the rarest and the commonest order came up, as multiples of the fair share. It should print `1.0 1.0`. It prints `0.9 1.1`. Find the fault and fix it.
+        starter: |
+          import random
+
+          def shuffle(items, below):
+              items = list(items)
+              for i in range(len(items)):
+                  j = below(len(items))
+                  items[i], items[j] = items[j], items[i]
+              return items
+
+          def below(k):
+              return random.randint(0, k - 1)
+
+          random.seed(7)
+          counts = {}
+          for _ in range(60000):
+              order = "".join(shuffle("abc", below))
+              counts[order] = counts.get(order, 0) + 1
+          print(round(6 * min(counts.values()) / 60000, 1), round(6 * max(counts.values()) / 60000, 1))
+        solution: |
+          import random
+
+          def shuffle(items, below):
+              items = list(items)
+              for i in range(len(items)):
+                  j = i + below(len(items) - i)
+                  items[i], items[j] = items[j], items[i]
+              return items
+
+          def below(k):
+              return random.randint(0, k - 1)
+
+          random.seed(7)
+          counts = {}
+          for _ in range(60000):
+              order = "".join(shuffle("abc", below))
+              counts[order] = counts.get(order, 0) + 1
+          print(round(6 * min(counts.values()) / 60000, 1), round(6 * max(counts.values()) / 60000, 1))
+        tests: |
+          import itertools
+          import math
+          from fractions import Fraction
+          def _spread(_items):
+              _found = {}
+              _todo = [[]]
+              while _todo:
+                  _prefix = _todo.pop()
+                  _path = []
+                  _weight = [Fraction(1)]
+                  def _below(k, _prefix=_prefix, _path=_path, _weight=_weight):
+                      assert isinstance(k, int) and k >= 1, "below(k) needs a whole number k of at least 1, not " + repr(k)
+                      _i = len(_path)
+                      if _i < len(_prefix):
+                          _c = _prefix[_i]
+                      else:
+                          for _other in range(1, k):
+                              _todo.append(_path + [_other])
+                          _c = 0
+                      _path.append(_c)
+                      _weight[0] = _weight[0] / k
+                      return _c
+                  _out = shuffle(_items, _below)
+                  assert sorted(_out) == sorted(_items), "shuffle(" + repr(_items) + ", below) should return the same items in some order, not " + repr(_out)
+                  _key = tuple(_out)
+                  _found[_key] = _found.get(_key, 0) + _weight[0]
+              return _found
+          for _items in [[], ["a"], ["a", "b"], ["a", "b", "c"], [1, 2, 3, 4], [5, 6, 7, 8, 9]]:
+              _found = _spread(_items)
+              _want = Fraction(1, math.factorial(len(_items)))
+              for _order in itertools.permutations(_items):
+                  _got = _found.get(tuple(_order), 0)
+                  assert _got == _want, "shuffle(" + repr(_items) + ", below) should give the order " + repr(list(_order)) + " with chance " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "1.0 1.0", "The program should print 1.0 1.0"
+        wrong:
+          - |
+            import random
+
+            def shuffle(items, below):
+                items = list(items)
+                for i in range(len(items)):
+                    j = below(len(items) - i)
+                    items[i], items[j] = items[j], items[i]
+                return items
+
+            def below(k):
+                return random.randint(0, k - 1)
+
+            random.seed(7)
+            counts = {}
+            for _ in range(60000):
+                order = "".join(shuffle("abc", below))
+                counts[order] = counts.get(order, 0) + 1
+            print("1.0 1.0")
+          - |
+            import random
+
+            def shuffle(items, below):
+                items = list(items)
+                for i in range(len(items) - 1, 0, -1):
+                    j = below(i)
+                    items[i], items[j] = items[j], items[i]
+                return items
+
+            def below(k):
+                return random.randint(0, k - 1)
+
+            random.seed(7)
+            counts = {}
+            for _ in range(60000):
+                order = "".join(shuffle("abc", below))
+                counts[order] = counts.get(order, 0) + 1
+            print("1.0 1.0")
+          - |
+            import random
+
+            def shuffle(items, below):
+                items = list(items)
+                for i in range(len(items) - 1):
+                    j = below(len(items))
+                    items[i], items[j] = items[j], items[i]
+                return items
+
+            def below(k):
+                return random.randint(0, k - 1)
+
+            random.seed(7)
+            counts = {}
+            for _ in range(60000):
+                order = "".join(shuffle("abc", below))
+                counts[order] = counts.get(order, 0) + 1
+            print("1.0 1.0")
+        explanation: |
+          Swapping each position with any position makes $3^3 = 27$ equally likely runs, and 27 cannot be split evenly among 6 orders: three orders come from 5 runs each and three from 4. Choosing `j` from positions `i` to the end makes $3 \times 2 \times 1 = 6$ runs, one per order. Choosing from the first `len(items) - i` positions also makes 6 runs, but some orders come twice and others never. Counting down and choosing below `i`, which never lets an item stay where it is, gives only the orders that form one long cycle. Stopping one position early still makes $3^2 = 9$ runs, which 6 orders cannot share.
+    - question:
+        id: write-estimate
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `estimate(trial, n)`, which calls `trial()` `n` times, where each call returns `True` or `False`, and returns two numbers: the fraction of calls that returned `True`, and that fraction's estimated standard error. The program estimates the chance that a 1-metre stick of sugarcane, cut at two uniformly random points, gives three pieces that make a triangle.
+        starter: |
+          import math
+          import random
+
+          def estimate(trial, n):
+              return 0.0, 0.0
+
+          def triangle():
+              a, b = sorted([random.random(), random.random()])
+              return max(a, b - a, 1 - b) < 0.5
+
+          random.seed(7)
+          share, error = estimate(triangle, 10000)
+          print(round(share, 4), round(error, 4))
+        solution: |
+          import math
+          import random
+
+          def estimate(trial, n):
+              hits = 0
+              for _ in range(n):
+                  if trial():
+                      hits += 1
+              share = hits / n
+              return share, math.sqrt(share * (1 - share) / n)
+
+          def triangle():
+              a, b = sorted([random.random(), random.random()])
+              return max(a, b - a, 1 - b) < 0.5
+
+          random.seed(7)
+          share, error = estimate(triangle, 10000)
+          print(round(share, 4), round(error, 4))
+        tests: |
+          import math
+          def _make(_pattern):
+              _calls = [0]
+              def _trial():
+                  _calls[0] += 1
+                  return _pattern[(_calls[0] - 1) % len(_pattern)]
+              return _trial, _calls
+          for _pattern in [[True], [False], [True, False], [True, False, False, False], [False, True, True, False, True]]:
+              for _n in [1, 4, 20, 100, 400, 1000]:
+                  _trial, _calls = _make(_pattern)
+                  _got = estimate(_trial, _n)
+                  _hits = sum(1 for _i in range(_n) if _pattern[_i % len(_pattern)])
+                  _share = _hits / _n
+                  _error = math.sqrt(_share * (1 - _share) / _n)
+                  assert _calls[0] == _n, "estimate(trial, " + str(_n) + ") should run trial " + str(_n) + " times, not " + str(_calls[0])
+                  assert len(_got) == 2, "estimate should return two numbers, the fraction and its standard error"
+                  assert abs(_got[0] - _share) < 1e-12, "With " + str(_hits) + " of " + str(_n) + " trials hitting, the fraction should be " + str(_share) + ", not " + str(_got[0])
+                  assert abs(_got[1] - _error) < 1e-12, "With " + str(_hits) + " of " + str(_n) + " trials hitting, the standard error should be about " + str(round(_error, 6)) + ", not " + str(_got[1])
+          assert output.strip() == "0.2492 0.0043", "The program should print 0.2492 0.0043"
+        wrong:
+          - |
+            import math
+            import random
+
+            def estimate(trial, n):
+                hits = 0
+                for _ in range(n):
+                    if trial():
+                        hits += 1
+                share = hits / n
+                return share, math.sqrt(share * (1 - share)) / n
+
+            def triangle():
+                a, b = sorted([random.random(), random.random()])
+                return max(a, b - a, 1 - b) < 0.5
+
+            random.seed(7)
+            share, error = estimate(triangle, 10000)
+            print("0.2492 0.0043")
+          - |
+            import math
+            import random
+
+            def estimate(trial, n):
+                hits = 0
+                for _ in range(n):
+                    if trial():
+                        hits += 1
+                share = hits / n
+                return share, share * (1 - share) / n
+
+            def triangle():
+                a, b = sorted([random.random(), random.random()])
+                return max(a, b - a, 1 - b) < 0.5
+
+            random.seed(7)
+            share, error = estimate(triangle, 10000)
+            print("0.2492 0.0043")
+          - |
+            import math
+            import random
+
+            def estimate(trial, n):
+                hits = 0
+                for _ in range(n):
+                    if trial():
+                        hits += 1
+                share = hits / n
+                return share, math.sqrt(share / n)
+
+            def triangle():
+                a, b = sorted([random.random(), random.random()])
+                return max(a, b - a, 1 - b) < 0.5
+
+            random.seed(7)
+            share, error = estimate(triangle, 10000)
+            print("0.2492 0.0043")
+        explanation: |
+          The fraction is $\hat{p}$ = hits $/n$, and its standard error is $\sqrt{\hat{p}(1 - \hat{p})/n}$. Putting $n$ outside the square root shrinks the error far too fast; leaving out the square root gives the variance, not the standard error; and $\sqrt{\hat{p}/n}$ forgets that an event that always happens has no uncertainty at all. The program prints `0.2492 0.0043`: the exact chance, $1/4$, is well within one standard error.
+    - question:
+        id: write-pick
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A tea stall sells chai to half its customers, coffee to 30% and lemon tea to 20%. Write `pick(chances, u)`, which turns one uniform draw `u`, with $0 \le u < 1$, into a choice: it returns the first index `i` for which `u` is less than `chances[0] + ... + chances[i]`. The chances add up to 1 and may include zeros.
+        starter: |
+          from fractions import Fraction
+
+          def pick(chances, u):
+              return 0
+
+          chances = [Fraction(1, 2), Fraction(3, 10), Fraction(1, 5)]
+          draws = [Fraction(0), Fraction(49, 100), Fraction(1, 2), Fraction(79, 100), Fraction(4, 5), Fraction(99, 100)]
+          print(" ".join([str(pick(chances, u)) for u in draws]))
+        solution: |
+          from fractions import Fraction
+
+          def pick(chances, u):
+              total = 0
+              for i in range(len(chances)):
+                  total += chances[i]
+                  if u < total:
+                      return i
+              return len(chances) - 1
+
+          chances = [Fraction(1, 2), Fraction(3, 10), Fraction(1, 5)]
+          draws = [Fraction(0), Fraction(49, 100), Fraction(1, 2), Fraction(79, 100), Fraction(4, 5), Fraction(99, 100)]
+          print(" ".join([str(pick(chances, u)) for u in draws]))
+        tests: |
+          from fractions import Fraction
+          for _chances in [[Fraction(1)], [Fraction(1, 2), Fraction(1, 2)], [Fraction(1, 2), Fraction(3, 10), Fraction(1, 5)], [Fraction(0), Fraction(1, 2), Fraction(0), Fraction(1, 2)], [Fraction(1, 6)] * 6, [Fraction(1, 10), Fraction(0), Fraction(3, 5), Fraction(3, 10)]]:
+              for _k in range(60):
+                  _u = Fraction(_k, 60)
+                  _total = Fraction(0)
+                  _want = None
+                  for _i in range(len(_chances)):
+                      _total += _chances[_i]
+                      if _want is None and _u < _total:
+                          _want = _i
+                  _got = pick(_chances, _u)
+                  assert _got == _want, "pick(" + str([str(_c) for _c in _chances]) + ", " + str(_u) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "0 0 1 1 2 2", "The program should print 0 0 1 1 2 2"
+        wrong:
+          - |
+            from fractions import Fraction
+
+            def pick(chances, u):
+                total = 0
+                for i in range(len(chances)):
+                    total += chances[i]
+                    if u <= total:
+                        return i
+                return len(chances) - 1
+
+            chances = [Fraction(1, 2), Fraction(3, 10), Fraction(1, 5)]
+            draws = [Fraction(0), Fraction(49, 100), Fraction(1, 2), Fraction(79, 100), Fraction(4, 5), Fraction(99, 100)]
+            print("0 0 1 1 2 2")
+          - |
+            from fractions import Fraction
+
+            def pick(chances, u):
+                total = 0
+                for i in range(len(chances)):
+                    if u < chances[i]:
+                        return i
+                return len(chances) - 1
+
+            chances = [Fraction(1, 2), Fraction(3, 10), Fraction(1, 5)]
+            draws = [Fraction(0), Fraction(49, 100), Fraction(1, 2), Fraction(79, 100), Fraction(4, 5), Fraction(99, 100)]
+            print("0 0 1 1 2 2")
+          - |
+            from fractions import Fraction
+
+            def pick(chances, u):
+                total = 0
+                for i in range(len(chances)):
+                    if u < total:
+                        return i
+                    total += chances[i]
+                return len(chances) - 1
+
+            chances = [Fraction(1, 2), Fraction(3, 10), Fraction(1, 5)]
+            draws = [Fraction(0), Fraction(49, 100), Fraction(1, 2), Fraction(79, 100), Fraction(4, 5), Fraction(99, 100)]
+            print("0 0 1 1 2 2")
+        explanation: |
+          The running total cuts the stretch from 0 to 1 into pieces of the right lengths, and the comparison must be strict: a draw exactly at $1/2$ belongs to the second piece, not the first, and a piece of length 0 must never be chosen. Comparing with one chance at a time, instead of the running total, compares `u` with lengths rather than boundaries; and testing before adding shifts every choice one place.
+    - question:
+        id: work-papers
+        type: numeric
+        system: s2
+        tolerance: "0.5"
+        prompt: |
+          In the puzzle, what is the expected number of pairs of students who get identical papers? Give a decimal to one place.
+        answer: "299.5"
+        explanation: |
+          A paper is fixed by its seed, and there are only 600 seconds. Each of the $\binom{600}{2} = 179{,}700$ pairs shares a second with chance $1/600$, so by linearity the expected number of identical pairs is $179{,}700/600 = 299.5$.
+    - question:
+        id: work-rare
+        type: numeric
+        system: s2
+        tolerance: "200"
+        prompt: |
+          A simulation estimates the chance that a backup fails within a year, which is near 0.02. About how many trials make its standard error 0.001?
+        answer: "19600"
+        explanation: |
+          $n = p(1 - p)/\text{SE}^2 = 0.02 \times 0.98/0.000001 = 19{,}600$. That is only 5% of the chance itself; a 1% relative error would need 25 times as many trials.
+    - question:
+        id: work-tokens
+        type: choice
+        system: s2
+        prompt: |
+          A web app builds each password-reset link from 20 draws of `random.randint(0, 61)`, after calling `random.seed(int(time.time()))` when the request arrives. What is the real danger?
+        options:
+          - "An attacker who knows roughly when a reset was requested can try each second as the seed and rebuild the link, so links should come from the secrets module."
+          - "Twenty characters are too few, because $62^{20}$ links are easy to try one by one."
+          - "The Mersenne Twister repeats after 624 draws, so links repeat."
+          - "randint favours small numbers, so some characters are more common than others."
+        answer: 0
+        explanation: |
+          The link has no more variety than its seed. An hour holds only 3,600 seconds, so an attacker who knows the hour can rebuild every possible link. $62^{20}$ is about $7 \times 10^{35}$, far too many to try; 624 is the number of outputs that reveal the Mersenne Twister's state, not its period; and `randint` has no modulo bias. Even without a clock seed, earlier outputs of the same generator can predict later ones, so secrets need `secrets`.
+  connections:
+    - text: |
+        About 300 pairs of students get identical papers. A paper is decided entirely by its seed, and the seed is the second at which the student pressed Start, which has only 600 possible values. Each of the 179,700 pairs of students shares a second with chance $1/600$, so the expected number of identical pairs is 299.5. It is [[f4.the-birthday-problem-and-collisions]] with 600 days and 600 people. The 49-digit number of possible papers never mattered: a generator's output has no more variety than its seed.
+
+        A pseudo-random generator is a fixed rule applied to a state. The seed fixes the whole sequence, so runs can be repeated; the finite state forces a period; and a simple rule can leave patterns between draws, such as alternating low bits and points on a few lines. Python's Mersenne Twister is good for simulation and wrong for secrets. A simulation estimates a chance by the fraction of hits, with standard error $\sqrt{\hat{p}(1 - \hat{p})/n}$; every distribution is built from uniform draws, by cutting the stretch from 0 to 1 into pieces, by the inverse cdf, or by the Fisher and Yates shuffle.
+
+        That completes probability. Statistics turns the question around, from known chances to unknown ones read from data. [[f5.summaries-mean-median-and-percentiles]] begins with the simplest question about any pile of measurements: what is typical? [[f5.sampling-and-estimators]] treats a dataset as one run of a random experiment, and [[f5.the-bootstrap]] measures the error of almost any statistic by simulation, resampling the data with exactly the generators of this lesson. Later, [[f7.checksums-and-error-detection]] uses simulated random errors to measure how often a checksum misses one.

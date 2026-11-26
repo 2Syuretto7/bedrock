@@ -4546,6 +4546,84 @@ function SampleMeans(props: Props) {
   );
 }
 
+/** A small linear congruential generator, x → (5x + 1) mod 2048, whose pairs fall on five lines. */
+function poorDraws(seed: number, count: number): number[] {
+  let state = seed;
+  return Array.from({ length: count }, () => {
+    state = (5 * state + 1) % 2048;
+    return state / 2048;
+  });
+}
+
+const THROWS = [100, 300, 1000, 3000, 10000];
+
+/** Points thrown at a unit square to estimate π, from a good generator or a poor one. */
+function MonteCarlo(props: Props) {
+  const [poor, setPoor] = useState(props.generator === "poor");
+  const [throwsAt, setThrowsAt] = useState(Math.max(0, THROWS.indexOf(num(props.points, 1000))));
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const count = THROWS[throwsAt];
+  const raw = poor ? poorDraws(seed, 2 * count) : draws(seed, 2 * count, false);
+  const points = Array.from({ length: count }, (_, i) => [raw[2 * i], raw[2 * i + 1]] as const);
+  const inside = points.filter(([x, y]) => x * x + y * y < 1).length;
+  const share = inside / count;
+  const estimate = 4 * share;
+  const error = 4 * Math.sqrt((share * (1 - share)) / count);
+  const distinct = new Set(points.map(([x, y]) => `${x},${y}`)).size;
+  const shown = points.slice(0, 2000);
+  const sx = (x: number) => 20 + x * 200;
+  const sy = (y: number) => 220 - y * 200;
+  const arc = Array.from({ length: 61 }, (_, i) => {
+    const angle = (Math.PI / 2) * (i / 60);
+    return `${dp(sx(Math.cos(angle)), 2)},${dp(sy(Math.sin(angle)), 2)}`;
+  }).join(" ");
+  const name = poor ? "the poor generator, x → (5x + 1) mod 2048" : "a good generator";
+  return (
+    <Frame
+      title="Throwing points at a square"
+      summary={`${group(count)} points from ${name}, seed ${seed}, each made of two draws. ${group(inside)} land inside the quarter circle, so the estimate of π is 4 × ${group(inside)}/${group(count)} = ${dp(estimate, 3)}, with a standard error of about ${dp(error, 3)}. The true value is 3.142. ${
+        poor
+          ? `Only ${group(distinct)} of the points are different, because the generator repeats after 2,048 draws, and every pair lies on one of five lines. However many points are thrown, the estimate stays near 3.09, and the standard error, which assumes independent draws, is wrong.`
+          : "About 95% of the time the estimate is within two standard errors of π, and four times as many points halve the standard error."
+      }${shown.length < count ? ` The picture shows the first ${group(shown.length)} points.` : ""}`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={poor} onClick={() => setPoor(!poor)}>
+            Use the poor generator
+          </button>
+          <Slider label="points" value={throwsAt} onChange={setThrowsAt} min={0} max={THROWS.length - 1} text={group(count)} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 240" role="img" aria-label={`${group(shown.length)} points in a square from ${name}, with a quarter circle drawn in it`}>
+        <rect x="20" y="20" width="200" height="200" className="fig-ghost" />
+        {shown.map(([x, y], i) => (
+          <rect key={i} x={dp(sx(x) - 1, 2)} y={dp(sy(y) - 1, 2)} width="2" height="2" className={x * x + y * y < 1 ? "fig-accent" : "fig-fill"} />
+        ))}
+        <polyline points={arc} className="fig-line" />
+        <line x1="20" y1="220" x2="220" y2="220" className="fig-axis" />
+        <line x1="20" y1="20" x2="20" y2="220" className="fig-axis" />
+        <text x="250" y="60" className="fig-small">
+          {`inside: ${group(inside)} of ${group(count)}`}
+        </text>
+        <text x="250" y="90" className="fig-small">
+          {`estimate of π: ${dp(estimate, 3)}`}
+        </text>
+        <text x="250" y="120" className="fig-small">
+          {`standard error: ${dp(error, 3)}`}
+        </text>
+        <text x="250" y="150" className="fig-small">
+          {`different points: ${group(distinct)}`}
+        </text>
+        <text x="250" y="180" className="fig-small">
+          true π: 3.142
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5845,6 +5923,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "birthday-curve": BirthdayCurve,
   "tail-bounds": TailBounds,
   "sample-means": SampleMeans,
+  "monte-carlo": MonteCarlo,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
