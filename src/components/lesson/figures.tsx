@@ -3813,6 +3813,96 @@ function LeafStrip(props: Props) {
   );
 }
 
+const DICE_EVENTS: Record<string, { name: string; holds: (a: number, b: number) => boolean }> = {
+  seven: { name: "the total is 7", holds: (a, b) => a + b === 7 },
+  doubles: { name: "the two dice match", holds: (a, b) => a === b },
+  six: { name: "at least one die shows 6", holds: (a, b) => a === 6 || b === 6 },
+  ten: { name: "the total is at least 10", holds: (a, b) => a + b >= 10 },
+  "first-even": { name: "the first die is even", holds: (a) => a % 2 === 0 },
+  "first-six": { name: "the first die shows 6", holds: (a) => a === 6 },
+};
+const DICE_ORDER = ["seven", "doubles", "six", "ten", "first-even", "first-six"];
+
+/** A fraction in lowest terms, written n/d, or a whole number. */
+const lowest = (n: number, d: number) => {
+  const g = commonDivisor(n, d) || 1;
+  return d / g === 1 ? `${n / g}` : `${n / g}/${d / g}`;
+};
+
+/** The 36 outcomes of two dice, an event among them, and optionally an event it is conditioned on. */
+function DiceGrid(props: Props) {
+  const [which, setWhich] = useState(typeof props.event === "string" && props.event in DICE_EVENTS ? props.event : "seven");
+  const [given, setGiven] = useState(typeof props.given === "string" && props.given in DICE_EVENTS ? props.given : "none");
+  const event = DICE_EVENTS[which];
+  const condition = given === "none" ? null : DICE_EVENTS[given];
+  const faces = [1, 2, 3, 4, 5, 6];
+  const cells = faces.flatMap((a) => faces.map((b) => [a, b] as [number, number]));
+  const inEvent = cells.filter(([a, b]) => event.holds(a, b)).length;
+  const room = condition ? cells.filter(([a, b]) => condition.holds(a, b)) : cells;
+  const both = room.filter(([a, b]) => event.holds(a, b)).length;
+  const nextEvent = DICE_ORDER[(DICE_ORDER.indexOf(which) + 1) % DICE_ORDER.length];
+  const givens = ["none", ...DICE_ORDER];
+  const nextGiven = givens[(givens.indexOf(given) + 1) % givens.length];
+  const same = both * 36 === inEvent * room.length;
+  const summary = condition
+    ? `Given that ${condition.name}, only the ${room.length} outcomes where that is true remain, and they are still equally likely. ${both} of them also have ${event.name}, so the chance that ${event.name}, given that ${condition.name}, is ${both}/${room.length}${both === 0 ? "" : ` = ${lowest(both, room.length)}`}. Without the condition it is ${inEvent}/36 = ${lowest(inEvent, 36)}. ${
+        same ? "Knowing the condition does not change the chance." : both * 36 > inEvent * room.length ? "Knowing the condition makes it more likely." : "Knowing the condition makes it less likely."
+      }`
+    : `Two dice, first and second, give 36 equally likely outcomes. The event that ${event.name} contains ${plural(inEvent, "of them", "of them")}, so its probability is ${inEvent}/36 = ${lowest(inEvent, 36)}.`;
+  return (
+    <Frame
+      title="Outcomes of two dice"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setWhich(nextEvent)}>
+            {`Event: ${DICE_EVENTS[nextEvent].name}`}
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setGiven(nextGiven)}>
+            {nextGiven === "none" ? "Remove the condition" : `Given: ${DICE_EVENTS[nextGiven].name}`}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`A 6 by 6 grid of outcomes of two dice, ${condition ? `${room.length} kept by the condition, ` : ""}${both} in the event`}>
+        <text x="250" y="18" textAnchor="middle" className="fig-small">
+          first die
+        </text>
+        <text x="40" y="160" textAnchor="middle" className="fig-small" transform="rotate(-90 40 160)">
+          second die
+        </text>
+        {faces.map((f) => (
+          <g key={f}>
+            <text x={130 + (f - 1) * 40 + 20} y="38" textAnchor="middle" className="fig-small">
+              {f}
+            </text>
+            <text x="116" y={46 + (f - 1) * 40 + 24} textAnchor="middle" className="fig-small">
+              {f}
+            </text>
+          </g>
+        ))}
+        {cells.map(([a, b]) => {
+          const kept = !condition || condition.holds(a, b);
+          const hit = event.holds(a, b);
+          const x = 130 + (a - 1) * 40;
+          const y = 46 + (b - 1) * 40;
+          return (
+            <g key={`${a}-${b}`}>
+              <rect x={x + 2} y={y + 2} width="36" height="36" className={kept && hit ? "fig-accent" : kept ? "fig-fill" : "fig-ghost"} opacity={kept ? 1 : 0.35} />
+              <text x={x + 20} y={y + 25} textAnchor="middle" className="fig-small" style={{ fill: kept && hit ? "var(--bg)" : "var(--text)" }}>
+                {a + b}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="284" className="fig-small">
+          {condition ? `${both} of ${room.length} kept outcomes` : `${inEvent} of 36 outcomes`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5104,6 +5194,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "bound-witness": BoundWitness,
   "one-stroke": OneStroke,
   "leaf-strip": LeafStrip,
+  "dice-grid": DiceGrid,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
