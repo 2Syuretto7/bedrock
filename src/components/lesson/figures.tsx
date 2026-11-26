@@ -4918,7 +4918,7 @@ function IntervalCatch(props: Props) {
     >
       <svg viewBox="0 0 440 260" role="img" aria-label={`100 horizontal intervals stacked one above another, with a vertical line at the true mean; ${caught} of them cross it`}>
         {intervals.map((iv, r) => (
-          <line key={r} x1={sx(iv.low)} y1={20 + r * 2.2} x2={sx(iv.high)} y2={20 + r * 2.2} className={iv.caught ? "fig-line" : "fig-accent-line"} />
+          <line key={r} x1={sx(iv.low)} y1={20 + r * 2.2} x2={sx(iv.high)} y2={20 + r * 2.2} className={iv.caught ? "fig-line" : "fig-accent-line"} style={{ strokeWidth: 1.6 }} />
         ))}
         <line x1={sx(truth)} y1="14" x2={sx(truth)} y2="242" className="fig-guide" />
         <line x1="40" y1="242" x2="420" y2="242" className="fig-axis" />
@@ -4929,6 +4929,78 @@ function IntervalCatch(props: Props) {
         ))}
         <text x={sx(truth) + 4} y="12" className="fig-small">
           {`true mean ${dp(truth, 1)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const NULL_SIZES = [10, 20, 50, 100, 200];
+
+/** A permutation test: shuffle the labels of two groups many times, and see how often chance alone gives a difference as large as the one observed. */
+function NullTest(props: Props) {
+  const [effect, setEffect] = useState(clamp(Math.round(num(props.effect, 5)), 0, 15));
+  const [sizeAt, setSizeAt] = useState(Math.max(0, NULL_SIZES.indexOf(num(props.n, 50))));
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const n = NULL_SIZES[sizeAt];
+  const picks = draws(40 + seed, 2 * n, false);
+  const values = picks.map((u, i) => EST_POPULATION[Math.floor(u * EST_POPULATION.length)] + (i >= n ? effect : 0));
+  const meanOf = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const observed = meanOf(values.slice(n)) - meanOf(values.slice(0, n));
+  const shuffles = 1000;
+  const coins = draws(60 + seed, shuffles * 2 * n, false);
+  const total = values.reduce((a, b) => a + b, 0);
+  const diffs = Array.from({ length: shuffles }, (_, s) => {
+    const pool = [...values];
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(coins[s * 2 * n + i] * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const first = pool.slice(0, n).reduce((a, b) => a + b, 0);
+    return (total - first) / n - first / n;
+  });
+  const extreme = diffs.filter((d) => Math.abs(d) >= Math.abs(observed)).length;
+  const span = Math.max(15, Math.abs(observed) * 1.2, ...diffs.map((d) => Math.abs(d)));
+  const bins = 40;
+  const counts = Array.from({ length: bins }, () => 0);
+  for (const d of diffs) counts[clamp(Math.floor(((d + span) / (2 * span)) * bins), 0, bins - 1)]++;
+  const tallest = Math.max(...counts);
+  const sx = (v: number) => 40 + ((v + span) / (2 * span)) * 380;
+  const sy = (c: number) => 200 - (c / tallest) * 160;
+  const binMid = (j: number) => -span + ((j + 0.5) * 2 * span) / bins;
+  const p = extreme / shuffles;
+  return (
+    <Frame
+      title="Could it be chance?"
+      summary={`Two groups of ${n} response times from the same population, with ${effect} ms added to every time in group B. The observed difference of means, B minus A, is ${dp(observed, 2)} ms. Shuffling the ${2 * n} times between the groups at random ${group(shuffles)} times, as if the labels meant nothing, gave a difference at least that large in size ${group(extreme)} times, so the p-value is about ${dp(p, 3)}. ${p < 0.05 ? "That is below 0.05: chance alone rarely does this, and the difference is called significant at the 5% level." : "That is not below 0.05: chance alone does this often enough that the data cannot rule it out."}`}
+      controls={
+        <>
+          <Slider label="added to group B" value={effect} onChange={setEffect} min={0} max={15} text={`${effect} ms`} />
+          <Slider label="group size" value={sizeAt} onChange={setSizeAt} min={0} max={NULL_SIZES.length - 1} text={`${n}`} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 240" role="img" aria-label={`A histogram of ${group(shuffles)} differences from shuffled labels, centred on zero, with the observed difference of ${dp(observed, 1)} milliseconds marked`}>
+        {counts.map((c, j) => (
+          <rect key={j} x={40 + (j * 380) / bins + 0.5} y={sy(c)} width={380 / bins - 1} height={200 - sy(c)} className={Math.abs(binMid(j)) >= Math.abs(observed) ? "fig-accent" : "fig-fill"} />
+        ))}
+        <line x1="40" y1="200" x2="420" y2="200" className="fig-axis" />
+        <line x1={sx(observed)} y1="30" x2={sx(observed)} y2="200" className="fig-line" />
+        <text x={sx(observed)} y="24" textAnchor="middle" className="fig-small">
+          {`observed ${dp(observed, 1)}`}
+        </text>
+        <text x={sx(0)} y="218" textAnchor="middle" className="fig-small">
+          0
+        </text>
+        <text x="40" y="218" textAnchor="middle" className="fig-small">
+          {`−${dp(span, 0)}`}
+        </text>
+        <text x="420" y="218" textAnchor="middle" className="fig-small">
+          {dp(span, 0)}
+        </text>
+        <text x="230" y="234" textAnchor="middle" className="fig-small">
+          difference of means after shuffling, ms
         </text>
       </svg>
     </Frame>
@@ -6240,6 +6312,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "histogram-bins": HistogramBins,
   "estimator-spread": EstimatorSpread,
   "interval-catch": IntervalCatch,
+  "null-test": NullTest,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
