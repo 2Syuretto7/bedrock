@@ -6120,6 +6120,53 @@ function GroupBuckets(props: Props) {
   );
 }
 
+/** A correlated subquery run for each row of the outer query: is this order above its own store's average? */
+function SubquerySteps(props: Props) {
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, GB_ORDERS.length));
+  const average = (store: string) => {
+    const amounts = GB_ORDERS.filter((o) => o[1] === store).map((o) => o[2]);
+    return amounts.reduce((s, a) => s + a, 0) / amounts.length;
+  };
+  const done = GB_ORDERS.slice(0, step);
+  const kept = done.filter((o) => o[2] > average(o[1]));
+  const now = step > 0 ? GB_ORDERS[step - 1] : null;
+  const money = (x: number) => `₹${group(Math.round(x * 100) / 100)}`;
+  const summary = now
+    ? `Outer row ${step} of ${GB_ORDERS.length}: order ${now[0]}, ${money(now[2])} at ${now[1]}. The subquery runs again with o.store = '${now[1]}' and returns that store's average, ${money(average(now[1]))}. ${money(now[2])} is ${now[2] > average(now[1]) ? "above it, so the order is kept" : "not above it, so the order is dropped"}. Kept so far: ${kept.length === 0 ? "none" : kept.map((o) => o[0]).join(", ")}.`
+    : `select id, amount from orders o where amount > (select avg(amount) from orders where store = o.store). The subquery mentions o.store, a column of the outer row, so it is re-evaluated for each of the ${GB_ORDERS.length} orders. Step through the outer rows.`;
+  return (
+    <Frame title="A subquery that depends on the outer row" summary={summary} controls={<Stepper label="outer row" value={step} onChange={setStep} min={0} max={GB_ORDERS.length} />}>
+      <svg viewBox="0 0 440 232" role="img" aria-label={`Nine orders checked one by one against their store's average, ${step} checked so far`}>
+        <SqlTable
+          x={8}
+          y={22}
+          widths={[30, 46, 60]}
+          head={["id", "store", "amount"]}
+          rows={GB_ORDERS.map((o) => [o[0], o[1], group(o[2])])}
+          title="orders o (outer)"
+          mark={(r) => (r === step - 1 ? "accent" : r < step ? (GB_ORDERS[r][2] > average(GB_ORDERS[r][1]) ? "fill" : "ghost") : undefined)}
+        />
+        <text x="168" y="36" className="fig-small">
+          subquery for this row
+        </text>
+        <rect x="166" y="44" width="266" height="46" className={now ? "fig-fill" : "fig-ghost"} />
+        <text x="174" y="62" className="fig-small">
+          {now ? `select avg(amount) from orders` : "select avg(amount) from orders"}
+        </text>
+        <text x="174" y="80" className="fig-small">
+          {now ? `where store = '${now[1]}'  →  ${money(average(now[1]))}` : "where store = o.store"}
+        </text>
+        <text x="168" y="118" className="fig-small">
+          {now ? `${money(now[2])} > ${money(average(now[1]))}?  ${now[2] > average(now[1]) ? "yes, keep" : "no, drop"}` : ""}
+        </text>
+        <text x="168" y="150" className="fig-small">
+          {`kept so far: ${kept.length === 0 ? "none" : kept.map((o) => o[0]).join(", ")}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -7439,6 +7486,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "query-order": QueryOrder,
   "join-match": JoinMatch,
   "group-buckets": GroupBuckets,
+  "subquery-steps": SubquerySteps,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
