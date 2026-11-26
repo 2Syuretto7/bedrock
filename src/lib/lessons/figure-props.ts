@@ -77,6 +77,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "leaf-strip": z.strictObject({ tree: z.enum(["branching", "path", "star"]).optional(), step: z.number().optional() }),
   "dice-grid": z.strictObject({ event: z.enum(["seven", "doubles", "six", "ten", "first-even", "first-six"]).optional(), given: z.enum(["none", "seven", "doubles", "six", "ten", "first-even", "first-six"]).optional() }),
   "bayes-square": z.strictObject({ prevalence: z.number().int().min(1).max(500).optional(), sensitivity: z.number().int().min(50).max(100).optional(), falsePositive: z.number().int().min(0).max(30).optional() }),
+  "variable-bars": z.strictObject({ variable: z.enum(["max", "total", "gap", "sixes", "prize"]).optional(), cumulative: z.boolean().optional(), marks: z.enum(["none", "mean", "spread"]).optional() }),
   "union-find": z.strictObject({ bySize: z.boolean().optional(), find: z.number().optional(), joins: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),

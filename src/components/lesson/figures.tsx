@@ -3978,6 +3978,105 @@ function BayesSquare(props: Props) {
   );
 }
 
+const DICE_VARIABLES: Record<string, { name: string; of: (a: number, b: number) => number }> = {
+  max: { name: "the larger of the two numbers", of: (a, b) => Math.max(a, b) },
+  total: { name: "the total of the two dice", of: (a, b) => a + b },
+  gap: { name: "the gap between the two numbers", of: (a, b) => Math.abs(a - b) },
+  sixes: { name: "the number of sixes", of: (a, b) => (a === 6 ? 1 : 0) + (b === 6 ? 1 : 0) },
+  prize: { name: "the prize in rupees, 20 for a double and −5 otherwise", of: (a, b) => (a === b ? 20 : -5) },
+};
+const VARIABLE_ORDER = ["max", "total", "gap", "sixes", "prize"];
+const minus = (value: number | string) => String(value).replace("-", "−");
+
+/** A number computed from two dice, its chances drawn as bars, one at a time or added up, with its mean and spread if asked. */
+function VariableBars(props: Props) {
+  const [which, setWhich] = useState(typeof props.variable === "string" && props.variable in DICE_VARIABLES ? props.variable : "max");
+  const [cumulative, setCumulative] = useState(props.cumulative === true);
+  const marks = props.marks === "mean" || props.marks === "spread" ? props.marks : "none";
+  const variable = DICE_VARIABLES[which];
+  const counts = new Map<number, number>();
+  for (let a = 1; a <= 6; a++) for (let b = 1; b <= 6; b++) counts.set(variable.of(a, b), (counts.get(variable.of(a, b)) ?? 0) + 1);
+  const values = [...counts.keys()].sort((x, y) => x - y);
+  const running = values.map((v, i) => values.slice(0, i + 1).reduce((total, w) => total + (counts.get(w) ?? 0), 0));
+  const lo = values[0];
+  const hi = values[values.length - 1];
+  const x = (v: number) => 50 + ((v - lo) / (hi - lo)) * 340;
+  const gaps = values.slice(1).map((v, i) => x(v) - x(values[i]));
+  const width = Math.min(28, 0.7 * Math.min(...gaps));
+  const most = Math.max(...counts.values());
+  const sum = values.reduce((total, v) => total + v * (counts.get(v) ?? 0), 0);
+  const mean = sum / 36;
+  const sd = Math.sqrt(values.reduce((total, v) => total + (v - mean) ** 2 * (counts.get(v) ?? 0), 0) / 36);
+  const inside = values.filter((v) => Math.abs(v - mean) <= sd).reduce((total, v) => total + (counts.get(v) ?? 0), 0);
+  const height = (count: number, all: number) => (count / all) * 150;
+  const modes = values.filter((v) => counts.get(v) === most).map(minus);
+  const meanText = Number.isInteger(mean) ? minus(mean) : `${minus(lowest(sum, 36))}, about ${minus(dp(mean, 2))}`;
+  const marksText =
+    marks === "mean"
+      ? ` The bars balance at ${meanText}: that is the mean.`
+      : marks === "spread"
+        ? ` The mean is ${meanText} and the standard deviation is about ${dp(sd, 2)}. The bracket runs from one standard deviation below the mean to one above, ${minus(dp(mean - sd, 2))} to ${minus(dp(mean + sd, 2))}, and the values inside it hold ${inside}/36 of the probability.`
+        : "";
+  const summary = cumulative
+    ? `The chance that ${variable.name} is at most x climbs in steps: ${values.map((v, i) => `${minus(v)}: ${running[i]}/36`).join(", ")}. Each step is as tall as the chance of that one value, and the last reaches 36/36 = 1.${marksText}`
+    : `Out of 36 equally likely throws, ${variable.name} takes ${plural(values.length, "value")}: ${values.map((v) => `${minus(v)} in ${counts.get(v)}`).join(", ")}. The most likely ${modes.length === 1 ? `value is ${modes[0]}` : `values are ${modes.join(" and ")}`}, with chance ${lowest(most, 36)}.${marksText}`;
+  const nextVariable = VARIABLE_ORDER[(VARIABLE_ORDER.indexOf(which) + 1) % VARIABLE_ORDER.length];
+  const edge = (v: number) => clamp(x(v), 30, 410);
+  return (
+    <Frame
+      title="A number that depends on two dice"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setWhich(nextVariable)}>
+            {`Show ${DICE_VARIABLES[nextVariable].name.split(",")[0]}`}
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={cumulative} onClick={() => setCumulative(!cumulative)}>
+            Add up the chances
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`Bars for ${variable.name}${cumulative ? ", added up from the left" : ""}`}>
+        <line x1="30" y1="200" x2="410" y2="200" className="fig-axis" />
+        {values.map((v, i) => {
+          const count = cumulative ? running[i] : (counts.get(v) ?? 0);
+          const tall = height(count, cumulative ? 36 : most);
+          return (
+            <g key={v}>
+              <rect x={x(v) - width / 2} y={200 - tall} width={width} height={tall} className="fig-accent" />
+              <text x={x(v)} y={194 - tall} textAnchor="middle" className="fig-small">
+                {count}
+              </text>
+              <text x={x(v)} y="216" textAnchor="middle" className="fig-small">
+                {minus(v)}
+              </text>
+            </g>
+          );
+        })}
+        <text x="30" y="30" className="fig-small">
+          {cumulative ? "throws with at most this value, of 36" : "throws with this value, of 36"}
+        </text>
+        {marks === "none" ? null : (
+          <g>
+            <path d={`M ${x(mean)} 222 l -7 12 l 14 0 z`} className="fig-accent" />
+            <text x={clamp(x(mean), 60, 380)} y="252" textAnchor="middle" className="fig-small">
+              {`mean ${minus(dp(mean, 2))}`}
+            </text>
+          </g>
+        )}
+        {marks === "spread" ? (
+          <g>
+            <line x1={edge(mean - sd)} y1="44" x2={edge(mean + sd)} y2="44" className="fig-accent-line" />
+            <line x1={edge(mean - sd)} y1="38" x2={edge(mean - sd)} y2="50" className="fig-accent-line" />
+            <line x1={edge(mean + sd)} y1="38" x2={edge(mean + sd)} y2="50" className="fig-accent-line" />
+          </g>
+        ) : null}
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5271,6 +5370,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "leaf-strip": LeafStrip,
   "dice-grid": DiceGrid,
   "bayes-square": BayesSquare,
+  "variable-bars": VariableBars,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
