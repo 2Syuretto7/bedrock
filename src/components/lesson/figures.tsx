@@ -7834,6 +7834,67 @@ function RefactorSteps(props: Props) {
   );
 }
 
+/** Page 2 of a newest-first feed, asked for by offset or by cursor, after new posts arrive at the top. */
+function PageCursor(props: Props) {
+  const [cursor, setCursor] = useState(props.mode === "cursor");
+  const [arrived, setArrived] = useState(clamp(Math.round(num(props.arrived, 2)), 0, 5));
+  const size = 5;
+  const first = Array.from({ length: size }, (_, i) => 40 - i);
+  const now = [...Array.from({ length: arrived }, (_, i) => 40 + arrived - i), ...Array.from({ length: 40 }, (_, i) => 40 - i)];
+  const last = first[size - 1];
+  const second = cursor ? now.filter((id) => id < last).slice(0, size) : now.slice(size, 2 * size);
+  const repeats = second.filter((id) => first.includes(id));
+  const ask = cursor ? `5 posts older than post ${last}` : "skip 5 posts, take 5";
+  const box = (id: number, i: number, y: number, seen: boolean) => (
+    <g key={`${y}-${i}`}>
+      <rect x={10 + i * 88} y={y} width={80} height={30} rx={3} className={seen ? "fig-accent" : "fig-ghost"} />
+      <text x={50 + i * 88} y={y + 20} textAnchor="middle" className="fig-small" style={{ fill: seen ? "var(--bg)" : "var(--text)", fontWeight: seen ? 600 : 400 }}>
+        {seen ? `${id} (again)` : `post ${id}`}
+      </text>
+    </g>
+  );
+  const arrivedText = arrived === 0 ? "no new posts arrive" : `${arrived} new ${arrived === 1 ? "post arrives" : "posts arrive"} at the top (${Array.from({ length: arrived }, (_, i) => 41 + i).join(", ")})`;
+  const summary = cursor
+    ? `Page 2 asks for the ${ask}. ${arrived ? "New posts at the top do not move that point, so page" : "Page"} 2 is post ${second[0]} to post ${second[size - 1]} with no repeats${arrived ? "; the new posts appear when the feed is refreshed" : ""}.`
+    : arrived === 0
+      ? `Page 2 asks to skip 5 posts and take 5. Nothing arrived, so it is post ${second[0]} to post ${second[size - 1]}, exactly the next five.`
+      : `Page 2 asks to skip 5 posts and take 5. ${arrived === 1 ? "The new post" : `The ${arrived} new posts`} pushed everything down by ${arrived}, so the first ${arrived === 1 ? "post" : `${arrived} posts`} of page 2 ${arrived === 1 ? "is" : "are"} ${arrived === 1 ? "one" : "ones"} the reader already saw on page 1.`;
+  return (
+    <Frame
+      title="Offset or cursor: fetching page 2 of a feed"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!cursor} onClick={() => setCursor(false)}>
+            by offset
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={cursor} onClick={() => setCursor(true)}>
+            by cursor
+          </button>
+          <Stepper label="new posts before page 2" value={arrived} min={0} max={5} onChange={setArrived} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 196" role="img" aria-label={`Page 2 by ${cursor ? "cursor" : "offset"} after ${arrived} new posts: ${repeats.length} repeated from page 1`}>
+        <text x={10} y={16} className="fig-small">
+          page 1, newest first
+        </text>
+        {first.map((id, i) => box(id, i, 24, false))}
+        <text x={10} y={76} className="fig-small">
+          {`then ${arrivedText}`}
+        </text>
+        <text x={10} y={100} className="fig-small">
+          {`page 2: ${ask}`}
+        </text>
+        {second.map((id, i) => box(id, i, 108, repeats.includes(id)))}
+        <text x={10} y={170} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`posts on page 2 already seen on page 1: ${repeats.length}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -9172,6 +9233,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "di-clock": DiClock,
   "fee-strategy": FeeStrategy,
   "refactor-steps": RefactorSteps,
+  "page-cursor": PageCursor,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

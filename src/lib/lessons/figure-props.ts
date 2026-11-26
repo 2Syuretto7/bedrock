@@ -123,6 +123,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "di-clock": z.strictObject({ mode: z.enum(["inside", "injected"]).optional(), hour: z.number().optional() }),
   "fee-strategy": z.strictObject({ plan: z.enum(["flat", "distance", "busy", "free_over_500"]).optional(), km: z.number().optional(), total: z.number().optional() }),
   "refactor-steps": z.strictObject({ mode: z.enum(["small", "big"]).optional(), changes: z.number().optional(), slip: z.number().optional() }),
+  "page-cursor": z.strictObject({ mode: z.enum(["offset", "cursor"]).optional(), arrived: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
