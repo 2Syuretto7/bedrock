@@ -3545,6 +3545,103 @@ function Tower(props: Props) {
   );
 }
 
+const BOUND_PAIRS: Record<string, { f: (n: number) => number; g: (n: number) => number; fName: string; gName: string; verdict: string }> = {
+  linear: {
+    f: (n) => 3 * n + 20,
+    g: (n) => n,
+    fName: "3n + 20",
+    gName: "n",
+    verdict: "In fact 3n + 20 ≤ 4n for every n from 20 on, so c = 4 and n₀ = 20 prove that 3n + 20 is O(n).",
+  },
+  log: {
+    f: (n) => 8 * Math.log2(n),
+    g: (n) => n,
+    fName: "8 log₂ n",
+    gName: "n",
+    verdict: "In fact 8 log₂ n ≤ n for every n from 44 on, so c = 1 and n₀ = 44 prove that 8 log₂ n is O(n).",
+  },
+  square: {
+    f: (n) => (n * n) / 10,
+    g: (n) => n,
+    fName: "n²/10",
+    gName: "n",
+    verdict: "No c works for ever: n²/10 ≤ c·n only while n ≤ 10c, so n²/10 is not O(n).",
+  },
+  exponential: {
+    f: (n) => 2 ** n,
+    g: (n) => n ** 3,
+    fName: "2ⁿ",
+    gName: "n³",
+    verdict: "No c works for ever: 2ⁿ eventually outgrows every multiple of n³, so 2ⁿ is not O(n³).",
+  },
+};
+const BOUND_ORDER = ["linear", "log", "square", "exponential"];
+
+/** Testing a proposed big-O bound: f(n) ≤ c·g(n) for every n from n₀ on, with the places it fails marked. */
+function BoundWitness(props: Props) {
+  const [which, setWhich] = useState(typeof props.pair === "string" && props.pair in BOUND_PAIRS ? props.pair : "linear");
+  const [c, setC] = useState(clamp(Math.round(num(props.c, 1)), 1, 20));
+  const [start, setStart] = useState(clamp(Math.round(num(props.start, 1)), 1, 100));
+  const { f, g, fName, gName, verdict } = BOUND_PAIRS[which];
+  const ns = Array.from({ length: 100 }, (_, i) => i + 1);
+  const bad = ns.filter((n) => n >= start && f(n) > c * g(n));
+  const fTop = Math.max(...ns.map(f));
+  const top = 1.15 * Math.max(c * g(100), Math.min(fTop, 2 * c * g(100)));
+  const gx = (n: number) => 40 + ((n - 1) / 99) * 384;
+  const gy = (v: number) => 250 - (Math.min(v, top) / top) * 224;
+  const line = (h: (n: number) => number) => ns.map((n) => `${gx(n).toFixed(1)},${gy(h(n)).toFixed(1)}`).join(" ");
+  const next = BOUND_ORDER[(BOUND_ORDER.indexOf(which) + 1) % BOUND_ORDER.length];
+  return (
+    <Frame
+      title="Testing a big-O bound"
+      summary={`f(n) = ${fName} against ${c} × g(n), where g(n) = ${gName}, for n from ${start} to 100. ${
+        bad.length === 0 ? `The bound f(n) ≤ ${c} × ${gName} holds at every one of these n` : `The bound f(n) ≤ ${c} × ${gName} fails at ${plural(bad.length, "of these n", "of these n")}, first at n = ${bad[0]}`
+      }. ${verdict}`}
+      controls={
+        <>
+          <Stepper label="c" value={c} onChange={setC} min={1} max={20} />
+          <Slider label="from n" value={start} onChange={setStart} min={1} max={100} />
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => {
+              setWhich(next);
+              setC(1);
+              setStart(1);
+            }}
+          >
+            {`Try ${BOUND_PAIRS[next].fName} against ${BOUND_PAIRS[next].gName}`}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`${fName} and ${c} times ${gName} for n from 1 to 100, with the bound failing at ${plural(bad.length, "point")} from n = ${start}`}>
+        <rect x="40" y="26" width={Math.max(0, gx(start) - 40)} height="224" className="fig-ghost" opacity="0.35" />
+        <line x1="40" y1="250" x2="428" y2="250" className="fig-axis" />
+        <line x1="40" y1="250" x2="40" y2="22" className="fig-axis" />
+        <line x1={gx(start)} y1="250" x2={gx(start)} y2="26" className="fig-guide" />
+        <polyline points={line((n) => c * g(n))} className="fig-line" fill="none" />
+        <polyline points={line(f)} className="fig-accent-line" fill="none" />
+        {bad.map((n) => (
+          <circle key={n} cx={gx(n)} cy={gy(f(n))} r="2.5" className="fig-accent" />
+        ))}
+        <text x="46" y="18" className="fig-small">
+          {`f(n) = ${fName}, thick; ${c} × ${gName}, thin`}
+        </text>
+        <text x={Math.min(gx(start) + 4, 360)} y="244" className="fig-small">
+          {`n₀ = ${start}`}
+        </text>
+        <text x="428" y="272" textAnchor="end" className="fig-small">
+          n = 100
+        </text>
+        <text x="40" y="272" className="fig-small">
+          n = 1
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -4833,6 +4930,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "mod-clock": ModClock,
   "euclid-squares": EuclidSquares,
   tower: Tower,
+  "bound-witness": BoundWitness,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

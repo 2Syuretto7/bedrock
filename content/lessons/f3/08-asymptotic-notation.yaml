@@ -1,0 +1,510 @@
+concept: f3.asymptotic-notation
+minutes: 95
+claim: You can state the definitions of $O$, $\Omega$ and $\Theta$ with explicit constants, prove that one function is or is not big-O of another, reduce sums, products and polynomials to their dominant term, order the common growth rates from logarithms to factorials, estimate an exponent from measured running times, and keep the order of growth separate from the choice of worst, best or average case.
+recalls: [f3.recurrences]
+uses: [s2.arrays-and-dynamic-arrays, s2.hash-tables, f3.permutations-and-combinations, f3.divisibility-and-euclids-algorithm, f2.quantifiers-and-their-negation, f2.direct-proof, f1.inequalities, f1.logarithms, f1.exponents-and-exponential-growth, f1.arithmetic-and-geometric-series, f1.summation-notation, f1.composition-and-inverses, s1.modules-and-imports, s1.comprehensions-and-iterators, s0.loops, s0.functions, s0.lists-and-tuples, s0.dictionaries-and-sets]
+leads: [f3.graph-theory-basics, s3.measuring-and-predicting-running-time, s3.sorting, s3.divide-and-conquer-and-the-master-theorem]
+starter: |
+  # Scratch space. Two methods for the same job, costs in microseconds.
+  import math
+
+  for n in [100, 1000, 2000, 3000, 10 ** 6]:
+      a = 2 * n * n
+      b = 400 * n * math.log2(n)
+      print(n, round(a), round(b), "A" if a < b else "B")
+parts:
+  recall:
+    - text: |
+        [[f3.recurrences]] ended with answers such as $2^n - 1$ and $n \log_2 n + n$, in which one part takes over as $n$ grows. Today you make "takes over" precise. Three quick pulls first.
+  puzzle:
+    - text: |
+        Two teams at a Bengaluru start-up each write a function to match ride requests with drivers. On $n$ requests, team A's function takes $2n^2$ microseconds and team B's takes $400\, n \log_2 n$.
+
+        On the test data, 100 requests, A takes 0.02 seconds and B takes 0.27 seconds. A is thirteen times faster, and team A says so in the review.
+
+        In production, on a busy evening, there are a million requests. A would take $2 \times 10^{12}$ microseconds, about 23 days. B takes about 2.2 hours.
+
+        So which function is faster? For small inputs A, for large ones B. Yet everyone feels that B is the better method, and that the 2 and the 400 are details: they would change with the machine, the language and the programmer. A third team's method, at $n^{100}$ microseconds, sounds absurd, and a fourth's, at $1.01^n$, sounds mild; in fact the fourth is the faster of the two only until about 117,000 requests, and after that it is hopeless.
+
+        **How do you say precisely that one cost grows faster than another, in a way that ignores the constants and the small cases, but nothing else?**
+  intuition:
+    - text: |
+        The lesson on arrays asked what happens to the work when $n$ doubles. A cost of $2n^2$ becomes four times as large; a cost of $400 n \log_2 n$ becomes a little over twice as large. The 2 and the 400 do not affect those answers at all. They decide where the two costs cross, here at about 2,224 requests, but not who wins after that. Once B is ahead it stays ahead, because each doubling widens the gap.
+
+        Think of two autorickshaws racing down a long, straight road. One starts 400 metres ahead; the other is faster. If the road is short, the head start decides the race. If the road is long enough, the faster one wins, and how big the head start was only changes where it overtakes. Asymptotic notation is the language for "on a long enough road": it compares functions for all large enough $n$, and it treats two functions as the same size if a constant factor separates them.
+
+        To say that $f$ grows no faster than $g$, you have to produce two things: a constant $c$ by which you may scale $g$ up, and a starting point $n_0$ after which $f$ stays underneath $c \cdot g$ for ever. The figure lets you try. With $c = 1$, the line $3n + 20$ is above $n$ everywhere. Raise $c$ to 4, then move the starting point.
+    - figure: bound-witness
+      props: { pair: linear, c: 1, start: 1 }
+    - text: |
+        With $c = 4$ the bound fails only for $n < 20$, so from $n_0 = 20$ on it holds at every $n$ shown, and the algebra shows it holds for ever. Now try the other pairs. For $n^2 / 10$ against $n$, every $c$ you choose works for a while and then fails, at $n = 10c + 1$: no constant can hold back a square. For $8 \log_2 n$ against $n$, the logarithm starts larger and is overtaken at 44.
+  derivation:
+    - text: |
+        **Big-O.** For functions $f$ and $g$ from the whole numbers to the non-negative numbers, $f(n)$ is $O(g(n))$, read "big-O of $g$", when
+
+        $$\text{there are } c > 0 \text{ and } n_0 \text{ such that } f(n) \le c \cdot g(n) \text{ for every } n \ge n_0.$$
+
+        The quantifiers matter, in the sense of [[f2.quantifiers-and-their-negation]]: *there is* a $c$ and *there is* an $n_0$, and then *for every* $n$ beyond it. The pair $c$, $n_0$ is called a **witness**.
+
+        To prove $3n + 20 = O(n)$, produce a witness: $c = 4$, $n_0 = 20$. For $n \ge 20$, $3n + 20 \le 3n + n = 4n$, an inequality of [[f1.inequalities]].
+
+        To prove that $f$ is **not** $O(g)$, negate the definition: for every $c$ and every $n_0$ there is some $n \ge n_0$ with $f(n) > c \cdot g(n)$. For $n^2$ and $n$: given any $c$ and $n_0$, take $n$ larger than both; then $n^2 = n \cdot n > c \cdot n$. So $n^2$ is not $O(n)$.
+
+        **Omega and Theta.** $f(n)$ is $\Omega(g(n))$ when there are $c > 0$ and $n_0$ with $f(n) \ge c \cdot g(n)$ for every $n \ge n_0$: $f$ grows at least as fast as $g$. And $f(n)$ is $\Theta(g(n))$ when it is both $O(g(n))$ and $\Omega(g(n))$: $f$ is trapped between two constant multiples of $g$. $3n + 20$ is $\Theta(n)$, since also $3n + 20 \ge 3n$. $n^2$ is $\Omega(n)$ but not $\Theta(n)$.
+
+        Big-O is an upper bound, so $3n + 20$ is also $O(n^2)$, as a person under two metres tall is also under three. That is true and useless. When you know the growth exactly, say $\Theta$; when you only have an upper bound, say $O$, and give the smallest one you can prove.
+
+        The "$=$" in $f = O(g)$ is a convention, not an equation: $O(g)$ stands for the set of functions that $g$ bounds, and $f = O(g)$ means $f$ belongs to it. You may write $n = O(n^2)$, but never $O(n^2) = n$.
+    - question:
+        id: derivation-witness
+        type: choice
+        system: s2
+        prompt: |
+          Which pair is a witness that $5n + 40 = O(n)$?
+        options:
+          - "$c = 6$, $n_0 = 40$, because $5n + 40 \\le 6n$ exactly when $n \\ge 40$."
+          - "$c = 5$, $n_0 = 1$, because the leading coefficient is 5."
+          - "$c = 6$, $n_0 = 1$, because 6 is larger than 5."
+          - "$c = 1$, $n_0 = 40$, because 40 is the constant term."
+        answer: 0
+        explanation: |
+          $5n + 40 \le 6n$ rearranges to $40 \le n$. With $c = 5$ the bound $5n + 40 \le 5n$ never holds, and with $c = 6$ it fails for every $n$ below 40. Other witnesses work too, such as $c = 45$ and $n_0 = 1$, since $5n + 40 \le 45n$ for all $n \ge 1$.
+    - text: |
+        **Rules that save proofs.** Each of these follows from the definitions by a short [[f2.direct-proof]], and together they handle almost every case.
+
+        1. *Constants disappear.* For any constant $a > 0$, $a \cdot f(n)$ is $\Theta(f(n))$.
+        2. *A sum is as big as its biggest part.* $f(n) + g(n)$ is $\Theta(\max(f(n), g(n)))$, because $\max(f, g) \le f + g \le 2 \max(f, g)$.
+        3. *Products multiply.* If $f_1 = O(g_1)$ and $f_2 = O(g_2)$, then $f_1 f_2 = O(g_1 g_2)$: multiply the two inequalities, with constant $c_1 c_2$. A loop of $n$ rounds whose body costs $O(\log n)$ costs $O(n \log n)$.
+        4. *Bounds chain.* If $f = O(g)$ and $g = O(h)$, then $f = O(h)$.
+        5. *Polynomials.* $a_d n^d + \cdots + a_1 n + a_0$ with $a_d > 0$ is $\Theta(n^d)$. For $n \ge 1$ every $n^k$ with $k \le d$ is at most $n^d$, so the polynomial is at most $(|a_d| + \cdots + |a_0|)\, n^d$; and for large $n$ the lower terms total less than $\tfrac12 a_d n^d$.
+
+        So $\tfrac12 n^2 - \tfrac12 n + 7$ is $\Theta(n^2)$: the number of handshakes among $n$ people, $\tfrac12 n(n - 1)$, grows like $n^2$.
+
+        **The base of a logarithm does not matter.** By the change of base rule of [[f1.logarithms]], $\log_{10} n = \log_2 n / \log_2 10$, a constant multiple. So people write $O(\log n)$ with no base.
+
+        **The base of an exponential does.** $3^n / 2^n = 1.5^n$ grows without limit, so $3^n$ is not $O(2^n)$. Equally, $2^{n + 1} = 2 \cdot 2^n$ is $\Theta(2^n)$, but $2^{2n} = 4^n$ is not.
+    - question:
+        id: order-hierarchy
+        type: order
+        system: s2
+        prompt: |
+          Put these in order of growth, slowest first.
+        steps:
+          - "$\\log n$"
+          - "$\\sqrt n$"
+          - "$n \\log n$"
+          - "$n^2$"
+          - "$2^n$"
+          - "$n!$"
+        explanation: Each is $O$ of the next and not $\Omega$ of it. The square root is $n^{1/2}$, which beats any power of $\log n$ eventually; $n \log n$ sits between $n$ and $n^{1.01}$; and $n! \ge 2^{n - 1}$ because each factor from 2 on is at least 2.
+    - text: |
+        **The ladder of growth.** These facts put the common functions on one ladder, each rung growing more slowly than the next:
+
+        $$1 \;\ll\; \log n \;\ll\; \sqrt n \;\ll\; n \;\ll\; n \log n \;\ll\; n^2 \;\ll\; n^3 \;\ll\; 2^n \;\ll\; 3^n \;\ll\; n! \;\ll\; n^n.$$
+
+        Here $f \ll g$ means $f = O(g)$ but $f$ is not $\Omega(g)$; equivalently, $f(n)/g(n)$ shrinks towards 0. Two facts do most of the work.
+
+        *Every power of $\log n$ is overtaken by every power of $n$.* For example $(\log_2 n)^3$ against $n$: at $n = 2^{10} = 1024$ they are 1,000 and 1,024, and from there each doubling of $n$ adds 1 to $\log_2 n$, which multiplies its cube by less than 2, while $n$ doubles.
+
+        *Every polynomial is overtaken by every exponential with base above 1.* Compare $n^d$ and $b^n$ one step at a time. Going from $n$ to $n + 1$ multiplies $n^d$ by $\bigl(1 + \tfrac1n\bigr)^d$, which gets closer and closer to 1, but multiplies $b^n$ by $b$ every time. Once the first factor is below $b$, the exponential gains on the polynomial by a fixed factor at every step, which is the exponential growth of [[f1.exponents-and-exponential-growth]]. That is the puzzle's third and fourth teams: $n^{100}$ is larger than $1.01^n$ until about $n = 117{,}000$, and after that $1.01^n$ is larger for ever, and soon unimaginably larger.
+
+        **Factorials.** $n! \le n^n$ is clear, factor by factor. And at least half the factors of $n!$ are at least $n/2$, so $n! \ge (n/2)^{n/2}$. Taking logarithms, $\log(n!)$ lies between $\tfrac{n}{2} \log \tfrac{n}{2}$ and $n \log n$, so $\log(n!) = \Theta(n \log n)$. The $n!$ orderings of [[f3.permutations-and-combinations]] will give the limit on how fast any comparison-based method can sort, in [[s3.sorting]].
+
+        **Sums.** By [[f1.arithmetic-and-geometric-series]], $1 + 2 + \cdots + n = \tfrac12 n(n + 1)$ is $\Theta(n^2)$; in the notation of [[f1.summation-notation]], $\sum_{i = 1}^{n} i^k$ is $\Theta(n^{k + 1})$. A geometric sum with ratio above 1 is dominated by its last term: $1 + 2 + 4 + \cdots + 2^n = 2^{n + 1} - 1$ is $\Theta(2^n)$. That is why doubling an array when it is full costs only $\Theta(n)$ copying in total over $n$ appends, as you saw in [[s2.arrays-and-dynamic-arrays]].
+
+        **The last lessons, in this language.** The tower of discs needs $\Theta(2^n)$ moves. The Fibonacci numbers are $\Theta(\varphi^n)$, and so is the naive recursive function that computes them, while the loop takes $\Theta(n)$ steps. Euclid's algorithm, from [[f3.divisibility-and-euclids-algorithm]], takes $O(\log n)$ steps. Splitting in halves with linear work to combine gives $\Theta(n \log n)$, and general rules for such recurrences are [[s3.divide-and-conquer-and-the-master-theorem]].
+
+        **Order of growth is not worst case.** An algorithm's running time on inputs of size $n$ is not one function. Searching a list for a value takes 1 comparison if it is first and $n$ if it is absent. So there is a worst-case cost, a best-case cost and an average cost, each a function of $n$, and each can be described with $O$, $\Omega$ or $\Theta$. Linear search is $\Theta(n)$ in the worst case and $\Theta(1)$ in the best. A lookup in the [[s2.hash-tables]] is $\Theta(1)$ on average and $\Theta(n)$ in the worst case, when every key lands in one bucket. "$O$" does not mean "worst case", and "$\Omega$" does not mean "best case"; they are bounds, and you must also say which cost you are bounding.
+
+        **What the notation hides.** $\Theta$ throws away constants and small inputs, and sometimes those are exactly what matter. B was thirteen times slower on 100 requests. That is why fast sorting routines, Python's own among them, switch to a simple $\Theta(n^2)$ method for short stretches of their input, where its small constant wins. Use the notation to choose a method that will survive large inputs, then measure, as [[s3.measuring-and-predicting-running-time]] will teach.
+  formal:
+    - text: |
+        For functions $f, g \ge 0$ on the whole numbers:
+
+        **Big-O.** $f = O(g)$ when there are $c > 0$ and $n_0$ with $f(n) \le c\,g(n)$ for all $n \ge n_0$.
+
+        **Omega.** $f = \Omega(g)$ when there are $c > 0$ and $n_0$ with $f(n) \ge c\,g(n)$ for all $n \ge n_0$.
+
+        **Theta.** $f = \Theta(g)$ when $f = O(g)$ and $f = \Omega(g)$.
+
+        **Rules.** $a f = \Theta(f)$ for constant $a > 0$; $f + g = \Theta(\max(f, g))$; $O(f) \cdot O(g) = O(fg)$; $O$ is transitive; a polynomial of degree $d$ with positive leading coefficient is $\Theta(n^d)$.
+
+        **Ladder.** $1 \ll \log n \ll n^a \ll n^b \ll c^n \ll d^n \ll n!$ for $0 < a < b$ and $1 < c < d$, where $f \ll g$ means $f/g$ shrinks towards 0. Logarithms of different bases differ by a constant factor; exponentials of different bases do not. $\log(n!) = \Theta(n \log n)$.
+
+        **Cases.** Worst-case, best-case and average costs are separate functions of $n$, each of which may be bounded with $O$, $\Omega$ or $\Theta$.
+  drill:
+    - text: Seconds each. Keep the biggest term, drop its constant.
+    - question:
+        id: drill-dominant
+        type: choice
+        system: s1
+        prompt: |
+          A function takes $5n^3 + 100n^2 + 10^6$ steps. What is its order of growth?
+        options: ["$\\Theta(n^3)$", "$\\Theta(10^6)$", "$\\Theta(n^2)$", "$\\Theta(5n^3 + 100n^2)$"]
+        answer: 0
+        explanation: Keep the fastest-growing term and drop its constant. The million is largest for small $n$, but $5n^3$ passes it at $n = 59$.
+    - question:
+        id: drill-start
+        type: numeric
+        system: s1
+        prompt: |
+          From which $n$ on is $3n + 20 \le 4n$?
+        answer: "20"
+        explanation: 'Subtract $3n$ from both sides: $20 \le n$.'
+    - question:
+        id: drill-log-base
+        type: choice
+        system: s1
+        prompt: |
+          Is $\log_{10} n$ in $\Theta(\log_2 n)$?
+        options: ["Yes: $\\log_{10} n = \\log_2 n / \\log_2 10$, a constant multiple", "No: base 10 grows more slowly", "No: base 10 grows faster", "Only for $n$ a power of 10"]
+        answer: 0
+        explanation: $\log_2 10 \approx 3.32$, so $\log_{10} n$ is always about 0.3 times $\log_2 n$.
+    - question:
+        id: drill-exponent
+        type: choice
+        system: s1
+        prompt: |
+          Which of these is $O(2^n)$?
+        options: ["$2^{n + 3}$", "$4^n$", "$2^{2n}$", "$3^n$"]
+        answer: 0
+        explanation: $2^{n + 3} = 8 \cdot 2^n$, a constant multiple. The others are $4^n$, $4^n$ and $3^n$, which outgrow every multiple of $2^n$.
+    - question:
+        id: drill-cubic
+        type: numeric
+        system: s1
+        prompt: |
+          A $\Theta(n^3)$ method takes 2 seconds on 1,000 items. About how many seconds will it take on 2,000?
+        answer: "16"
+        explanation: Doubling $n$ multiplies $n^3$ by $2^3 = 8$.
+    - question:
+        id: drill-sum
+        type: choice
+        system: s1
+        prompt: |
+          What is $\sum_{i = 1}^{n} i$, in $\Theta$ notation?
+        options: ["$\\Theta(n^2)$", "$\\Theta(n)$", "$\\Theta(n \\log n)$", "$\\Theta(2^n)$"]
+        answer: 0
+        explanation: It is $\tfrac12 n(n + 1)$, a polynomial of degree 2.
+    - question:
+        id: predict-ratio
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          for n in [10, 100, 1000, 10000]:
+              print(n, (3 * n + 20) / n)
+        output: "10 5.0\n100 3.2\n1000 3.02\n10000 3.002"
+        explanation: The ratio $(3n + 20)/n = 3 + 20/n$ settles towards 3. A ratio that stays between two positive constants is what $\Theta(n)$ means.
+    - question:
+        id: predict-doubling-loop
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          steps = 0
+          n = 16
+          i = 1
+          while i < n:
+              for j in range(n):
+                  steps += 1
+              i = i * 2
+          print(steps)
+        output: "64"
+        explanation: The outer loop runs while `i` is 1, 2, 4 and 8, which is $\log_2 16 = 4$ times, and each round does $n = 16$ steps. That is $n \log_2 n = 64$, a $\Theta(n \log n)$ shape.
+  work:
+    - text: Slower now. For every bound, name the witness, or show that none can exist.
+    - question:
+        id: fix-unique
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `unique(items)` should return the items without repeats, each in the place it first appears, in time proportional to the number of items, because it will run on lakhs of log lines. It gives the right answers, and prints `['chai', 'dosa', 'idli']`, but the hidden tests count how many times items are compared and find $\Theta(n^2)$ comparisons. Find the fault and fix it.
+        starter: |
+          def unique(items):
+              seen = []
+              result = []
+              for x in items:
+                  if x not in seen:
+                      seen.append(x)
+                      result.append(x)
+              return result
+
+          print(unique(["chai", "dosa", "chai", "idli", "dosa"]))
+        solution: |
+          def unique(items):
+              seen = set()
+              result = []
+              for x in items:
+                  if x not in seen:
+                      seen.add(x)
+                      result.append(x)
+              return result
+
+          print(unique(["chai", "dosa", "chai", "idli", "dosa"]))
+        tests: |
+          import random
+          random.seed(31)
+          _compares = [0]
+          class _Item:
+              def __init__(self, v):
+                  self.v = v
+              def __eq__(self, other):
+                  _compares[0] += 1
+                  return isinstance(other, _Item) and self.v == other.v
+              def __hash__(self):
+                  return hash(self.v)
+          _values = list(range(600))
+          random.shuffle(_values)
+          _with_repeats = _values + [_values[_i] for _i in range(0, 600, 3)]
+          random.shuffle(_with_repeats)
+          _first = []
+          _met = set()
+          for _v in _with_repeats:
+              if _v not in _met:
+                  _met.add(_v)
+                  _first.append(_v)
+          _items = [_Item(_v) for _v in _with_repeats]
+          _compares[0] = 0
+          _got = unique(_items)
+          assert [_x.v for _x in _got] == _first, "unique should keep each item once, in the order of its first appearance"
+          assert _compares[0] <= 5 * len(_items), "unique compared items " + str(_compares[0]) + " times for " + str(len(_items)) + " items; the count should grow in proportion to the items, not to their square"
+          assert unique([]) == [], "unique([]) should be []"
+          assert output.strip() == "['chai', 'dosa', 'idli']", "The program should print ['chai', 'dosa', 'idli']"
+        wrong:
+          - |
+            def unique(items):
+                return list(set(items))
+
+            print(['chai', 'dosa', 'idli'])
+          - |
+            def unique(items):
+                seen = set()
+                result = []
+                for x in items:
+                    if x not in result:
+                        seen.add(x)
+                        result.append(x)
+                return result
+
+            print(['chai', 'dosa', 'idli'])
+        explanation: |
+          `x not in seen` on a list compares `x` with the items one by one, $\Theta(k)$ comparisons when the list holds $k$, so the whole function makes about $1 + 2 + \cdots + n = \Theta(n^2)$ of them. A set finds an item by its hash, as in a hash table, so each test costs $\Theta(1)$ on average and the function is $\Theta(n)$. The list `result` is still needed to keep the first-seen order, which a set does not remember; but testing membership against `result` instead would bring the quadratic cost straight back.
+    - question:
+        id: write-witness
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `smallest_start(f, g, c, limit)`. It returns the smallest whole number $n_0 \ge 1$ such that $f(n) \le c \cdot g(n)$ for every whole $n$ from $n_0$ to `limit`, or `None` if the bound fails at `limit` itself. Remember that a bound can hold for small $n$, fail, and then hold again.
+        starter: |
+          import math
+
+          def smallest_start(f, g, c, limit):
+              return None
+
+          print(smallest_start(lambda n: 3 * n + 20, lambda n: n, 4, 1000), smallest_start(lambda n: 8 * math.log2(n), lambda n: n, 1, 1000), smallest_start(lambda n: n * n, lambda n: n, 50, 1000))
+        solution: |
+          import math
+
+          def smallest_start(f, g, c, limit):
+              if f(limit) > c * g(limit):
+                  return None
+              start = limit
+              while start > 1 and f(start - 1) <= c * g(start - 1):
+                  start -= 1
+              return start
+
+          print(smallest_start(lambda n: 3 * n + 20, lambda n: n, 4, 1000), smallest_start(lambda n: 8 * math.log2(n), lambda n: n, 1, 1000), smallest_start(lambda n: n * n, lambda n: n, 50, 1000))
+        tests: |
+          import math
+          import random
+          random.seed(37)
+          def _reference(_f, _g, _c, _limit):
+              _ok = None
+              for _n in range(_limit, 0, -1):
+                  if _f(_n) <= _c * _g(_n):
+                      _ok = _n
+                  else:
+                      break
+              return _ok
+          _cases = [
+              (lambda n: 3 * n + 20, lambda n: n, 4, 1000),
+              (lambda n: 8 * math.log2(n), lambda n: n, 1, 1000),
+              (lambda n: n * n, lambda n: n, 50, 1000),
+              (lambda n: n, lambda n: n, 1, 50),
+              (lambda n: 2 ** n, lambda n: n ** 3, 1, 9),
+              (lambda n: 2 ** n, lambda n: n ** 3, 1, 12),
+              (lambda n: (n - 30) ** 2, lambda n: n, 2, 60),
+          ]
+          for _trial in range(150):
+              _a = random.randint(1, 9)
+              _b = random.randint(0, 200)
+              _c = random.randint(1, 12)
+              _cases.append((lambda n, a=_a, b=_b: a * n + b, lambda n: n, _c, random.randint(1, 300)))
+          for _f, _g, _c, _limit in _cases:
+              _want = _reference(_f, _g, _c, _limit)
+              _got = smallest_start(_f, _g, _c, _limit)
+              assert _got == _want, "For one of the test bounds with c = " + str(_c) + " and limit = " + str(_limit) + ", the answer should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "20 44 None", "The program should print 20 44 None"
+        wrong:
+          - |
+            import math
+
+            def smallest_start(f, g, c, limit):
+                for n in range(1, limit + 1):
+                    if f(n) <= c * g(n):
+                        return n
+                return None
+
+            print(20, 44, None)
+          - |
+            import math
+
+            def smallest_start(f, g, c, limit):
+                if f(limit) > c * g(limit):
+                    return None
+                start = limit
+                while start > 1 and f(start) <= c * g(start):
+                    start -= 1
+                return start
+
+            print(20, 44, None)
+          - |
+            import math
+
+            def smallest_start(f, g, c, limit):
+                start = limit
+                while start > 1 and f(start - 1) <= c * g(start - 1):
+                    start -= 1
+                return start
+
+            print(20, 44, None)
+        explanation: |
+          The definition says "for every $n$ from $n_0$ on", so the search must start from the top and walk down while the bound keeps holding; the first failure on the way down fixes $n_0$ just above it. Scanning upwards and stopping at the first $n$ where the bound holds answers a different question: $8 \log_2 n \le n$ holds at $n = 1$ and $n = 2$, fails from 3 to 43, and holds again from 44. Testing `start` rather than `start - 1` stops one place too early, and forgetting to check `limit` itself returns a start for a bound that does not even hold at the end.
+    - question:
+        id: write-exponent
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A program was timed on inputs that double in size each time. Write `estimate_power(timings)`, where `timings` is a list of at least two pairs `(n, seconds)` in which each `n` is twice the one before. If the running time is close to $c \cdot n^k$, each doubling multiplies the time by about $2^k$. Return the whole number $k$ that best fits: the average, over the doublings, of $\log_2$ of the ratio of successive times, rounded.
+        starter: |
+          import math
+
+          def estimate_power(timings):
+              return 0
+
+          print(estimate_power([(1000, 0.5), (2000, 2.01), (4000, 8.1)]), estimate_power([(10 ** 5, 0.012), (2 * 10 ** 5, 0.025), (4 * 10 ** 5, 0.049), (8 * 10 ** 5, 0.1)]))
+        solution: |
+          import math
+
+          def estimate_power(timings):
+              logs = []
+              for (n1, t1), (n2, t2) in zip(timings, timings[1:]):
+                  logs.append(math.log2(t2 / t1))
+              return round(sum(logs) / len(logs))
+
+          print(estimate_power([(1000, 0.5), (2000, 2.01), (4000, 8.1)]), estimate_power([(10 ** 5, 0.012), (2 * 10 ** 5, 0.025), (4 * 10 ** 5, 0.049), (8 * 10 ** 5, 0.1)]))
+        tests: |
+          import random
+          random.seed(41)
+          for _trial in range(400):
+              _k = random.randint(0, 4)
+              _c = random.uniform(1e-9, 1e-3)
+              _start = random.randint(100, 10000)
+              _m = random.randint(2, 6)
+              _timings = []
+              for _i in range(_m):
+                  _n = _start * 2 ** _i
+                  _timings.append((_n, _c * _n ** _k * random.uniform(0.9, 1.1)))
+              _got = estimate_power(_timings)
+              assert _got == _k, "For times growing like n to the power " + str(_k) + ", the answer should be " + str(_k) + ", not " + str(_got)
+          assert output.strip() == "2 1", "The program should print 2 1"
+        wrong:
+          - |
+            import math
+
+            def estimate_power(timings):
+                ratios = []
+                for (n1, t1), (n2, t2) in zip(timings, timings[1:]):
+                    ratios.append(t2 / t1)
+                return round(sum(ratios) / len(ratios))
+
+            print(2, 1)
+          - |
+            import math
+
+            def estimate_power(timings):
+                first = timings[0][1]
+                last = timings[-1][1]
+                return round(math.log2(last / first))
+
+            print(2, 1)
+          - |
+            import math
+
+            def estimate_power(timings):
+                logs = []
+                for (n1, t1), (n2, t2) in zip(timings, timings[1:]):
+                    logs.append(math.log10(t2 / t1))
+                return round(sum(logs) / len(logs))
+
+            print(2, 1)
+        explanation: |
+          If $t(n) \approx c\,n^k$, then $t(2n)/t(n) \approx 2^k$ whatever $c$ is, so $\log_2$ of each ratio estimates $k$, and averaging over the doublings smooths out noise in the measurements. The constant $c$, which depends on the machine, cancels in every ratio; that is the doubling test of the arrays lesson, made into a measurement. The ratio itself is $2^k$, not $k$, and $\log_2$ of the ratio from the first time to the last counts every doubling at once, so it must be divided by their number. A logarithm to base 10 measures in the wrong unit.
+    - question:
+        id: work-overtake
+        type: numeric
+        system: s2
+        prompt: |
+          Method A takes $50n$ steps and method B takes $n^2 / 2$ steps. What is the smallest whole $n$ for which A takes fewer steps than B?
+        answer: "101"
+        explanation: |
+          $50n < n^2 / 2$ means $100n < n^2$, so $n > 100$. At $n = 100$ the two are equal, at 5,000 steps each.
+    - question:
+        id: work-false
+        type: choice
+        system: s2
+        prompt: |
+          Which statement is false?
+        options:
+          - "$4^n = O(2^n)$"
+          - "$2^{n + 1} = O(2^n)$"
+          - "$\\log_{10} n = \\Theta(\\log_2 n)$"
+          - "$n \\log n = O(n^{1.5})$"
+        answer: 0
+        explanation: |
+          $4^n / 2^n = 2^n$ grows without limit, so no constant $c$ gives $4^n \le c \cdot 2^n$ for ever. $2^{n + 1} = 2 \cdot 2^n$. Logarithms to different bases differ by a constant factor. And $n \log n / n^{1.5} = \log n / \sqrt n$ shrinks towards 0, because every power of $n$ outgrows the logarithm.
+    - question:
+        id: work-squares
+        type: choice
+        system: s2
+        prompt: |
+          What is $\sum_{i = 1}^{n} i^2$ in $\Theta$ notation?
+        options: ["$\\Theta(n^3)$", "$\\Theta(n^2)$", "$\\Theta(n^2 \\log n)$", "$\\Theta(2^n)$"]
+        answer: 0
+        explanation: |
+          Each of the $n$ terms is at most $n^2$, so the sum is at most $n^3$. The largest half of the terms are each at least $(n/2)^2$, so the sum is at least $\tfrac{n}{2} \cdot \tfrac{n^2}{4} = \tfrac{n^3}{8}$. The exact value is $\tfrac16 n(n + 1)(2n + 1)$.
+    - question:
+        id: work-cases
+        type: choice
+        system: s2
+        prompt: |
+          A function checks whether a value is in an unsorted list by looking at each item in turn, stopping as soon as it finds it. Which statement is true?
+        options:
+          - "Its worst case is $\\Theta(n)$ and its best case is $\\Theta(1)$, so its running time is $O(n)$ but not $\\Theta(n)$ on every input."
+          - "It is $O(n)$, which means it always takes $n$ steps."
+          - "It is $\\Omega(1)$, which means its best case is constant, so it is fast."
+          - "Its order of growth is undefined because it depends on the input."
+        answer: 0
+        explanation: |
+          $O(n)$ is an upper bound on the worst case: it never takes more than $cn$ steps. When the value is first, it takes one step, so the best case is $\Theta(1)$. Saying "$\Omega(1)$" adds nothing, since every function that takes at least a step is $\Omega(1)$. Order of growth is well defined once you say which cost, worst, best or average, you are describing.
+  connections:
+    - text: |
+        Team B's method is better in exactly this sense: $400 n \log_2 n$ is $O(n^2)$ but $2n^2$ is not $O(n \log n)$. The constants 2 and 400 only decide where B overtakes, at about 2,224 requests, and after that B wins by more at every doubling. Likewise $n^{100}$ is $O(1.01^n)$, however unlikely that looks at first.
+
+        Big-O gives an upper bound, $\Omega$ a lower bound, and $\Theta$ both, each up to a constant factor and from some size on. A witness $c$, $n_0$ proves a bound, and the negated definition disproves one. Sums are as big as their biggest part, products multiply, polynomials are as big as their leading term, logarithms of any base are the same size, exponentials of different bases are not, and the ladder runs from $\log n$ through powers of $n$ to $2^n$ and $n!$. Worst, best and average cases are separate questions, each answered in this language.
+
+        So far the things being counted have been numbers, arrangements and steps. The rest of this cluster counts and reasons about connections: which towns a road network joins, which friends a social network links, which tasks wait on which. A graph was a data structure in the data structures cluster; next it becomes a mathematical object with theorems of its own, in [[f3.graph-theory-basics]].
