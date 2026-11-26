@@ -108,6 +108,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "window-frame": z.strictObject({ frame: z.enum(["whole", "running", "moving", "rank"]).optional(), row: z.number().optional() }),
   "three-valued": z.strictObject({ op: z.enum(["and", "or", "not"]).optional(), cell: z.number().optional() }),
   "transfer-crash": z.strictObject({ transaction: z.boolean().optional(), crash: z.boolean().optional(), step: z.number().optional() }),
+  "index-lookup": z.strictObject({ method: z.enum(["scan", "index"]).optional(), step: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),

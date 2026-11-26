@@ -6441,6 +6441,130 @@ function TransferCrash(props: Props) {
   );
 }
 
+const IX_ORDERS: [number, string][] = [
+  [1, "Rohan"],
+  [2, "Meera"],
+  [3, "Arjun"],
+  [4, "Zoya"],
+  [5, "Kabir"],
+  [6, "Priya"],
+  [7, "Dev"],
+  [8, "Nisha"],
+  [9, "Arjun"],
+  [10, "Tara"],
+  [11, "Meera"],
+  [12, "Ishaan"],
+  [13, "Rohan"],
+  [14, "Kabir"],
+  [15, "Zoya"],
+  [16, "Priya"],
+];
+const IX_ENTRIES = [...IX_ORDERS].sort((a, b) => a[1].localeCompare(b[1]) || a[0] - b[0]);
+const IX_TARGET = "Meera";
+/** The ranges a lower-bound binary search for IX_TARGET passes through, one per comparison. */
+const IX_SEARCH: { lo: number; hi: number; mid: number }[] = (() => {
+  const out: { lo: number; hi: number; mid: number }[] = [];
+  let lo = 0;
+  let hi = IX_ENTRIES.length;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    out.push({ lo, hi, mid });
+    if (IX_ENTRIES[mid][1] < IX_TARGET) lo = mid + 1;
+    else hi = mid;
+  }
+  out.push({ lo, hi: lo, mid: -1 });
+  return out;
+})();
+type IxMethod = "scan" | "index";
+
+/** Finding one customer's orders by reading every row, or by binary search in a sorted index that points to the rows. */
+function IndexLookup(props: Props) {
+  const [method, setMethod] = useState<IxMethod>(props.method === "index" ? "index" : "scan");
+  const last = method === "scan" ? IX_ORDERS.length : IX_SEARCH.length;
+  const [stepRaw, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, IX_ORDERS.length));
+  const step = Math.min(stepRaw, last);
+  const first = IX_SEARCH[IX_SEARCH.length - 1].lo;
+  const matches = IX_ENTRIES.map((e, i) => i).filter((i) => IX_ENTRIES[i][1] === IX_TARGET);
+  const done = step === last;
+  const found = method === "scan" ? IX_ORDERS.slice(0, step).filter((o) => o[1] === IX_TARGET) : done ? matches.map((i) => IX_ENTRIES[i]) : [];
+  const now = method === "index" && step > 0 && step < last ? IX_SEARCH[step - 1] : null;
+  const range = method === "index" && step > 0 ? IX_SEARCH[Math.min(step, IX_SEARCH.length) - 1] : null;
+  const rowMark = (r: number): SqlMark => {
+    if (method === "scan") return r === step - 1 ? "accent" : r < step ? (IX_ORDERS[r][1] === IX_TARGET ? "fill" : "ghost") : undefined;
+    return done && IX_ORDERS[r][1] === IX_TARGET ? "accent" : undefined;
+  };
+  const entryMark = (i: number): SqlMark => {
+    if (method === "scan" || !range) return method === "scan" ? "ghost" : undefined;
+    if (done) return matches.includes(i) ? "accent" : i === matches[matches.length - 1] + 1 ? "fill" : "ghost";
+    if (now && i === now.mid) return "accent";
+    return i >= range.lo && i < range.hi ? "fill" : "ghost";
+  };
+  const h = 16;
+  const rowY = (r: number) => 22 + (r + 1) * h + h / 2;
+  const line =
+    method === "scan"
+      ? step === 0
+        ? `No index: read the rows in the order they are stored.`
+        : `Rows read: ${step} of ${IX_ORDERS.length}. Found so far: ${found.map((o) => `order ${o[0]}`).join(", ") || "none"}.`
+      : step === 0
+        ? `The index keeps every (customer, id) pair sorted by customer.`
+        : now
+          ? `Comparison ${step}: entry ${now.mid + 1} is ${IX_ENTRIES[now.mid][1]}, ${IX_ENTRIES[now.mid][1] < IX_TARGET ? `before ${IX_TARGET}, so look later` : `not before ${IX_TARGET}, so look here or earlier`}.`
+          : `After ${IX_SEARCH.length - 1} comparisons, entries ${first + 1} to ${first + matches.length} hold ${IX_TARGET}: orders ${matches.map((i) => IX_ENTRIES[i][0]).join(" and ")}.`;
+  const tail =
+    method === "scan"
+      ? done
+        ? `A scan reads all ${IX_ORDERS.length} rows: another ${IX_TARGET} could be anywhere.`
+        : ""
+      : done
+        ? `About log₂ ${IX_ORDERS.length} = ${Math.log2(IX_ORDERS.length)} comparisons, then one read per match.`
+        : "";
+  const summary = `select id from orders where customer = '${IX_TARGET}'. ${method === "scan" ? "Full scan of the table." : "Search in an index on customer."} Step ${step} of ${last}. ${line} ${tail} The table holds ${IX_ORDERS.length} orders; ${IX_TARGET} placed orders ${matches.map((i) => IX_ENTRIES[i][0]).join(" and ")}.`;
+  return (
+    <Frame
+      title="Finding rows with and without an index"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={method === "scan"} onClick={() => setMethod("scan")}>
+            full scan
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={method === "index"} onClick={() => setMethod("index")}>
+            index search
+          </button>
+          <Stepper label="step" value={step} onChange={setStep} min={0} max={last} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 340" role="img" aria-label={`Looking for ${IX_TARGET}'s orders by ${method === "scan" ? "full scan" : "index search"}, step ${step} of ${last}`}>
+        <SqlTable x={8} y={22} widths={[32, 72]} head={["id", "customer"]} rows={IX_ORDERS.map((o) => [o[0], o[1]])} title="orders, as stored" height={h} mark={(r) => rowMark(r)} />
+        <SqlTable
+          x={300}
+          y={22}
+          widths={[72, 32]}
+          head={["customer", "id"]}
+          rows={IX_ENTRIES.map((e) => [e[1], e[0]])}
+          title="index on customer"
+          height={h}
+          mark={(i) => entryMark(i)}
+        />
+        {method === "index" && done
+          ? matches.map((i) => {
+              const r = IX_ORDERS.findIndex((o) => o[0] === IX_ENTRIES[i][0]);
+              return <line key={i} x1={300} y1={rowY(i)} x2={112} y2={rowY(r)} className="fig-axis" />;
+            })
+          : null}
+        <text x={8} y={318} className="fig-small">
+          {line}
+        </text>
+        <text x={8} y={334} className="fig-small">
+          {tail}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -7764,6 +7888,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "window-frame": WindowFrame,
   "three-valued": ThreeValued,
   "transfer-crash": TransferCrash,
+  "index-lookup": IndexLookup,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
