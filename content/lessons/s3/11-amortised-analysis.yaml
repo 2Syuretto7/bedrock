@@ -1,0 +1,614 @@
+concept: s3.amortised-analysis
+minutes: 85
+claim: You can bound the total cost of a sequence of operations when a few are expensive and most are cheap, by adding up the whole sequence, by charging each operation a fixed fee and saving the surplus, or with a potential function, and use it to show that appending to a doubling array, a queue built from two stacks and a binary counter each cost a constant per operation over any sequence, while knowing what an amortised bound does not promise.
+recalls: [s3.dynamic-programming]
+uses: [s2.arrays-and-dynamic-arrays, s2.stacks-and-queues, s2.hash-tables, s2.union-find, f1.arithmetic-and-geometric-series, s1.classes-and-objects, s3.measuring-and-predicting-running-time, f5.summaries-mean-median-and-percentiles]
+leads: [s3.randomised-algorithms]
+starter: |
+  # Scratch space. Count the copies a doubling list makes.
+  room = 1
+  size = 0
+  copies = 0
+  for i in range(1000):
+      if size == room:
+          copies += size
+          room *= 2
+      size += 1
+  print(size, room, copies, (size + copies) / size)
+parts:
+  recall:
+    - text: |
+        [[s3.dynamic-programming]] counted its cost as the number of table entries times the work for each, the same for every entry. Some operations are not like that. Appending to a Python list is usually one write, but now and then the list runs out of room and copies everything it holds. Judging such an operation by its worst single call is too pessimistic, and this lesson shows how to count it fairly. Three quick pulls first.
+  puzzle:
+    - text: |
+        A binary counter starts at 0 and is increased by 1, one thousand times, ending at 1,000. Each increase turns the trailing 1s at the right end to 0 and the next 0 to 1: from 0111 to 1000 flips four bits, while from 1000 to 1001 flips one.
+
+        **How many bit flips do the thousand increases make in all?**
+  intuition:
+    - text: |
+        A family pays a big annual insurance premium once a year and small grocery bills every week. Judging the household by its most expensive day would make it look ruinous; judging it by the total over the year, divided by the days, gives a fair daily cost. **Amortised analysis** does the same for operations: it bounds the total cost of any sequence of $n$ operations, and divides by $n$.
+
+        The textbook case is the dynamic array from [[s2.arrays-and-dynamic-arrays]]. It keeps its items in a block with spare room. An append writes into the next free place, one step. When the block is full, it moves to a new block twice the size, copying every item, a step for each. The figure counts the work of each append. Step through the appends and watch where the expensive ones fall.
+    - figure: doubling-array
+      props: { appends: 9 }
+    - text: |
+        After 9 appends, the block has moved four times, copying 1, 2, 4 and 8 items, 15 copies in all, plus 9 writes: 24 steps, under 3 per append. The expensive appends grow, but they come exponentially further apart, so their cost spread over the cheap appends between them stays constant.
+  derivation:
+    - text: |
+        **Adding it all up.** Starting from a block of 1, $n$ appends move the block whenever the count reaches 1, 2, 4, …, up to the largest power of 2 below $n$, copying that many items each time. By [[f1.arithmetic-and-geometric-series]], $1 + 2 + 4 + \cdots + 2^k = 2^{k+1} - 1 < 2n$, since $2^k < n$. With the $n$ writes, the total is less than $3n$, so each append costs less than 3 **amortised**, even though one append can cost $n$. This is the **aggregate method**: bound the whole sequence and divide.
+    - question:
+        id: derivation-copies
+        type: numeric
+        system: s2
+        prompt: |
+          A dynamic array starts with room for 1 and doubles when full. How many items are copied in all during 17 appends?
+        answer: "31"
+        explanation: |
+          The block is full at sizes 1, 2, 4, 8 and 16, each time before the next append, copying $1 + 2 + 4 + 8 + 16 = 31$ items. That is less than $2 \times 17 = 34$.
+    - text: |
+        **Why doubling, and not adding room.** Suppose the block grows by a fixed 4 places each time it fills. Then it moves at sizes 4, 8, 12, …, and $n$ appends copy about $4 + 8 + 12 + \cdots \approx n^2/8$ items: quadratic, as in [[s3.measuring-and-predicting-running-time]]. Any constant growth factor above 1 keeps the copies linear; Python's lists grow by about an eighth each time, trading a few more moves for less unused room. The hash tables of [[s2.hash-tables]] grow their bucket arrays the same way, for the same reason.
+
+        **The accounting method.** Charge every append a fixed fee of 3 steps. One pays for its own write; two are saved with the item. When the block of size $m$ fills, the $m/2$ items added since the last move have saved $m$ steps between them, exactly enough to copy all $m$ items. Since the savings never go negative, the real total never exceeds the fees, $3n$.
+
+        **The potential method.** Define a quantity of the data structure, its **potential** $\Phi$, that is never negative, here $\Phi = 2 \times \text{size} - \text{room}$, once the block has moved at least once. The amortised cost of an operation is its actual cost plus the change in $\Phi$. An ordinary append costs 1 and raises $\Phi$ by 2: amortised 3. An append that moves a full block of $m$ costs $m + 1$, and $\Phi$ falls from $2m - m = m$ to $2(m + 1) - 2m = 2$: amortised $(m + 1) + (2 - m) = 3$. The amortised costs add to the actual total plus the final $\Phi$ minus the first, so the actual total is at most $3n$.
+    - question:
+        id: derivation-constant-growth
+        type: numeric
+        system: s2
+        prompt: |
+          A block starts with room for 4 and grows by 4 places each time it is full. How many items are copied in all during 20 appends?
+        answer: "40"
+        explanation: |
+          The block is full, before the next append, at sizes 4, 8, 12 and 16, copying $4 + 8 + 12 + 16 = 40$ items: already twice the number of appends, and growing with the square of $n$.
+    - text: |
+        **A queue from two stacks.** A queue can be built from two lists used as stacks, as in [[s2.stacks-and-queues]]: new items are pushed on an **inbox**, and items leave from an **outbox**. When the outbox is empty and an item must leave, every item in the inbox is popped and pushed onto the outbox, which reverses them, putting the oldest on top. One such dequeue can carry $n$ items. But each item is pushed on the inbox once, carried once, and popped from the outbox once, so any sequence of $n$ operations does at most $3n$ steps: constant amortised time.
+
+        **The binary counter.** The last bit flips on every increase, the next bit on every second increase, the next on every fourth. Over $n$ increases from 0, bit $i$ flips $\lfloor n/2^i \rfloor$ times, and the total is less than $n + n/2 + n/4 + \cdots = 2n$.
+
+        **What amortised does not promise.** An amortised bound holds for every sequence, with no probability involved: it is a worst-case guarantee for the total, not an average over random inputs. It does not make any single operation cheap. The append that copies a million items still takes a million steps, and in a system that must answer every request within a few milliseconds, that one slow call shows up in the tail of the latency, the p99 of [[f5.summaries-mean-median-and-percentiles]]. Union-find with path compression, from [[s2.union-find]], is another structure whose good bound is amortised: a single `find` can be slow, but it shortens the paths for every later one.
+    - question:
+        id: order-potential
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of an amortised analysis by the potential method in order.
+        steps:
+          - "Choose a potential that is zero at the start and never negative."
+          - "For each kind of operation, add its actual cost to the change in potential it causes."
+          - "Show that every operation's amortised cost is at most some constant."
+          - "Conclude that the actual cost of any sequence of n operations is at most that constant times n."
+        explanation: |
+          The amortised costs are defined by the potential, the constant bound is about the amortised costs, and the conclusion needs the bound together with a potential that never goes negative.
+  formal:
+    - text: |
+        **Amortised cost.** A bound $c$ such that every sequence of $n$ operations, from the empty structure, costs at most $c\,n$ in total. It is a guarantee for every sequence, not an average over inputs.
+
+        **Aggregate method.** Bound the total of any sequence directly, then divide by $n$.
+
+        **Accounting method.** Charge each operation a fee; the surplus saved by cheap operations must always cover the expensive ones.
+
+        **Potential method.** $\Phi \ge 0$, with $\Phi_0 = 0$; amortised cost $\hat{c}_i = c_i + \Phi_i - \Phi_{i-1}$; then $\sum c_i = \sum \hat{c}_i - \Phi_n \le \sum \hat{c}_i$.
+
+        **Results.** Doubling array: append $< 3$ amortised, $n$ worst case. Growth by a constant amount: $\Theta(n)$ amortised. Two-stack queue: $O(1)$ amortised per operation. Binary counter: fewer than $2n$ flips for $n$ increases; exactly $2n$ minus the number of 1s in $n$.
+  drill:
+    - text: Seconds each. Add up the whole sequence, not one step.
+    - question:
+        id: drill-eight
+        type: numeric
+        system: s1
+        prompt: |
+          A doubling array starting with room for 1 receives 8 appends. How many steps of work in all, counting each write and each copy as one?
+        answer: "15"
+        explanation: 8 writes, and copies of $1 + 2 + 4 = 7$ items when the block fills at sizes 1, 2 and 4.
+    - question:
+        id: drill-last-bit
+        type: numeric
+        system: s1
+        prompt: |
+          A binary counter is increased 8 times from 0. How many times does its rightmost bit flip?
+        answer: "8"
+        explanation: The rightmost bit flips on every increase.
+    - question:
+        id: drill-queue-moves
+        type: numeric
+        system: s1
+        prompt: |
+          Ten items are put into a two-stack queue, then all ten are taken out. How many items are carried from the inbox to the outbox?
+        answer: "10"
+        explanation: The first dequeue carries all ten at once; the other nine dequeues carry nothing.
+    - question:
+        id: drill-amortised-meaning
+        type: choice
+        system: s1
+        prompt: |
+          An operation takes 3 steps amortised. What is guaranteed?
+        options:
+          - "Any sequence of n such operations takes at most 3n steps."
+          - "Every single operation takes at most 3 steps."
+          - "On random inputs, operations take 3 steps on average."
+          - "Most operations take exactly 3 steps."
+        answer: 0
+        explanation: Amortised bounds the total of every sequence; a single operation can still be expensive, and no randomness is assumed.
+    - question:
+        id: drill-growth
+        type: choice
+        system: s1
+        prompt: |
+          A list grows by 100 places each time it fills. What is the total cost of n appends?
+        options:
+          - "$\\Theta(n^2)$"
+          - "$\\Theta(n)$"
+          - "$\\Theta(n \\log n)$"
+          - "$\\Theta(100n)$"
+        answer: 0
+        explanation: It moves about $n/100$ times, copying on average about $n/2$ items each time, about $n^2/200$ copies.
+    - question:
+        id: predict-room
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          room = 1
+          size = 0
+          copies = 0
+          for i in range(10):
+              if size == room:
+                  copies += size
+                  room *= 2
+              size += 1
+          print(room, copies)
+        output: "16 15"
+        explanation: The block fills at sizes 1, 2, 4 and 8, copying $1 + 2 + 4 + 8 = 15$ items and ending with room for 16.
+    - question:
+        id: predict-bits
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          x = 7
+          print(bin(x), bin(x + 1))
+        output: "0b111 0b1000"
+        explanation: Going from 7 to 8 turns three trailing 1s to 0 and sets the next bit, four flips in one increase.
+  work:
+    - text: Slower now. For each structure, find the expensive operation, and count how often it can happen.
+    - question:
+        id: fix-doubling
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `DynamicArray` should keep its items in a block that doubles when full, so that appends cost a constant amortised. The program should print `1000 1024 1023`. It prints `1000 1000 499500`. Find the fault and fix it.
+        starter: |
+          class DynamicArray:
+              def __init__(self):
+                  self.block = [None]
+                  self.size = 0
+                  self.copies = 0
+
+              def resize(self, room):
+                  new = [None] * room
+                  for i in range(self.size):
+                      new[i] = self.block[i]
+                      self.copies += 1
+                  self.block = new
+
+              def append(self, x):
+                  # When the block is full, move to a block twice as large.
+                  if self.size == len(self.block):
+                      self.resize(len(self.block) + 1)
+                  self.block[self.size] = x
+                  self.size += 1
+
+
+          a = DynamicArray()
+          for i in range(1000):
+              a.append(i)
+          print(a.size, len(a.block), a.copies)
+        solution: |
+          class DynamicArray:
+              def __init__(self):
+                  self.block = [None]
+                  self.size = 0
+                  self.copies = 0
+
+              def resize(self, room):
+                  new = [None] * room
+                  for i in range(self.size):
+                      new[i] = self.block[i]
+                      self.copies += 1
+                  self.block = new
+
+              def append(self, x):
+                  # When the block is full, move to a block twice as large.
+                  if self.size == len(self.block):
+                      self.resize(2 * len(self.block))
+                  self.block[self.size] = x
+                  self.size += 1
+
+
+          a = DynamicArray()
+          for i in range(1000):
+              a.append(i)
+          print(a.size, len(a.block), a.copies)
+        tests: |
+          for _n in [0, 1, 2, 3, 5, 8, 9, 100, 1000, 4097]:
+              _a = DynamicArray()
+              for _i in range(_n):
+                  _a.append(_i * 7)
+              assert _a.size == _n, "After " + str(_n) + " appends, size should be " + str(_n) + ", not " + str(_a.size)
+              assert list(_a.block[:_n]) == [_i * 7 for _i in range(_n)], "After " + str(_n) + " appends, the block should start with the items appended, in order"
+              _room = 1
+              while _room < _n:
+                  _room *= 2
+              assert len(_a.block) == _room, "After " + str(_n) + " appends, the block should have room for " + str(_room) + ", not " + str(len(_a.block))
+              assert _a.copies == _room - 1 if _n > 0 else _a.copies == 0, "After " + str(_n) + " appends, " + str(_room - 1 if _n > 0 else 0) + " copies should have been made, not " + str(_a.copies)
+              assert _a.copies <= 2 * _n, "After " + str(_n) + " appends, there were " + str(_a.copies) + " copies, more than two for each append"
+          assert output.strip() == "1000 1024 1023", "The program should print 1000 1024 1023"
+        wrong:
+          - |
+            class DynamicArray:
+                def __init__(self):
+                    self.block = [None]
+                    self.size = 0
+                    self.copies = 0
+
+                def resize(self, room):
+                    new = [None] * room
+                    for i in range(self.size):
+                        new[i] = self.block[i]
+                        self.copies += 1
+                    self.block = new
+
+                def append(self, x):
+                    # When the block is full, move to a block twice as large.
+                    if self.size == len(self.block):
+                        self.resize(len(self.block) + 10)
+                    self.block[self.size] = x
+                    self.size += 1
+
+
+            a = DynamicArray()
+            for i in range(1000):
+                a.append(i)
+            print(a.size, len(a.block), a.copies)
+          - |
+            class DynamicArray:
+                def __init__(self):
+                    self.block = [None]
+                    self.size = 0
+                    self.copies = 0
+
+                def resize(self, room):
+                    new = [None] * room
+                    self.copies += self.size
+                    self.block = new
+
+                def append(self, x):
+                    # When the block is full, move to a block twice as large.
+                    if self.size == len(self.block):
+                        self.resize(2 * len(self.block))
+                    self.block[self.size] = x
+                    self.size += 1
+
+
+            a = DynamicArray()
+            for i in range(1000):
+                a.append(i)
+            print(a.size, len(a.block), a.copies)
+          - |
+            class DynamicArray:
+                def __init__(self):
+                    self.block = [None]
+                    self.size = 0
+                    self.copies = 0
+
+                def resize(self, room):
+                    new = [None] * room
+                    for i in range(self.size):
+                        new[i] = self.block[i]
+                        self.copies += 1
+                    self.block = new
+
+                def append(self, x):
+                    # When the block is full, move to a block twice as large.
+                    if self.size > len(self.block):
+                        self.resize(2 * len(self.block))
+                    self.block[self.size] = x
+                    self.size += 1
+
+
+            a = DynamicArray()
+            for i in range(1000):
+                a.append(i)
+            print(a.size, len(a.block), a.copies)
+        explanation: |
+          Growing by one place means every append after the first is a full block, so the $k$-th append copies $k - 1$ items and 1,000 appends copy $0 + 1 + \cdots + 999 = 4{,}99{,}500$. Doubling makes the moves exponentially rarer, and the copies add to $1 + 2 + \cdots + 512 = 1{,}023$. Growing by 10 places is still quadratic, only ten times slower to show it; counting copies without making them leaves the new block empty; and checking `size > len(block)` lets an append write past the end.
+    - question:
+        id: write-two-stack-queue
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Complete `dequeue` in `TwoStackQueue`. New items are pushed on `inbox`, and items leave from `outbox`. When `outbox` is empty, carry every item from `inbox` onto it, counting each carried item in `moves`; then remove and return the item on top of `outbox`, which is the oldest. The queue is never empty when `dequeue` is called.
+        starter: |
+          class TwoStackQueue:
+              # A queue built from two lists used as stacks. New items go on inbox; items leave from
+              # outbox. moves counts the items carried from inbox to outbox.
+              def __init__(self):
+                  self.inbox = []
+                  self.outbox = []
+                  self.moves = 0
+
+              def enqueue(self, x):
+                  self.inbox.append(x)
+
+              def dequeue(self):
+                  # Return and remove the oldest item. The queue is never empty when this is called.
+                  return self.inbox.pop()
+
+
+          q = TwoStackQueue()
+          for i in range(5):
+              q.enqueue(i)
+          print(q.dequeue(), q.dequeue())
+          q.enqueue(5)
+          print([q.dequeue() for _ in range(4)], q.moves)
+        solution: |
+          class TwoStackQueue:
+              # A queue built from two lists used as stacks. New items go on inbox; items leave from
+              # outbox. moves counts the items carried from inbox to outbox.
+              def __init__(self):
+                  self.inbox = []
+                  self.outbox = []
+                  self.moves = 0
+
+              def enqueue(self, x):
+                  self.inbox.append(x)
+
+              def dequeue(self):
+                  # Return and remove the oldest item. The queue is never empty when this is called.
+                  if len(self.outbox) == 0:
+                      while len(self.inbox) > 0:
+                          self.outbox.append(self.inbox.pop())
+                          self.moves += 1
+                  return self.outbox.pop()
+
+
+          q = TwoStackQueue()
+          for i in range(5):
+              q.enqueue(i)
+          print(q.dequeue(), q.dequeue())
+          q.enqueue(5)
+          print([q.dequeue() for _ in range(4)], q.moves)
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(73)
+          for _round in range(40):
+              _q = TwoStackQueue()
+              _model = []
+              _expected_moves = 0
+              _in = []
+              _out = []
+              _next = 0
+              for _step in range(_rng.randint(1, 30)):
+                  if _model and _rng.random() < 0.45:
+                      if not _out:
+                          _expected_moves += len(_in)
+                          _out = _in[::-1]
+                          _in = []
+                      _out.pop()
+                      _want = _model.pop(0)
+                      _got = _q.dequeue()
+                      assert _got == _want, "dequeue() should return the oldest item, " + str(_want) + ", not " + str(_got)
+                  else:
+                      _q.enqueue(_next)
+                      _model.append(_next)
+                      _in.append(_next)
+                      _next += 1
+              assert _q.moves == _expected_moves, "moves should count each item carried from inbox to outbox, " + str(_expected_moves) + " here, not " + str(_q.moves)
+              assert _q.moves <= _next, "No item should be carried more than once, but " + str(_next) + " items took " + str(_q.moves) + " moves"
+          assert output.strip() == "0 1\n[2, 3, 4, 5] 6", "The program should print 0 1 and then [2, 3, 4, 5] 6"
+        wrong:
+          - |
+            class TwoStackQueue:
+                # A queue built from two lists used as stacks. New items go on inbox; items leave from
+                # outbox. moves counts the items carried from inbox to outbox.
+                def __init__(self):
+                    self.inbox = []
+                    self.outbox = []
+                    self.moves = 0
+
+                def enqueue(self, x):
+                    self.inbox.append(x)
+
+                def dequeue(self):
+                    # Return and remove the oldest item. The queue is never empty when this is called.
+                    if len(self.outbox) == 0:
+                        self.outbox.append(self.inbox.pop())
+                        self.moves += 1
+                    return self.outbox.pop()
+
+
+            q = TwoStackQueue()
+            for i in range(5):
+                q.enqueue(i)
+            print(q.dequeue(), q.dequeue())
+            q.enqueue(5)
+            print([q.dequeue() for _ in range(4)], q.moves)
+          - |
+            class TwoStackQueue:
+                # A queue built from two lists used as stacks. New items go on inbox; items leave from
+                # outbox. moves counts the items carried from inbox to outbox.
+                def __init__(self):
+                    self.inbox = []
+                    self.outbox = []
+                    self.moves = 0
+
+                def enqueue(self, x):
+                    self.inbox.append(x)
+
+                def dequeue(self):
+                    # Return and remove the oldest item. The queue is never empty when this is called.
+                    while len(self.inbox) > 0:
+                        self.outbox.append(self.inbox.pop())
+                        self.moves += 1
+                    return self.outbox.pop()
+
+
+            q = TwoStackQueue()
+            for i in range(5):
+                q.enqueue(i)
+            print(q.dequeue(), q.dequeue())
+            q.enqueue(5)
+            print([q.dequeue() for _ in range(4)], q.moves)
+          - |
+            class TwoStackQueue:
+                # A queue built from two lists used as stacks. New items go on inbox; items leave from
+                # outbox. moves counts the items carried from inbox to outbox.
+                def __init__(self):
+                    self.inbox = []
+                    self.outbox = []
+                    self.moves = 0
+
+                def enqueue(self, x):
+                    self.inbox.append(x)
+
+                def dequeue(self):
+                    # Return and remove the oldest item. The queue is never empty when this is called.
+                    if len(self.outbox) == 0:
+                        while len(self.inbox) > 0:
+                            self.outbox.append(self.inbox.pop(0))
+                            self.moves += 1
+                    return self.outbox.pop()
+
+
+            q = TwoStackQueue()
+            for i in range(5):
+                q.enqueue(i)
+            print(q.dequeue(), q.dequeue())
+            q.enqueue(5)
+            print([q.dequeue() for _ in range(4)], q.moves)
+        explanation: |
+          Popping the inbox item by item and pushing onto the outbox reverses the inbox, so the oldest item ends on top. Carrying only when the outbox is empty keeps the outbox's items, which are older than anything in the inbox, in front. Carrying one item at a time leaves the order wrong; carrying even when the outbox has items buries older items under newer ones; and taking from the front of the inbox reverses the order twice. Each item is carried at most once, so `moves` never exceeds the number of items enqueued.
+    - question:
+        id: write-flips
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A binary counter starts at 0 and is increased by 1, `n` times. Write `flips(n)`, the total number of bits flipped, for `n` up to about $10^{18}$, without simulating every increase.
+        starter: |
+          def flips(n):
+              # A binary counter starts at 0 and is increased by 1, n times. Each increase turns the
+              # trailing 1s to 0 and the next 0 to 1. Return the total number of bits flipped, for n
+              # up to about 10 ** 18, without simulating every increase.
+              return n
+
+
+          print(flips(1), flips(8), flips(100))
+        solution: |
+          def flips(n):
+              # A binary counter starts at 0 and is increased by 1, n times. Each increase turns the
+              # trailing 1s to 0 and the next 0 to 1. Return the total number of bits flipped, for n
+              # up to about 10 ** 18, without simulating every increase.
+              total = 0
+              while n > 0:
+                  total += n
+                  n = n // 2
+              return total
+
+
+          print(flips(1), flips(8), flips(100))
+        tests: |
+          def _simulate(_n):
+              _bits = []
+              _total = 0
+              for _ in range(_n):
+                  _i = 0
+                  while _i < len(_bits) and _bits[_i] == 1:
+                      _bits[_i] = 0
+                      _total += 1
+                      _i += 1
+                  if _i == len(_bits):
+                      _bits.append(1)
+                  else:
+                      _bits[_i] = 1
+                  _total += 1
+              return _total
+
+
+          for _n in list(range(0, 70)) + [100, 1000, 1023, 1024]:
+              _want = _simulate(_n)
+              _got = flips(_n)
+              assert _got == _want, "flips(" + str(_n) + ") should be " + str(_want) + ", not " + str(_got)
+          for _n, _want in [(10 ** 12, 1999999999987), (10 ** 18, 1999999999999999976)]:
+              _got = flips(_n)
+              assert _got == _want, "flips(" + str(_n) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "1 15 197", "The program should print 1 15 197"
+        wrong:
+          - |
+            def flips(n):
+                # A binary counter starts at 0 and is increased by 1, n times. Each increase turns the
+                # trailing 1s to 0 and the next 0 to 1. Return the total number of bits flipped, for n
+                # up to about 10 ** 18, without simulating every increase.
+                return 2 * n
+
+
+            print(flips(1), flips(8), flips(100))
+          - |
+            def flips(n):
+                # A binary counter starts at 0 and is increased by 1, n times. Each increase turns the
+                # trailing 1s to 0 and the next 0 to 1. Return the total number of bits flipped, for n
+                # up to about 10 ** 18, without simulating every increase.
+                total = 0
+                n = n // 2
+                while n > 0:
+                    total += n
+                    n = n // 2
+                return total
+
+
+            print(flips(1), flips(8), flips(100))
+          - |
+            def flips(n):
+                # A binary counter starts at 0 and is increased by 1, n times. Each increase turns the
+                # trailing 1s to 0 and the next 0 to 1. Return the total number of bits flipped, for n
+                # up to about 10 ** 18, without simulating every increase.
+                total = 0
+                for value in range(n + 1):
+                    total += bin(value).count("1")
+                return total
+
+
+            print(flips(1), flips(8), flips(100))
+        explanation: |
+          Bit $i$ flips once every $2^i$ increases, so $\lfloor n/2^i \rfloor$ times in all, and the total is $n + \lfloor n/2 \rfloor + \lfloor n/4 \rfloor + \cdots$, which halving `n` until it reaches 0 adds up in about 60 steps. $2n$ is only an upper bound; starting at $\lfloor n/2 \rfloor$ leaves out the last bit's flips; and adding up the 1s in every value counts bits that are set, not bits that change.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          A binary counter is increased from 0 to 1,000, one at a time. How many bit flips are made in all?
+        answer: "1994"
+        explanation: |
+          Bit $i$ flips $\lfloor 1000/2^i \rfloor$ times: $1000 + 500 + 250 + 125 + 62 + 31 + 15 + 7 + 3 + 1 = 1{,}994$. That is $2 \times 1{,}000$ minus 6, the number of 1s in 1,000 written in binary, 1111101000.
+    - question:
+        id: work-stutter
+        type: choice
+        system: s2
+        prompt: |
+          A game appends each frame's events to a Python list that is never cleared during a level. The game runs smoothly, but every so often one frame stutters, and the stutters grow further apart and longer as the level goes on. What is the most likely cause, and a fix?
+        options:
+          - "The list's occasional move to a bigger block copies every event at once; preallocating room or keeping only recent events removes the long copies."
+          - "Appending to a list costs more each time; using a set would make every append the same."
+          - "The stutters are random noise from the operating system and cannot be fixed."
+          - "Appends are quadratic; sorting the list each frame would help."
+        answer: 0
+        explanation: |
+          Appends are constant amortised, so the total cost is fine, but each move to a larger block copies the whole list in one frame. The moves come at sizes doubling or growing by a fixed fraction, so they get rarer and longer, exactly as observed. Amortised bounds say nothing about a single frame's deadline.
+  connections:
+    - text: |
+        1,994 flips. The last bit flips all 1,000 times, the next 500 times, the next 250, and so on, so the total is just under twice the number of increases, although a single increase, such as 511 to 512, can flip ten bits at once. The few expensive increases are paid for by the many cheap ones.
+
+        Amortised analysis guarantees a total without any chance involved. [[s3.randomised-algorithms]] takes the other route: let the algorithm itself flip coins, and bound its expected cost over its own random choices, which can be guaranteed for every input. Quicksort with a random pivot and hash functions chosen at random are the classic cases.
