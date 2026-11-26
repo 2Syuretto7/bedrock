@@ -7701,7 +7701,7 @@ function FeeStrategy(props: Props) {
         </text>
         {FS_PLANS.map(([k, fn], i) => (
           <g key={k}>
-            <rect x={8} y={26 + i * 28} width={196} height={22} rx={3} className={k === plan ? "fig-accent" : "fig-fill"} />
+            <rect x={8} y={26 + i * 28} width={214} height={22} rx={3} className={k === plan ? "fig-accent" : "fig-fill"} />
             <text x={14} y={41 + i * 28} className="fig-small" style={{ fill: k === plan ? "var(--bg)" : "var(--text)" }}>
               {`"${k}": ${fn}`}
             </text>
@@ -7925,17 +7925,16 @@ function DecisionMatrix(props: Props) {
       for (const to of [weights[c] - d, weights[c] + d]) {
         if (flip || to < 0 || to > 5) continue;
         const w = weights.map((v, i) => (i === c ? to : v));
-        if (winnerOf(w) !== winner) flip = { c, to };
+        const next = winnerOf(w);
+        if (next !== -1 && next !== winner) flip = { c, to };
       }
     }
   }
   const order = DM_OPTIONS.map((_, i) => i).sort((a, b) => totals[b] - totals[a]);
+  const tied = order.filter((i) => totals[i] === totals[order[0]]).map((i) => DM_OPTIONS[i][0]);
   const lead =
     winner === -1
-      ? `With these weights, ${order
-          .filter((i) => totals[i] === totals[order[0]])
-          .map((i) => DM_OPTIONS[i][0])
-          .join(" and ")} tie at ${totals[order[0]]}.`
+      ? `With these weights, ${tied.slice(0, -1).join(", ")} and ${tied[tied.length - 1]} tie at ${totals[order[0]]}.`
       : `With these weights, ${DM_OPTIONS[winner][0]} wins with ${totals[winner]}, ahead of ${DM_OPTIONS[order[1]][0]} at ${totals[order[1]]} and ${DM_OPTIONS[order[2]][0]} at ${totals[order[2]]}.`;
   const sens = flip
     ? winner === -1
@@ -7956,9 +7955,12 @@ function DecisionMatrix(props: Props) {
         </>
       }
     >
-      <svg viewBox="0 0 460 172" role="img" aria-label={winner === -1 ? "The options tie" : `${DM_OPTIONS[winner][0]} scores highest, ${totals[winner]}`}>
-        <text x={8} y={16} className="fig-small">
-          score 1 to 5, higher is better
+      <svg viewBox="0 0 460 184" role="img" aria-label={winner === -1 ? "The options tie" : `${DM_OPTIONS[winner][0]} scores highest, ${totals[winner]}`}>
+        <text x={8} y={34} className="fig-small">
+          option
+        </text>
+        <text x={8} y={176} className="fig-small">
+          each score runs from 1 to 5, and higher is better
         </text>
         {DM_CRITERIA.map(([key], c) => (
           <text key={key} x={colX[c]} y={16} textAnchor="middle" className="fig-small">
