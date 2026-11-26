@@ -4077,6 +4077,103 @@ function VariableBars(props: Props) {
   );
 }
 
+type Family = "binomial" | "geometric" | "poisson";
+const FAMILY_ORDER: Family[] = ["binomial", "geometric", "poisson"];
+const FAMILY_NAMES: Record<Family, string> = { binomial: "binomial", geometric: "geometric", poisson: "Poisson" };
+
+/** The chances of a named distribution, from its smallest value up to where almost no probability is left. */
+function familyChances(family: Family, n: number, p: number, rate: number): { start: number; chances: number[] } {
+  if (family === "binomial") {
+    const chances = [(1 - p) ** n];
+    for (let k = 0; k < n; k++) chances.push((chances[k] * (n - k) * p) / ((k + 1) * (1 - p)));
+    return { start: 0, chances };
+  }
+  if (family === "geometric") {
+    const chances = [p];
+    while (chances.length < 30 && (1 - p) ** chances.length > 0.005) chances.push(chances[chances.length - 1] * (1 - p));
+    return { start: 1, chances };
+  }
+  const chances = [Math.exp(-rate)];
+  const last = Math.min(30, Math.ceil(rate + 4 * Math.sqrt(rate) + 3));
+  for (let k = 0; k < last; k++) chances.push((chances[k] * rate) / (k + 1));
+  return { start: 0, chances };
+}
+
+/** The binomial, geometric and Poisson distributions, with their parameters on controls, and their means and spreads marked. */
+function DistributionBars(props: Props) {
+  const [family, setFamily] = useState<Family>(props.family === "geometric" || props.family === "poisson" ? props.family : "binomial");
+  const [n, setN] = useState(clamp(Math.round(num(props.n, 10)), 1, 40));
+  const [p, setP] = useState(clamp(Math.round(num(props.p, 0.3) * 20) / 20, 0.05, 0.95));
+  const [rate, setRate] = useState(clamp(Math.round(num(props.rate, 2) * 2) / 2, 0.5, 15));
+  const { start, chances } = familyChances(family, n, p, rate);
+  const mean = family === "binomial" ? n * p : family === "geometric" ? 1 / p : rate;
+  const variance = family === "binomial" ? n * p * (1 - p) : family === "geometric" ? (1 - p) / (p * p) : rate;
+  const sd = Math.sqrt(variance);
+  const tallest = Math.max(...chances);
+  const mode = start + chances.indexOf(tallest);
+  const count = chances.length;
+  const step = 350 / Math.max(count, 1);
+  const x = (value: number) => 45 + (value - start + 0.5) * step;
+  const label = count <= 16 ? 1 : 5;
+  const story =
+    family === "binomial"
+      ? `the number of successes in ${n} independent ${n === 1 ? "trial" : "trials"}, each a success with chance ${dp(p, 2)}`
+      : family === "geometric"
+        ? `the number of independent trials up to and including the first success, each a success with chance ${dp(p, 2)}`
+        : `the number of rare events in a stretch of time in which ${dp(rate, 1)} happen on average`;
+  const formula = family === "binomial" ? `np = ${dp(mean, 2)}` : family === "geometric" ? `1/p = ${dp(mean, 2)}` : `λ = ${dp(mean, 2)}`;
+  const shown = family === "geometric" ? ` The bars stop at ${start + count - 1}; later values are possible but together have chance ${dp((1 - p) ** count, 3)}.` : "";
+  const nextFamily = FAMILY_ORDER[(FAMILY_ORDER.indexOf(family) + 1) % FAMILY_ORDER.length];
+  const edge = (value: number) => clamp(x(value), 30, 410);
+  return (
+    <Frame
+      title="Three distributions that keep turning up"
+      summary={`The ${FAMILY_NAMES[family]} distribution: ${story}. Its mean is ${formula} and its standard deviation is about ${dp(sd, 2)}. The most likely value is ${mode}, with chance ${dp(tallest, 3)}.${shown}`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setFamily(nextFamily)}>
+            {`Show the ${FAMILY_NAMES[nextFamily]} distribution`}
+          </button>
+          {family === "binomial" ? <Stepper label="trials" value={n} onChange={setN} min={1} max={40} /> : null}
+          {family === "poisson" ? (
+            <Slider label="average count" value={rate} onChange={setRate} min={0.5} max={15} step={0.5} text={dp(rate, 1)} />
+          ) : (
+            <Slider label="chance of success" value={p} onChange={(v) => setP(Math.round(v * 20) / 20)} min={0.05} max={0.95} step={0.05} text={dp(p, 2)} />
+          )}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`Bars for the ${FAMILY_NAMES[family]} distribution, mean ${dp(mean, 2)}`}>
+        <line x1="30" y1="200" x2="410" y2="200" className="fig-axis" />
+        {chances.map((chance, i) => {
+          const tall = (chance / tallest) * 140;
+          const value = start + i;
+          return (
+            <g key={value}>
+              <rect x={x(value) - step * 0.36} y={200 - tall} width={step * 0.72} height={tall} className="fig-accent" />
+              {value % label === 0 || label === 1 ? (
+                <text x={x(value)} y="216" textAnchor="middle" className="fig-small">
+                  {value}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+        <path d={`M ${edge(mean)} 222 l -7 12 l 14 0 z`} className="fig-accent" />
+        <text x={clamp(edge(mean), 60, 380)} y="252" textAnchor="middle" className="fig-small">
+          {`mean ${dp(mean, 2)}`}
+        </text>
+        <line x1={edge(mean - sd)} y1="44" x2={edge(mean + sd)} y2="44" className="fig-accent-line" />
+        <line x1={edge(mean - sd)} y1="38" x2={edge(mean - sd)} y2="50" className="fig-accent-line" />
+        <line x1={edge(mean + sd)} y1="38" x2={edge(mean + sd)} y2="50" className="fig-accent-line" />
+        <text x="30" y="30" className="fig-small">
+          {`chance of each value, tallest ${dp(tallest, 3)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5371,6 +5468,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "dice-grid": DiceGrid,
   "bayes-square": BayesSquare,
   "variable-bars": VariableBars,
+  "distribution-bars": DistributionBars,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
