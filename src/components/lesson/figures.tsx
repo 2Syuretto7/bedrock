@@ -6048,6 +6048,78 @@ function JoinMatch(props: Props) {
   );
 }
 
+const GB_ORDERS: [number, string, number][] = [
+  [1, "KOR", 250],
+  [2, "IND", 900],
+  [3, "KOR", 480],
+  [4, "HSR", 150],
+  [5, "KOR", 1200],
+  [6, "IND", 300],
+  [7, "KOR", 650],
+  [8, "HSR", 410],
+  [9, "IND", 720],
+];
+type GbAggregate = "count" | "sum" | "avg" | "max";
+const GB_AGGREGATES: GbAggregate[] = ["count", "sum", "avg", "max"];
+
+/** Orders split into groups by store, each group folded into one row by an aggregate, then filtered by having. */
+function GroupBuckets(props: Props) {
+  const [agg, setAgg] = useState<GbAggregate>(GB_AGGREGATES.includes(props.aggregate as GbAggregate) ? (props.aggregate as GbAggregate) : "count");
+  const [least, setLeast] = useState(clamp(Math.round(num(props.least, 1)), 1, 5));
+  const stores = [...new Set(GB_ORDERS.map((o) => o[1]))].sort();
+  const sorted = [...GB_ORDERS].sort((a, b) => a[1].localeCompare(b[1]) || a[0] - b[0]);
+  const fold = (amounts: number[]) =>
+    agg === "count" ? amounts.length : agg === "sum" ? amounts.reduce((s, a) => s + a, 0) : agg === "avg" ? amounts.reduce((s, a) => s + a, 0) / amounts.length : Math.max(...amounts);
+  const groups = stores.map((s) => {
+    const amounts = GB_ORDERS.filter((o) => o[1] === s).map((o) => o[2]);
+    return { store: s, size: amounts.length, value: fold(amounts) };
+  });
+  const kept = groups.filter((g) => g.size >= least);
+  const value = (v: number) => (agg === "avg" ? dp(v, 2) : group(v));
+  const expr = agg === "count" ? "count(*)" : `${agg}(amount)`;
+  const summary = `select store, ${expr} from orders group by store having count(*) >= ${least}. The ${GB_ORDERS.length} rows fall into ${groups.length} groups, one per store: ${groups.map((g) => `${g.store} with ${plural(g.size, "row")}`).join(", ")}. Each group becomes one row: ${groups.map((g) => `${g.store} ${value(g.value)}`).join(", ")}. ${
+    kept.length === groups.length ? `Every group has at least ${least} rows, so having keeps them all.` : `Having drops ${groups.filter((g) => g.size < least).map((g) => g.store).join(" and ") || "none"}, with fewer than ${least} rows.`
+  } Result: ${kept.length === 0 ? "no rows" : kept.map((g) => `${g.store} ${value(g.value)}`).join("; ")}.`;
+  const isKept = (s: string) => kept.some((g) => g.store === s);
+  return (
+    <Frame
+      title="Grouping rows and folding each group"
+      summary={summary}
+      controls={
+        <>
+          {GB_AGGREGATES.map((a) => (
+            <button key={a} type="button" className="btn btn-secondary btn-small" aria-pressed={agg === a} onClick={() => setAgg(a)}>
+              {a === "count" ? "count(*)" : `${a}(amount)`}
+            </button>
+          ))}
+          <Stepper label="having count(*) at least" value={least} onChange={setLeast} min={1} max={5} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 232" role="img" aria-label={`Nine orders grouped by store into ${groups.length} groups, ${kept.length} kept by having`}>
+        <SqlTable
+          x={8}
+          y={22}
+          widths={[30, 46, 60]}
+          head={["id", "store", "amount"]}
+          rows={sorted.map((o) => [o[0], o[1], group(o[2])])}
+          title="orders, grouped by store"
+          mark={(r) => (isKept(sorted[r][1]) ? (stores.indexOf(sorted[r][1]) % 2 === 0 ? "fill" : undefined) : "ghost")}
+        />
+        <SqlTable
+          x={250}
+          y={22}
+          widths={[50, 100]}
+          head={["store", expr]}
+          rows={groups.map((g) => [g.store, value(g.value)])}
+          title="one row per group"
+          mark={(r) => (isKept(groups[r].store) ? "accent" : "ghost")}
+        />
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -7366,6 +7438,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "algebra-ops": AlgebraOps,
   "query-order": QueryOrder,
   "join-match": JoinMatch,
+  "group-buckets": GroupBuckets,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

@@ -1,0 +1,586 @@
+concept: q0.grouping-and-aggregation
+minutes: 85
+claim: You can summarise rows with count, sum, avg, min and max, split them into groups with GROUP BY so each group becomes one row, filter groups with HAVING and rows with WHERE at the right stage, avoid integer division and averages of averages, count conditions by summing comparisons, and correct the double counting that joins cause with count distinct.
+recalls: [q0.joins]
+uses: [q0.selecting-and-filtering, f5.summaries-mean-median-and-percentiles, f2.equivalence-relations-and-partial-orders]
+leads: [q0.subqueries-and-common-table-expressions, q3.aggregation, q8.oltp-and-olap]
+starter: |
+  # Scratch space. Group and aggregate.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.executescript("""
+      create table orders (id integer primary key, store text, amount integer);
+      insert into orders values (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150);
+  """)
+  print(db.execute("select store, count(*), sum(amount), avg(amount) from orders group by store").fetchall())
+parts:
+  recall:
+    - text: |
+        [[q0.joins]] combined tables row by row, and ended with a count that came out twenty times too big. Most questions a business asks are not about single rows at all, but about totals: orders per store, revenue per day, the average basket. This lesson folds many rows into one, for the whole table or for each group of rows. Three quick pulls first.
+  puzzle:
+    - text: |
+        A chain has two stores. Store A took 2 orders this morning, averaging ₹1,000. Store B took 8 orders, averaging ₹500. A dashboard shows each store's average and, below them, "average order value" as the average of the two averages, ₹750.
+
+        **What is the true average value of the morning's 10 orders, in rupees?**
+  intuition:
+    - text: |
+        At the end of a day a shopkeeper does not reread every bill. The bills are sorted into piles, one per counter, and each pile is reduced to a few numbers: how many bills, how much money, the largest. **Aggregation** is that reduction: a function such as `count`, `sum`, `avg`, `min` or `max` takes many rows and gives one value. **Grouping** is the sorting into piles first, so that each pile is reduced separately and becomes one row of the result.
+
+        The figure groups nine orders by store. Choose an aggregate, then raise the least number of rows a group needs to survive.
+    - figure: group-buckets
+      props: { aggregate: sum, least: 1 }
+    - text: |
+        Grouping by store makes three piles, and each becomes exactly one row, whatever the aggregate. The `having` filter works on the piles, after they are formed: requiring at least 3 rows removes HSR's whole group, not some of its orders. Rows are filtered before grouping by `where`; groups are filtered after it by `having`.
+  derivation:
+    - text: |
+        **Aggregates over a whole table.** `select count(*), sum(amount), avg(amount), max(amount) from orders` returns one row, whatever the number of orders. `count(*)` counts rows; `count(amount)` counts the rows where amount is not missing; `count(distinct store)` counts different values. The averages are the means of [[f5.summaries-mean-median-and-percentiles]], with the same weakness for skewed data; SQLite has no median function, a reminder that the mean is the easy summary, not always the right one.
+
+        **Group by.** `select store, count(*), sum(amount) from orders group by store` splits the rows into groups with equal store and returns one row per group. Rows agreeing on the grouping columns are the classes of an equivalence relation, as in [[f2.equivalence-relations-and-partial-orders]], so every row lands in exactly one group. Grouping by several columns, `group by store, day`, makes one group per combination that occurs.
+    - question:
+        id: derivation-groups
+        type: numeric
+        system: s2
+        prompt: |
+          A table holds 40 orders placed by 12 different customers. How many rows does `select customer, count(*) from orders group by customer` return?
+        answer: "12"
+        explanation: |
+          One row per group, and there is one group for each customer who appears: 12. The counts in those rows add up to 40.
+    - text: |
+        **What may be selected.** After grouping, each result row stands for a whole group, so the select list may contain only the grouping columns and aggregates. Asking for `amount` in a query grouped by store has no single answer, since the store's orders have many amounts. Most databases reject such a query. SQLite accepts it and takes the value from some row of the group, which looks like an answer and is not one: keep every selected column either grouped or aggregated.
+
+        **Where and having.** The full order of evaluation extends the one from [[q0.selecting-and-filtering]]: `from`, `where`, `group by`, `having`, `select`, `order by`, `limit`. `where` filters rows before they are grouped, so it cannot use aggregates; `having` filters whole groups after aggregation. "Stores with at least three delivered orders" needs both: `where status = 'delivered'` keeps the right rows, and `having count(*) >= 3` keeps the right groups. Putting the status test in `having` would not work, since by then there is no single status per group. A useful habit when writing any grouped query is to say aloud what one row of the result stands for: one store, one day, one customer, or one store on one day.
+    - question:
+        id: derivation-having
+        type: choice
+        system: s2
+        prompt: |
+          Which query lists the stores whose cancelled orders number more than 5?
+        options:
+          - "select store from orders where status = 'cancelled' group by store having count(*) > 5"
+          - "select store from orders where count(*) > 5 group by store having status = 'cancelled'"
+          - "select store from orders group by store having count(*) > 5"
+          - "select store, count(*) > 5 from orders where status = 'cancelled'"
+        answer: 0
+        explanation: |
+          Rows are filtered by status before grouping, and groups by their count after. An aggregate cannot appear in `where`, which sees one row at a time; the third query counts all orders, not cancelled ones; the last has no grouping, so it returns one row for the whole table.
+    - text: |
+        **Traps in averages.** In SQLite, `sum(amount) / count(*)` divides two integers and throws away the fraction, so ₹1,930 over 3 orders becomes 643, not 643.33; `avg` always gives a decimal. A worse trap is the average of averages. Store A's 2 orders average ₹1,000 and Store B's 8 orders average ₹500, so the average of the two averages is ₹750, but the 10 orders total ₹6,000 and average ₹600. An average must be recomputed from the sum and the count, `sum(amount) * 1.0 / count(*)` over all the rows, never averaged again.
+
+        **Counting conditions.** A comparison in SQLite is 1 when true and 0 when false, so `sum(status = 'cancelled')` counts cancelled orders in each group, alongside `count(*)` for all of them, in a single pass. Other databases write the same thing as `sum(case when status = 'cancelled' then 1 else 0 end)`.
+
+        **Joins and double counting.** Joining a restaurant to its items and its reviews makes a row for every item and review pair, so `count(v.id)` counts each review once per item. `count(distinct v.id)` counts each review once, however often the join repeated it. That repair works for counts but not for sums, since two different reviews may carry the same number; for sums, aggregate each table separately first, which [[q0.subqueries-and-common-table-expressions]] makes easy.
+
+        **Naming and sorting groups.** An aggregate can be named with `as`, as in `sum(amount) as total`, and because `order by` runs after `select`, it can sort by that name: `order by total desc`. `min` and `max` work on text as well as numbers, and since dates stored as ISO text sort in time order, `max(placed)` gives each customer's latest order time. `group_concat(dish, ', ')` joins a group's text values into one string, handy for a report line such as "masala dosa, rava dosa, idli", though the order of the pieces is not promised.
+
+        **Empty groups.** Over no rows at all, `count(*)` is 0 but `sum` and `avg` are NULL, not zero. A store with no orders has no group, so it does not appear in a grouped result unless a left join from a stores table brings it in.
+    - question:
+        id: order-evaluation
+        type: order
+        system: s2
+        prompt: |
+          Put the clauses of a grouped query in the order the database evaluates them.
+        steps:
+          - "from"
+          - "where"
+          - "group by"
+          - "having"
+          - "select"
+          - "order by"
+        explanation: |
+          Rows are gathered and filtered, then grouped, groups are filtered, the result's columns are computed, and the result is sorted.
+  formal:
+    - text: |
+        **Aggregates.** `count(*)` counts rows; `count(x)` counts rows where x is not NULL; `count(distinct x)` counts distinct values; `sum`, `avg`, `min`, `max`. Over no rows: `count` is 0, the others NULL.
+
+        **Group by.** One result row per class of rows equal on the grouping columns. The select list may contain only grouping columns and aggregates.
+
+        **Order of evaluation.** from, where, group by, having, select, order by, limit. `where` filters rows and cannot use aggregates; `having` filters groups.
+
+        **SQLite details.** Integer divided by integer is an integer; `avg` gives a decimal; a true comparison is 1 and a false one 0, so `sum(condition)` counts.
+
+        **Averages combine by sums and counts:** $\bar{x} = \sum_g s_g / \sum_g n_g$, never the mean of the group means unless the groups are equal in size.
+  drill:
+    - text: Seconds each. One row per group, always.
+    - question:
+        id: drill-whole
+        type: numeric
+        system: s1
+        prompt: |
+          How many rows does `select count(*), max(amount) from orders` return for a table of 500 orders?
+        answer: "1"
+        explanation: Without `group by`, aggregates fold the whole table into one row.
+    - question:
+        id: drill-two-columns
+        type: numeric
+        system: s1
+        prompt: |
+          Orders come from 3 stores on 7 days, and every store had orders on every day. How many rows does `group by store, day` give?
+        answer: "21"
+        explanation: One group for each combination that occurs, $3 \times 7$.
+    - question:
+        id: drill-where-aggregate
+        type: choice
+        system: s1
+        prompt: |
+          Where can `count(*) > 3` appear?
+        options:
+          - "In having"
+          - "In where"
+          - "In from"
+          - "Anywhere in the query"
+        answer: 0
+        explanation: Aggregates exist only once groups are formed, after `where` has run.
+    - question:
+        id: drill-mean
+        type: numeric
+        system: s1
+        prompt: |
+          One group has 3 rows averaging 10; another has 1 row of 30. What is the average over all 4 rows?
+        answer: "15"
+        explanation: $(3 \times 10 + 30) / 4 = 60 / 4 = 15$, not the average of 10 and 30.
+    - question:
+        id: drill-count-distinct
+        type: numeric
+        system: s1
+        prompt: |
+          A column holds 4, 4, 7, 9, 9, 9. What is its `count(distinct x)`?
+        answer: "3"
+        explanation: The distinct values are 4, 7 and 9.
+    - question:
+        id: predict-empty
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.execute("create table t (x integer)")
+          print(db.execute("select count(*), sum(x) from t").fetchone())
+        output: "(0, None)"
+        explanation: Over no rows, `count` is 0 while `sum` is NULL, which Python shows as None.
+    - question:
+        id: predict-condition
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("create table o (status text); insert into o values ('delivered'), ('cancelled'), ('cancelled');")
+          print(db.execute("select count(*), sum(status = 'cancelled') from o").fetchone())
+        output: "(3, 2)"
+        explanation: Each comparison is 1 when true and 0 when false, so the sum counts the cancelled rows.
+  work:
+    - text: Slower now. Decide what one row of the result stands for before writing it.
+    - question:
+        id: fix-average
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The query should give each store's average order amount, to two decimal places, in order of store. The program should print `[('HSR', 280.0), ('IND', 640.0), ('KOR', 643.33)]`. It prints `[('HSR', 280), ('IND', 640), ('KOR', 643)]`. Find the fault and fix it.
+        starter: |
+          import sqlite3
+
+          query = """
+              select store, sum(amount) / count(*)
+              from orders
+              group by store
+              order by store
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text, amount integer);
+              insert into orders values
+                  (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150),
+                  (5, 'KOR', 1200), (6, 'IND', 300), (7, 'IND', 720), (8, 'HSR', 410);
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select store, round(avg(amount), 2)
+              from orders
+              group by store
+              order by store
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text, amount integer);
+              insert into orders values
+                  (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150),
+                  (5, 'KOR', 1200), (6, 'IND', 300), (7, 'IND', 720), (8, 'HSR', 410);
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(107)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table orders (id integer primary key, store text, amount integer)")
+              _rows = [(_i, _rng.choice(["KOR", "IND", "HSR"]), _rng.randint(100, 1500)) for _i in range(1, _rng.randint(2, 14))]
+              _db.executemany("insert into orders values (?, ?, ?)", _rows)
+              _want = []
+              for _s in sorted(set(_r[1] for _r in _rows)):
+                  _a = [_r[2] for _r in _rows if _r[1] == _s]
+                  _want.append((_s, round(sum(_a) / len(_a), 2)))
+              _got = _db.execute(query).fetchall()
+              assert len(_got) == len(_want) and all(_g[0] == _w[0] and abs(_g[1] - _w[1]) < 0.006 for _g, _w in zip(_got, _want)), "For the orders " + str(_rows) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('HSR', 280.0), ('IND', 640.0), ('KOR', 643.33)]", "The program should print [('HSR', 280.0), ('IND', 640.0), ('KOR', 643.33)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select store, round(avg(amount))
+                from orders
+                group by store
+                order by store
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer);
+                insert into orders values
+                    (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150),
+                    (5, 'KOR', 1200), (6, 'IND', 300), (7, 'IND', 720), (8, 'HSR', 410);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select store, round(sum(amount) / count(*), 2)
+                from orders
+                group by store
+                order by store
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer);
+                insert into orders values
+                    (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150),
+                    (5, 'KOR', 1200), (6, 'IND', 300), (7, 'IND', 720), (8, 'HSR', 410);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select store, round(avg(amount), 2)
+                from orders
+                group by store, id
+                order by store
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer);
+                insert into orders values
+                    (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150),
+                    (5, 'KOR', 1200), (6, 'IND', 300), (7, 'IND', 720), (8, 'HSR', 410);
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          Both the sum and the count are integers, so SQLite's division discards the fraction: KOR's ₹1,930 over 3 orders becomes 643. `avg` divides as decimals, and `round(…, 2)` keeps two places. Rounding to no places loses the paise again; rounding after the integer division is too late, since the fraction is already gone; and grouping by store and id makes every order its own group.
+    - question:
+        id: write-busy-stores
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `query` so that it returns `(store, number of orders, total amount)` for each store with at least 3 delivered orders, counting and totalling only delivered orders, largest total first.
+        starter: |
+          import sqlite3
+
+          query = """
+              select store, amount, status
+              from orders
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text, amount integer, status text);
+              insert into orders values
+                  (1, 'KOR', 250, 'delivered'), (2, 'IND', 900, 'delivered'), (3, 'KOR', 480, 'cancelled'),
+                  (4, 'HSR', 150, 'delivered'), (5, 'KOR', 1200, 'delivered'), (6, 'IND', 300, 'delivered'),
+                  (7, 'KOR', 650, 'delivered'), (8, 'HSR', 410, 'delivered'), (9, 'IND', 720, 'delivered'),
+                  (10, 'HSR', 990, 'cancelled'), (11, 'HSR', 330, 'cancelled');
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select store, count(*) as orders, sum(amount) as total
+              from orders
+              where status = 'delivered'
+              group by store
+              having count(*) >= 3
+              order by total desc
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text, amount integer, status text);
+              insert into orders values
+                  (1, 'KOR', 250, 'delivered'), (2, 'IND', 900, 'delivered'), (3, 'KOR', 480, 'cancelled'),
+                  (4, 'HSR', 150, 'delivered'), (5, 'KOR', 1200, 'delivered'), (6, 'IND', 300, 'delivered'),
+                  (7, 'KOR', 650, 'delivered'), (8, 'HSR', 410, 'delivered'), (9, 'IND', 720, 'delivered'),
+                  (10, 'HSR', 990, 'cancelled'), (11, 'HSR', 330, 'cancelled');
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(109)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table orders (id integer primary key, store text, amount integer, status text)")
+              _rows = [(_i, _rng.choice(["KOR", "IND", "HSR", "BTM"]), _rng.randint(1, 40) * 50 + _i, _rng.choice(["delivered", "delivered", "cancelled"])) for _i in range(1, _rng.randint(2, 20))]
+              _db.executemany("insert into orders values (?, ?, ?, ?)", _rows)
+              _want = []
+              for _s in set(_r[1] for _r in _rows):
+                  _a = [_r[2] for _r in _rows if _r[1] == _s and _r[3] == "delivered"]
+                  if len(_a) >= 3:
+                      _want.append((_s, len(_a), sum(_a)))
+              _want.sort(key=lambda _t: -_t[2])
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For the orders " + str(_rows) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('KOR', 3, 2100), ('IND', 3, 1920)]", "The program should print [('KOR', 3, 2100), ('IND', 3, 1920)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select store, count(*) as orders, sum(amount) as total
+                from orders
+                group by store
+                having count(*) >= 3
+                order by total desc
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer, status text);
+                insert into orders values
+                    (1, 'KOR', 250, 'delivered'), (2, 'IND', 900, 'delivered'), (3, 'KOR', 480, 'cancelled'),
+                    (4, 'HSR', 150, 'delivered'), (5, 'KOR', 1200, 'delivered'), (6, 'IND', 300, 'delivered'),
+                    (7, 'KOR', 650, 'delivered'), (8, 'HSR', 410, 'delivered'), (9, 'IND', 720, 'delivered'),
+                    (10, 'HSR', 990, 'cancelled'), (11, 'HSR', 330, 'cancelled');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select store, count(*) as orders, sum(amount) as total
+                from orders
+                where status = 'delivered'
+                group by store
+                having count(*) > 3
+                order by total desc
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer, status text);
+                insert into orders values
+                    (1, 'KOR', 250, 'delivered'), (2, 'IND', 900, 'delivered'), (3, 'KOR', 480, 'cancelled'),
+                    (4, 'HSR', 150, 'delivered'), (5, 'KOR', 1200, 'delivered'), (6, 'IND', 300, 'delivered'),
+                    (7, 'KOR', 650, 'delivered'), (8, 'HSR', 410, 'delivered'), (9, 'IND', 720, 'delivered'),
+                    (10, 'HSR', 990, 'cancelled'), (11, 'HSR', 330, 'cancelled');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select store, count(*) as orders, sum(amount) as total
+                from orders
+                where status = 'delivered'
+                group by store
+                having count(*) >= 3
+                order by total
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer, status text);
+                insert into orders values
+                    (1, 'KOR', 250, 'delivered'), (2, 'IND', 900, 'delivered'), (3, 'KOR', 480, 'cancelled'),
+                    (4, 'HSR', 150, 'delivered'), (5, 'KOR', 1200, 'delivered'), (6, 'IND', 300, 'delivered'),
+                    (7, 'KOR', 650, 'delivered'), (8, 'HSR', 410, 'delivered'), (9, 'IND', 720, 'delivered'),
+                    (10, 'HSR', 990, 'cancelled'), (11, 'HSR', 330, 'cancelled');
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          `where` keeps delivered orders before grouping, `having` keeps groups of at least 3, and `order by total desc` sorts the groups. Without the status filter, cancelled orders are counted and totalled; `> 3` drops stores with exactly three; and sorting without `desc` puts the smallest total first.
+    - question:
+        id: write-counts
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `query` so that it returns `(name, number of menu items, number of reviews)` for every restaurant, in order of name, including restaurants with no items or no reviews.
+        starter: |
+          import sqlite3
+
+          query = """
+              select r.name
+              from restaurants r
+              order by r.name
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table restaurants (id integer primary key, name text);
+              create table items (id integer primary key, restaurant integer, dish text);
+              create table reviews (id integer primary key, restaurant integer, stars integer);
+              insert into restaurants values (1, 'Dosa Corner'), (2, 'Biryani House'), (3, 'Chai Point');
+              insert into items values (1, 1, 'masala dosa'), (2, 1, 'rava dosa'), (3, 1, 'idli'), (4, 2, 'chicken biryani'), (5, 3, 'chai');
+              insert into reviews values (1, 1, 5), (2, 1, 4), (3, 2, 3), (4, 2, 5), (5, 2, 4);
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select r.name, count(distinct i.id), count(distinct v.id)
+              from restaurants r
+              left join items i on i.restaurant = r.id
+              left join reviews v on v.restaurant = r.id
+              group by r.id
+              order by r.name
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table restaurants (id integer primary key, name text);
+              create table items (id integer primary key, restaurant integer, dish text);
+              create table reviews (id integer primary key, restaurant integer, stars integer);
+              insert into restaurants values (1, 'Dosa Corner'), (2, 'Biryani House'), (3, 'Chai Point');
+              insert into items values (1, 1, 'masala dosa'), (2, 1, 'rava dosa'), (3, 1, 'idli'), (4, 2, 'chicken biryani'), (5, 3, 'chai');
+              insert into reviews values (1, 1, 5), (2, 1, 4), (3, 2, 3), (4, 2, 5), (5, 2, 4);
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(113)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.executescript("create table restaurants (id integer primary key, name text); create table items (id integer primary key, restaurant integer, dish text); create table reviews (id integer primary key, restaurant integer, stars integer);")
+              _rs = [(_i, _n) for _i, _n in enumerate(_rng.sample(["Dosa Corner", "Biryani House", "Chai Point", "Thali Ghar", "Momo Stop"], _rng.randint(1, 5)), 1)]
+              _items = [(_k, _rng.randint(1, 5), "dish") for _k in range(1, _rng.randint(1, 12))]
+              _revs = [(_k, _rng.randint(1, 5), _rng.randint(1, 5)) for _k in range(1, _rng.randint(1, 12))]
+              _db.executemany("insert into restaurants values (?, ?)", _rs)
+              _db.executemany("insert into items values (?, ?, ?)", _items)
+              _db.executemany("insert into reviews values (?, ?, ?)", _revs)
+              _want = sorted((_n, sum(1 for _t in _items if _t[1] == _i), sum(1 for _v in _revs if _v[1] == _i)) for _i, _n in _rs)
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For restaurants " + str(_rs) + ", items " + str(_items) + " and reviews " + str(_revs) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('Biryani House', 1, 3), ('Chai Point', 1, 0), ('Dosa Corner', 3, 2)]", "The program should print [('Biryani House', 1, 3), ('Chai Point', 1, 0), ('Dosa Corner', 3, 2)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select r.name, count(i.id), count(v.id)
+                from restaurants r
+                left join items i on i.restaurant = r.id
+                left join reviews v on v.restaurant = r.id
+                group by r.id
+                order by r.name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table restaurants (id integer primary key, name text);
+                create table items (id integer primary key, restaurant integer, dish text);
+                create table reviews (id integer primary key, restaurant integer, stars integer);
+                insert into restaurants values (1, 'Dosa Corner'), (2, 'Biryani House'), (3, 'Chai Point');
+                insert into items values (1, 1, 'masala dosa'), (2, 1, 'rava dosa'), (3, 1, 'idli'), (4, 2, 'chicken biryani'), (5, 3, 'chai');
+                insert into reviews values (1, 1, 5), (2, 1, 4), (3, 2, 3), (4, 2, 5), (5, 2, 4);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select r.name, count(distinct i.id), count(distinct v.id)
+                from restaurants r
+                join items i on i.restaurant = r.id
+                join reviews v on v.restaurant = r.id
+                group by r.id
+                order by r.name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table restaurants (id integer primary key, name text);
+                create table items (id integer primary key, restaurant integer, dish text);
+                create table reviews (id integer primary key, restaurant integer, stars integer);
+                insert into restaurants values (1, 'Dosa Corner'), (2, 'Biryani House'), (3, 'Chai Point');
+                insert into items values (1, 1, 'masala dosa'), (2, 1, 'rava dosa'), (3, 1, 'idli'), (4, 2, 'chicken biryani'), (5, 3, 'chai');
+                insert into reviews values (1, 1, 5), (2, 1, 4), (3, 2, 3), (4, 2, 5), (5, 2, 4);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select r.name, count(*), count(*)
+                from restaurants r
+                left join items i on i.restaurant = r.id
+                left join reviews v on v.restaurant = r.id
+                group by r.id
+                order by r.name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table restaurants (id integer primary key, name text);
+                create table items (id integer primary key, restaurant integer, dish text);
+                create table reviews (id integer primary key, restaurant integer, stars integer);
+                insert into restaurants values (1, 'Dosa Corner'), (2, 'Biryani House'), (3, 'Chai Point');
+                insert into items values (1, 1, 'masala dosa'), (2, 1, 'rava dosa'), (3, 1, 'idli'), (4, 2, 'chicken biryani'), (5, 3, 'chai');
+                insert into reviews values (1, 1, 5), (2, 1, 4), (3, 2, 3), (4, 2, 5), (5, 2, 4);
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          Left joins keep restaurants with nothing on one side, and the two joins pair every item with every review, so plain counts multiply: Dosa Corner's 3 items and 2 reviews become 6 and 6. `count(distinct …)` counts each item and review once, and ignores the NULLs of the padded rows, giving 0 where there are none. Inner joins drop Chai Point, which has no reviews; `count(*)` counts the multiplied rows.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Store A's 2 orders average ₹1,000 and Store B's 8 orders average ₹500. What is the average of all 10 orders, in rupees?
+        answer: "600"
+        explanation: |
+          The totals are ₹2,000 and ₹4,000, so ₹6,000 over 10 orders is ₹600. The average of the two averages, ₹750, gives Store A's two orders as much weight as Store B's eight.
+    - question:
+        id: work-missing-days
+        type: choice
+        system: s2
+        prompt: |
+          A daily sales chart is drawn from `select day, sum(amount) from orders group by day`. On a day when the shop was shut, the chart joins the previous and next days with a straight line instead of dropping to zero. Why, and what is the fix?
+        options:
+          - "A day with no orders has no rows and so no group; left joining a table of all days to the orders, and turning a missing sum into 0, gives every day a row."
+          - "sum returns NULL on holidays; use avg instead."
+          - "group by skips days whose total is small; use having to keep them."
+          - "The chart library is wrong; the query is fine."
+        answer: 0
+        explanation: |
+          Grouping can only produce groups for values that occur. To show days with no orders, the days must come from somewhere else, such as a calendar table, joined with a left join so that each day appears, and then its NULL total replaced by 0.
+  connections:
+    - text: |
+        ₹600, not ₹750. Averages must be rebuilt from sums and counts, because an average throws away the size of the group it came from. Dashboards that average averages, across stores, days or regions, are wrong in exactly this way more often than anyone likes to admit.
+
+        The double count from [[q0.joins]] is now repaired for counts. For sums, the cure is to aggregate each table on its own and join the small results, which needs a query inside a query, the subject of [[q0.subqueries-and-common-table-expressions]]. How a database computes groups over millions of rows, by sorting or by hashing, is [[q3.aggregation]]; and tables designed for exactly these summaries are the theme of [[q8.oltp-and-olap]].

@@ -103,6 +103,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "algebra-ops": z.strictObject({ op: z.enum(["select", "project", "product", "join", "union", "difference"]).optional() }),
   "query-order": z.strictObject({ step: z.number().optional() }),
   "join-match": z.strictObject({ kind: z.enum(["inner", "left", "right", "full"]).optional() }),
+  "group-buckets": z.strictObject({ aggregate: z.enum(["count", "sum", "avg", "max"]).optional(), least: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
