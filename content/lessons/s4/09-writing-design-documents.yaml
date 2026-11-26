@@ -1,0 +1,563 @@
+concept: s4.writing-design-documents
+minutes: 80
+claim: You can decide when a change needs a design document, write one that leads with the problem, states goals and non-goals, gives requirements as numbers and checks them with back-of-the-envelope estimates, compares real alternatives with a weighted decision matrix and tests how easily its answer changes, invites review on the questions that matter, and records each decision so that people who arrive later know why the system is the way it is.
+recalls: [s4.designing-apis]
+uses: [s4.design-patterns-that-earn-their-place, s4.refactoring, f0.estimation-and-back-of-the-envelope-reasoning, f0.units-prefixes-and-orders-of-magnitude, f5.summaries-mean-median-and-percentiles]
+leads: [s5.version-control-as-a-content-addressed-store, s5.code-review, d10.requirements-and-estimates, d10.reviewing-a-design]
+starter: |
+  # Scratch space. A back-of-the-envelope estimate, checked in Python.
+  users = 10_000_000
+  photos_each = 20
+  mb_each = 2
+
+  total_mb = users * photos_each * mb_each
+  print(total_mb / 1_000_000, "TB")
+  print(10_000_000 / (24 * 60 * 60), "requests a second on average for 1 crore a day")
+parts:
+  recall:
+    - text: |
+        [[s4.designing-apis]] ended with decisions that are cheap to change on paper and expensive once callers exist: offset or cursor, one field name or another, which errors may be retried. This cluster's other lessons were full of the same kind of choice: where to draw module boundaries, whether a pattern earns its place, which dependencies to inject. This lesson is about making such choices deliberately, in writing, before the code exists. Three quick pulls first.
+  puzzle:
+    - text: |
+        A team is building a photo-sharing app for a college festival network. The first draft of their plan says: "Store every photo in our existing database server, which has a 4 TB disk."
+
+        They expect 1 crore users in the first year, and each user to upload about 20 photos averaging 2 MB.
+
+        **How many terabytes would the photos take in the first year?**
+  intuition:
+    - text: |
+        Before a house is built in Pune, someone draws its naksha, the plan. The family argues over it at the dining table: the kitchen is too far from the dining room, the stairs block the morning light, the second bedroom needs a window. The municipal corporation then checks it against the rules. All of this happens on paper, because moving a wall on paper costs an eraser, and moving it after the concrete has set costs a demolition.
+
+        A **design document** is the naksha of a piece of software: a short written plan, shared before building, so that the expensive mistakes are made on paper. Its most useful parts are often the ones that compare ways of doing the job. The figure shows one common tool for that comparison, applied to the festival app: where should the photos live?
+    - figure: decision-matrix
+      props: { cost: 3, effort: 2, scale: 5 }
+    - text: |
+        Each option is scored from 1 to 5 on each criterion, and each criterion gets a weight for how much it matters. The weighted totals rank the options. The matrix does not make the decision; it makes the reasoning visible, so that a reviewer can disagree with something specific, such as a score or a weight, rather than with a conclusion. Change the weights and see how far each one must move before the winner changes. If a small change flips the answer, that weight is what the team should argue about; if nothing reasonable flips it, the decision is robust.
+  derivation:
+    - text: |
+        **Why write it down.** Three reasons, in rising order of importance. A document is a record: a year later, someone asking why photos live in object storage, possibly you, can read the reasons instead of guessing them. A document can be reviewed: colleagues who know other parts of the system find the flaws you cannot see, while fixing them costs an eraser. And above all, writing is thinking. A plan that feels complete in your head shows its gaps the moment you try to write the sentence that explains it: "and then the thumbnails are made by..." by what, and when, and what if it fails?
+
+        **When it is worth it.** Not every change needs a document. Write one when a decision is hard to reverse: an API that others will call, a data format that will be stored for years, a choice of database. Write one when the work crosses team boundaries or will take more than a couple of weeks. For a small change that is easy to undo, a pull request with a clear description is enough, and a design document would be the kind of ceremony that [[s4.design-patterns-that-earn-their-place]] warned against.
+    - question:
+        id: derivation-when
+        type: choice
+        system: s2
+        prompt: |
+          Which of these changes most needs a design document before work starts?
+        options:
+          - "Choosing the format in which every order will be stored for the next five years"
+          - "Renaming a local variable in the billing module"
+          - "Fixing a typo in an error message"
+          - "Extracting a repeated block into a function, with tests passing throughout"
+        answer: 0
+        explanation: |
+          A stored format is hard to reverse, because every record written in it must be read or migrated later. The other three are small, local and easy to undo; the last is exactly the safe, stepwise [[s4.refactoring]] that needs no plan on paper.
+    - text: |
+        **What goes in it.** Design documents vary between teams, but most contain the same parts, in roughly this order, and fit in a few pages:
+
+        - **Summary**: one paragraph saying what you propose and why. Many reviewers will read only this, so it must stand alone.
+        - **Context**: the problem, who has it, and the numbers that size it.
+        - **Goals and non-goals**: what the design must achieve, and what it deliberately will not. A good non-goal is something a reasonable reader might expect, such as "no video in the first version", which saves a week of argument later.
+        - **Proposed design**: enough detail to build and to review: the data, the interfaces, how requests flow, and what happens when parts fail.
+        - **Alternatives considered**: the real options, including doing nothing, each with the reason it lost.
+        - **Risks and open questions**: what you are unsure of, said plainly.
+        - **Rollout and testing**: how the change reaches users in small reversible steps, and how you will know it works.
+    - question:
+        id: order-sections
+        type: order
+        system: s2
+        prompt: |
+          Put these parts of a design document in the usual order.
+        steps:
+          - "Summary"
+          - "Context"
+          - "Goals and non-goals"
+          - "Proposed design"
+          - "Alternatives considered"
+          - "Rollout and testing"
+        explanation: |
+          The reader first learns what is proposed, then why it is needed and what it must achieve, then how; alternatives make sense only once the proposal is known, and the rollout plan comes last because it depends on everything before it.
+    - text: |
+        **Requirements are numbers.** "The app must be fast and handle lots of users" cannot be checked; "95% of uploads finish within 2 seconds at 350 uploads a second" can. Percentiles, from [[f5.summaries-mean-median-and-percentiles]], are the right language for speed, because an average hides the slow requests that users remember.
+
+        The numbers come from back-of-the-envelope estimates, the habit of [[f0.estimation-and-back-of-the-envelope-reasoning]]. A day has $24 \times 60 \times 60 = 86{,}400$ seconds, so 1 crore requests a day is about 116 a second on average. Traffic is never even: evenings, festivals and sales bring peaks several times the average, so a design should be sized for the peak. Storage is users times items times size, kept in consistent units, where a gigabyte is $10^9$ bytes and a terabyte $10^{12}$, as [[f0.units-prefixes-and-orders-of-magnitude]] set out. Estimates need only be right to within a factor of two or so. Their job is to tell you whether a design is in the right universe, and most bad designs fail that test by a factor of a hundred.
+    - question:
+        id: derivation-per-second
+        type: numeric
+        system: s2
+        prompt: |
+          A service expects 1 crore requests a day, spread evenly. About how many requests a second is that on average?
+        answer: "116"
+        tolerance: "1"
+        explanation: |
+          $10^7 / 86{,}400 \approx 115.7$, so about 116 a second. With a peak three times the average, the design must handle about 350.
+    - text: |
+        **Comparing alternatives.** List the options honestly, including the dull one and doing nothing. A weighted decision matrix, as in the figure, puts the comparison in one place: choose the criteria that matter, agree weights, score each option, and add up. Then check its sensitivity by asking how far a weight or a score must move before the winner changes. A matrix can also hide prejudice behind arithmetic, since whoever picks the weights picks the winner, which is why the weights belong in the document where reviewers can see and challenge them.
+    - question:
+        id: derivation-total
+        type: numeric
+        system: s2
+        prompt: |
+          Object storage scores 3 on cost, 4 on build effort and 5 on scaling. With weights 3, 2 and 5, what is its weighted total?
+        answer: "42"
+        explanation: |
+          $3 \times 3 + 2 \times 4 + 5 \times 5 = 9 + 8 + 25 = 42$, the figure's winning total.
+    - text: |
+        **Writing it clearly.** Lead with the conclusion, then support it. Use short sentences and the words your readers use. Define a term once and keep using it. Give every number its unit. Draw a diagram for anything that flows. Say what you do not know, because an open question that is stated gets answered, while one that is hidden becomes a surprise in production.
+
+        **Review and record.** Send the document to the people who will build, run and depend on the system, and ask them specific questions: what happens when traffic grows ten times, when the storage service is down, when a request is retried. Answer every comment, by changing the design or by saying why not. When a decision is made, record it in a short **decision record**: the context, the decision and its consequences, numbered and dated. Records are never quietly edited afterwards. When a later decision reverses one, it is written as a new record that says which one it supersedes, so the history of why the system changed stays readable. Teams keep these records next to the code, in version control, where they change alongside it.
+  formal:
+    - text: |
+        **Design document.** A short written plan for a change, shared for review before building; worth writing when a decision is hard to reverse, crosses teams, or is weeks of work.
+
+        **Usual parts.** Summary, context, goals and non-goals, proposed design, alternatives considered, risks and open questions, rollout and testing.
+
+        **Non-goal.** Something a reader might reasonably expect that the design deliberately excludes.
+
+        **Requirement.** A checkable statement with numbers and units, such as a percentile of latency at a stated load.
+
+        **Back-of-the-envelope estimate.** A quick calculation, right to within a small factor: per day divided by 86,400 gives per second; size for the peak, not the average.
+
+        **Weighted decision matrix.** Options scored on weighted criteria and totalled; useful mainly for making reasoning visible and for checking how sensitive the winner is to the weights.
+
+        **Decision record.** A short, numbered, dated note of a decision, its context and its consequences; superseded by a new record, never edited.
+  drill:
+    - text: Seconds each. Think of a reviewer reading quickly.
+    - question:
+        id: drill-non-goal
+        type: choice
+        system: s1
+        prompt: |
+          Which is a useful non-goal for the first version of the festival photo app?
+        options:
+          - "Uploading videos"
+          - "Storing photos"
+          - "Being correct"
+          - "Using Python"
+        answer: 0
+        explanation: A reader might well expect video, and saying it is out of scope settles that early. The others are either the goal itself or say nothing.
+    - question:
+        id: drill-requirement
+        type: choice
+        system: s1
+        prompt: |
+          Which is a checkable requirement?
+        options:
+          - "99% of searches return within 300 ms at 200 searches a second"
+          - "Search must be fast"
+          - "Search should feel instant to users"
+          - "Search must scale"
+        answer: 0
+        explanation: Only the first names a percentile, a time with its unit and a load, so a test can pass or fail it.
+    - question:
+        id: drill-seconds
+        type: numeric
+        system: s1
+        prompt: |
+          How many seconds are there in a day?
+        answer: "86400"
+        explanation: $24 \times 60 \times 60 = 86{,}400$.
+    - question:
+        id: drill-supersede
+        type: choice
+        system: s1
+        prompt: |
+          A year after decision record 12 chose a relational database for orders, the team moves orders elsewhere. What should happen to record 12?
+        options:
+          - "Leave it, and write a new record that says it supersedes record 12"
+          - "Edit record 12 to describe the new choice"
+          - "Delete record 12"
+          - "Nothing; decision records are not updated"
+        answer: 0
+        explanation: The old reasons stay readable, and the new record explains what changed and why.
+    - question:
+        id: predict-units
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          per_day = 8_640_000
+          print(per_day // (24 * 60 * 60), per_day // (24 * 60))
+        output: "100 6000"
+        explanation: Dividing by the seconds in a day gives a rate per second; dividing by the minutes in a day gives a rate per minute, 60 times larger.
+    - question:
+        id: predict-weighted
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          weights = {"cost": 2, "scale": 3}
+          scores = {"cost": 4, "scale": 5}
+          print(sum(weights[c] * scores[c] for c in weights))
+        output: "23"
+        explanation: $2 \times 4 + 3 \times 5 = 23$.
+  work:
+    - text: Slower now. Each problem is a small tool a design author would use.
+    - question:
+        id: fix-units
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `estimate` turns a daily count into an average and a peak rate per second and a yearly storage figure for a design document. The program should print `116 347 730`. It prints `6944 20833 730`. Find the fault and fix it.
+        starter: |
+          SECONDS_PER_DAY = 24 * 60
+          BYTES_PER_GB = 1000 * 1000 * 1000
+
+
+          def estimate(per_day, peak_factor, bytes_each):
+              average = per_day / SECONDS_PER_DAY
+              return {
+                  "avg_per_s": round(average),
+                  "peak_per_s": round(average * peak_factor),
+                  "gb_per_year": round(per_day * bytes_each * 365 / BYTES_PER_GB),
+              }
+
+
+          est = estimate(10_000_000, 3, 200)  # 1 crore requests a day, each storing 200 bytes
+          print(est["avg_per_s"], est["peak_per_s"], est["gb_per_year"])
+        solution: |
+          SECONDS_PER_DAY = 24 * 60 * 60
+          BYTES_PER_GB = 1000 * 1000 * 1000
+
+
+          def estimate(per_day, peak_factor, bytes_each):
+              average = per_day / SECONDS_PER_DAY
+              return {
+                  "avg_per_s": round(average),
+                  "peak_per_s": round(average * peak_factor),
+                  "gb_per_year": round(per_day * bytes_each * 365 / BYTES_PER_GB),
+              }
+
+
+          est = estimate(10_000_000, 3, 200)  # 1 crore requests a day, each storing 200 bytes
+          print(est["avg_per_s"], est["peak_per_s"], est["gb_per_year"])
+        tests: |
+          _cases = [
+              ((10_000_000, 3, 200), (116, 347, 730)),
+              ((864_000, 2, 1000), (10, 20, 315)),
+              ((1_000_000, 5, 50), (12, 58, 18)),
+              ((43_200_000, 1.5, 0), (500, 750, 0)),
+          ]
+          for _args, _want in _cases:
+              _e = estimate(_args[0], _args[1], _args[2])
+              _got = (_e["avg_per_s"], _e["peak_per_s"], _e["gb_per_year"])
+              assert _got == _want, "For " + str(_args[0]) + " a day, peak factor " + str(_args[1]) + " and " + str(_args[2]) + " bytes each, the estimate should be " + str(_want) + " (average per second, peak per second, GB a year), not " + str(_got)
+          assert output.strip() == "116 347 730", "The program should print 116 347 730"
+        wrong:
+          - |
+            SECONDS_PER_DAY = 24 * 60 * 60
+            BYTES_PER_GB = 1000 * 1000 * 1000
+
+
+            def estimate(per_day, peak_factor, bytes_each):
+                average = per_day / SECONDS_PER_DAY
+                return {
+                    "avg_per_s": round(average),
+                    "peak_per_s": round(average) * peak_factor,
+                    "gb_per_year": round(per_day * bytes_each * 365 / BYTES_PER_GB),
+                }
+
+
+            est = estimate(10_000_000, 3, 200)  # 1 crore requests a day, each storing 200 bytes
+            print(est["avg_per_s"], est["peak_per_s"], est["gb_per_year"])
+          - |
+            SECONDS_PER_DAY = 24 * 60 * 60
+            BYTES_PER_GB = 1024 * 1024 * 1024
+
+
+            def estimate(per_day, peak_factor, bytes_each):
+                average = per_day / SECONDS_PER_DAY
+                return {
+                    "avg_per_s": round(average),
+                    "peak_per_s": round(average * peak_factor),
+                    "gb_per_year": round(per_day * bytes_each * 365 / BYTES_PER_GB),
+                }
+
+
+            est = estimate(10_000_000, 3, 200)  # 1 crore requests a day, each storing 200 bytes
+            print(est["avg_per_s"], est["peak_per_s"], est["gb_per_year"])
+          - |
+            SECONDS_PER_DAY = 60 * 60
+            BYTES_PER_GB = 1000 * 1000 * 1000
+
+
+            def estimate(per_day, peak_factor, bytes_each):
+                average = per_day / SECONDS_PER_DAY
+                return {
+                    "avg_per_s": round(average),
+                    "peak_per_s": round(average * peak_factor),
+                    "gb_per_year": round(per_day * bytes_each * 365 / BYTES_PER_GB),
+                }
+
+
+            est = estimate(10_000_000, 3, 200)  # 1 crore requests a day, each storing 200 bytes
+            print(est["avg_per_s"], est["peak_per_s"], est["gb_per_year"])
+        explanation: |
+          `24 * 60` is the number of minutes in a day, so the rates came out per minute, 60 times too large. A day has `24 * 60 * 60` seconds. Rounding the average before multiplying by the peak factor gives 348 instead of 347; switching to 1,024-based gigabytes changes the storage figure, which was already right; and `60 * 60` is the seconds in an hour, not a day.
+    - question:
+        id: write-rank
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `rank(scores, weights)`, which returns the option names from the highest weighted total to the lowest, where an option's total is the sum over the criteria in `weights` of weight times score, and options with equal totals keep the order they have in `scores`. The program should print `['object storage', 'own file servers', 'one database server'] one database server`.
+        starter: |
+          def rank(scores, weights):
+              # scores: option -> {criterion: score}; weights: criterion -> weight.
+              # Return the option names from highest weighted total to lowest;
+              # options with equal totals keep the order they have in scores.
+              return list(scores)
+
+
+          scores = {
+              "one database server": {"cost": 4, "effort": 5, "scale": 1},
+              "object storage": {"cost": 3, "effort": 4, "scale": 5},
+              "own file servers": {"cost": 4, "effort": 1, "scale": 4},
+          }
+          first = rank(scores, {"cost": 3, "effort": 2, "scale": 5})
+          second = rank(scores, {"cost": 3, "effort": 2, "scale": 1})
+          print(first, second[0])
+        solution: |
+          def rank(scores, weights):
+              totals = {}
+              for option in scores:
+                  totals[option] = sum(weights[c] * scores[option][c] for c in weights)
+              return sorted(scores, key=lambda option: -totals[option])
+
+
+          scores = {
+              "one database server": {"cost": 4, "effort": 5, "scale": 1},
+              "object storage": {"cost": 3, "effort": 4, "scale": 5},
+              "own file servers": {"cost": 4, "effort": 1, "scale": 4},
+          }
+          first = rank(scores, {"cost": 3, "effort": 2, "scale": 5})
+          second = rank(scores, {"cost": 3, "effort": 2, "scale": 1})
+          print(first, second[0])
+        tests: |
+          _s = {
+              "kafka": {"speed": 5, "cost": 2},
+              "a queue table": {"speed": 2, "cost": 5},
+              "redis": {"speed": 4, "cost": 3},
+          }
+          _got = rank(_s, {"speed": 3, "cost": 1})
+          assert _got == ["kafka", "redis", "a queue table"], "With speed weighted 3 and cost 1, the order should be ['kafka', 'redis', 'a queue table'], not " + str(_got)
+          _got = rank(_s, {"speed": 1, "cost": 3})
+          assert _got == ["a queue table", "redis", "kafka"], "With cost weighted 3 and speed 1, the order should be ['a queue table', 'redis', 'kafka'], not " + str(_got)
+          _got = rank(_s, {"speed": 1, "cost": 1})
+          assert _got == ["kafka", "a queue table", "redis"], "With equal weights all three total 7, so they keep their order in scores: ['kafka', 'a queue table', 'redis'], not " + str(_got)
+          _got = rank(_s, {"speed": 0, "cost": 2})
+          assert _got == ["a queue table", "redis", "kafka"], "A weight of 0 should make that criterion count for nothing; got " + str(_got)
+          assert output.strip() == "['object storage', 'own file servers', 'one database server'] one database server", "The program should print ['object storage', 'own file servers', 'one database server'] one database server"
+        wrong:
+          - |
+            def rank(scores, weights):
+                totals = {}
+                for option in scores:
+                    totals[option] = sum(weights[c] * scores[option][c] for c in weights)
+                return sorted(scores, key=lambda option: totals[option])
+
+
+            scores = {
+                "one database server": {"cost": 4, "effort": 5, "scale": 1},
+                "object storage": {"cost": 3, "effort": 4, "scale": 5},
+                "own file servers": {"cost": 4, "effort": 1, "scale": 4},
+            }
+            first = rank(scores, {"cost": 3, "effort": 2, "scale": 5})
+            second = rank(scores, {"cost": 3, "effort": 2, "scale": 1})
+            print(first, second[0])
+          - |
+            def rank(scores, weights):
+                totals = {}
+                for option in scores:
+                    totals[option] = sum(scores[option][c] for c in weights)
+                return sorted(scores, key=lambda option: -totals[option])
+
+
+            scores = {
+                "one database server": {"cost": 4, "effort": 5, "scale": 1},
+                "object storage": {"cost": 3, "effort": 4, "scale": 5},
+                "own file servers": {"cost": 4, "effort": 1, "scale": 4},
+            }
+            first = rank(scores, {"cost": 3, "effort": 2, "scale": 5})
+            second = rank(scores, {"cost": 3, "effort": 2, "scale": 1})
+            print(first, second[0])
+          - |
+            def rank(scores, weights):
+                totals = {}
+                for option in scores:
+                    totals[option] = sum(weights[c] * scores[option][c] for c in weights)
+                return sorted(scores, key=lambda option: (-totals[option], option))
+
+
+            scores = {
+                "one database server": {"cost": 4, "effort": 5, "scale": 1},
+                "object storage": {"cost": 3, "effort": 4, "scale": 5},
+                "own file servers": {"cost": 4, "effort": 1, "scale": 4},
+            }
+            first = rank(scores, {"cost": 3, "effort": 2, "scale": 5})
+            second = rank(scores, {"cost": 3, "effort": 2, "scale": 1})
+            print(first, second[0])
+        explanation: |
+          Sorting by the negated total puts the highest first, and because Python's sort is stable, equal totals keep their original order. Sorting by the total itself ranks the worst option first; adding the scores without their weights ignores what the team agreed matters; and breaking ties by name reorders options the prompt said to keep.
+    - question:
+        id: write-sections
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `missing_sections(text)`, which returns the names in `REQUIRED`, in that order, for which the document has no heading line: a line starting with `## ` whose remaining text, ignoring capitals and surrounding spaces, is the name. The program should print `['Goals', 'Risks']`.
+        starter: |
+          REQUIRED = ["Context", "Goals", "Non-goals", "Design", "Alternatives", "Risks"]
+
+
+          def missing_sections(text):
+              # Return the REQUIRED sections, in REQUIRED order, that have no heading
+              # line of the form "## Name" (any capitals, spaces around the name ignored).
+              return []
+
+
+          doc = """# Photo storage for the festival app
+          ## Context
+          1 crore users, 20 photos each, about 2 MB a photo.
+          ## Non-goals
+          Video. Editing photos.
+          ## Design
+          Object storage, with thumbnails made on upload.
+          ##  alternatives
+          One database server; our own file servers.
+          Risks are listed in the appendix.
+          """
+          print(missing_sections(doc))
+        solution: |
+          REQUIRED = ["Context", "Goals", "Non-goals", "Design", "Alternatives", "Risks"]
+
+
+          def missing_sections(text):
+              headings = []
+              for line in text.splitlines():
+                  if line.startswith("## "):
+                      headings.append(line[3:].strip().lower())
+              return [name for name in REQUIRED if name.lower() not in headings]
+
+
+          doc = """# Photo storage for the festival app
+          ## Context
+          1 crore users, 20 photos each, about 2 MB a photo.
+          ## Non-goals
+          Video. Editing photos.
+          ## Design
+          Object storage, with thumbnails made on upload.
+          ##  alternatives
+          One database server; our own file servers.
+          Risks are listed in the appendix.
+          """
+          print(missing_sections(doc))
+        tests: |
+          _full = "# T\n## Context\nx\n## Goals\ny\n## Non-goals\nz\n## Design\n## Alternatives\n## Risks\n"
+          assert missing_sections(_full) == [], "A document with all six headings is missing nothing, not " + str(missing_sections(_full))
+          _t = "# T\n## Non-goals\n## DESIGN\n##   risks  \n"
+          _got = missing_sections(_t)
+          assert _got == ["Context", "Goals", "Alternatives"], "With headings Non-goals, DESIGN and risks, the missing ones are ['Context', 'Goals', 'Alternatives'], not " + str(_got) + ". A Non-goals heading is not a Goals heading, and capitals and spaces do not matter"
+          _t = "# Context and Goals\nWe weigh the alternatives and the risks.\n## Design\n"
+          _got = missing_sections(_t)
+          assert _got == ["Context", "Goals", "Non-goals", "Alternatives", "Risks"], "Only lines starting with '## ' are section headings; the title and body text do not count. Expected ['Context', 'Goals', 'Non-goals', 'Alternatives', 'Risks'], got " + str(_got)
+          _got = missing_sections("")
+          assert _got == REQUIRED, "An empty document is missing every section, not " + str(_got)
+          assert output.strip() == "['Goals', 'Risks']", "The program should print ['Goals', 'Risks']"
+        wrong:
+          - |
+            REQUIRED = ["Context", "Goals", "Non-goals", "Design", "Alternatives", "Risks"]
+
+
+            def missing_sections(text):
+                return [name for name in REQUIRED if "## " + name not in text]
+
+
+            doc = """# Photo storage for the festival app
+            ## Context
+            1 crore users, 20 photos each, about 2 MB a photo.
+            ## Non-goals
+            Video. Editing photos.
+            ## Design
+            Object storage, with thumbnails made on upload.
+            ##  alternatives
+            One database server; our own file servers.
+            Risks are listed in the appendix.
+            """
+            print(missing_sections(doc))
+          - |
+            REQUIRED = ["Context", "Goals", "Non-goals", "Design", "Alternatives", "Risks"]
+
+
+            def missing_sections(text):
+                lower = text.lower()
+                return [name for name in REQUIRED if name.lower() not in lower]
+
+
+            doc = """# Photo storage for the festival app
+            ## Context
+            1 crore users, 20 photos each, about 2 MB a photo.
+            ## Non-goals
+            Video. Editing photos.
+            ## Design
+            Object storage, with thumbnails made on upload.
+            ##  alternatives
+            One database server; our own file servers.
+            Risks are listed in the appendix.
+            """
+            print(missing_sections(doc))
+          - |
+            REQUIRED = ["Context", "Goals", "Non-goals", "Design", "Alternatives", "Risks"]
+
+
+            def missing_sections(text):
+                headings = []
+                for line in text.splitlines():
+                    if line.startswith("## "):
+                        headings.append(line[3:].strip())
+                return [name for name in REQUIRED if name not in headings]
+
+
+            doc = """# Photo storage for the festival app
+            ## Context
+            1 crore users, 20 photos each, about 2 MB a photo.
+            ## Non-goals
+            Video. Editing photos.
+            ## Design
+            Object storage, with thumbnails made on upload.
+            ##  alternatives
+            One database server; our own file servers.
+            Risks are listed in the appendix.
+            """
+            print(missing_sections(doc))
+        explanation: |
+          Collect the heading lines, clean each one, and look up each required name among them. Searching the whole text for `"## " + name` is fooled by capitals and extra spaces; searching for the bare word finds "goals" inside "Non-goals" and "risks" in a sentence of the body; and comparing headings without lowering their capitals misses "alternatives".
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          How many terabytes would the puzzle's photos take in the first year?
+        answer: "400"
+        explanation: |
+          $10^7$ users $\times$ 20 photos $\times$ 2 MB $= 4 \times 10^8$ MB, and a terabyte is $10^6$ MB, so 400 TB: a hundred times the 4 TB disk, before any backup copies.
+    - question:
+        id: work-which
+        type: choice
+        system: s2
+        prompt: |
+          A clinic app team must choose how appointment data will sync between the app and three partner hospitals, each run by a different company. The work will take two months. What should they do first?
+        options:
+          - "Write a short design document with the problem, numbers, a proposal and alternatives, and review it with the hospitals' engineers before building."
+          - "Start building the sync for the first hospital and adjust for the others later."
+          - "Write a 60-page specification covering every possible future feature before talking to anyone."
+          - "Pick the most popular sync library and skip the discussion."
+        answer: 0
+        explanation: |
+          The decision crosses companies, takes months and fixes a format others will depend on, so it is exactly the case for a design document. Building first commits everyone to a shape no one reviewed; a 60-page specification is too long to be read; and choosing a library is one of the alternatives to compare, not a substitute for the comparison.
+  connections:
+    - text: |
+        400 terabytes: $10^7 \times 20 \times 2$ MB, a hundred times the disk in the first draft. One line of arithmetic in the document's context section ruled that plan out before any code was written, and it also changed the question: no longer "which server" but "which kind of storage grows to hundreds of terabytes", which is the comparison the decision matrix then made.
+
+        This completes software design. Its decisions live on in documents, decision records and code, and all three are kept in version control, which records every version of every file so that any past state of a project can be recovered and compared. How it does that, by naming every piece of content by its hash, is [[s5.version-control-as-a-content-addressed-store]]. The review habits begun here continue in [[s5.code-review]]. For whole systems spread across many machines, the estimates grow into capacity plans, [[d10.requirements-and-estimates]], and the review of a design becomes a discipline of its own, [[d10.reviewing-a-design]].

@@ -7895,6 +7895,110 @@ function PageCursor(props: Props) {
   );
 }
 
+const DM_CRITERIA: [string, string][] = [
+  ["cost", "cost"],
+  ["effort", "build effort"],
+  ["scale", "scaling"],
+];
+const DM_OPTIONS: [string, number[]][] = [
+  ["one database server", [4, 5, 1]],
+  ["object storage", [3, 4, 5]],
+  ["own file servers", [4, 1, 4]],
+];
+
+/** A weighted decision matrix for where a festival app keeps its photos, with a check of how easily the winner changes. */
+function DecisionMatrix(props: Props) {
+  const start = (key: string, fallback: number) => clamp(Math.round(num(props[key], fallback)), 0, 5);
+  const [weights, setWeights] = useState([start("cost", 3), start("effort", 2), start("scale", 5)]);
+  const totalsFor = (w: number[]) => DM_OPTIONS.map(([, s]) => s.reduce((acc, v, i) => acc + v * w[i], 0));
+  const winnerOf = (w: number[]) => {
+    const t = totalsFor(w);
+    const best = Math.max(...t);
+    const top = t.flatMap((v, i) => (v === best ? [i] : []));
+    return top.length === 1 ? top[0] : -1;
+  };
+  const totals = totalsFor(weights);
+  const winner = winnerOf(weights);
+  let flip: { c: number; to: number } | null = null;
+  for (let d = 1; d <= 5 && !flip; d++) {
+    for (let c = 0; c < 3 && !flip; c++) {
+      for (const to of [weights[c] - d, weights[c] + d]) {
+        if (flip || to < 0 || to > 5) continue;
+        const w = weights.map((v, i) => (i === c ? to : v));
+        if (winnerOf(w) !== winner) flip = { c, to };
+      }
+    }
+  }
+  const order = DM_OPTIONS.map((_, i) => i).sort((a, b) => totals[b] - totals[a]);
+  const lead =
+    winner === -1
+      ? `With these weights, ${order
+          .filter((i) => totals[i] === totals[order[0]])
+          .map((i) => DM_OPTIONS[i][0])
+          .join(" and ")} tie at ${totals[order[0]]}.`
+      : `With these weights, ${DM_OPTIONS[winner][0]} wins with ${totals[winner]}, ahead of ${DM_OPTIONS[order[1]][0]} at ${totals[order[1]]} and ${DM_OPTIONS[order[2]][0]} at ${totals[order[2]]}.`;
+  const sens = flip
+    ? winner === -1
+      ? ` Changing the weight of ${DM_CRITERIA[flip.c][1]} from ${weights[flip.c]} to ${flip.to} would break the tie.`
+      : ` The winner changes if the weight of ${DM_CRITERIA[flip.c][1]} goes from ${weights[flip.c]} to ${flip.to}, so the decision rests on that weight.`
+    : " No change to a single weight would change the result.";
+  const colX = [196, 246, 296];
+  const barScale = 90 / 75;
+  return (
+    <Frame
+      title="A weighted decision matrix"
+      summary={lead + sens}
+      controls={
+        <>
+          {DM_CRITERIA.map(([, label], c) => (
+            <Stepper key={label} label={`weight of ${label}`} value={weights[c]} min={0} max={5} onChange={(v) => setWeights(weights.map((x, i) => (i === c ? v : x)))} />
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 172" role="img" aria-label={winner === -1 ? "The options tie" : `${DM_OPTIONS[winner][0]} scores highest, ${totals[winner]}`}>
+        <text x={8} y={16} className="fig-small">
+          score 1 to 5, higher is better
+        </text>
+        {DM_CRITERIA.map(([key], c) => (
+          <text key={key} x={colX[c]} y={16} textAnchor="middle" className="fig-small">
+            {key}
+          </text>
+        ))}
+        {DM_CRITERIA.map(([key], c) => (
+          <text key={`w${key}`} x={colX[c]} y={34} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+            {`× ${weights[c]}`}
+          </text>
+        ))}
+        <text x={340} y={16} className="fig-small">
+          weighted total
+        </text>
+        <line x1={8} x2={452} y1={44} y2={44} className="fig-grid" />
+        {DM_OPTIONS.map(([name, s], r) => {
+          const y = 70 + r * 36;
+          const win = r === winner;
+          return (
+            <g key={name}>
+              <text x={8} y={y} className="fig-small" style={{ fill: "var(--text)", fontWeight: win ? 600 : 400 }}>
+                {name}
+              </text>
+              {s.map((v, c) => (
+                <text key={c} x={colX[c]} y={y} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+                  {v}
+                </text>
+              ))}
+              <rect x={340} y={y - 13} width={Math.max(1, totals[r] * barScale)} height={18} rx={2} className={win ? "fig-accent" : "fig-ghost"} />
+              <text x={344 + totals[r] * barScale} y={y} className="fig-small" style={{ fill: "var(--text)", fontWeight: win ? 600 : 400 }}>
+                {totals[r]}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -9234,6 +9338,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "fee-strategy": FeeStrategy,
   "refactor-steps": RefactorSteps,
   "page-cursor": PageCursor,
+  "decision-matrix": DecisionMatrix,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
