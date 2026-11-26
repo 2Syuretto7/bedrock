@@ -3,12 +3,14 @@ import { expect, test, type Locator } from "@playwright/test";
 
 /**
  * React replays a click made before the page hydrates, but not a slider moved before then: the slider keeps its
- * new value and the figure never hears of it. So move the slider away and back until the read-out follows.
+ * new value and the figure never hears of it. So move the slider away and back until the read-out follows,
+ * going away to whichever end of the slider is not the value wanted.
  */
 async function slide(figure: Locator, name: string, value: string, readOut: string) {
   const slider = figure.getByRole("slider", { name });
   await expect(async () => {
-    await slider.fill((await slider.getAttribute("min")) ?? "0");
+    const min = (await slider.getAttribute("min")) ?? "0";
+    await slider.fill(value === min ? ((await slider.getAttribute("max")) ?? "100") : min);
     await slider.fill(value);
     await expect(figure).toContainText(readOut, { timeout: 1_000 });
   }).toPass();
