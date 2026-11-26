@@ -5599,6 +5599,106 @@ function QuickPivot(props: Props) {
   );
 }
 
+const TOUR_TOWNS: Spot[] = [
+  [15, 20],
+  [25, 40],
+  [50, 35],
+  [60, 15],
+  [70, 25],
+  [75, 40],
+  [5, 40],
+  [85, 5],
+  [30, 5],
+];
+const TOUR_NAMES = "ABCDEFGHI";
+const tourKm = (a: number, b: number) => Math.hypot(TOUR_TOWNS[a][0] - TOUR_TOWNS[b][0], TOUR_TOWNS[a][1] - TOUR_TOWNS[b][1]);
+const tourLength = (order: number[]) => order.reduce((s, t, k) => s + tourKm(t, order[(k + 1) % order.length]), 0);
+const tourRoads = (order: number[]) => order.map((t, k) => [t, order[(k + 1) % order.length]].sort((x, y) => x - y).join("-"));
+const roadLabel = (road: string) =>
+  road
+    .split("-")
+    .map((t) => TOUR_NAMES[Number(t)])
+    .join("–");
+
+/** The nearest-neighbour tour from A, then each 2-opt step that shortens it most, until none does. */
+const TOUR_STEPS = (() => {
+  const order = [0];
+  const left = new Set(TOUR_TOWNS.map((_, i) => i).slice(1));
+  while (left.size > 0) {
+    const here = order[order.length - 1];
+    let next = -1;
+    for (const t of left) if (next < 0 || tourKm(here, t) < tourKm(here, next)) next = t;
+    order.push(next);
+    left.delete(next);
+  }
+  const steps = [order];
+  for (;;) {
+    const now = steps[steps.length - 1];
+    let best: number[] | null = null;
+    let bestLength = tourLength(now);
+    for (let i = 1; i < now.length - 1; i++) {
+      for (let j = i + 1; j < now.length; j++) {
+        const trial = [...now.slice(0, i), ...now.slice(i, j + 1).reverse(), ...now.slice(j + 1)];
+        const length = tourLength(trial);
+        if (length < bestLength - 1e-9) {
+          best = trial;
+          bestLength = length;
+        }
+      }
+    }
+    if (!best) return steps;
+    steps.push(best);
+  }
+})();
+
+/** A tour of nine towns built by the nearest-neighbour rule, then shortened by reversing stretches of it. */
+function TourHeuristic(props: Props) {
+  const last = TOUR_STEPS.length - 1;
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, last));
+  const order = TOUR_STEPS[step];
+  const roads = tourRoads(order);
+  const before = step > 0 ? tourRoads(TOUR_STEPS[step - 1]) : roads;
+  const added = roads.filter((r) => !before.includes(r));
+  const removed = before.filter((r) => !roads.includes(r));
+  const km = (x: number) => dp(x, 1);
+  const names = order.map((t) => TOUR_NAMES[t]).join(", ");
+  let summary: string;
+  if (step === 0) {
+    const [g, h] = [order[order.length - 2], order[order.length - 1]];
+    summary = `The tour that nearest neighbour builds from A: ${names}, and back to A, ${km(tourLength(order))} km. Each move goes to the closest town not yet visited, so ${TOUR_NAMES[h]}, out on its own, is left until last, and the tour ends with ${km(tourKm(g, h))} km from ${TOUR_NAMES[g]} to ${TOUR_NAMES[h]} and ${km(tourKm(h, 0))} km back to A.`;
+  } else {
+    const prev = TOUR_STEPS[step - 1];
+    const first = prev.findIndex((t, k) => t !== order[k]);
+    const end = prev.length - 1 - [...prev].reverse().findIndex((t, k) => t !== order[order.length - 1 - k]);
+    summary = `After ${plural(step, "improvement")}: ${names}, and back to A, ${km(tourLength(order))} km. This step reversed the stretch from ${TOUR_NAMES[prev[first]]} to ${TOUR_NAMES[prev[end]]}, replacing the roads ${removed.map(roadLabel).join(" and ")} with ${added.map(roadLabel).join(" and ")}, ${km(tourLength(prev) - tourLength(order))} km shorter. ${
+      step === last
+        ? "No single reversal shortens it further. Checking all 20,160 possible tours confirms that, here, it is also the shortest of them all."
+        : "Another reversal can still shorten it."
+    }`;
+  }
+  const at = (t: number): Spot => [30 + TOUR_TOWNS[t][0] * 4.6, 22 + TOUR_TOWNS[t][1] * 5];
+  return (
+    <Frame title="Building a tour, then improving it" summary={summary} controls={<Stepper label="improvements" value={step} onChange={setStep} min={0} max={last} />}>
+      <svg viewBox="0 0 440 250" role="img" aria-label={`Nine towns and a tour through them, ${km(tourLength(order))} km long`}>
+        <text x="12" y="16" className="fig-small">
+          {`tour ${km(tourLength(order))} km`}
+        </text>
+        {removed.map((r) => {
+          const [a, b] = r.split("-").map(Number);
+          return <Link key={"x" + r} from={at(a)} to={at(b)} faint />;
+        })}
+        {roads.map((r) => {
+          const [a, b] = r.split("-").map(Number);
+          return <Link key={r} from={at(a)} to={at(b)} hot={added.includes(r)} />;
+        })}
+        {TOUR_TOWNS.map((_, t) => (
+          <Dot key={t} at={at(t)} name={TOUR_NAMES[t]} mark={t === 0 ? "now" : "done"} />
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -6912,6 +7012,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "spanning-tree": SpanningTree,
   "interval-schedule": IntervalSchedule,
   "quick-pivot": QuickPivot,
+  "tour-heuristic": TourHeuristic,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

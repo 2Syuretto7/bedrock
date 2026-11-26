@@ -98,6 +98,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "spanning-tree": z.strictObject({ method: z.enum(["kruskal", "prim"]).optional(), step: z.number().optional() }),
   "interval-schedule": z.strictObject({ rule: z.enum(["finish", "start", "shortest"]).optional(), step: z.number().optional() }),
   "quick-pivot": z.strictObject({ input: z.enum(["sorted", "shuffled"]).optional(), pivot: z.enum(["first", "random"]).optional(), seed: z.number().optional() }),
+  "tour-heuristic": z.strictObject({ step: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
