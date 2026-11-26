@@ -1,0 +1,479 @@
+concept: f5.histograms
+minutes: 90
+claim: You can count measurements into buckets and draw them as a histogram, choose the number and kind of buckets, explain why logarithmic buckets suit response times, estimate a percentile from bucket counts and bound its error, merge histograms from many machines exactly, and write the bucket and percentile code in Python.
+recalls: [f5.distributions-of-latency-and-heavy-tails]
+uses: [f5.summaries-mean-median-and-percentiles, f4.continuous-distributions-and-densities, f4.common-discrete-distributions, f4.variance, f1.logarithms, s1.modules-and-imports, s1.comprehensions-and-iterators, s0.dictionaries-and-sets, s0.functions, s0.loops, s0.lists-and-tuples]
+leads: [f5.sampling-and-estimators, f5.the-bootstrap, f5.noise-in-measurements-and-benchmarks]
+starter: |
+  # Scratch space. Count response times in buckets of 10 ms.
+  times = [3, 12, 17, 25, 8, 14, 41]
+  counts = {}
+  for t in times:
+      counts[t // 10] = counts.get(t // 10, 0) + 1
+  print(counts)
+parts:
+  recall:
+    - text: |
+        [[f5.distributions-of-latency-and-heavy-tails]] described response times by formulas for their tails. Real measurements arrive as a pile of numbers, not a formula, and often as millions of them a minute. The first thing to do with a pile is to look at its shape, and the cheapest way to look, and to keep, is to count. Three quick pulls first.
+  puzzle:
+    - text: |
+        A service answers tens of thousands of requests a second, and its monitoring must report percentiles of their response times for every minute of the day. Keeping every time is out of the question. Instead it will keep a fixed set of counters: it splits the range of times into buckets, adds one to a bucket's counter for each request that lands there, and reports a percentile as the upper edge of the bucket it falls in.
+
+        The requirement: any reported percentile, for any time between 1 ms and 100 seconds, must be within 10% of the true value. **What is the smallest number of buckets that can cover 1 ms to 100 seconds with that guarantee?**
+  intuition:
+    - text: |
+        A teacher has marked sixty answer sheets and wants to see how the class did, so the teacher draws ten columns on the board, for marks 0 to 9, 10 to 19, and so on up to 99, and puts a tally in a column for each sheet. The tallies make a picture: where most of the class scored, whether there are two groups, those who studied and those who did not, and how far the stragglers trail. That picture is a **histogram**: split the range into **buckets**, count the values in each, and draw a bar for each count.
+
+        Everything depends on the buckets. With two, pass and fail, the shape is gone. With a hundred, one per mark, most columns hold one sheet or none, and the picture is mostly chance: which exact mark a student got, not how the class did. Between those is a range of sensible choices, and the more sheets there are, the finer the buckets can be.
+
+        Response times add a twist. Most of them are a few tens of milliseconds and a few are seconds, so equal-width buckets wide enough to reach the slowest put almost every request in the first one or two bars. Buckets whose edges *grow by a fixed factor*, 1, 2, 4, 8 milliseconds and so on, give the fast requests narrow buckets and the slow ones wide buckets, matched to how far apart the values are.
+
+        The figure counts 400 response times. Move the number of buckets from 2 up to 60 and watch the shape appear and then break into noise. Then switch to logarithmic buckets.
+    - figure: histogram-bins
+      props: { buckets: 12 }
+    - text: |
+        With two or three buckets the picture says only that times are mostly short. Past thirty or so, empty buckets appear and neighbouring bars jump up and down for no reason but chance. With logarithmic buckets the same 400 times form a smooth hump, and the slow requests get bars of their own instead of a few slivers at the right.
+  derivation:
+    - text: |
+        **Buckets and counts.** Choose edges $e_0 < e_1 < \cdots < e_k$. Bucket $j$ holds the values in $(e_{j-1}, e_j]$, and its count $c_j$ is how many of the $n$ values fall there. Which end is closed is a convention, but it must be fixed: monitoring systems usually name a bucket by its upper edge and count values *at or below* it, while Python's `t // w` puts $t$ in bucket $j$ when $jw \le t < (j + 1)w$. Values outside the range need a home too, usually an extra bucket at the top for everything beyond.
+
+        **Heights.** With equal widths, a bar's height can simply be its count. With unequal widths that misleads: a bucket twice as wide collects about twice as many values with no change in how crowded they are. The fair height is the **density**
+
+        $$h_j = \frac{c_j}{n\,(e_j - e_{j-1})},$$
+
+        the fraction of values per unit of time. Then the area of bar $j$ is the fraction $c_j/n$, all the areas add up to 1, and for large $n$ and narrow buckets the bars approach the density $f(t)$ of [[f4.continuous-distributions-and-densities]].
+    - question:
+        id: derivation-density
+        type: numeric
+        system: s2
+        tolerance: "0.0001"
+        prompt: |
+          Of 100 response times, 15 lie in the bucket from 20 ms to 50 ms. What is that bucket's density, as a fraction per millisecond?
+        answer: "0.005"
+        explanation: |
+          The fraction is $15/100 = 0.15$, spread over 30 ms, so $0.15/30 = 0.005$ per millisecond. A neighbouring bucket from 10 ms to 20 ms with 30 values has density $0.3/10 = 0.03$, six times as crowded, though its count is only twice as large.
+    - text: |
+        **How many buckets.** Each count is itself random. If a bucket would hold a fraction $q$ of all values, its count among $n$ is binomial, from [[f4.common-discrete-distributions]], with mean $nq$ and variance $nq(1 - q) \approx nq$ when $q$ is small. So a bucket that expects $\lambda$ values sees counts that wobble by about $\sqrt{\lambda}$, as [[f4.variance]] measures it: a bucket expecting 4 swings by about 2, half its size, while one expecting 400 swings by about 20, a twentieth. Narrow buckets show detail but each holds few values and so is noisy; wide buckets are steady but blur the shape. Rules of thumb balance the two, and all of them grow slowly with $n$: about $\sqrt{n}$ buckets, or $1 + \log_2 n$ (Sturges' rule), or a width of $2\,\mathrm{IQR}/n^{1/3}$, using the interquartile range of [[f5.summaries-mean-median-and-percentiles]] (the Freedman–Diaconis rule). For 400 values the first gives 20 buckets and the second about 10.
+
+        **Logarithmic buckets.** Let the edges grow by a fixed ratio $r > 1$: $e_j = e_0 r^j$. A value $t > e_0$ lands in the bucket with the smallest $j$ such that $e_0 r^j \ge t$, that is
+
+        $$j = \left\lceil \log_r \frac{t}{e_0} \right\rceil = \left\lceil \frac{\ln(t/e_0)}{\ln r} \right\rceil,$$
+
+        using [[f1.logarithms]]. Each bucket's upper edge is $r$ times its lower edge, so reporting the upper edge in place of any value in the bucket overstates it by less than a factor $r$: a **relative** error below $r - 1$, the same at 1 ms as at 10 seconds. Covering the range from $L$ to $H$ takes $\lceil \ln(H/L)/\ln r \rceil$ buckets, which grows only with the logarithm of the range. Equal-width buckets give an *absolute* error below the width instead, which is far too coarse for the fast requests or far too many buckets for the slow ones.
+    - question:
+        id: derivation-doublings
+        type: numeric
+        system: s2
+        prompt: |
+          Buckets start at 1 ms and each upper edge is twice the one before: 2, 4, 8, … ms. How many buckets are needed to reach at least 60,000 ms, one minute?
+        answer: "16"
+        explanation: |
+          The upper edges are $2^1, 2^2, \ldots$, and the first at or above 60,000 is $2^{16} = 65{,}536$, since $2^{15} = 32{,}768$ falls short. So 16 buckets, each reporting values to within a factor of 2.
+    - text: |
+        **Percentiles from counts.** The counts lose each value's exact position inside its bucket, but they keep the order of the buckets, and that is enough to find which bucket a percentile is in. Form the running totals $C_j = c_1 + c_2 + \cdots + c_j$. The nearest-rank $p$th percentile is the value at rank $r = \lceil pn/100 \rceil$, and it lies in the first bucket with $C_j \ge r$. Reporting that bucket's upper edge gives a number at or above the true percentile, too high by less than one bucket: less than the width for equal buckets, less than the factor $r$ for logarithmic ones. Some systems instead interpolate inside the bucket, assuming its values are spread evenly, which is often closer but carries no guarantee.
+    - question:
+        id: order-percentile
+        type: order
+        system: s2
+        prompt: |
+          Put the steps for estimating p99 from a histogram's bucket counts in order.
+        steps:
+          - "Add up all the counts to get the number of values, $n$."
+          - "Compute the rank $\\lceil 99n/100 \\rceil$."
+          - "Walk through the buckets from the fastest, adding each count to a running total, until the total reaches the rank."
+          - "Report the upper edge of the bucket where the running total reached the rank."
+        explanation: |
+          The rank needs $n$, the walk needs the rank, and the answer is the bucket where the walk stops. Its upper edge is an upper bound on the true p99, off by less than one bucket.
+    - text: |
+        **Merging.** Two histograms with the same edges combine by adding their counts bucket by bucket, and the result is *exactly* the histogram of all the values together. [[f5.summaries-mean-median-and-percentiles]] found that percentiles from two machines cannot be combined; their histograms can, and the percentile of the combined counts is then as good as either machine's alone. This is why monitoring systems store histograms. A histogram per server per minute takes $k$ counters, whatever the traffic; recording a request is one addition; and any group of servers and minutes can be summed afterwards and asked for any percentile. The price is that every machine must use the same edges, or edges that nest inside a shared coarser set.
+
+        **No buckets at all.** The **empirical distribution function** $F_n(t)$ is the fraction of values at or below $t$: a staircase that rises by $1/n$ at each value. It needs no choice of buckets, and the nearest-rank $p$th percentile is exactly where it first reaches $p/100$. A cumulative histogram is $F_n$ read only at the bucket edges. When all the data fit in memory, $F_n$ is the honest picture; when they do not, a histogram is the honest compression.
+  formal:
+    - text: |
+        **Histogram.** Edges $e_0 < \cdots < e_k$; counts $c_j = \#\{i : e_{j-1} < x_i \le e_j\}$; fractions $c_j/n$; densities $c_j/(n(e_j - e_{j-1}))$, whose bar areas add to 1.
+
+        **Bucket noise.** A bucket with expected count $\lambda = nq$ has a binomial count with standard deviation $\sqrt{nq(1 - q)} \approx \sqrt{\lambda}$.
+
+        **Logarithmic buckets.** $e_j = e_0 r^j$. A value $t > e_0$ is in bucket $\lceil \ln(t/e_0)/\ln r \rceil$. Reporting the upper edge overstates by less than a factor $r$. Covering $[L, H]$ takes $\lceil \ln(H/L)/\ln r \rceil$ buckets.
+
+        **Percentile from counts.** With $C_j = \sum_{i \le j} c_i$ and $r = \lceil pn/100 \rceil$, the nearest-rank $p$th percentile lies in the first bucket with $C_j \ge r$.
+
+        **Merging.** For histograms with the same edges, $c_j^{A \cup B} = c_j^A + c_j^B$.
+
+        **Empirical distribution function.** $F_n(t) = \frac{1}{n}\#\{i : x_i \le t\}$; the nearest-rank $p$th percentile is $\min\{x_i : F_n(x_i) \ge p/100\}$.
+  drill:
+    - text: Seconds each. Find the bucket first, then count.
+    - question:
+        id: drill-linear-bucket
+        type: numeric
+        system: s1
+        prompt: |
+          Buckets are 10 ms wide, numbered from 0: bucket 0 holds times from 0 up to but not including 10 ms, bucket 1 from 10 ms, and so on. Which bucket holds 37 ms?
+        answer: "3"
+        explanation: $37 /\!/ 10 = 3$, and bucket 3 holds 30 up to 40 ms.
+    - question:
+        id: drill-log-bucket
+        type: numeric
+        system: s1
+        prompt: |
+          Bucket upper edges are 1, 2, 4, 8, …, 1,024 ms. What is the upper edge of the bucket holding a 300 ms request?
+        answer: "512"
+        explanation: 300 is above 256 and at most 512, so it is in the bucket from 256 to 512 ms.
+    - question:
+        id: drill-merge
+        type: numeric
+        system: s1
+        prompt: |
+          Two servers use the same three buckets. Their counts are 3, 5, 2 and 1, 4, 6. What is the merged count in the middle bucket?
+        answer: "9"
+        explanation: Merging adds counts bucket by bucket, $5 + 4 = 9$.
+    - question:
+        id: drill-sqrt
+        type: numeric
+        system: s1
+        prompt: |
+          By the square-root rule, about how many buckets suit 400 values?
+        answer: "20"
+        explanation: $\sqrt{400} = 20$.
+    - question:
+        id: drill-ratio
+        type: numeric
+        system: s1
+        prompt: |
+          Each bucket's upper edge is 1.25 times its lower edge. Reporting the upper edge overstates a value in the bucket by at most what fraction?
+        answer: "0.25"
+        explanation: The upper edge is at most 1.25 times any value in the bucket, so the overstatement is below 25%.
+    - question:
+        id: drill-mergeable
+        type: choice
+        system: s1
+        prompt: |
+          Which summaries from ten servers can be combined exactly into the same summary for all their requests?
+        options:
+          - "Histograms with the same bucket edges"
+          - "Their p99s"
+          - "Their medians"
+          - "Their p99s, weighted by traffic"
+        answer: 0
+        explanation: Adding counts bucket by bucket gives exactly the histogram of all the requests. Percentiles and medians cannot be combined without the data.
+    - question:
+        id: predict-counts
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          counts = {}
+          for t in [3, 12, 17, 25, 8, 14]:
+              b = t // 10
+              counts[b] = counts.get(b, 0) + 1
+          print(counts)
+        output: "{0: 2, 1: 3, 2: 1}"
+        explanation: The buckets are 0, 1, 1, 2, 0, 1. A dictionary lists its keys in the order they were first added, so 0, then 1, then 2.
+    - question:
+        id: predict-log-bucket
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import math
+
+          print([math.ceil(math.log2(t)) for t in [1, 3, 4, 5, 1000]])
+        output: "[0, 2, 2, 3, 10]"
+        explanation: For doubling buckets starting at 1, $\lceil \log_2 t \rceil$ is the power of 2 at the bucket's upper edge. 3 and 4 share the bucket up to $2^2 = 4$, 5 is in the one up to 8, and 1,000 in the one up to $2^{10} = 1{,}024$.
+  work:
+    - text: Slower now. For each bucket, ask which values it holds, including the ones exactly on an edge and the ones beyond the last edge.
+    - question:
+        id: fix-buckets
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `bucket_counts(times, width, buckets)` should count whole-number times into `buckets` buckets of the given width, starting at 0, with the last bucket also taking every time beyond it. The program should print `[2, 3, 1, 1]`. It stops with an `IndexError`. Find the fault and fix it.
+        starter: |
+          def bucket_counts(times, width, buckets):
+              # counts[j] is how many times lie in [j * width, (j + 1) * width).
+              # The last bucket also takes every time beyond it.
+              counts = [0] * buckets
+              for t in times:
+                  counts[t // width] += 1
+              return counts
+
+
+          print(bucket_counts([3, 12, 17, 25, 8, 14, 400], 10, 4))
+        solution: |
+          def bucket_counts(times, width, buckets):
+              # counts[j] is how many times lie in [j * width, (j + 1) * width).
+              # The last bucket also takes every time beyond it.
+              counts = [0] * buckets
+              for t in times:
+                  counts[min(t // width, buckets - 1)] += 1
+              return counts
+
+
+          print(bucket_counts([3, 12, 17, 25, 8, 14, 400], 10, 4))
+        tests: |
+          _cases = [([], 5, 3), ([0], 5, 3), ([4, 5, 9, 10], 5, 3), ([3, 12, 17, 25, 8, 14, 400], 10, 4), ([99, 100, 101, 250, 7], 100, 2), ([15, 15, 15], 5, 1)]
+          for _times, _width, _buckets in _cases:
+              _want = [0] * _buckets
+              for _t in _times:
+                  _j = 0
+                  while _j < _buckets - 1 and _t >= (_j + 1) * _width:
+                      _j += 1
+                  _want[_j] += 1
+              _got = bucket_counts(_times, _width, _buckets)
+              assert _got == _want, "bucket_counts(" + str(_times) + ", " + str(_width) + ", " + str(_buckets) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[2, 3, 1, 1]", "The program should print [2, 3, 1, 1]"
+        wrong:
+          - |
+            def bucket_counts(times, width, buckets):
+                # counts[j] is how many times lie in [j * width, (j + 1) * width).
+                # The last bucket also takes every time beyond it.
+                counts = [0] * buckets
+                for t in times:
+                    if t // width < buckets:
+                        counts[t // width] += 1
+                return counts
+
+
+            print(bucket_counts([3, 12, 17, 25, 8, 14, 400], 10, 4))
+          - |
+            def bucket_counts(times, width, buckets):
+                # counts[j] is how many times lie in [j * width, (j + 1) * width).
+                # The last bucket also takes every time beyond it.
+                counts = [0] * buckets
+                for t in times:
+                    counts[min(t // width, buckets)] += 1
+                return counts
+
+
+            print(bucket_counts([3, 12, 17, 25, 8, 14, 400], 10, 4))
+          - |
+            def bucket_counts(times, width, buckets):
+                # counts[j] is how many times lie in [j * width, (j + 1) * width).
+                # The last bucket also takes every time beyond it.
+                counts = [0] * buckets
+                for t in times:
+                    counts[min(round(t / width), buckets - 1)] += 1
+                return counts
+
+
+            print(bucket_counts([3, 12, 17, 25, 8, 14, 400], 10, 4))
+        explanation: |
+          The 400 ms request belongs in bucket `400 // 10 = 40`, but there are only four, so it must go to the last one, `min(t // width, buckets - 1)`. Dropping times beyond the range loses the slowest requests, which a latency histogram exists to show; capping at `buckets` instead of `buckets - 1` is still one past the end; and rounding instead of floor division moves 8 ms into the bucket that starts at 10.
+    - question:
+        id: write-percentile-from-counts
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `percentile_from_counts(edges, counts, p)`. `edges[j]` is the upper edge of bucket `j` and `counts[j]` how many values it holds, in increasing order of edge. For a whole number `p` from 1 to 100, return the upper edge of the bucket holding the nearest-rank `p`th percentile.
+        starter: |
+          import math
+
+
+          def percentile_from_counts(edges, counts, p):
+              # edges[j] is the upper edge of bucket j and counts[j] how many times it holds.
+              # Return the upper edge of the bucket holding the nearest-rank p-th percentile.
+              return 0
+
+
+          edges = [10, 20, 50, 100, 1000]
+          counts = [50, 30, 15, 4, 1]
+          print(percentile_from_counts(edges, counts, 50), percentile_from_counts(edges, counts, 95), percentile_from_counts(edges, counts, 99), percentile_from_counts(edges, counts, 100))
+        solution: |
+          import math
+
+
+          def percentile_from_counts(edges, counts, p):
+              # edges[j] is the upper edge of bucket j and counts[j] how many times it holds.
+              # Return the upper edge of the bucket holding the nearest-rank p-th percentile.
+              rank = math.ceil(p * sum(counts) / 100)
+              seen = 0
+              for edge, count in zip(edges, counts):
+                  seen += count
+                  if seen >= rank:
+                      return edge
+
+
+          edges = [10, 20, 50, 100, 1000]
+          counts = [50, 30, 15, 4, 1]
+          print(percentile_from_counts(edges, counts, 50), percentile_from_counts(edges, counts, 95), percentile_from_counts(edges, counts, 99), percentile_from_counts(edges, counts, 100))
+        tests: |
+          _cases = [([10, 20, 50, 100, 1000], [50, 30, 15, 4, 1]), ([1, 2, 4, 8], [0, 3, 0, 2]), ([5], [7]), ([10, 20, 30], [1, 1, 1]), ([2, 4, 8, 16, 32], [10, 0, 5, 0, 1])]
+          for _edges, _counts in _cases:
+              _values = []
+              for _e, _c in zip(_edges, _counts):
+                  _values = _values + [_e] * _c
+              for _p in range(1, 101):
+                  _want = _values[math.ceil(_p * len(_values) / 100) - 1]
+                  _got = percentile_from_counts(_edges, _counts, _p)
+                  assert _got == _want, "percentile_from_counts(" + str(_edges) + ", " + str(_counts) + ", " + str(_p) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "10 50 100 1000", "The program should print 10 50 100 1000"
+        wrong:
+          - |
+            import math
+
+
+            def percentile_from_counts(edges, counts, p):
+                # edges[j] is the upper edge of bucket j and counts[j] how many times it holds.
+                # Return the upper edge of the bucket holding the nearest-rank p-th percentile.
+                rank = math.ceil(p * sum(counts) / 100)
+                seen = 0
+                for edge, count in zip(edges, counts):
+                    seen += count
+                    if seen > rank:
+                        return edge
+                return edges[-1]
+
+
+            edges = [10, 20, 50, 100, 1000]
+            counts = [50, 30, 15, 4, 1]
+            print(percentile_from_counts(edges, counts, 50), percentile_from_counts(edges, counts, 95), percentile_from_counts(edges, counts, 99), percentile_from_counts(edges, counts, 100))
+          - |
+            import math
+
+
+            def percentile_from_counts(edges, counts, p):
+                # edges[j] is the upper edge of bucket j and counts[j] how many times it holds.
+                # Return the upper edge of the bucket holding the nearest-rank p-th percentile.
+                rank = math.ceil(p * sum(counts) / 100)
+                for edge, count in zip(edges, counts):
+                    if count >= rank:
+                        return edge
+                return edges[-1]
+
+
+            edges = [10, 20, 50, 100, 1000]
+            counts = [50, 30, 15, 4, 1]
+            print(percentile_from_counts(edges, counts, 50), percentile_from_counts(edges, counts, 95), percentile_from_counts(edges, counts, 99), percentile_from_counts(edges, counts, 100))
+          - |
+            import math
+
+
+            def percentile_from_counts(edges, counts, p):
+                # edges[j] is the upper edge of bucket j and counts[j] how many times it holds.
+                # Return the upper edge of the bucket holding the nearest-rank p-th percentile.
+                rank = p * sum(counts) // 100
+                seen = 0
+                for edge, count in zip(edges, counts):
+                    seen += count
+                    if seen >= rank:
+                        return edge
+
+
+            edges = [10, 20, 50, 100, 1000]
+            counts = [50, 30, 15, 4, 1]
+            print(percentile_from_counts(edges, counts, 50), percentile_from_counts(edges, counts, 95), percentile_from_counts(edges, counts, 99), percentile_from_counts(edges, counts, 100))
+        explanation: |
+          The rank is $\lceil pn/100 \rceil$ and the percentile lies in the first bucket whose running total reaches it, so the test is `seen >= rank`. A strict `>` overshoots whenever a bucket ends exactly at the rank, as p50 does here. Comparing each bucket's own count with the rank forgets the buckets before it, and rounding the rank down with `//` lets a rank of 0 pick an empty first bucket.
+    - question:
+        id: write-edges
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `fixed_error_edges(low, high, error)`: the list of bucket upper edges that starts at `low`, multiplies by `1 + error` each time, and stops at the first edge that is at least `high`.
+        starter: |
+          def fixed_error_edges(low, high, error):
+              # Bucket upper edges: start at low, multiply by (1 + error) each time,
+              # and stop at the first edge that is at least high.
+              return [low]
+
+
+          print(fixed_error_edges(10, 80, 1))
+          edges = fixed_error_edges(1, 100000, 0.1)
+          print(len(edges) - 1, round(edges[-1]))
+        solution: |
+          def fixed_error_edges(low, high, error):
+              # Bucket upper edges: start at low, multiply by (1 + error) each time,
+              # and stop at the first edge that is at least high.
+              edges = [low]
+              while edges[-1] < high:
+                  edges.append(edges[-1] * (1 + error))
+              return edges
+
+
+          print(fixed_error_edges(10, 80, 1))
+          edges = fixed_error_edges(1, 100000, 0.1)
+          print(len(edges) - 1, round(edges[-1]))
+        tests: |
+          _cases = [(10, 80, 1), (10, 81, 1), (5, 5, 1), (1, 1000, 9), (3, 100, 0.5), (1, 100000, 0.1), (2, 7, 0.25)]
+          for _low, _high, _error in _cases:
+              _got = fixed_error_edges(_low, _high, _error)
+              _want = [_low]
+              while _want[-1] < _high:
+                  _want.append(_want[-1] * (1 + _error))
+              assert len(_got) == len(_want), "fixed_error_edges(" + str(_low) + ", " + str(_high) + ", " + str(_error) + ") should give " + str(len(_want)) + " edges, not " + str(len(_got))
+              for _a, _b in zip(_got, _want):
+                  assert abs(_a - _b) <= 1e-9 * _b, "fixed_error_edges(" + str(_low) + ", " + str(_high) + ", " + str(_error) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[10, 20, 40, 80]\n121 101980", "The program should print [10, 20, 40, 80] and then 121 101980"
+        wrong:
+          - |
+            def fixed_error_edges(low, high, error):
+                # Bucket upper edges: start at low, multiply by (1 + error) each time,
+                # and stop at the first edge that is at least high.
+                edges = [low]
+                while edges[-1] * (1 + error) < high:
+                    edges.append(edges[-1] * (1 + error))
+                return edges
+
+
+            print(fixed_error_edges(10, 80, 1))
+            edges = fixed_error_edges(1, 100000, 0.1)
+            print(len(edges) - 1, round(edges[-1]))
+          - |
+            def fixed_error_edges(low, high, error):
+                # Bucket upper edges: start at low, multiply by (1 + error) each time,
+                # and stop at the first edge that is at least high.
+                edges = [low]
+                while edges[-1] <= high:
+                    edges.append(edges[-1] * (1 + error))
+                return edges
+
+
+            print(fixed_error_edges(10, 80, 1))
+            edges = fixed_error_edges(1, 100000, 0.1)
+            print(len(edges) - 1, round(edges[-1]))
+          - |
+            def fixed_error_edges(low, high, error):
+                # Bucket upper edges: start at low, multiply by (1 + error) each time,
+                # and stop at the first edge that is at least high.
+                edges = [low * (1 + error)]
+                while edges[-1] < high:
+                    edges.append(edges[-1] * (1 + error))
+                return edges
+
+
+            print(fixed_error_edges(10, 80, 1))
+            edges = fixed_error_edges(1, 100000, 0.1)
+            print(len(edges) - 1, round(edges[-1]))
+        explanation: |
+          Keep multiplying while the last edge is below `high`, so the loop stops at the first edge at or above it. Checking the next edge before adding it stops one short, below `high`; `<=` adds one edge too many when an edge lands exactly on `high`; and starting from `low * (1 + error)` drops the first edge. The second line of output is the puzzle's answer: 121 buckets above 1 ms, the last reaching about 102 seconds.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Buckets must cover 1 ms to 100,000 ms, and reporting a bucket's upper edge must never overstate a value in it by 10% or more. What is the smallest number of buckets?
+        answer: "121"
+        explanation: |
+          Each bucket's upper edge can be at most 1.1 times its lower edge, so $k$ buckets reach at most $1.1^k$ ms. We need $1.1^k \ge 100{,}000$, so $k \ge \ln 100{,}000 / \ln 1.1 \approx 120.8$, and $k = 121$.
+    - question:
+        id: work-nested
+        type: choice
+        system: s2
+        prompt: |
+          Server A counts requests in buckets with upper edges 1, 2, 4, 8, … ms. Server B uses edges that grow by $\sqrt{2}$: 1, 1.41, 2, 2.83, 4, … ms. What is the finest histogram of all their requests that can be built exactly from the two sets of counts?
+        options:
+          - "A's buckets: add each pair of B's buckets into the one A bucket that contains them, then add A's counts."
+          - "B's buckets: split each of A's buckets into two equal halves."
+          - "Any edges at all, by interpolating inside the buckets."
+          - "None: histograms with different edges cannot be combined."
+        answer: 0
+        explanation: |
+          Every edge of A is also an edge of B, so each A bucket is exactly two B buckets. Adding B's counts in pairs gives B's requests on A's edges, and then the two can be added. Splitting A's counts in half guesses how the values fall inside a bucket, and so does interpolation; the counts do not say.
+  connections:
+    - text: |
+        121 buckets do it. If every bucket's upper edge is 1.1 times its lower edge, the upper edge never overstates a value by 10% or more, and $1.1^{121} \approx 102{,}000$ ms passes the 100-second mark. So 121 counters, under a kilobyte, record every minute's requests with a guaranteed relative error, however many requests there are, and the counters from every server and every minute can simply be added. Equal-width buckets fine enough for 10% at 1 ms would be 0.1 ms wide, and a million of them would be needed to reach 100 seconds.
+
+        A histogram describes the measurements you have. [[f5.sampling-and-estimators]] asks what they say about the measurements you do not have: how far a percentile computed from one minute's requests is from the service's true percentile. [[f5.the-bootstrap]] answers that question by resampling the data, and [[f5.noise-in-measurements-and-benchmarks]] uses histograms of repeated timings to see whether a benchmark measures the program or the noise around it.

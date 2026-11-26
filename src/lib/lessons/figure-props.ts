@@ -87,6 +87,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "union-find": z.strictObject({ bySize: z.boolean().optional(), find: z.number().optional(), joins: z.number().optional() }),
   "summary-marks": z.strictObject({ slowest: z.number().min(100).max(5000).optional(), percentile: z.number().int().min(1).max(100).optional() }),
   "tail-plot": z.strictObject({ alpha: z.number().min(1).max(3).optional() }),
+  "histogram-bins": z.strictObject({ buckets: z.number().int().min(2).max(60).optional(), log: z.boolean().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),

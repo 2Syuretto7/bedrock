@@ -4741,6 +4741,63 @@ function TailPlot(props: Props) {
   );
 }
 
+const HIST_TIMES = draws(3, 400, true).map((z) => 20 * Math.exp(0.75 * z));
+const HIST_TOP = 250;
+
+/** Four hundred response times counted in buckets: too few hide the shape, too many show noise, and logarithmic buckets suit a long right tail. */
+function HistogramBins(props: Props) {
+  const [k, setK] = useState(clamp(Math.round(num(props.buckets, 12)), 2, 60));
+  const [log, setLog] = useState(props.log === true);
+  const edge = (j: number) => (log ? HIST_TOP ** (j / k) : (HIST_TOP * j) / k);
+  const counts = Array.from({ length: k }, () => 0);
+  for (const t of HIST_TIMES) {
+    const at = log ? Math.floor((Math.log(Math.max(t, 1)) / Math.log(HIST_TOP)) * k) : Math.floor((t / HIST_TOP) * k);
+    counts[clamp(at, 0, k - 1)]++;
+  }
+  const tallest = Math.max(...counts);
+  const peak = counts.indexOf(tallest);
+  const empty = counts.filter((c) => c === 0).length;
+  const sorted = [...HIST_TIMES].sort((a, b) => a - b);
+  const median = (sorted[199] + sorted[200]) / 2;
+  const ms = (t: number) => (t < 10 ? dp(t, 1) : group(Math.round(t)));
+  const sy = (c: number) => 200 - (c / tallest) * 170;
+  const ticks = log ? [1, 10, 100, 250] : [0, 50, 100, 150, 200, 250];
+  const tx = (t: number) => 40 + (log ? Math.log(t) / Math.log(HIST_TOP) : t / HIST_TOP) * 380;
+  const width = log ? `edges that grow by a factor of ${dp(HIST_TOP ** (1 / k), 2)} each` : `each ${dp(HIST_TOP / k, 1)} ms wide`;
+  return (
+    <Frame
+      title="Counting times in buckets"
+      summary={`400 response times, from ${ms(sorted[0])} to ${ms(sorted[399])} ms with median ${ms(median)} ms, counted in ${k} buckets ${width}. The tallest bucket, from ${ms(edge(peak))} to ${ms(edge(peak + 1))} ms, holds ${tallest} of them. ${empty === 0 ? "No bucket is empty." : `${plural(empty, "bucket is", "buckets are")} empty.`}${log ? " On logarithmic buckets the long right tail is spread out and the bulk is no longer squeezed against zero." : " On equal-width buckets the bulk is squeezed to the left and the tail is a few thin bars."}`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={log} onClick={() => setLog(!log)}>
+            Use logarithmic buckets
+          </button>
+          <Slider label="buckets" value={k} onChange={setK} min={2} max={60} text={`${k}`} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 240" role="img" aria-label={`A histogram of 400 response times in ${k} ${log ? "logarithmic" : "equal-width"} buckets`}>
+        {counts.map((c, j) => (
+          <rect key={j} x={40 + (j * 380) / k + 0.5} y={sy(c)} width={Math.max(380 / k - 1, 0.5)} height={200 - sy(c)} className="fig-accent" opacity={0.75} />
+        ))}
+        <line x1="40" y1="200" x2="420" y2="200" className="fig-axis" />
+        {ticks.map((t) => (
+          <text key={t} x={tx(t)} y="218" textAnchor="middle" className="fig-small">
+            {group(t)}
+          </text>
+        ))}
+        <text x="420" y="234" textAnchor="end" className="fig-small">
+          milliseconds
+        </text>
+        <text x="40" y="22" className="fig-small">
+          {`tallest bucket: ${tallest}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -6043,6 +6100,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "monte-carlo": MonteCarlo,
   "summary-marks": SummaryMarks,
   "tail-plot": TailPlot,
+  "histogram-bins": HistogramBins,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
