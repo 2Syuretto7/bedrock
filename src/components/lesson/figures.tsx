@@ -6906,7 +6906,7 @@ function DenormTradeoff(props: Props) {
             <span className="label">views per like</span>
           </span>
           {DN_VIEWS.map((v) => (
-            <button key={v} type="button" className="btn btn-secondary btn-small" aria-pressed={views === v} aria-label={`${v} views per like`} onClick={() => setViews(v)}>
+            <button key={v} type="button" className="btn btn-secondary btn-small" aria-pressed={views === v} aria-label={`${group(v)} views per like`} onClick={() => setViews(v)}>
               {group(v)}
             </button>
           ))}
@@ -6914,7 +6914,7 @@ function DenormTradeoff(props: Props) {
             <span className="label">likes per post</span>
           </span>
           {DN_LIKES.map((l) => (
-            <button key={l} type="button" className="btn btn-secondary btn-small" aria-pressed={likes === l} aria-label={`${l} likes per post`} onClick={() => setLikes(l)}>
+            <button key={l} type="button" className="btn btn-secondary btn-small" aria-pressed={likes === l} aria-label={`${group(l)} likes per post`} onClick={() => setLikes(l)}>
               {group(l)}
             </button>
           ))}
