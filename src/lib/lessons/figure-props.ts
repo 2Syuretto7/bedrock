@@ -114,6 +114,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "normalise-steps": z.strictObject({ step: z.number().optional() }),
   "denorm-tradeoff": z.strictObject({ views: z.number().optional(), likes: z.number().optional() }),
   "doc-embed": z.strictObject({ mode: z.enum(["embed", "reference"]).optional(), orders: z.number().optional() }),
+  "graph-hops": z.strictObject({ hops: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),

@@ -1,0 +1,693 @@
+concept: q1.graph-models
+minutes: 80
+claim: You can model data as a property graph or as triples, store a graph in a nodes table and an edges table, write fixed-hop queries as self-joins and variable-hop queries as recursive queries that survive cycles, estimate how fast a traversal fans out, find shortest hop counts with breadth-first search, and say when a graph model fits the questions an application asks.
+recalls: [q1.document-models]
+uses: [s2.graphs-and-their-representations, f3.graph-theory-basics, q0.joins, q0.subqueries-and-common-table-expressions, s3.breadth-first-and-depth-first-search, s3.shortest-paths, f2.relations-and-functions-between-sets]
+leads: [q1.schema-evolution-and-compatibility]
+starter: |
+  # Scratch space. A small follows graph, and everyone within two hops of Asha.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.executescript("""
+      create table follows (src text not null, dst text not null, primary key (src, dst));
+      insert into follows values ('asha', 'bilal'), ('bilal', 'chitra'), ('chitra', 'asha'), ('bilal', 'dev');
+  """)
+  print(db.execute("""
+      with recursive reach(person, hops) as (
+          select 'asha', 0
+          union
+          select f.dst, r.hops + 1 from reach r join follows f on f.src = r.person where r.hops < 2
+      )
+      select person, hops from reach order by hops, person
+  """).fetchall())
+parts:
+  recall:
+    - text: |
+        [[q1.document-models]] nested what belongs to one parent and referred to what is shared, and found that many-to-many relationships fit a tree badly. Some data is almost nothing but many-to-many relationships: who follows whom, which station connects to which, which account sent money to which. For that data, the relationships themselves are the thing worth storing and querying. Three quick pulls first.
+  puzzle:
+    - text: |
+        A social app suggests "people you may know" by walking outwards from a user along follows: the people she follows, the people they follow, and the people those follow. Every user follows exactly 200 accounts, and the walk does not remember whom it has already seen.
+
+        **How many follow edges does the walk read for one user, out to three hops?**
+  intuition:
+    - text: |
+        Open a railway map. It shows stations and the tracks between them, and nearly every question you ask of it is about connections: can I get from Churchgate to Thane, how many stops is it, where must I change lines, is there a route that avoids the bridge under repair? None of these is a question about one station. Each is about paths, and you cannot know in advance how long the path will be.
+
+        A **graph model** stores data the way that map does: things as **nodes**, connections as **edges**, and both carrying properties. The figure shows a small friendship graph. Step the number of hops up from Asha and watch who is reached.
+    - figure: graph-hops
+      props: { hops: 1 }
+    - text: |
+        One hop reaches Asha's three friends; two hops reach their friends; Jai is four hops away. In tables, each hop is one more join of the friendships table to itself, so the number of hops must be written into the query. A graph query asks for "any number of hops" directly, and the reach is decided by the data. Notice also how quickly the reached set grows with each hop; in a real network, where people have hundreds of friends, that growth is the whole story of graph queries.
+  derivation:
+    - text: |
+        **The property graph.** The graphs of [[f3.graph-theory-basics]] and [[s2.graphs-and-their-representations]] had bare vertices and edges. A **property graph** dresses them up. Each node has a label, such as Person, Post or City, and properties, such as a name. Each edge has a type, such as FOLLOWS, LIKES or LIVES_IN, a direction, and properties of its own, such as the date a follow began. Anything may connect to anything: a person follows a person, likes a post, lives in a city. A new kind of relationship is just a new edge type; no new table, no migration.
+
+        **Triples.** An even plainer model stores every fact as a **triple**, subject, predicate, object: (asha, knows, bilal), (bilal, lives_in, Pune). That is the binary relation of [[f2.relations-and-functions-between-sets]] with a name attached. The whole database is one long list of triples, as in Wikidata and other knowledge graphs, and a query is a pattern of triples with blanks to fill: "asha knows ?x, ?x lives_in ?city".
+    - question:
+        id: derivation-triples
+        type: choice
+        system: s2
+        prompt: |
+          A triple store holds (asha, knows, bilal), (bilal, lives_in, Pune) and (asha, lives_in, Delhi). Which pattern finds the cities where Asha's acquaintances live?
+        options:
+          - "asha knows ?x, then ?x lives_in ?city"
+          - "asha lives_in ?city"
+          - "?x knows asha, then asha lives_in ?city"
+          - "asha knows ?city"
+        answer: 0
+        explanation: |
+          The first triple binds ?x to each person Asha knows, and the second follows each of them to a city. The other patterns find Asha's own city, the wrong direction of acquaintance, or people rather than cities.
+    - text: |
+        **A graph in two tables.** A relational database can hold any graph: a nodes table and an edges table `(src, dst, type)`, which is the edge-list representation. One hop is a join of edges to itself on `a.dst = b.src`, from [[q0.joins]]; two hops is two joins; a query for exactly four hops needs four copies of the edges table. That works when the number of hops is fixed and small.
+
+        For "any number of hops", SQL has the recursive common table expression of [[q0.subqueries-and-common-table-expressions]]. Start with the first person; each round joins the rows found so far to the edges and adds the people one step further. That is the breadth-first search of [[s3.breadth-first-and-depth-first-search]], carried out by the database. Two cautions. A graph with a cycle, Asha follows Bilal who follows Asha, makes `union all` add rows forever, while `union` stops once a round adds nothing new; and if each row carries its hop count, even `union` sees (bilal, 1) and (bilal, 3) as different rows, so a depth limit such as `where r.hops < 3` is needed too. Second, the rows found are paths, not people: the same person reached along two paths appears twice, so count with `count(distinct person)`.
+    - question:
+        id: order-recursive
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of a recursive query for everyone within two hops of Asha in order.
+        steps:
+          - "Start the result with Asha at hop 0."
+          - "Join the rows at hop 0 to the follows table to add the people at hop 1."
+          - "Join the rows at hop 1 to the follows table to add the people at hop 2."
+          - "Stop, because the depth limit lets no row at hop 2 go further."
+          - "Count the distinct people found, leaving out Asha."
+        explanation: |
+          Each round reads only the previous round's rows, exactly like a breadth-first frontier. The count comes last and must remove both repeats and the start.
+    - text: |
+        **Fan-out.** If every person has $d$ friends, one hop reads $d$ edges, two hops $d^2$ more, and $k$ hops about $d + d^2 + \dots + d^k$. With $d$ in the hundreds, three hops already read lakhs of edges. Graph databases such as Neo4j store each node's edges next to the node, so following an edge is a pointer and not an index search, which makes each step cheap. Nothing makes $d^k$ small, though. The cures are the ones from search: remember whom you have seen, so each person is expanded once; limit the depth; and prune, for example by following only close friends. Shortest connections, "how many handshakes from Asha to Jai", are the breadth-first distances of [[s3.shortest-paths]], and stopping as soon as the target is found saves most of the work.
+    - question:
+        id: derivation-fanout
+        type: numeric
+        system: s2
+        prompt: |
+          Each person knows exactly 50 others. A walk out to two hops does not remember whom it has seen. How many edges does it read?
+        answer: "2550"
+        explanation: |
+          $50$ at the first hop and $50 \times 50 = 2{,}500$ at the second, $2{,}550$ in all.
+    - text: |
+        **Graph query languages.** In Cypher, the language of Neo4j and several other graph databases, "everyone Asha follows, up to three hops away" is `MATCH (a:Person {name: 'Asha'})-[:FOLLOWS*1..3]->(p) RETURN DISTINCT p`. The pattern is drawn in ASCII: round brackets for nodes, square brackets for edges, an arrow for direction, `*1..3` for one to three hops. SPARQL queries triple stores with patterns of triples, and the SQL standard has added graph patterns of the same shape. The syntax differs; the idea is the same pattern match over nodes and edges.
+
+        **When a graph fits.** Choose a graph model when the important questions are about paths and connections of unknown length: recommendations, fraud rings where money moves through chains of accounts, dependency graphs, route planning, access rules that pass through nested groups. Choose tables when the questions are totals over many rows, such as sales by store by month, which graph databases handle no better and often worse. Many systems keep the source of truth in tables and copy the relationships into a graph for the traversals, which is denormalisation once more, with the costs you now know.
+  formal:
+    - text: |
+        **Property graph.** Nodes and directed edges, each with a label or type and a set of properties.
+
+        **Triple.** A fact (subject, predicate, object); a triple store holds a graph as a set of triples and is queried with patterns containing variables.
+
+        **Graph in tables.** `nodes(id, …)` and `edges(src, dst, type, …)`. Exactly $k$ hops: $k$ self-joins of edges. Any number of hops: a recursive query.
+
+        **Recursive reach.** `with recursive reach(node, hops) as (select start, 0 union select e.dst, r.hops + 1 from reach r join edges e on e.src = r.node where r.hops < limit)`. Use a depth limit or `union` to survive cycles, and `count(distinct …)` to count nodes rather than paths.
+
+        **Fan-out.** With $d$ edges per node, a walk to $k$ hops that does not remember visited nodes reads $d + d^2 + \dots + d^k$ edges.
+
+        **Shortest hop count.** Breadth-first search from the start, recording each node's hop count when it is first seen.
+  drill:
+    - text: Seconds each. For every query, ask how many hops and whether a cycle can bring someone back.
+    - question:
+        id: drill-joins
+        type: numeric
+        system: s1
+        prompt: |
+          A plain SQL query, without recursion, finds people exactly 4 follows away. How many copies of the follows table does it join?
+        answer: "4"
+        explanation: One copy per hop.
+    - question:
+        id: drill-union-all
+        type: choice
+        system: s1
+        prompt: |
+          A recursive query with `union all` and no depth limit walks a follows graph in which Asha follows Bilal and Bilal follows Asha. What happens?
+        options:
+          - "It never finishes, adding Asha and Bilal again every round."
+          - "It returns Asha and Bilal once each."
+          - "It returns nothing."
+          - "SQLite refuses the query."
+        answer: 0
+        explanation: "`union all` keeps every new row, so the cycle produces new rows forever. `union` would stop once a round adds nothing new."
+    - question:
+        id: drill-fanout
+        type: numeric
+        system: s1
+        prompt: |
+          Every node has 10 edges. How many edges does a walk read at its third hop alone, if it never remembers whom it has seen?
+        answer: "1000"
+        explanation: $10^3$.
+    - question:
+        id: drill-fit
+        type: choice
+        system: s1
+        prompt: |
+          Which question most needs a graph model?
+        options:
+          - "Is account A connected to account B through any chain of transfers?"
+          - "What were the total sales per store last month?"
+          - "What is the average order value?"
+          - "Which products cost more than ₹500?"
+        answer: 0
+        explanation: Only the first is about paths of unknown length; the others are filters and totals that tables answer well.
+    - question:
+        id: predict-union
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table follows (src text, dst text);
+              insert into follows values ('a', 'b'), ('b', 'c'), ('c', 'a'), ('b', 'd');
+          """)
+          print(db.execute("""
+              with recursive reach(p) as (
+                  select 'a' union select f.dst from reach r join follows f on f.src = r.p
+              )
+              select count(*) from reach
+          """).fetchone()[0])
+        output: "4"
+        explanation: "`union` drops rows already found, so when the cycle leads back to 'a' nothing new is added and the query stops with a, b, c and d."
+    - question:
+        id: predict-bfs
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          from collections import deque
+          follows = {"asha": ["bilal", "chitra"], "bilal": ["dev"], "chitra": ["dev", "asha"], "dev": ["esha"]}
+          hops = {"asha": 0}
+          queue = deque(["asha"])
+          while queue:
+              p = queue.popleft()
+              for q in follows.get(p, []):
+                  if q not in hops:
+                      hops[q] = hops[p] + 1
+                      queue.append(q)
+          print(hops["dev"], hops["esha"], len(hops))
+        output: "2 3 5"
+        explanation: Dev is first seen from Bilal at hop 2, Esha from Dev at hop 3, and the five people are each recorded once; Chitra's edge back to Asha adds nothing.
+  work:
+    - text: Slower now. Each problem walks a graph; check cycles, repeats and direction.
+    - question:
+        id: fix-reach-count
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `query` should count the people Asha can reach in one or two hops along follows, not counting Asha herself. The program should print `3`. It prints `6`. Find the fault and fix it.
+        starter: |
+          import sqlite3
+
+          query = """
+              with recursive reach(person, hops) as (
+                  select :start, 0
+                  union all
+                  select f.dst, r.hops + 1
+                  from reach r join follows f on f.src = r.person
+                  where r.hops < 2
+              )
+              select count(*) from reach where hops > 0
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table follows (src text not null, dst text not null, primary key (src, dst));
+              insert into follows values
+                  ('asha', 'bilal'), ('asha', 'chitra'), ('bilal', 'chitra'), ('bilal', 'dev'),
+                  ('chitra', 'dev'), ('chitra', 'asha'), ('dev', 'esha');
+          """)
+          print(db.execute(query, {"start": "asha"}).fetchone()[0])
+        solution: |
+          import sqlite3
+
+          query = """
+              with recursive reach(person, hops) as (
+                  select :start, 0
+                  union all
+                  select f.dst, r.hops + 1
+                  from reach r join follows f on f.src = r.person
+                  where r.hops < 2
+              )
+              select count(distinct person) from reach where person != :start
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table follows (src text not null, dst text not null, primary key (src, dst));
+              insert into follows values
+                  ('asha', 'bilal'), ('asha', 'chitra'), ('bilal', 'chitra'), ('bilal', 'dev'),
+                  ('chitra', 'dev'), ('chitra', 'asha'), ('dev', 'esha');
+          """)
+          print(db.execute(query, {"start": "asha"}).fetchone()[0])
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(62)
+          _people = ["asha", "bilal", "chitra", "dev", "esha", "farhan", "gita"]
+          for _ in range(30):
+              _edges = sorted({(_a, _b) for _a in _people for _b in _people if _a != _b and _rng.random() < 0.25})
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table follows (src text not null, dst text not null, primary key (src, dst))")
+              _db.executemany("insert into follows values (?, ?)", _edges)
+              _start = _rng.choice(_people)
+              _one = {_b for _a, _b in _edges if _a == _start}
+              _two = {_b for _a, _b in _edges if _a in _one}
+              _want = len((_one | _two) - {_start})
+              _got = _db.execute(query, {"start": _start}).fetchone()[0]
+              assert _got == _want, "With follows " + str(_edges) + ", " + _start + " reaches " + str(_want) + " other people in one or two hops, not " + str(_got)
+          assert output.strip() == "3", "The program should print 3"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                with recursive reach(person, hops) as (
+                    select :start, 0
+                    union all
+                    select f.dst, r.hops + 1
+                    from reach r join follows f on f.src = r.person
+                    where r.hops < 2
+                )
+                select count(distinct person) from reach where hops > 0
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table follows (src text not null, dst text not null, primary key (src, dst));
+                insert into follows values
+                    ('asha', 'bilal'), ('asha', 'chitra'), ('bilal', 'chitra'), ('bilal', 'dev'),
+                    ('chitra', 'dev'), ('chitra', 'asha'), ('dev', 'esha');
+            """)
+            print(db.execute(query, {"start": "asha"}).fetchone()[0])
+          - |
+            import sqlite3
+
+            query = """
+                with recursive reach(person, hops) as (
+                    select :start, 0
+                    union
+                    select f.dst, r.hops + 1
+                    from reach r join follows f on f.src = r.person
+                    where r.hops < 2
+                )
+                select count(*) from reach where hops > 0
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table follows (src text not null, dst text not null, primary key (src, dst));
+                insert into follows values
+                    ('asha', 'bilal'), ('asha', 'chitra'), ('bilal', 'chitra'), ('bilal', 'dev'),
+                    ('chitra', 'dev'), ('chitra', 'asha'), ('dev', 'esha');
+            """)
+            print(db.execute(query, {"start": "asha"}).fetchone()[0])
+          - |
+            import sqlite3
+
+            query = """
+                with recursive reach(person, hops) as (
+                    select :start, 0
+                    union
+                    select f.dst, r.hops + 1
+                    from reach r join follows f on f.src = r.person
+                    where r.hops < 2
+                )
+                select count(*) from reach where person != :start
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table follows (src text not null, dst text not null, primary key (src, dst));
+                insert into follows values
+                    ('asha', 'bilal'), ('asha', 'chitra'), ('bilal', 'chitra'), ('bilal', 'dev'),
+                    ('chitra', 'dev'), ('chitra', 'asha'), ('dev', 'esha');
+            """)
+            print(db.execute(query, {"start": "asha"}).fetchone()[0])
+        explanation: |
+          The recursive query finds paths: Chitra at hop 1 and again at hop 2, Dev along two paths, and Asha herself through Chitra. Counting distinct people other than the start counts each person once. Keeping `hops > 0` still counts Asha when a cycle returns to her, and switching to `union` removes only rows identical in both person and hop count.
+    - question:
+        id: write-degrees
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `degrees` so that it returns the fewest follows hops from `a` to `b`, following each edge only in its own direction: 0 when `a` and `b` are the same person, and `None` when `b` cannot be reached. The program should print `[0, 2, 3, None]`.
+        starter: |
+          import sqlite3
+          from collections import deque
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table follows (src text not null, dst text not null, primary key (src, dst));
+              insert into follows values
+                  ('asha', 'bilal'), ('asha', 'chitra'), ('bilal', 'chitra'), ('bilal', 'dev'),
+                  ('chitra', 'dev'), ('chitra', 'asha'), ('dev', 'esha'), ('farhan', 'asha');
+          """)
+
+
+          def degrees(db, a, b):
+              following = {}
+              for src, dst in db.execute("select src, dst from follows"):
+                  if src not in following:
+                      following[src] = []
+                  following[src].append(dst)
+              return None
+
+
+          print([degrees(db, "asha", p) for p in ["asha", "dev", "esha", "farhan"]])
+        solution: |
+          import sqlite3
+          from collections import deque
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table follows (src text not null, dst text not null, primary key (src, dst));
+              insert into follows values
+                  ('asha', 'bilal'), ('asha', 'chitra'), ('bilal', 'chitra'), ('bilal', 'dev'),
+                  ('chitra', 'dev'), ('chitra', 'asha'), ('dev', 'esha'), ('farhan', 'asha');
+          """)
+
+
+          def degrees(db, a, b):
+              following = {}
+              for src, dst in db.execute("select src, dst from follows"):
+                  if src not in following:
+                      following[src] = []
+                  following[src].append(dst)
+              hops = {a: 0}
+              queue = deque([a])
+              while queue:
+                  person = queue.popleft()
+                  if person == b:
+                      return hops[person]
+                  for other in following.get(person, []):
+                      if other not in hops:
+                          hops[other] = hops[person] + 1
+                          queue.append(other)
+              return None
+
+
+          print([degrees(db, "asha", p) for p in ["asha", "dev", "esha", "farhan"]])
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(63)
+          _db = sqlite3.connect(":memory:")
+          _db.execute("create table follows (src text not null, dst text not null, primary key (src, dst))")
+          _db.executemany("insert into follows values (?, ?)", [("asha", "bilal"), ("asha", "chitra"), ("bilal", "esha"), ("chitra", "dev"), ("dev", "esha")])
+          _got = degrees(_db, "asha", "esha")
+          assert _got == 2, "With asha following bilal and chitra, bilal following esha, chitra following dev and dev following esha, degrees from asha to esha should be 2, not " + str(_got)
+          _people = ["asha", "bilal", "chitra", "dev", "esha", "farhan", "gita", "hari"]
+          for _ in range(40):
+              _edges = sorted({(_x, _y) for _x in _people for _y in _people if _x != _y and _rng.random() < 0.2})
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table follows (src text not null, dst text not null, primary key (src, dst))")
+              _db.executemany("insert into follows values (?, ?)", _edges)
+              _a, _b = _rng.choice(_people), _rng.choice(_people)
+              _dist, _front = {_a: 0}, [_a]
+              while _front:
+                  _next = []
+                  for _p in _front:
+                      for _x, _y in _edges:
+                          if _x == _p and _y not in _dist:
+                              _dist[_y] = _dist[_p] + 1
+                              _next.append(_y)
+                  _front = _next
+              _want = _dist.get(_b)
+              _got = degrees(_db, _a, _b)
+              assert _got == _want, "With follows " + str(_edges) + ", degrees from " + _a + " to " + _b + " should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[0, 2, 3, None]", "The program should print [0, 2, 3, None]"
+        wrong:
+          - |
+            import sqlite3
+            from collections import deque
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table follows (src text not null, dst text not null, primary key (src, dst));
+                insert into follows values
+                    ('asha', 'bilal'), ('asha', 'chitra'), ('bilal', 'chitra'), ('bilal', 'dev'),
+                    ('chitra', 'dev'), ('chitra', 'asha'), ('dev', 'esha'), ('farhan', 'asha');
+            """)
+
+
+            def degrees(db, a, b):
+                following = {}
+                for src, dst in db.execute("select src, dst from follows"):
+                    if src not in following:
+                        following[src] = []
+                    following[src].append(dst)
+                hops = {a: 0}
+                stack = [a]
+                while stack:
+                    person = stack.pop()
+                    if person == b:
+                        return hops[person]
+                    for other in following.get(person, []):
+                        if other not in hops:
+                            hops[other] = hops[person] + 1
+                            stack.append(other)
+                return None
+
+
+            print([degrees(db, "asha", p) for p in ["asha", "dev", "esha", "farhan"]])
+          - |
+            import sqlite3
+            from collections import deque
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table follows (src text not null, dst text not null, primary key (src, dst));
+                insert into follows values
+                    ('asha', 'bilal'), ('asha', 'chitra'), ('bilal', 'chitra'), ('bilal', 'dev'),
+                    ('chitra', 'dev'), ('chitra', 'asha'), ('dev', 'esha'), ('farhan', 'asha');
+            """)
+
+
+            def degrees(db, a, b):
+                following = {}
+                for src, dst in db.execute("select src, dst from follows"):
+                    for x, y in [(src, dst), (dst, src)]:
+                        if x not in following:
+                            following[x] = []
+                        following[x].append(y)
+                hops = {a: 0}
+                queue = deque([a])
+                while queue:
+                    person = queue.popleft()
+                    if person == b:
+                        return hops[person]
+                    for other in following.get(person, []):
+                        if other not in hops:
+                            hops[other] = hops[person] + 1
+                            queue.append(other)
+                return None
+
+
+            print([degrees(db, "asha", p) for p in ["asha", "dev", "esha", "farhan"]])
+          - |
+            import sqlite3
+            from collections import deque
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table follows (src text not null, dst text not null, primary key (src, dst));
+                insert into follows values
+                    ('asha', 'bilal'), ('asha', 'chitra'), ('bilal', 'chitra'), ('bilal', 'dev'),
+                    ('chitra', 'dev'), ('chitra', 'asha'), ('dev', 'esha'), ('farhan', 'asha');
+            """)
+
+
+            def degrees(db, a, b):
+                following = {}
+                for src, dst in db.execute("select src, dst from follows"):
+                    if src not in following:
+                        following[src] = []
+                    following[src].append(dst)
+                hops = {}
+                queue = deque()
+                for other in following.get(a, []):
+                    hops[other] = 1
+                    queue.append(other)
+                while queue:
+                    person = queue.popleft()
+                    if person == b:
+                        return hops[person]
+                    for other in following.get(person, []):
+                        if other not in hops:
+                            hops[other] = hops[person] + 1
+                            queue.append(other)
+                return None
+
+
+            print([degrees(db, "asha", p) for p in ["asha", "dev", "esha", "farhan"]])
+        explanation: |
+          Breadth-first search with a queue sees every person at hop $k$ before anyone at hop $k + 1$, so the first hop count recorded is the smallest. A stack explores one branch deeply first and can record a longer route; adding each edge in both directions finds Farhan, who follows Asha but is not followed by her; and starting from Asha's followees without Asha herself gives the wrong answer when `a` is `b`.
+    - question:
+        id: write-friend-cities
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          The facts are stored as triples. Change `query` so that it returns the distinct cities that the people `:person` knows live in, in alphabetical order. The program should print `[('Kochi',), ('Pune',)]`.
+        starter: |
+          import sqlite3
+
+          query = """
+              select object from triples
+              where subject = :person and predicate = 'knows'
+              order by object
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table triples (subject text not null, predicate text not null, object text not null);
+              insert into triples values
+                  ('asha', 'knows', 'bilal'), ('asha', 'knows', 'chitra'), ('asha', 'knows', 'dev'),
+                  ('asha', 'blocked', 'farhan'), ('asha', 'lives_in', 'Delhi'),
+                  ('bilal', 'lives_in', 'Pune'), ('bilal', 'knows', 'esha'),
+                  ('chitra', 'lives_in', 'Kochi'), ('chitra', 'born_in', 'Madurai'),
+                  ('dev', 'lives_in', 'Pune'), ('esha', 'lives_in', 'Jaipur'), ('farhan', 'lives_in', 'Agra');
+          """)
+          print(db.execute(query, {"person": "asha"}).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select distinct c.object
+              from triples k join triples c on c.subject = k.object
+              where k.subject = :person and k.predicate = 'knows' and c.predicate = 'lives_in'
+              order by c.object
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table triples (subject text not null, predicate text not null, object text not null);
+              insert into triples values
+                  ('asha', 'knows', 'bilal'), ('asha', 'knows', 'chitra'), ('asha', 'knows', 'dev'),
+                  ('asha', 'blocked', 'farhan'), ('asha', 'lives_in', 'Delhi'),
+                  ('bilal', 'lives_in', 'Pune'), ('bilal', 'knows', 'esha'),
+                  ('chitra', 'lives_in', 'Kochi'), ('chitra', 'born_in', 'Madurai'),
+                  ('dev', 'lives_in', 'Pune'), ('esha', 'lives_in', 'Jaipur'), ('farhan', 'lives_in', 'Agra');
+          """)
+          print(db.execute(query, {"person": "asha"}).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(64)
+          _people = ["asha", "bilal", "chitra", "dev", "esha", "farhan"]
+          _cities = ["Agra", "Delhi", "Jaipur", "Kochi", "Madurai", "Pune"]
+          for _ in range(30):
+              _facts = set()
+              for _p in _people:
+                  _facts.add((_p, "lives_in", _rng.choice(_cities)))
+                  if _rng.random() < 0.4:
+                      _facts.add((_p, "born_in", _rng.choice(_cities)))
+                  for _q in _people:
+                      if _q != _p and _rng.random() < 0.3:
+                          _facts.add((_p, _rng.choice(["knows", "knows", "blocked"]), _q))
+              _facts = sorted(_facts)
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table triples (subject text not null, predicate text not null, object text not null)")
+              _db.executemany("insert into triples values (?, ?, ?)", _facts)
+              _who = _rng.choice(_people)
+              _friends = {_o for _s, _r, _o in _facts if _s == _who and _r == "knows"}
+              _want = [(_c,) for _c in sorted({_o for _s, _r, _o in _facts if _s in _friends and _r == "lives_in"})]
+              _got = _db.execute(query, {"person": _who}).fetchall()
+              assert _got == _want, "With the triples " + str(_facts) + ", the cities where the people " + _who + " knows live are " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('Kochi',), ('Pune',)]", "The program should print [('Kochi',), ('Pune',)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select distinct c.object
+                from triples k join triples c on c.subject = k.object
+                where k.subject = :person and k.predicate = 'knows'
+                order by c.object
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table triples (subject text not null, predicate text not null, object text not null);
+                insert into triples values
+                    ('asha', 'knows', 'bilal'), ('asha', 'knows', 'chitra'), ('asha', 'knows', 'dev'),
+                    ('asha', 'blocked', 'farhan'), ('asha', 'lives_in', 'Delhi'),
+                    ('bilal', 'lives_in', 'Pune'), ('bilal', 'knows', 'esha'),
+                    ('chitra', 'lives_in', 'Kochi'), ('chitra', 'born_in', 'Madurai'),
+                    ('dev', 'lives_in', 'Pune'), ('esha', 'lives_in', 'Jaipur'), ('farhan', 'lives_in', 'Agra');
+            """)
+            print(db.execute(query, {"person": "asha"}).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select c.object
+                from triples k join triples c on c.subject = k.object
+                where k.subject = :person and k.predicate = 'knows' and c.predicate = 'lives_in'
+                order by c.object
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table triples (subject text not null, predicate text not null, object text not null);
+                insert into triples values
+                    ('asha', 'knows', 'bilal'), ('asha', 'knows', 'chitra'), ('asha', 'knows', 'dev'),
+                    ('asha', 'blocked', 'farhan'), ('asha', 'lives_in', 'Delhi'),
+                    ('bilal', 'lives_in', 'Pune'), ('bilal', 'knows', 'esha'),
+                    ('chitra', 'lives_in', 'Kochi'), ('chitra', 'born_in', 'Madurai'),
+                    ('dev', 'lives_in', 'Pune'), ('esha', 'lives_in', 'Jaipur'), ('farhan', 'lives_in', 'Agra');
+            """)
+            print(db.execute(query, {"person": "asha"}).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select distinct c.object
+                from triples k join triples c on c.subject = k.object
+                where k.subject = :person and c.predicate = 'lives_in'
+                order by c.object
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table triples (subject text not null, predicate text not null, object text not null);
+                insert into triples values
+                    ('asha', 'knows', 'bilal'), ('asha', 'knows', 'chitra'), ('asha', 'knows', 'dev'),
+                    ('asha', 'blocked', 'farhan'), ('asha', 'lives_in', 'Delhi'),
+                    ('bilal', 'lives_in', 'Pune'), ('bilal', 'knows', 'esha'),
+                    ('chitra', 'lives_in', 'Kochi'), ('chitra', 'born_in', 'Madurai'),
+                    ('dev', 'lives_in', 'Pune'), ('esha', 'lives_in', 'Jaipur'), ('farhan', 'lives_in', 'Agra');
+            """)
+            print(db.execute(query, {"person": "asha"}).fetchall())
+        explanation: |
+          The pattern "person knows ?x, ?x lives_in ?city" is a join of the triples table to itself, with each copy filtered by its own predicate. Without the `lives_in` filter, birthplaces and acquaintances come back as cities; without `distinct`, Pune appears once per friend there; and without the `knows` filter, the people Asha has blocked count as friends.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          How many follow edges does the puzzle's walk read for one user, out to three hops?
+        answer: "8040200"
+        explanation: |
+          $200 + 200^2 + 200^3 = 200 + 40{,}000 + 80{,}00{,}000 = 80{,}40{,}200$ edges.
+    - question:
+        id: work-model
+        type: choice
+        system: s2
+        prompt: |
+          A bank wants to flag accounts that sit within four transfers of a known fraudulent account, and also to report total deposits per branch each month. Which design fits?
+        options:
+          - "Keep accounts and transfers in tables for the reports, and query the transfers as a graph for the four-hop check."
+          - "Store everything as one document per branch with its accounts and transfers nested."
+          - "Use only a graph database and compute monthly totals by walking every edge."
+          - "Answer the four-hop check with four separate queries written by hand for each account."
+        answer: 0
+        explanation: |
+          The fraud check is a bounded traversal of unknown paths, which a graph or a recursive query answers directly, while the monthly totals are an aggregate over many rows, which tables answer well. Nesting transfers in branch documents breaks every transfer between branches.
+  connections:
+    - text: |
+        80,40,200 edges for one user: 200 at the first hop, 40,000 at the second and 80 lakh at the third. Remembering whom the walk has already seen cuts this sharply, because friends of friends overlap heavily, but the lesson stands: every extra hop multiplies the work, so real recommendation systems stop at two or three hops and keep only the most promising people at each step.
+
+        Three models now sit side by side. Tables make totals and constraints easy, documents make reading a whole object easy, and graphs make paths easy. Each stores the same facts in a different shape, and each faces the same problem once it is in use: the shape must change while old data and old programs are still running. That is [[q1.schema-evolution-and-compatibility]].

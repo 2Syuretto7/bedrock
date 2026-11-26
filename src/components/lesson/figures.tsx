@@ -7043,6 +7043,81 @@ function DocEmbed(props: Props) {
   );
 }
 
+const GH_PEOPLE: [string, number, number][] = [
+  ["Asha", 40, 110],
+  ["Bilal", 140, 46],
+  ["Chitra", 140, 110],
+  ["Dev", 140, 174],
+  ["Esha", 240, 30],
+  ["Farhan", 240, 98],
+  ["Gita", 240, 174],
+  ["Hari", 340, 64],
+  ["Isha", 340, 174],
+  ["Jai", 430, 118],
+];
+const GH_LINKS: [number, number][] = [
+  [0, 1], [0, 2], [0, 3], [1, 2], [1, 4], [2, 5], [3, 6], [4, 7], [5, 7], [6, 8], [7, 9], [8, 9],
+];
+
+/** Breadth-first distance of every person from Asha along the friendships. */
+function ghDistances(): number[] {
+  const dist = GH_PEOPLE.map(() => -1);
+  dist[0] = 0;
+  const queue = [0];
+  while (queue.length > 0) {
+    const p = queue.shift()!;
+    for (const [a, b] of GH_LINKS) {
+      const q = a === p ? b : b === p ? a : -1;
+      if (q >= 0 && dist[q] < 0) {
+        dist[q] = dist[p] + 1;
+        queue.push(q);
+      }
+    }
+  }
+  return dist;
+}
+
+/** People within a number of hops of Asha in a friendship graph, and the self-joins a query needs to find them. */
+function GraphHops(props: Props) {
+  const [hops, setHops] = useState(clamp(Math.round(num(props.hops, 1)), 0, 4));
+  const dist = ghDistances();
+  const reached = GH_PEOPLE.filter((_, i) => dist[i] <= hops).map(([name]) => name);
+  const others = reached.slice(1);
+  const summary = `Within ${hops} ${plural(hops, "hop", "hops")} of Asha: ${others.length === 0 ? "nobody but Asha herself" : others.join(", ")}, ${others.length} ${plural(others.length, "person", "people")} besides Asha. In tables, a query for exactly this reach joins the friendships table to itself ${hops} ${plural(hops, "time", "times")}, one join per hop; a recursive query lets the number of hops be decided by the data.`;
+  return (
+    <Frame
+      title="Hops through a friendship graph"
+      summary={summary}
+      controls={
+        <Stepper label="hops" value={hops} min={0} max={4} onChange={setHops} />
+      }
+    >
+      <svg viewBox="0 0 470 230" role="img" aria-label={`${others.length} ${plural(others.length, "person", "people")} within ${hops} ${plural(hops, "hop", "hops")} of Asha`}>
+        {GH_LINKS.map(([a, b]) => {
+          const walked = Math.min(dist[a], dist[b]) < hops;
+          return (
+            <line key={`${a}-${b}`} x1={GH_PEOPLE[a][1]} y1={GH_PEOPLE[a][2]} x2={GH_PEOPLE[b][1]} y2={GH_PEOPLE[b][2]} className={walked ? "fig-accent-line" : "fig-grid"} />
+          );
+        })}
+        {GH_PEOPLE.map(([name, x, y], i) => {
+          const lit = dist[i] <= hops;
+          return (
+            <g key={name}>
+              <rect x={x - 26} y={y - 11} width={52} height={22} rx={4} className={lit ? "fig-accent" : "fig-fill"} />
+              <text x={x} y={y + 4} textAnchor="middle" className="fig-small" style={lit ? { fill: "var(--bg)" } : { fill: "var(--text)" }}>
+                {name}
+              </text>
+            </g>
+          );
+        })}
+        <text x={8} y={222} className="fig-small">
+          {`${others.length} ${plural(others.length, "person", "people")} reached, ${hops} ${plural(hops, "self-join", "self-joins")} of the friendships table`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -8372,6 +8447,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "normalise-steps": NormaliseSteps,
   "denorm-tradeoff": DenormTradeoff,
   "doc-embed": DocEmbed,
+  "graph-hops": GraphHops,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
