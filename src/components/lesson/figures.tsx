@@ -6167,6 +6167,104 @@ function SubquerySteps(props: Props) {
   );
 }
 
+const WF_ROWS: [string, number, number][] = [
+  ["KOR", 1, 1200],
+  ["KOR", 2, 900],
+  ["KOR", 3, 1500],
+  ["KOR", 4, 800],
+  ["KOR", 5, 2100],
+  ["IND", 1, 700],
+  ["IND", 2, 1100],
+  ["IND", 3, 600],
+  ["IND", 4, 1300],
+  ["IND", 5, 1000],
+];
+type WfKind = "whole" | "running" | "moving" | "rank";
+const WF_KINDS: WfKind[] = ["whole", "running", "moving", "rank"];
+const WF_LABELS: Record<WfKind, string> = { whole: "store total", running: "running total", moving: "3-day average", rank: "rank" };
+const WF_SQL: Record<WfKind, string[]> = {
+  whole: ["sum(amount) over (", "  partition by store)"],
+  running: ["sum(amount) over (", "  partition by store", "  order by day)"],
+  moving: ["avg(amount) over (", "  partition by store", "  order by day", "  rows between 2 preceding", "  and current row)"],
+  rank: ["rank() over (", "  partition by store", "  order by amount desc)"],
+};
+
+/** A window function: for each row, the rows of its partition that its frame covers, and the value computed from them. */
+function WindowFrame(props: Props) {
+  const [kind, setKind] = useState<WfKind>(WF_KINDS.includes(props.frame as WfKind) ? (props.frame as WfKind) : "running");
+  const [row, setRow] = useState(clamp(Math.round(num(props.row, 3)), 1, WF_ROWS.length));
+  const inFrame = (i: number, j: number) => {
+    const [a, b] = [WF_ROWS[i], WF_ROWS[j]];
+    if (a[0] !== b[0]) return false;
+    if (kind === "whole") return true;
+    if (kind === "running") return b[1] <= a[1];
+    if (kind === "moving") return b[1] <= a[1] && b[1] >= a[1] - 2;
+    return b[2] > a[2];
+  };
+  const value = (i: number) => {
+    const frame = WF_ROWS.filter((_, j) => inFrame(i, j)).map((r) => r[2]);
+    if (kind === "rank") return 1 + frame.length;
+    const total = frame.reduce((s, a) => s + a, 0);
+    return kind === "moving" ? total / frame.length : total;
+  };
+  const show = (v: number) => (kind === "rank" ? String(v) : group(Math.round(v * 100) / 100));
+  const cur = row - 1;
+  const [store, day, amount] = WF_ROWS[cur];
+  const frameRows = WF_ROWS.filter((_, j) => inFrame(cur, j));
+  const working =
+    kind === "rank"
+      ? frameRows.length === 0
+        ? [`no ${store} amount is above ₹${group(amount)}`, `rank = 1`]
+        : [`${store} amounts above ₹${group(amount)}:`, frameRows.map((r) => group(r[2])).join(", "), `rank = 1 + ${frameRows.length} = ${1 + frameRows.length}`]
+      : [
+          kind === "whole" ? `frame: all of ${store}` : `frame: ${store} days ${frameRows[0][1]} to ${day}`,
+          frameRows.map((r) => group(r[2])).join(" + "),
+          kind === "moving" ? `÷ ${frameRows.length} = ${show(value(cur))}` : `= ${show(value(cur))}`,
+        ];
+  const summary = `${WF_SQL[kind].join(" ").replace(/\s+/g, " ").replace("( ", "(")}. Each of the ${WF_ROWS.length} rows stays in the result and gains one value, computed from the rows of its own store that its window covers. Current row ${row}: ${store}, day ${day}, ₹${group(amount)}. ${working.join(" ")}. The other store's rows are outside this row's partition. Results for every row: ${WF_ROWS.map((r, i) => `${r[0]} day ${r[1]} ${show(value(i))}`).join(", ")}.`;
+  return (
+    <Frame
+      title="A window over each row"
+      summary={summary}
+      controls={
+        <>
+          {WF_KINDS.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={kind === k} onClick={() => setKind(k)}>
+              {WF_LABELS[k]}
+            </button>
+          ))}
+          <Stepper label="current row" value={row} onChange={setRow} min={1} max={WF_ROWS.length} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`Ten rows of daily takings for two stores, with the ${WF_LABELS[kind]} of each; row ${row} is current`}>
+        <SqlTable
+          x={8}
+          y={22}
+          widths={[44, 34, 58, 70]}
+          head={["store", "day", "amount", kind === "rank" ? "rank" : kind === "moving" ? "avg" : "sum"]}
+          rows={WF_ROWS.map((r, i) => [r[0], r[1], group(r[2]), show(value(i))])}
+          title="takings, one row per store and day"
+          mark={(r, c) => (r === cur ? (c === 3 || c === 2 ? "accent" : "fill") : WF_ROWS[r][0] !== store ? "ghost" : inFrame(cur, r) && c === 2 ? "fill" : undefined)}
+        />
+        {WF_SQL[kind].map((line, i) => (
+          <text key={"s" + i} x="230" y={44 + i * 16} className="fig-small">
+            {line}
+          </text>
+        ))}
+        <text x="230" y="146" className="fig-small" style={{ fontWeight: 600 }}>
+          {`row ${row}: ${store}, day ${day}`}
+        </text>
+        {working.map((line, i) => (
+          <text key={"w" + i} x="230" y={166 + i * 16} className="fig-small">
+            {line}
+          </text>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -7487,6 +7585,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "join-match": JoinMatch,
   "group-buckets": GroupBuckets,
   "subquery-steps": SubquerySteps,
+  "window-frame": WindowFrame,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

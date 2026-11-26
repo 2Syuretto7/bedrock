@@ -1,0 +1,632 @@
+concept: q0.window-functions
+minutes: 85
+claim: You can give every row a value computed from a set of related rows without collapsing them, using OVER with PARTITION BY and ORDER BY for group totals, running totals and moving averages, choose a frame with ROWS BETWEEN and know the default frame's treatment of ties, number and rank rows with row_number, rank and dense_rank, reach the previous or next row with lag and lead, and filter on a window's value from an outer query.
+recalls: [q0.subqueries-and-common-table-expressions]
+uses: [q0.grouping-and-aggregation, q0.selecting-and-filtering, f1.summation-notation, f5.summaries-mean-median-and-percentiles, f5.noise-in-measurements-and-benchmarks, s3.sorting]
+leads: [q0.null-and-three-valued-logic, s8.data-frames]
+starter: |
+  # Scratch space. Window functions keep every row.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.executescript("""
+      create table takings (store text, day integer, amount integer);
+      insert into takings values ('KOR', 1, 1200), ('KOR', 2, 900), ('KOR', 3, 1500), ('IND', 1, 700), ('IND', 2, 1100);
+  """)
+  query = """
+      select store, day, amount,
+             sum(amount) over (partition by store order by day) as so_far,
+             rank() over (partition by store order by amount desc) as place
+      from takings
+      order by store, day
+  """
+  for row in db.execute(query).fetchall():
+      print(row)
+parts:
+  recall:
+    - text: |
+        [[q0.subqueries-and-common-table-expressions]] ended by putting each order beside its own store's average, with a correlated subquery or a table of averages joined back to the orders. Wanting every row together with some summary of the rows around it is so common in reports that SQL has a dedicated tool for it, one that needs neither the subquery nor the join and also handles totals so far, rankings and comparisons with yesterday. Three quick pulls first.
+  puzzle:
+    - text: |
+        A tea stall near a bus depot writes down its takings each evening. The first week of November:
+
+        | day | amount |
+        | --- | --- |
+        | 1 | 1,200 |
+        | 2 | 900 |
+        | 3 | 2,500 |
+        | 4 | 1,800 |
+        | 5 | 700 |
+        | 6 | 1,500 |
+        | 7 | 1,300 |
+
+        The owner wants, beside every day, the total taken so far this month, and wants to know when the month's rent of ₹6,000 was covered.
+
+        **On which day does the total so far first pass ₹6,000?**
+  intuition:
+    - text: |
+        The scoreboard at a cricket match keeps a line for every over: the runs scored in it, the team's total after it, and the runs in the last five overs. No over disappears into a summary. The total after the twelfth over is a sum over overs one to twelve, and "last five overs" is a sum over a stretch that slides along as the innings goes on. Each line carries a number computed from a set of lines related to it.
+
+        [[q0.grouping-and-aggregation]] cannot do this, because `group by` folds a group into one row. A **window function** computes, for each row, a value from a set of rows related to that row, called its **window**, and keeps every row. The figure shows two stores' daily takings. Pick a kind of window and step through the rows: the highlighted amounts are the ones the current row's value is computed from.
+    - figure: window-frame
+      props: { frame: running, row: 3 }
+    - text: |
+        Three things describe a window. `partition by store` splits the rows into groups, as `group by` would, but only to decide which rows a row can see; KOR's rows never see IND's. `order by day` lines up the rows within each partition. The **frame** picks which of those lined-up rows count: for a running total, everything from the first day to the current one; for a three-day average, the current day and the two before it. With "store total" there is no order, and every row sees its whole partition, so each KOR row carries ₹6,500 and each IND row ₹4,700. Ten rows go in, and ten rows come out.
+  derivation:
+    - text: |
+        **An aggregate over a partition.** Any aggregate becomes a window function when `over (…)` follows it. `sum(amount) over (partition by store)` gives every row its store's total; `over ()` with nothing inside uses the whole result. A share of the store's takings is then one expression, with no join:
+
+        ```sql
+        select store, day, amount,
+               round(100.0 * amount / sum(amount) over (partition by store), 1) as share
+        from takings
+        ```
+
+        The comparison from the last lesson, each order against its store's average, becomes `amount - avg(amount) over (partition by store)`, a column beside every order.
+
+        **Where windows are computed.** The evaluation order of [[q0.selecting-and-filtering]] decides where a window may appear. Window functions are computed after `where`, `group by` and `having` have done their work, alongside the `select` list, so they can be used in `select` and `order by` but not in `where`. To keep only the orders above their store's average, compute the window in a common table expression and filter in the outer query:
+
+        ```sql
+        with marked as (
+            select id, amount, avg(amount) over (partition by store) as store_avg
+            from orders
+        )
+        select id, amount from marked where amount > store_avg
+        ```
+
+        Because windows come after grouping, they can also be taken over grouped rows: `select store, sum(amount), rank() over (order by sum(amount) desc) from orders group by store` ranks the stores by their totals.
+    - question:
+        id: order-evaluation
+        type: order
+        system: s2
+        prompt: |
+          Put the stages of evaluating a query that uses a window function in order.
+        steps:
+          - "Build the rows from the tables in from and their joins."
+          - "Keep the rows that pass where."
+          - "Form groups with group by and keep those that pass having."
+          - "Compute each window function over the remaining rows."
+          - "Sort with order by and cut with limit."
+        explanation: |
+          A window looks at the rows that survive filtering and grouping, so it must come after them; sorting and limiting act on the finished rows, windows included. This is also why a window cannot be tested in `where`: when `where` runs, the window has not yet been computed.
+    - text: |
+        **Order inside the window.** Adding `order by day` inside `over` changes the frame: each row now sees the rows from the start of its partition up to itself. `sum(amount) over (order by day)` is the running total, the prefix sum $S_k = \sum_{i=1}^{k} a_i$ of [[f1.summation-notation]], computed for every $k$ in one pass instead of one subquery per row. A database sorts each partition once, by the methods of [[s3.sorting]], and then accumulates as it walks down.
+
+        There is a catch in the default. When `order by` is given and no frame, the frame is "from the start up to the current row **and every row tied with it**". Two entries on the same day are tied on `day`, so both receive the total including both, and a running total jumps by two entries at once. Ordering by something unique, such as `order by day, id`, removes the ties, and the total then grows one row at a time.
+    - question:
+        id: derivation-running
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle's table, what is the running total on day 6?
+        answer: "8600"
+        explanation: |
+          $1{,}200 + 900 + 2{,}500 + 1{,}800 + 700 + 1{,}500 = 8{,}600$. The window `sum(amount) over (order by day)` would show this beside day 6.
+    - text: |
+        **Choosing a frame.** A frame can be written out: `rows between 2 preceding and current row` covers the current row and the two before it, and `avg(amount) over (order by day rows between 2 preceding and current row)` is a three-day **moving average**. Other bounds are `unbounded preceding`, `n following` and `unbounded following`. A moving average smooths the day-to-day noise of [[f5.noise-in-measurements-and-benchmarks]] while still following a real change: a seven-day average of a shop's sales hides the Sunday dip and shows whether business is growing. Near the start of a partition the frame is shorter, so the first row's three-day average is just that row; a report should say so or leave those rows out.
+
+        A `rows` frame counts rows, not days. If a day with no sales has no row, "the two preceding rows" may reach back three or four days. The calendar of [[q0.subqueries-and-common-table-expressions]] cures this: generate every day, left join the takings, and take the window over the full calendar.
+    - question:
+        id: derivation-moving
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle's table, what is the three-day moving average on day 5, using `rows between 2 preceding and current row`? Give it to two decimal places.
+        answer: "1666.67"
+        tolerance: "0.01"
+        explanation: |
+          The frame is days 3, 4 and 5: $(2{,}500 + 1{,}800 + 700) / 3 = 5{,}000 / 3 \approx 1{,}666.67$.
+    - text: |
+        **Numbering and ranking.** Three functions number the rows of a partition in the window's order, and differ only on ties. For amounts ₹900, ₹900 and ₹700, ordered from largest:
+
+        | amount | row_number() | rank() | dense_rank() |
+        | --- | --- | --- | --- |
+        | 900 | 1 | 1 | 1 |
+        | 900 | 2 | 1 | 1 |
+        | 700 | 3 | 3 | 2 |
+
+        `row_number` gives every row its own number, breaking the tie in no particular order unless the `order by` breaks it; `rank` gives tied rows the same number and then skips, as in a race where two runners share first place and the next finishes third; `dense_rank` does not skip. The classic use is "the top two of each group": number the rows in a common table expression, then keep the rows numbered 1 and 2 in the outer query. Which function to use is a question about ties, and the answer belongs in the report's wording: "two orders per store" needs `row_number` with a tie-breaker, while "every order among the two highest amounts" needs `dense_rank`.
+
+        **Neighbours.** `lag(amount) over (order by day)` gives the previous row's amount, and `lead` the next row's, so `amount - lag(amount) over (order by day)` is the change from the day before. The first row has no previous row, and `lag` gives NULL there, unless a default is supplied as a third argument: `lag(amount, 1, 0)`.
+  formal:
+    - text: |
+        **Window function call.** `f(arguments) over (partition by p order by o frame)`; every part is optional. Any aggregate (`sum`, `avg`, `count`, `min`, `max`) can be used this way.
+
+        **Partition.** Rows with equal `p` form a partition; a row's window lies within its own partition. Without `partition by`, the whole result is one partition.
+
+        **Frame.** `rows between start and end`, where each bound is `unbounded preceding`, `n preceding`, `current row`, `n following` or `unbounded following`. Without `order by`, the default frame is the whole partition; with `order by` and no frame, it runs from the start of the partition to the current row and includes every row tied with it.
+
+        **Ranking.** `row_number()`, `rank()`, `dense_rank()`, numbered from 1 within each partition in the window's order.
+
+        **Offsets.** `lag(x, n, default)` and `lead(x, n, default)`: the value of `x` in the row `n` places before or after, or `default` (NULL if omitted) when there is no such row.
+
+        **Placement.** Window functions are evaluated after `where`, `group by` and `having`, and may appear only in `select` and `order by`. To filter on one, compute it in a subquery or common table expression.
+  drill:
+    - text: Seconds each. Ask which rows the window can see.
+    - question:
+        id: drill-rows
+        type: numeric
+        system: s1
+        prompt: |
+          A table has 9 orders across 3 stores. How many rows does `select store, sum(amount) over (partition by store) from orders` return?
+        answer: "9"
+        explanation: A window function adds a value to each row and removes none; `group by store` would return 3.
+    - question:
+        id: drill-rank
+        type: numeric
+        system: s1
+        prompt: |
+          Amounts ₹900, ₹900 and ₹700 are ranked with `rank() over (order by amount desc)`. What rank does ₹700 get?
+        answer: "3"
+        explanation: The two tied rows share rank 1, and `rank` then skips to 3. `dense_rank` would give 2.
+    - question:
+        id: drill-lag
+        type: choice
+        system: s1
+        prompt: |
+          What does `lag(amount) over (order by day)` give on the first day?
+        options:
+          - "NULL"
+          - "0"
+          - "The first day's amount"
+          - "An error"
+        answer: 0
+        explanation: There is no previous row, and with no default given, `lag` returns NULL.
+    - question:
+        id: drill-where
+        type: choice
+        system: s1
+        prompt: |
+          Can `where rank() over (order by amount desc) <= 3` be used to keep the top three orders?
+        options:
+          - "No; windows are computed after where, so filter in an outer query."
+          - "Yes, in every database."
+          - "Yes, but only with partition by."
+          - "No, because rank needs group by."
+        answer: 0
+        explanation: When `where` runs, the window has not been computed. Number the rows in a common table expression and filter outside it.
+    - question:
+        id: drill-frame
+        type: numeric
+        system: s1
+        prompt: |
+          With `rows between 2 preceding and current row`, how many rows does the first row of a partition average?
+        answer: "1"
+        explanation: There are no preceding rows yet, so the frame holds only the current row.
+    - question:
+        id: predict-running
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("create table t (i, x); insert into t values (1, 3), (2, 1), (3, 4), (4, 1), (5, 5);")
+          print(db.execute("select sum(x) over (order by i) from t order by i").fetchall())
+        output: "[(3,), (4,), (8,), (9,), (14,)]"
+        explanation: Each row gets the sum of `x` from the first row up to itself.
+    - question:
+        id: predict-ties
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("create table t (x); insert into t values (5), (5), (3);")
+          print(db.execute("select x, rank() over (order by x desc), dense_rank() over (order by x desc) from t order by x desc").fetchall())
+        output: "[(5, 1, 1), (5, 1, 1), (3, 3, 2)]"
+        explanation: Both 5s share first place; `rank` then skips to 3, and `dense_rank` continues at 2.
+  work:
+    - text: Slower now. For each window, say aloud its partition, its order and its frame before writing it.
+    - question:
+        id: fix-running
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The stall's day-book can have several entries a day, and late entries get later ids. The query should give `(id, total so far)` for each entry, adding the entries one at a time in order of day and then id. The program should print `[(1, 500), (2, 800), (3, 1500), (5, 1900), (4, 2100)]`. It prints `[(1, 800), (2, 800), (3, 1900), (5, 1900), (4, 2100)]`. Find the fault and fix it.
+        starter: |
+          import sqlite3
+
+          query = """
+              select id, sum(amount) over (order by day) as so_far
+              from takings
+              order by day, id
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table takings (id integer primary key, day text, amount integer);
+              insert into takings values
+                  (1, '2026-11-01', 500), (2, '2026-11-01', 300), (3, '2026-11-02', 700),
+                  (4, '2026-11-03', 200), (5, '2026-11-02', 400);
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select id, sum(amount) over (order by day, id) as so_far
+              from takings
+              order by day, id
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table takings (id integer primary key, day text, amount integer);
+              insert into takings values
+                  (1, '2026-11-01', 500), (2, '2026-11-01', 300), (3, '2026-11-02', 700),
+                  (4, '2026-11-03', 200), (5, '2026-11-02', 400);
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(71)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table takings (id integer primary key, day text, amount integer)")
+              _n = _rng.randint(2, 14)
+              _rows = [(_i, "2026-11-0" + str(_rng.randint(1, 4)), _rng.randint(1, 40) * 50) for _i in range(1, _n + 1)]
+              _shuffled = _rows[:]
+              _rng.shuffle(_shuffled)
+              _db.executemany("insert into takings values (?, ?, ?)", _shuffled)
+              _total = 0
+              _want = []
+              for _r in sorted(_rows, key=lambda _r: (_r[1], _r[0])):
+                  _total = _total + _r[2]
+                  _want.append((_r[0], _total))
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For the takings " + str(_rows) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[(1, 500), (2, 800), (3, 1500), (5, 1900), (4, 2100)]", "The program should print [(1, 500), (2, 800), (3, 1500), (5, 1900), (4, 2100)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select id, sum(amount) over (partition by day order by id) as so_far
+                from takings
+                order by day, id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table takings (id integer primary key, day text, amount integer);
+                insert into takings values
+                    (1, '2026-11-01', 500), (2, '2026-11-01', 300), (3, '2026-11-02', 700),
+                    (4, '2026-11-03', 200), (5, '2026-11-02', 400);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select id, sum(amount) over (order by id) as so_far
+                from takings
+                order by day, id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table takings (id integer primary key, day text, amount integer);
+                insert into takings values
+                    (1, '2026-11-01', 500), (2, '2026-11-01', 300), (3, '2026-11-02', 700),
+                    (4, '2026-11-03', 200), (5, '2026-11-02', 400);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select id, sum(amount) over (order by day, id desc) as so_far
+                from takings
+                order by day, id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table takings (id integer primary key, day text, amount integer);
+                insert into takings values
+                    (1, '2026-11-01', 500), (2, '2026-11-01', 300), (3, '2026-11-02', 700),
+                    (4, '2026-11-03', 200), (5, '2026-11-02', 400);
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          With `order by day` alone, the default frame includes every entry tied on the day, so both entries of 1 November show ₹800. Ordering by `day, id` makes the order unique and the total grows one entry at a time. Partitioning by day restarts the total every day; ordering by id alone puts the late entry 5 after entry 4; and `id desc` reverses the entries within a day.
+    - question:
+        id: write-top-two
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `query` so that it returns `(store, id, amount)` for the two largest orders of each store, largest first, with stores in order of code. When two orders have the same amount, the one with the smaller id comes first, and a store with one order shows just that order.
+        starter: |
+          import sqlite3
+
+          query = """
+              select store, id, amount
+              from orders
+              order by store, amount desc
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text, amount integer);
+              insert into orders values
+                  (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150), (5, 'KOR', 1200),
+                  (6, 'IND', 300), (7, 'KOR', 650), (8, 'HSR', 410), (9, 'IND', 720), (10, 'KOR', 650);
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              with ranked as (
+                  select store, id, amount,
+                         row_number() over (partition by store order by amount desc, id) as place
+                  from orders
+              )
+              select store, id, amount
+              from ranked
+              where place <= 2
+              order by store, place
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text, amount integer);
+              insert into orders values
+                  (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150), (5, 'KOR', 1200),
+                  (6, 'IND', 300), (7, 'KOR', 650), (8, 'HSR', 410), (9, 'IND', 720), (10, 'KOR', 650);
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(29)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table orders (id integer primary key, store text, amount integer)")
+              _rows = [(_i, _rng.choice(["KOR", "IND", "HSR"]), _rng.randint(1, 8) * 100) for _i in range(1, _rng.randint(2, 16))]
+              _shuffled = _rows[:]
+              _rng.shuffle(_shuffled)
+              _db.executemany("insert into orders values (?, ?, ?)", _shuffled)
+              _want = []
+              for _s in sorted(set(_r[1] for _r in _rows)):
+                  _mine = sorted([_r for _r in _rows if _r[1] == _s], key=lambda _r: (-_r[2], _r[0]))
+                  _want = _want + [(_r[1], _r[0], _r[2]) for _r in _mine[:2]]
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For the orders " + str(_rows) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('HSR', 8, 410), ('HSR', 4, 150), ('IND', 2, 900), ('IND', 9, 720), ('KOR', 5, 1200), ('KOR', 7, 650)]", "The program should print [('HSR', 8, 410), ('HSR', 4, 150), ('IND', 2, 900), ('IND', 9, 720), ('KOR', 5, 1200), ('KOR', 7, 650)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                with ranked as (
+                    select store, id, amount,
+                           rank() over (partition by store order by amount desc) as place
+                    from orders
+                )
+                select store, id, amount
+                from ranked
+                where place <= 2
+                order by store, place
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer);
+                insert into orders values
+                    (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150), (5, 'KOR', 1200),
+                    (6, 'IND', 300), (7, 'KOR', 650), (8, 'HSR', 410), (9, 'IND', 720), (10, 'KOR', 650);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                with ranked as (
+                    select store, id, amount,
+                           row_number() over (order by amount desc, id) as place
+                    from orders
+                )
+                select store, id, amount
+                from ranked
+                where place <= 2
+                order by store, place
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer);
+                insert into orders values
+                    (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150), (5, 'KOR', 1200),
+                    (6, 'IND', 300), (7, 'KOR', 650), (8, 'HSR', 410), (9, 'IND', 720), (10, 'KOR', 650);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                with ranked as (
+                    select store, id, amount,
+                           row_number() over (partition by store order by amount, id) as place
+                    from orders
+                )
+                select store, id, amount
+                from ranked
+                where place <= 2
+                order by store, place
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer);
+                insert into orders values
+                    (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150), (5, 'KOR', 1200),
+                    (6, 'IND', 300), (7, 'KOR', 650), (8, 'HSR', 410), (9, 'IND', 720), (10, 'KOR', 650);
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          `row_number` with `order by amount desc, id` numbers each store's orders without ties, and the outer query keeps numbers 1 and 2. `rank` lets KOR's two ₹650 orders share second place, so KOR shows three; without `partition by` only the chain's top two survive; and ascending order picks each store's smallest orders.
+    - question:
+        id: write-falls
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          The table has one row per day. Change `query` so that it returns `(day, change)` for every day whose takings were lower than the day before, in order of day, where `change` is that day's takings minus the previous day's, a negative number.
+        starter: |
+          import sqlite3
+
+          query = """
+              select day, amount
+              from takings
+              order by day
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table takings (day text primary key, amount integer);
+              insert into takings values
+                  ('2026-11-05', 700), ('2026-11-01', 1200), ('2026-11-03', 2500), ('2026-11-07', 1300),
+                  ('2026-11-02', 900), ('2026-11-06', 1500), ('2026-11-04', 1800);
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              with changes as (
+                  select day, amount - lag(amount) over (order by day) as change
+                  from takings
+              )
+              select day, change
+              from changes
+              where change < 0
+              order by day
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table takings (day text primary key, amount integer);
+              insert into takings values
+                  ('2026-11-05', 700), ('2026-11-01', 1200), ('2026-11-03', 2500), ('2026-11-07', 1300),
+                  ('2026-11-02', 900), ('2026-11-06', 1500), ('2026-11-04', 1800);
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(53)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table takings (day text primary key, amount integer)")
+              _n = _rng.randint(2, 9)
+              _rows = [("2026-11-0" + str(_i), _rng.randint(1, 5) * 300) for _i in range(1, _n + 1)]
+              _shuffled = _rows[:]
+              _rng.shuffle(_shuffled)
+              _db.executemany("insert into takings values (?, ?)", _shuffled)
+              _want = [(_rows[_i][0], _rows[_i][1] - _rows[_i - 1][1]) for _i in range(1, _n) if _rows[_i][1] < _rows[_i - 1][1]]
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For the takings " + str(_rows) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('2026-11-02', -300), ('2026-11-04', -700), ('2026-11-05', -1100), ('2026-11-07', -200)]", "The program should print [('2026-11-02', -300), ('2026-11-04', -700), ('2026-11-05', -1100), ('2026-11-07', -200)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                with changes as (
+                    select day, amount - lead(amount) over (order by day) as change
+                    from takings
+                )
+                select day, change
+                from changes
+                where change < 0
+                order by day
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table takings (day text primary key, amount integer);
+                insert into takings values
+                    ('2026-11-05', 700), ('2026-11-01', 1200), ('2026-11-03', 2500), ('2026-11-07', 1300),
+                    ('2026-11-02', 900), ('2026-11-06', 1500), ('2026-11-04', 1800);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                with changes as (
+                    select day, amount - lag(amount) over (order by amount) as change
+                    from takings
+                )
+                select day, change
+                from changes
+                where change < 0
+                order by day
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table takings (day text primary key, amount integer);
+                insert into takings values
+                    ('2026-11-05', 700), ('2026-11-01', 1200), ('2026-11-03', 2500), ('2026-11-07', 1300),
+                    ('2026-11-02', 900), ('2026-11-06', 1500), ('2026-11-04', 1800);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                with changes as (
+                    select day, amount - lag(amount) over (order by day) as change
+                    from takings
+                )
+                select day, change
+                from changes
+                where change <= 0
+                order by day
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table takings (day text primary key, amount integer);
+                insert into takings values
+                    ('2026-11-05', 700), ('2026-11-01', 1200), ('2026-11-03', 2500), ('2026-11-07', 1300),
+                    ('2026-11-02', 900), ('2026-11-06', 1500), ('2026-11-04', 1800);
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          `lag(amount) over (order by day)` fetches the previous day's takings, the common table expression names the change, and the outer query keeps the falls. `lead` compares with the next day instead; ordering the window by amount makes the "previous" row the next smaller amount, so no change is ever negative; and `<= 0` also keeps days that merely matched the day before.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle's table, on which day does the total so far first pass ₹6,000?
+        answer: "4"
+        explanation: |
+          The running totals are ₹1,200, ₹2,100, ₹4,600 and then ₹6,400 on day 4.
+    - question:
+        id: work-gaps
+        type: choice
+        system: s2
+        prompt: |
+          A report shows a seven-day moving average of daily sales with `rows between 6 preceding and current row`, but the shop is shut on some days and those days have no row. What is the right fix?
+        options:
+          - "Generate every day with a recursive common table expression, left join the sales with 0 for missing days, and take the window over that."
+          - "Change the frame to rows between 7 preceding and current row."
+          - "Use rank instead of avg."
+          - "Remove the order by from the window."
+        answer: 0
+        explanation: |
+          A `rows` frame counts rows, so with missing days it spans more than a week. Filling in the calendar makes one row per day, and the frame then means seven days. Widening the frame only moves the error, and dropping the order makes it the average of everything.
+  connections:
+    - text: |
+        Day 4. The running totals are ₹1,200, ₹2,100, ₹4,600 and ₹6,400, and one query computes all of them at once: `sum(amount) over (order by day)`, with an outer query to pick the first day above ₹6,000. Before windows, the same answer needed a correlated subquery summing the earlier days for every day, a quadratic amount of work for a linear idea.
+
+        Windows put three new tools beside the totals of the last lessons: running and moving aggregates, rankings, and neighbours. Several of them produce NULL where there is nothing to look at, such as `lag` on the first row, and NULL behaves strangely in comparisons, sums and `not in`, which is the subject of [[q0.null-and-three-valued-logic]]. The same ideas reappear outside databases: data frames in [[s8.data-frames]] offer cumulative sums, rolling windows, ranks and shifts that are window functions under other names.
