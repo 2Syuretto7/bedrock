@@ -99,6 +99,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "interval-schedule": z.strictObject({ rule: z.enum(["finish", "start", "shortest"]).optional(), step: z.number().optional() }),
   "quick-pivot": z.strictObject({ input: z.enum(["sorted", "shuffled"]).optional(), pivot: z.enum(["first", "random"]).optional(), seed: z.number().optional() }),
   "tour-heuristic": z.strictObject({ step: z.number().optional() }),
+  "table-keys": z.strictObject({ columns: z.array(z.enum(["rider", "day", "store", "slot"])).optional(), wednesday: z.boolean().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),

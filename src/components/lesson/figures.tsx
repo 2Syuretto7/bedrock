@@ -5701,6 +5701,126 @@ function TourHeuristic(props: Props) {
   );
 }
 
+type SqlCell = string | number | null;
+type SqlMark = "accent" | "fill" | "ghost" | undefined;
+
+/** A small table drawn in SVG: a header row, then rows whose cells can be marked. NULL is written out. */
+function SqlTable({ x, y, widths, head, rows, mark, title, height = 20 }: { x: number; y: number; widths: number[]; head: string[]; rows: SqlCell[][]; mark?: (row: number, col: number) => SqlMark; title?: string; height?: number }) {
+  const lefts = widths.map((_, i) => x + widths.slice(0, i).reduce((s, w) => s + w, 0));
+  const style = (m: SqlMark) => (m === "accent" ? "fig-accent" : m === "fill" ? "fig-fill" : m === "ghost" ? "fig-ghost" : "fig-cell");
+  return (
+    <g>
+      {title ? (
+        <text x={x} y={y - 6} className="fig-small">
+          {title}
+        </text>
+      ) : null}
+      {head.map((h, c) => (
+        <text key={"h" + c} x={lefts[c] + 4} y={y + height - 7} className="fig-small" style={{ fontWeight: 600 }}>
+          {h}
+        </text>
+      ))}
+      <line x1={x} x2={x + widths.reduce((s, w) => s + w, 0) - 2} y1={y + height - 1} y2={y + height - 1} className="fig-axis" />
+      {rows.map((row, r) =>
+        row.map((cell, c) => {
+          const m = mark?.(r, c);
+          return (
+            <g key={r + "-" + c}>
+              <rect x={lefts[c]} y={y + (r + 1) * height + 1} width={widths[c] - 2} height={height - 2} className={style(m)} />
+              <text x={lefts[c] + 4} y={y + (r + 2) * height - 6} className="fig-small" style={m === "accent" ? { fill: "var(--bg)" } : cell === null ? { fontStyle: "italic" } : undefined}>
+                {cell === null ? "NULL" : String(cell)}
+              </text>
+            </g>
+          );
+        }),
+      )}
+    </g>
+  );
+}
+
+const SHIFT_COLUMNS = ["rider", "day", "store", "slot"] as const;
+const SHIFT_ROWS: string[][] = [
+  ["Asha", "Mon", "Koramangala", "morning"],
+  ["Asha", "Mon", "Koramangala", "evening"],
+  ["Asha", "Tue", "Indiranagar", "morning"],
+  ["Bilal", "Mon", "Indiranagar", "morning"],
+  ["Bilal", "Tue", "Indiranagar", "evening"],
+  ["Chitra", "Mon", "Koramangala", "morning"],
+  ["Chitra", "Tue", "Koramangala", "evening"],
+  ["Dev", "Tue", "Indiranagar", "morning"],
+];
+const WEDNESDAY_ROW = ["Asha", "Wed", "Koramangala", "morning"];
+
+/** The first pair of rows that agree on every chosen column, or null when the columns tell every row apart. */
+function clash(rows: string[][], cols: number[]): [number, number] | null {
+  const seen = new Map<string, number>();
+  for (let r = 0; r < rows.length; r++) {
+    const key = cols.map((c) => rows[r][c]).join("\u0000");
+    const before = seen.get(key);
+    if (before !== undefined) return [before, r];
+    seen.set(key, r);
+  }
+  return null;
+}
+
+/** Riders' shifts, where the learner chooses columns and sees whether they single out every row. */
+function TableKeys(props: Props) {
+  const given = Array.isArray(props.columns) ? (props.columns as string[]) : ["rider"];
+  const [chosen, setChosen] = useState(SHIFT_COLUMNS.map((c) => given.includes(c)));
+  const [wednesday, setWednesday] = useState(props.wednesday === true);
+  const rows = wednesday ? [...SHIFT_ROWS, WEDNESDAY_ROW] : SHIFT_ROWS;
+  const cols = SHIFT_COLUMNS.map((_, i) => i).filter((i) => chosen[i]);
+  const names = (list: number[]) => list.map((c) => SHIFT_COLUMNS[c]).join(", ");
+  const pair = clash(rows, cols);
+  let summary: string;
+  if (cols.length === 0) {
+    summary = `No columns chosen, so all ${rows.length} rows look the same.`;
+  } else if (pair) {
+    summary = `Columns chosen: ${names(cols)}. Rows ${pair[0] + 1} and ${pair[1] + 1} agree on ${cols.length === 1 ? "it" : "all of them"} (${cols.map((c) => rows[pair[0]][c]).join(", ")}), so ${cols.length === 1 ? "this column does" : "these columns do"} not single out every row: not a key.`;
+  } else {
+    const spare = cols.filter((c) => !clash(rows, cols.filter((d) => d !== c)));
+    summary = `Columns chosen: ${names(cols)}. No two of the ${rows.length} rows agree on ${cols.length === 1 ? "it" : "all of them"}, so ${cols.length === 1 ? "it singles" : "they single"} out every row: a superkey. ${
+      spare.length === 0
+        ? "Dropping any one column breaks this, so no smaller set works: a candidate key."
+        : `It is not minimal: ${names(spare)} can be dropped and the rest still single out every row.`
+    }`;
+  }
+  const mark = (r: number, c: number): SqlMark => (pair && (r === pair[0] || r === pair[1]) && chosen[c] ? "accent" : chosen[c] ? "fill" : undefined);
+  return (
+    <Frame
+      title="Which columns single out a row"
+      summary={summary}
+      controls={
+        <>
+          {SHIFT_COLUMNS.map((c, i) => (
+            <button
+              key={c}
+              type="button"
+              className="btn btn-secondary btn-small"
+              aria-pressed={chosen[i]}
+              onClick={() => setChosen(chosen.map((on, j) => (j === i ? !on : on)))}
+            >
+              {c}
+            </button>
+          ))}
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={wednesday} onClick={() => setWednesday(!wednesday)}>
+            Add Wednesday&apos;s shift
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 226" role="img" aria-label={`A table of ${rows.length} shifts with the columns rider, day, store and slot`}>
+        <SqlTable x={60} y={4} widths={[70, 52, 114, 84]} head={[...SHIFT_COLUMNS]} rows={rows} mark={mark} />
+        {rows.map((_, r) => (
+          <text key={r} x="44" y={4 + (r + 2) * 20 - 6} textAnchor="end" className="fig-small">
+            {r + 1}
+          </text>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -7015,6 +7135,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "interval-schedule": IntervalSchedule,
   "quick-pivot": QuickPivot,
   "tour-heuristic": TourHeuristic,
+  "table-keys": TableKeys,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
