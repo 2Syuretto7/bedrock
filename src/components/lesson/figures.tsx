@@ -5914,6 +5914,66 @@ function AlgebraOps(props: Props) {
   );
 }
 
+const QO_ORDERS: (string | number)[][] = [
+  [1, "Asha", "KOR", 250],
+  [2, "Bilal", "IND", 900],
+  [3, "Chitra", "KOR", 480],
+  [4, "Asha", "KOR", 1200],
+  [5, "Dev", "IND", 300],
+  [6, "Chitra", "KOR", 650],
+  [7, "Esha", "HSR", 410],
+];
+/** The clauses as written, each with its place in the order of evaluation. */
+const QO_LINES: [string, number][] = [
+  ["SELECT rider, amount", 3],
+  ["FROM orders", 1],
+  ["WHERE store = 'KOR'", 2],
+  ["ORDER BY amount DESC", 4],
+  ["LIMIT 2", 5],
+];
+
+/** One query evaluated clause by clause, in the order a database applies them rather than the order they are written. */
+function QueryOrder(props: Props) {
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 1)), 1, 5));
+  let head = ["id", "rider", "store", "amount"];
+  let rows = QO_ORDERS;
+  if (step >= 2) rows = rows.filter((r) => r[2] === "KOR");
+  if (step >= 3) {
+    head = ["rider", "amount"];
+    rows = rows.map((r) => [r[1], r[3]]);
+  }
+  if (step >= 4) rows = [...rows].sort((a, b) => Number(b[1]) - Number(a[1]));
+  if (step >= 5) rows = rows.slice(0, 2);
+  const show = (r: (string | number)[]) => r.map((v) => (typeof v === "number" ? group(v) : v)).join(" ");
+  const notes = [
+    "",
+    `FROM orders: start with every row of the table, ${QO_ORDERS.length} rows.`,
+    `WHERE store = 'KOR': keep the rows whose store is KOR, ${rows.length} of the ${QO_ORDERS.length}.`,
+    "SELECT rider, amount: keep two columns of each remaining row. Only now do the result's columns exist, which is why standard SQL does not let WHERE use a name defined in SELECT.",
+    "ORDER BY amount DESC: sort the rows, largest amount first. Without this the rows come in no promised order.",
+    "LIMIT 2: keep the first 2 rows of the sorted result.",
+  ];
+  const summary = `Step ${step} of 5. ${notes[step]} The table now holds ${rows.length === 0 ? "no rows" : plural(rows.length, "row")}: ${rows.map(show).join("; ")}.`;
+  return (
+    <Frame title="The order a query is evaluated in" summary={summary} controls={<Stepper label="step" value={step} onChange={setStep} min={1} max={5} />}>
+      <svg viewBox="0 0 440 236" role="img" aria-label={`A query of five clauses, evaluated up to step ${step}, and the table it has produced`}>
+        <text x="10" y="18" className="fig-small">
+          as written, with the order of evaluation
+        </text>
+        {QO_LINES.map(([line, order], i) => (
+          <g key={line}>
+            <rect x="8" y={30 + i * 26} width="200" height="22" className={order === step ? "fig-accent" : order < step ? "fig-fill" : "fig-ghost"} />
+            <text x="16" y={45 + i * 26} className="fig-small" style={order === step ? { fill: "var(--bg)" } : undefined}>
+              {`${order}  ${line}`}
+            </text>
+          </g>
+        ))}
+        <SqlTable x={step >= 3 ? 250 : 224} y={30} widths={step >= 3 ? [70, 70] : [30, 60, 48, 60]} head={head} rows={rows.map((r) => r.map((v) => (typeof v === "number" && v >= 1000 ? group(v) : v)))} height={22} />
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -7230,6 +7290,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "tour-heuristic": TourHeuristic,
   "table-keys": TableKeys,
   "algebra-ops": AlgebraOps,
+  "query-order": QueryOrder,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
