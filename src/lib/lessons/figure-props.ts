@@ -69,6 +69,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "pascal-triangle": z.strictObject({ n: z.number().optional(), k: z.number().optional() }),
   "pigeonholes": z.strictObject({ items: z.number().optional(), boxes: z.number().optional() }),
   "inclusion-exclusion": z.strictObject({ n: z.number().optional(), stage: z.number().optional() }),
+  "mod-clock": z.strictObject({ m: z.number().optional(), step: z.number().optional(), jumps: z.number().optional() }),
   "union-find": z.strictObject({ bySize: z.boolean().optional(), find: z.number().optional(), joins: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),

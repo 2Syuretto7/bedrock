@@ -3327,6 +3327,73 @@ function InclusionExclusion(props: Props) {
   );
 }
 
+/** The greatest common divisor of two whole numbers, with gcd(m, 0) = m. */
+const commonDivisor = (a: number, b: number): number => {
+  let x = Math.abs(a);
+  let y = Math.abs(b);
+  while (y !== 0) [x, y] = [y, x % y];
+  return x;
+};
+
+/** A clock with m positions: jumps of a fixed size from 0 wrap round, and reach only the multiples of gcd(m, jump). */
+function ModClock(props: Props) {
+  const [m, setM] = useState(clamp(Math.round(num(props.m, 12)), 2, 24));
+  const [jump, setJump] = useState(clamp(Math.round(num(props.step, 5)), 0, 24));
+  const [jumps, setJumps] = useState(clamp(Math.round(num(props.jumps, 3)), 0, 24));
+  const g = commonDivisor(m, jump % m);
+  const orbit = m / g;
+  const at = (k: number) => (k * jump) % m;
+  const where = at(jumps);
+  const reached = Array.from({ length: orbit }, (_, k) => (k * g) % m);
+  const spot = (k: number, r: number): Spot => [220 + r * Math.sin((2 * Math.PI * k) / m), 146 - r * Math.cos((2 * Math.PI * k) / m)];
+  const path = Array.from({ length: jumps }, (_, k) => [at(k), at(k + 1)]);
+  const reach =
+    orbit === m
+      ? `reach all ${m} positions before coming back to 0`
+      : `reach only ${plural(orbit, "position")}, ${reached.join(", ")}, the multiples of ${g}, because ${g} is the largest number dividing both ${m} and ${jump}`;
+  return (
+    <Frame
+      title="Arithmetic on a clock"
+      summary={`A clock with ${m} positions, 0 to ${m - 1}. Start at 0 and jump ${jump} each time. After ${plural(jumps, "jump")} you are at ${jumps} × ${jump} = ${jumps * jump}, which leaves the remainder ${where} on division by ${m}. Jumps of ${jump} ${reach}.`}
+      controls={
+        <>
+          <Stepper label="positions" value={m} onChange={setM} min={2} max={24} />
+          <Stepper label="jump" value={jump} onChange={setJump} min={0} max={24} />
+          <Stepper label="jumps" value={jumps} onChange={setJumps} min={0} max={24} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`A clock of ${m} positions; ${plural(jumps, "jump")} of ${jump} from 0 end at ${where}`}>
+        <circle cx="220" cy="146" r="104" className="fig-ghost" fill="none" />
+        {path.map(([from, to], k) => {
+          const [x1, y1] = spot(from, 104);
+          const [x2, y2] = spot(to, 104);
+          return <line key={k} x1={x1} y1={y1} x2={x2} y2={y2} className="fig-accent-line" />;
+        })}
+        {Array.from({ length: m }, (_, k) => {
+          const [x, y] = spot(k, 104);
+          const [tx, ty] = spot(k, 126);
+          const visited = reached.includes(k);
+          return (
+            <g key={k}>
+              <circle cx={x} cy={y} r={k === where ? 9 : 6} className={k === where ? "fig-accent" : visited ? "fig-fill" : "fig-ghost"} />
+              <text x={tx} y={ty + 5} textAnchor="middle" className="fig-small">
+                {k}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="22" className="fig-small">
+          {`${jumps} × ${jump} = ${jumps * jump} ≡ ${where} (mod ${m})`}
+        </text>
+        <text x="12" y="282" className="fig-small">
+          {`jumps of ${jump} reach ${orbit} of ${m}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -4612,6 +4679,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "pascal-triangle": PascalTriangle,
   pigeonholes: Pigeonholes,
   "inclusion-exclusion": InclusionExclusion,
+  "mod-clock": ModClock,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
