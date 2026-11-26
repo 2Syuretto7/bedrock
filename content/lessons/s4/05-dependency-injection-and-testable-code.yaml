@@ -1,0 +1,635 @@
+concept: s4.dependency-injection-and-testable-code
+minutes: 80
+claim: You can name the hidden dependencies in a piece of code, such as the clock, randomness, the network and storage, pass them in instead of reaching for them, write tests that replace them with fakes to make slow, rare or costly cases fast and certain, wire the real objects together in one place, keep decisions in a pure core with effects at the edge, and judge which dependencies are worth injecting.
+recalls: [s4.errors-as-part-of-the-design]
+uses: [s4.abstraction-and-interfaces, s4.modules-coupling-and-cohesion, s1.testing-with-pytest, s1.modules-and-imports, f4.simulation-and-pseudo-random-numbers]
+leads: [s4.design-patterns-that-earn-their-place, s6.fakes-stubs-and-mocks, s6.deterministic-tests-seeds-clocks-and-fakes]
+starter: |
+  # Scratch space. The same function with a real clock and with a fake one.
+  import time
+
+
+  class SystemClock:
+      def now(self):
+          return time.localtime().tm_hour
+
+
+  class FakeClock:
+      def __init__(self, hour):
+          self.hour = hour
+
+      def now(self):
+          return self.hour
+
+
+  def is_open(clock):
+      return 9 <= clock.now() < 21
+
+
+  print(is_open(FakeClock(10)), is_open(FakeClock(22)))
+  print(is_open(SystemClock()))
+parts:
+  recall:
+    - text: |
+        [[s4.errors-as-part-of-the-design]] tested its retry logic with a gateway that played back a script of timeouts, and its handler with a booking function whose taken slots were fixed in advance. Neither test touched a real payment service or a real clinic. That was possible only because the code under test received those collaborators instead of creating them itself. This lesson makes that a deliberate design. Three quick pulls first.
+  puzzle:
+    - text: |
+        A clinic's `is_open()` reads the real clock and returns true from 8:00 to 20:00, except for a lunch break from 13:00 to 14:00. A test checks `assert is_open()`.
+
+        The team's test suite runs 48 times a month, at moments spread evenly over the day and night.
+
+        **On average, how many of those 48 runs does this test fail?**
+  intuition:
+    - text: |
+        A driving instructor in Pune does not wait for a real monsoon downpour to teach braking on a wet road, or for a real tyre burst to teach what to do next. Driving simulators and closed practice grounds let a learner meet rain, night and a child running onto the road on any afternoon, as often as needed, safely. The car's controls are the same; only the world around them is replaced.
+
+        Code meets its world through dependencies: the clock, random numbers, the network, the database, the file system. If a function reaches out and grabs the real ones, its tests must live in the real world too, waiting for midnight or hoping the network is up. If the function is handed its world, a test can hand it a simulated one. The figure tests a shop's opening hours both ways, at whatever hour the test happens to run.
+    - figure: di-clock
+      props: { mode: inside, hour: 23 }
+    - text: |
+        With the clock read inside `is_open`, the test's result depends on when it runs: it passes in the afternoon and fails at night, though nothing in the code changed. Such a test is called **flaky**, and a flaky test is worse than none, because people learn to ignore it. With the clock passed in, the test chooses the time, passes at every hour, and can check closing time as easily as opening time.
+  derivation:
+    - text: |
+        **Hidden dependencies.** A dependency is anything a piece of code uses but does not compute from its arguments: the current time, random numbers, a network service, a database, files, environment variables. When code calls `time.time()`, `random.shuffle()` or `SmsGateway()` inside itself, the dependency is **hidden**: nothing in the function's signature mentions it, and a caller, including a test, cannot change it. The function then gives different answers at different times, or sends real messages, or fails when the network is down, and no test can control which.
+
+        **Injection.** The fix is plain: pass the dependency in. `is_open(clock)` instead of `is_open()`; `remind(appointments, today, send)` instead of a function that constructs its own gateway; `seat(guests, rng)` instead of a function that uses the global random generator. This is called **dependency injection**, and despite the grand name it is usually just a parameter. Injection by constructor is the same idea for objects: a `ReminderService(send, clock)` keeps its collaborators as attributes and uses them in every method.
+
+        A parameter with a default can keep everyday calls short, `def is_open(clock=system_clock)`, but beware the trap from [[s4.modules-coupling-and-cohesion]]: a default is evaluated once. `def is_open(hour=clock.now())` reads the clock when the function is defined and never again; a default of the clock object itself, read inside the function, reads it on every call.
+    - question:
+        id: derivation-hidden
+        type: choice
+        system: s2
+        prompt: |
+          Which function has a hidden dependency?
+        options:
+          - "def due_today(bills): return [b for b in bills if b.due == date.today()]"
+          - "def due_on(bills, day): return [b for b in bills if b.due == day]"
+          - "def total(bills): return sum(b.amount for b in bills)"
+          - "def overdue(bills, today): return [b for b in bills if b.due < today]"
+        answer: 0
+        explanation: |
+          `due_today` reads the system date inside itself, so its answer changes every midnight and a test cannot choose the day. The others compute only from their arguments.
+    - text: |
+        **Fakes in tests.** With dependencies passed in, a test supplies simple stand-ins. A **fake** clock returns whatever hour the test sets. A fake sender records the messages it was asked to send instead of sending them, so the test can check exactly who would have been texted, at no cost. A random generator created with a fixed seed, `random.Random(7)`, from [[f4.simulation-and-pseudo-random-numbers]], produces the same sequence every time, so a test of a random seating plan can be repeated exactly. Fakes also make rare cases cheap: a gateway that times out twice and then succeeds, a clock at 23:59 on 31 March, a disk that is full.
+
+        Each fake must honour the same interface as the real thing, as in [[s4.abstraction-and-interfaces]]. A fake clock that has a `.hour` attribute but no `now()` method trains the code to reach past the interface, and the code then breaks with the real clock.
+    - question:
+        id: order-test-reminders
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of testing that reminders go only to tomorrow's patients, with the sender injected, in order.
+        steps:
+          - "Build a short list of appointments for today, tomorrow and the day after."
+          - "Create an empty list and a fake sender that appends each message to it."
+          - "Call remind with the appointments, a chosen today and the fake sender."
+          - "Check that the list holds exactly tomorrow's messages."
+        explanation: |
+          The data and the fake come first, the call in the middle, and the check reads what the fake recorded. No real SMS is sent and the test runs in microseconds.
+    - text: |
+        **Wire everything in one place.** If every function receives its dependencies, something must create the real ones. Do it once, at the program's entry point, sometimes called the **composition root**: build the real clock, the real gateway and the real database connection in `main`, and pass them down. The rest of the code never mentions a concrete class, so swapping the SMS provider is a change in one place.
+
+        **Turning dependencies around.** Injection also fixes the direction of imports from [[s4.modules-coupling-and-cohesion]]. The reminder rules are the stable heart of the app; the SMS gateway is a detail that may change. Without injection, the rules import the gateway. With it, the rules declare what they need, "something I can call as `send(phone, text)`", and the gateway module supplies it. The detail now depends on the policy instead of the policy on the detail, which is called the **dependency inversion principle**.
+
+        **A pure core.** The most testable code has no dependencies at all: a function that computes a result from its arguments and nothing else. A useful shape is a pure core of decisions, such as which patients get a reminder and what it says, surrounded by a thin shell that reads the clock, fetches the appointments and sends the messages. The core is tested exhaustively with plain values; the shell is small enough to check by hand.
+
+        **Not everything.** Inject what is slow, costly, nondeterministic or external: time, randomness, the network, storage. Do not inject `len` or a pure helper in the same module; that adds parameters and hides nothing worth replacing.
+    - question:
+        id: derivation-costs
+        type: numeric
+        system: s2
+        prompt: |
+          A reminder test suite sends 120 messages per run and runs 40 times a day. With the real gateway at 25 paise per message, how many rupees does it spend in a day?
+        answer: "1200"
+        explanation: |
+          $120 \times 40 = 4{,}800$ messages at 25 paise is $1{,}20{,}000$ paise, ₹1,200 a day, and that is before anyone counts the patients receiving test messages. A fake sender costs nothing.
+  formal:
+    - text: |
+        **Dependency.** Anything code uses that it does not compute from its arguments: time, randomness, network, storage, files, environment.
+
+        **Hidden dependency.** One reached for inside the code, invisible in its signature and impossible for a caller to replace.
+
+        **Dependency injection.** Passing dependencies in, as parameters or constructor arguments, so callers and tests choose them.
+
+        **Fake.** A simple implementation of the same interface for tests: a fixed clock, a recording sender, a seeded `random.Random`.
+
+        **Composition root.** The one place, usually `main`, that creates the real dependencies and wires them together.
+
+        **Dependency inversion.** Stable policy defines the interface it needs; volatile details implement it.
+
+        **Pure core.** Decisions computed only from arguments, with effects kept in a thin outer shell.
+  drill:
+    - text: Seconds each. For every function, ask what it uses that a test cannot control.
+    - question:
+        id: drill-hidden
+        type: choice
+        system: s1
+        prompt: |
+          `def greeting(): return "Good morning" if time.localtime().tm_hour < 12 else "Good afternoon"`. What makes it hard to test?
+        options:
+          - "It reads the clock inside, so the result depends on when the test runs."
+          - "It returns a string."
+          - "It has no parameters, which Python does not allow."
+          - "It uses an if expression."
+        answer: 0
+        explanation: Passing the hour or a clock in would let a test check both greetings at any time.
+    - question:
+        id: drill-seed
+        type: choice
+        system: s1
+        prompt: |
+          Two calls each shuffle the same list with `random.Random(42)`. What is true?
+        options:
+          - "Both give the same order."
+          - "They always give different orders."
+          - "The second call fails."
+          - "The list is not shuffled."
+        answer: 0
+        explanation: A generator with a fixed seed produces the same sequence each time.
+    - question:
+        id: drill-flaky
+        type: numeric
+        system: s1
+        prompt: |
+          A test passes only when run between 9:00 and 17:00, and runs at random times of day. In what percentage of runs does it fail?
+        answer: "66.67"
+        tolerance: "0.5"
+        explanation: It passes in 8 of 24 hours, so it fails in 16 of 24, two thirds of runs.
+    - question:
+        id: drill-root
+        type: choice
+        system: s1
+        prompt: |
+          Where should the real SMS gateway object be created?
+        options:
+          - "Once, in the program's entry point, then passed to what needs it"
+          - "Inside every function that sends a message"
+          - "In each test"
+          - "In a global variable that every module imports"
+        answer: 0
+        explanation: Creating it in one place keeps the rest of the code free of concrete classes, and tests pass fakes instead.
+    - question:
+        id: predict-default-once
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          readings = [8, 10, 22]
+
+
+          def read():
+              return readings.pop(0)
+
+
+          def hour_now(hour=read()):
+              return hour
+
+
+          print(hour_now(), hour_now(), readings)
+        output: "8 8 [10, 22]"
+        explanation: The default was computed once, when `hour_now` was defined, so both calls return 8 and only one reading was taken.
+    - question:
+        id: predict-fake
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          sent = []
+
+
+          def notify(phones, send):
+              for p in phones:
+                  send(p, "Your order is ready")
+              return len(phones)
+
+
+          n = notify(["98450", "90080"], lambda phone, text: sent.append(phone))
+          print(n, sent)
+        output: "2 ['98450', '90080']"
+        explanation: The fake sender records each phone instead of sending anything, so the test can see exactly who would have been told.
+  work:
+    - text: Slower now. In each problem, find what the code reaches for and hand it in instead.
+    - question:
+        id: fix-clock-default
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `is_open` should ask a clock for the hour every time it is called, using the app's clock when none is given, and any other object with a `now()` method when one is. The program should print `[False, True, False]`. It prints `[False, False, False]`. Find the fault and fix it.
+        starter: |
+          class FakeClock:
+              def __init__(self, hour):
+                  self.hour = hour
+
+              def now(self):
+                  return self.hour
+
+
+          clock = FakeClock(8)  # the app swaps in a real clock; tests use fakes
+
+
+          def is_open(hour=clock.now()):
+              return 9 <= hour < 21
+
+
+          results = []
+          for hour in [8, 10, 22]:
+              clock.hour = hour
+              results.append(is_open())
+          print(results)
+        solution: |
+          class FakeClock:
+              def __init__(self, hour):
+                  self.hour = hour
+
+              def now(self):
+                  return self.hour
+
+
+          clock = FakeClock(8)  # the app swaps in a real clock; tests use fakes
+
+
+          def is_open(source=clock):
+              hour = source.now()
+              return 9 <= hour < 21
+
+
+          results = []
+          for hour in [8, 10, 22]:
+              clock.hour = hour
+              results.append(is_open())
+          print(results)
+        tests: |
+          class _ScriptedClock:
+              def __init__(self, hours):
+                  self._hours = list(hours)
+
+              def now(self):
+                  return self._hours.pop(0)
+
+
+          for _h in range(24):
+              _want = 9 <= _h < 21
+              _got = is_open(_ScriptedClock([_h]))
+              assert _got == _want, "With a clock reading " + str(_h) + " o'clock, is_open should return " + str(_want) + ", not " + str(_got)
+              clock.hour = _h
+              _got = is_open()
+              assert _got == _want, "Called with no clock while the app's clock reads " + str(_h) + ", is_open should return " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[False, True, False]", "The program should print [False, True, False]"
+        wrong:
+          - |
+            class FakeClock:
+                def __init__(self, hour):
+                    self.hour = hour
+
+                def now(self):
+                    return self.hour
+
+
+            clock = FakeClock(8)  # the app swaps in a real clock; tests use fakes
+
+
+            def is_open(source=clock):
+                return 9 <= source.hour < 21
+
+
+            results = []
+            for hour in [8, 10, 22]:
+                clock.hour = hour
+                results.append(is_open())
+            print(results)
+          - |
+            class FakeClock:
+                def __init__(self, hour):
+                    self.hour = hour
+
+                def now(self):
+                    return self.hour
+
+
+            clock = FakeClock(8)  # the app swaps in a real clock; tests use fakes
+
+
+            def is_open(source=None):
+                hour = clock.now()
+                return 9 <= hour < 21
+
+
+            results = []
+            for hour in [8, 10, 22]:
+                clock.hour = hour
+                results.append(is_open())
+            print(results)
+          - |
+            class FakeClock:
+                def __init__(self, hour):
+                    self.hour = hour
+
+                def now(self):
+                    return self.hour
+
+
+            clock = FakeClock(8)  # the app swaps in a real clock; tests use fakes
+
+
+            def is_open(source=clock):
+                hour = source.now()
+                return 9 < hour <= 21
+
+
+            results = []
+            for hour in [8, 10, 22]:
+                clock.hour = hour
+                results.append(is_open())
+            print(results)
+        explanation: |
+          `hour=clock.now()` read the clock once, when the function was defined, at 8 o'clock, and every later call reused that reading. Making the clock itself the default and calling `now()` inside reads it on every call. Reading `.hour` works only for this one fake; ignoring the clock passed in makes injection pointless; and `9 < hour <= 21` opens an hour late and closes an hour late.
+    - question:
+        id: write-remind
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `remind` so that it takes the sending function as a third parameter, `send(phone, text)`, and uses it instead of creating an `SmsGateway`, sending each uncancelled appointment for the day after `today` exactly one message and returning how many it sent. The program should print `2 [('98450 22222', 'at 09:00 tomorrow.'), ('98450 44444', 'at 11:45 tomorrow.')]`.
+        starter: |
+          class SmsGateway:
+              # The real gateway: every message costs 25 paise and reaches a real phone.
+
+              def send(self, phone, text):
+                  raise RuntimeError("tests must never send real SMS")
+
+
+          appointments = [
+              {"phone": "98450 11111", "day": 41, "time": "10:30", "cancelled": False},
+              {"phone": "98450 22222", "day": 42, "time": "09:00", "cancelled": False},
+              {"phone": "98450 33333", "day": 42, "time": "16:15", "cancelled": True},
+              {"phone": "98450 44444", "day": 42, "time": "11:45", "cancelled": False},
+          ]
+
+
+          def remind(appointments, today):
+              gateway = SmsGateway()
+              count = 0
+              for a in appointments:
+                  if a["day"] == today + 1 and not a["cancelled"]:
+                      gateway.send(a["phone"], f"Reminder: your appointment is at {a['time']} tomorrow.")
+                      count += 1
+              return count
+
+
+          sent = []
+          count = remind(appointments, 41, lambda phone, text: sent.append((phone, text[-18:])))
+          print(count, sent)
+        solution: |
+          class SmsGateway:
+              # The real gateway: every message costs 25 paise and reaches a real phone.
+
+              def send(self, phone, text):
+                  raise RuntimeError("tests must never send real SMS")
+
+
+          appointments = [
+              {"phone": "98450 11111", "day": 41, "time": "10:30", "cancelled": False},
+              {"phone": "98450 22222", "day": 42, "time": "09:00", "cancelled": False},
+              {"phone": "98450 33333", "day": 42, "time": "16:15", "cancelled": True},
+              {"phone": "98450 44444", "day": 42, "time": "11:45", "cancelled": False},
+          ]
+
+
+          def remind(appointments, today, send):
+              count = 0
+              for a in appointments:
+                  if a["day"] == today + 1 and not a["cancelled"]:
+                      send(a["phone"], f"Reminder: your appointment is at {a['time']} tomorrow.")
+                      count += 1
+              return count
+
+
+          sent = []
+          count = remind(appointments, 41, lambda phone, text: sent.append((phone, text[-18:])))
+          print(count, sent)
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(131)
+          for _ in range(30):
+              _today = _rng.randint(10, 300)
+              _appts = [{"phone": "9" + str(_rng.randint(1000, 9999)), "day": _today + _rng.randint(-1, 2), "time": _rng.choice(["09:00", "10:30", "16:15"]), "cancelled": _rng.random() < 0.3} for _k in range(_rng.randint(0, 6))]
+              _want = [(_a["phone"], f"Reminder: your appointment is at {_a['time']} tomorrow.") for _a in _appts if _a["day"] == _today + 1 and not _a["cancelled"]]
+              _calls = []
+              _n = remind(_appts, _today, lambda _p, _t: _calls.append((_p, _t)))
+              assert _calls == _want, "With today " + str(_today) + " and appointments " + str(_appts) + ", the messages sent should be " + str(_want) + ", not " + str(_calls)
+              assert _n == len(_want), "remind should return " + str(len(_want)) + ", the number of messages sent, not " + str(_n)
+          assert output.strip() == "2 [('98450 22222', 'at 09:00 tomorrow.'), ('98450 44444', 'at 11:45 tomorrow.')]", "The program should print 2 [('98450 22222', 'at 09:00 tomorrow.'), ('98450 44444', 'at 11:45 tomorrow.')]"
+        wrong:
+          - |
+            class SmsGateway:
+                # The real gateway: every message costs 25 paise and reaches a real phone.
+
+                def send(self, phone, text):
+                    raise RuntimeError("tests must never send real SMS")
+
+
+            appointments = [
+                {"phone": "98450 11111", "day": 41, "time": "10:30", "cancelled": False},
+                {"phone": "98450 22222", "day": 42, "time": "09:00", "cancelled": False},
+                {"phone": "98450 33333", "day": 42, "time": "16:15", "cancelled": True},
+                {"phone": "98450 44444", "day": 42, "time": "11:45", "cancelled": False},
+            ]
+
+
+            def remind(appointments, today, send):
+                gateway = SmsGateway()
+                count = 0
+                for a in appointments:
+                    if a["day"] == today + 1 and not a["cancelled"]:
+                        send(a["phone"], f"Reminder: your appointment is at {a['time']} tomorrow.")
+                        gateway.send(a["phone"], f"Reminder: your appointment is at {a['time']} tomorrow.")
+                        count += 1
+                return count
+
+
+            sent = []
+            count = remind(appointments, 41, lambda phone, text: sent.append((phone, text[-18:])))
+            print(count, sent)
+          - |
+            class SmsGateway:
+                # The real gateway: every message costs 25 paise and reaches a real phone.
+
+                def send(self, phone, text):
+                    raise RuntimeError("tests must never send real SMS")
+
+
+            appointments = [
+                {"phone": "98450 11111", "day": 41, "time": "10:30", "cancelled": False},
+                {"phone": "98450 22222", "day": 42, "time": "09:00", "cancelled": False},
+                {"phone": "98450 33333", "day": 42, "time": "16:15", "cancelled": True},
+                {"phone": "98450 44444", "day": 42, "time": "11:45", "cancelled": False},
+            ]
+
+
+            def remind(appointments, today, send):
+                count = 0
+                for a in appointments:
+                    if a["day"] == today + 1:
+                        send(a["phone"], f"Reminder: your appointment is at {a['time']} tomorrow.")
+                        count += 1
+                return count
+
+
+            sent = []
+            count = remind(appointments, 41, lambda phone, text: sent.append((phone, text[-18:])))
+            print(count, sent)
+          - |
+            class SmsGateway:
+                # The real gateway: every message costs 25 paise and reaches a real phone.
+
+                def send(self, phone, text):
+                    raise RuntimeError("tests must never send real SMS")
+
+
+            appointments = [
+                {"phone": "98450 11111", "day": 41, "time": "10:30", "cancelled": False},
+                {"phone": "98450 22222", "day": 42, "time": "09:00", "cancelled": False},
+                {"phone": "98450 33333", "day": 42, "time": "16:15", "cancelled": True},
+                {"phone": "98450 44444", "day": 42, "time": "11:45", "cancelled": False},
+            ]
+
+
+            def remind(appointments, today, send):
+                count = 0
+                for a in appointments:
+                    if a["day"] >= today and not a["cancelled"]:
+                        send(a["phone"], f"Reminder: your appointment is at {a['time']} tomorrow.")
+                        count += 1
+                return count
+
+
+            sent = []
+            count = remind(appointments, 41, lambda phone, text: sent.append((phone, text[-18:])))
+            print(count, sent)
+        explanation: |
+          With `send` passed in, the decision of who gets a message is tested against a recording fake and the real gateway is never touched. Calling the real gateway as well as `send` still sends real messages from tests; dropping the cancelled check texts patients who cancelled; and `day >= today` reminds today's patients too.
+    - question:
+        id: write-seeded-seating
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `seat` so that it shuffles a copy of the guest list with the random generator it is given, not the module's own, and seats four guests per table in the shuffled order, so that two calls with generators made from the same seed give the same plan and the caller's list is left in order. The program should print `True asha [1, 1, 1, 1, 2, 2]`.
+        starter: |
+          import random
+
+
+          def seat(guests, rng):
+              order = list(guests)
+              random.shuffle(order)
+              return {guest: 1 + i // 4 for i, guest in enumerate(order)}
+
+
+          guests = ["asha", "bilal", "chitra", "dev", "esha", "farhan"]
+          first = seat(guests, random.Random(7))
+          second = seat(guests, random.Random(7))
+          print(first == second, guests[0], sorted(first.values()))
+        solution: |
+          import random
+
+
+          def seat(guests, rng):
+              order = list(guests)
+              rng.shuffle(order)
+              return {guest: 1 + i // 4 for i, guest in enumerate(order)}
+
+
+          guests = ["asha", "bilal", "chitra", "dev", "esha", "farhan"]
+          first = seat(guests, random.Random(7))
+          second = seat(guests, random.Random(7))
+          print(first == second, guests[0], sorted(first.values()))
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(132)
+          for _ in range(30):
+              _guests = ["g" + str(_k) for _k in range(_rng.randint(1, 11))]
+              _given = list(_guests)
+              _seed = _rng.randint(1, 10**6)
+              _order = list(_guests)
+              _random.Random(_seed).shuffle(_order)
+              _want = {_g: 1 + _i // 4 for _i, _g in enumerate(_order)}
+              _got = seat(_guests, _random.Random(_seed))
+              assert _guests == _given, "seat should not reorder the guest list it is given"
+              assert _got == _want, "With the guests " + str(_given) + " and random.Random(" + str(_seed) + "), seat should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "True asha [1, 1, 1, 1, 2, 2]", "The program should print True asha [1, 1, 1, 1, 2, 2]"
+        wrong:
+          - |
+            import random
+
+
+            def seat(guests, rng):
+                rng.shuffle(guests)
+                return {guest: 1 + i // 4 for i, guest in enumerate(guests)}
+
+
+            guests = ["asha", "bilal", "chitra", "dev", "esha", "farhan"]
+            first = seat(guests, random.Random(7))
+            second = seat(guests, random.Random(7))
+            print(first == second, guests[0], sorted(first.values()))
+          - |
+            import random
+
+
+            def seat(guests, rng):
+                order = list(guests)
+                random.seed(7)
+                random.shuffle(order)
+                return {guest: 1 + i // 4 for i, guest in enumerate(order)}
+
+
+            guests = ["asha", "bilal", "chitra", "dev", "esha", "farhan"]
+            first = seat(guests, random.Random(7))
+            second = seat(guests, random.Random(7))
+            print(first == second, guests[0], sorted(first.values()))
+          - |
+            import random
+
+
+            def seat(guests, rng):
+                order = list(guests)
+                rng.shuffle(order)
+                return {guest: 1 + i // 5 for i, guest in enumerate(order)}
+
+
+            guests = ["asha", "bilal", "chitra", "dev", "esha", "farhan"]
+            first = seat(guests, random.Random(7))
+            second = seat(guests, random.Random(7))
+            print(first == second, guests[0], sorted(first.values()))
+        explanation: |
+          The starter received `rng` but shuffled with the module's global generator, so the seed the caller chose had no effect. Calling `rng.shuffle` on a copy uses the injected generator. Shuffling the caller's list in place reorders it; reseeding the global generator inside makes every plan the same whatever generator is passed; and five to a table changes the plan.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          On average, how many of the puzzle's 48 runs does the test fail?
+        answer: "26"
+        explanation: |
+          The clinic is open from 8:00 to 20:00 less the lunch hour, 11 of 24 hours, so the test fails in 13 of 24: $48 \times \frac{13}{24} = 26$ runs.
+    - question:
+        id: work-design
+        type: choice
+        system: s2
+        prompt: |
+          A function decides whether to give a customer a festival discount: on Diwali day, for customers with at least 5 past orders, chosen at random for 1 in 10 of them, and it then sends an SMS. How should it be designed for testing?
+        options:
+          - "A pure function of today's date, the order count and a random draw, returning yes or no, with the date, a seeded generator and the SMS sender supplied by the caller"
+          - "Read the date and the global random generator inside, and send the SMS inside, so callers need pass nothing"
+          - "Test it only on Diwali, when the result is meaningful"
+          - "Inject every helper it calls, including len and min"
+        answer: 0
+        explanation: |
+          Passing in the date and the random source makes every case testable on any day, and keeping the SMS outside the decision lets the rule be tested without sending anything. Reading them inside makes the rule untestable for 364 days a year, and injecting pure helpers adds parameters that hide nothing.
+  connections:
+    - text: |
+        26 failed runs a month: the test passes only when it happens to run during the 11 open hours, so it fails 13 times in every 24, and $48 \times \frac{13}{24} = 26$. Passing a clock in turns it into two tests that always pass, one at 10:00 expecting open and one at 13:30 expecting the lunch break.
+
+        Passing behaviour in as a parameter, a `send` function or a `clock` object, is the simplest of a family of recurring designs with names: strategies, adapters, observers and factories. Knowing when each one earns its place, and when it is ceremony, is [[s4.design-patterns-that-earn-their-place]]. The fakes themselves, and how far to go with them, are [[s6.fakes-stubs-and-mocks]], and taming time, randomness and ordering in tests is [[s6.deterministic-tests-seeds-clocks-and-fakes]].

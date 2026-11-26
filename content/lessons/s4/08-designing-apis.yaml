@@ -1,0 +1,662 @@
+concept: s4.designing-apis
+minutes: 85
+claim: You can design an interface that other programs call as a promise, shaping it from the caller's side with a small surface, returning errors in one consistent shape that says whose fault it was and whether to retry, paging through changing lists with cursors instead of offsets, making repeated requests safe with idempotency keys, and telling additive changes from breaking ones so that the interface can grow without breaking the programs that use it.
+recalls: [s4.refactoring]
+uses: [s4.abstraction-and-interfaces, s4.errors-as-part-of-the-design, s4.designing-with-types-and-invariants, q1.schema-evolution-and-compatibility, s1.files-and-data-formats]
+leads: [s4.writing-design-documents, d1.http, d1.sockets-and-rpc, d2.idempotency-and-retries]
+starter: |
+  # Scratch space. Page 2 of a feed by offset and by cursor, after 2 new posts.
+  posts = [40, 39, 38, 37, 36, 35, 34, 33, 32, 31]
+  page1 = posts[:5]
+  posts = [42, 41] + posts
+
+  by_offset = posts[5:10]
+  by_cursor = [p for p in posts if p < page1[-1]][:5]
+  print(page1, by_offset, by_cursor)
+parts:
+  recall:
+    - text: |
+        [[s4.refactoring]] reshaped code freely, because the only people affected by a change in structure were the people editing it, and the tests could prove that nothing a caller sees had changed. That freedom ends at the edge of your code. Once other programs, written by other people and updated on their own schedules, call your functions or your service, the shape of what they call is part of what they see. This lesson is about designing that shape. Three quick pulls first.
+  puzzle:
+    - text: |
+        A news app shows a feed newest first, 20 posts to a page. It asks the server for each page by offset: "skip 20, take 20" for page 2, and "skip 40, take 20" for page 3.
+
+        A reader opens page 1. While they read it, 3 new posts are published at the top of the feed. They open page 2, and while they read that, 2 more are published. Then they open page 3.
+
+        **How many posts does the reader see twice across the three pages?**
+  intuition:
+    - text: |
+        The three-pin socket on the wall of an Indian home is an interface. Its shape has barely changed in decades, and so a fridge bought in 1985 and a phone charger bought last week both fit it. Behind the wall, almost everything has changed: the wiring, the meters, the power stations, the companies. None of that reached the appliances, because none of it changed the socket. Now imagine the electricity board announcing a new socket shape next month. Every appliance in the country would need a new plug, and the board, not the owners, would have broken them.
+
+        An **API**, an application programming interface, is the socket of a piece of software: the functions, requests and responses that other programs use. You may rebuild everything behind it, but its shape is a promise. Small details of that shape decide what callers experience, as the figure shows for something as ordinary as fetching the second page of a feed.
+    - figure: page-cursor
+      props: { mode: offset, arrived: 2 }
+    - text: |
+        Asked by offset, "skip 5, take 5", page 2 depends on where everything sits at the moment it is fetched. New posts at the top push the old ones down, so the reader is shown posts they have already seen. Deleted posts pull them up, so others are skipped without anyone noticing. Asked by cursor, "5 posts older than post 36", page 2 is anchored to the last thing the reader actually saw, and arrivals elsewhere in the list cannot disturb it. Both designs return a list of posts; only one returns the list the caller meant.
+  derivation:
+    - text: |
+        **An API is a promise.** Inside a module, [[s4.refactoring]] can change anything that callers cannot see. At an API, callers are programs written by people you may never meet: other teams, other companies, and apps on phones whose owners never update them. You cannot refactor their code, and they rely on your API's shape to keep working.
+
+        They also rely on more than you meant to promise. Hyrum Wright, an engineer at Google, observed that with enough users, every observable behaviour of an API will be relied on by somebody, documented or not: the order in which results come back, the wording of an error message, even how long a call takes. This is known as Hyrum's law. Its practical lesson is to keep an API's surface small. Every function, parameter and field you expose is one you will have to keep, and it is always easy to add something later and nearly impossible to take it away.
+    - question:
+        id: derivation-hyrum
+        type: choice
+        system: s2
+        prompt: |
+          A payments API documents that its list of refunds comes back "in no particular order". In practice it has always returned them oldest first. What does Hyrum's law predict if a new version starts returning them in random order?
+        options:
+          - "Some callers that quietly relied on oldest first will break, even though the documentation never promised it."
+          - "No caller can break, because the order was never documented."
+          - "Only callers in other countries will notice."
+          - "Callers will break only if the API's version number changes."
+        answer: 0
+        explanation: |
+          With enough callers, someone will have written code that takes the first refund as the oldest. The documentation decides who is to blame, not whose app stops working.
+    - text: |
+        **Design from the caller's side.** Write the code a caller would write before you write the server, and change the API until that code is short and obvious. Use the callers' words, `customer` and `order`, rather than the names of your internal tables. Use one word for one idea everywhere: if it is `phone` in one response, it is not `mobile` in another. Make the common request short and the rare one possible. And carry over the habits of [[s4.designing-with-types-and-invariants]]: send money as a whole number of paise rather than a floating-point number of rupees, and make an invalid request impossible to express where you can, rather than accepting it and failing later.
+
+        **Errors in one shape.** An API's errors are part of its design, as [[s4.errors-as-part-of-the-design]] argued for functions. Give every error the same shape, for example a machine-readable `code` such as `"invalid_amount"`, a `message` for people, and the `field` at fault. Most of all, tell callers whose fault it was. If the request itself is wrong, the caller must change it, and sending it again will fail again. If the server failed or was busy, the same request may succeed later, and the caller may retry. Web APIs carry this distinction in their status codes, the subject of [[d1.http]]. Never put internal details such as stack traces or database messages into an error: callers will start to depend on them, and they tell an attacker how your system is built.
+    - question:
+        id: derivation-retry
+        type: choice
+        system: s2
+        prompt: |
+          Which of these API errors should a caller retry automatically, after a pause?
+        options:
+          - "The server is temporarily overloaded."
+          - "The amount must be a whole number of paise."
+          - "The customer id does not exist."
+          - "The request is missing the required field phone."
+        answer: 0
+        explanation: |
+          Overload is the server's state, and it may pass. The other three describe the request itself, which will fail in exactly the same way however many times it is sent.
+    - text: |
+        **Lists that change: pagination.** Any list that can grow, such as orders, posts or transactions, must come back in pages. Paging by offset, "skip 40, take 20", is simple and lets a caller jump to any page, but as the figure showed, it is anchored to positions, and positions move whenever items are added or removed in front of the page. Paging by **cursor** anchors each page to the last item the caller saw: the server returns a page plus a cursor, often the id or timestamp of the last item, and the caller sends that cursor back to ask for what comes after it. The list can change freely around that point without repeats or gaps. The price is that a caller cannot jump straight to page 37, which a feed rarely needs. Servers usually wrap the cursor in an opaque token, so that callers pass it back without depending on what is inside, leaving the server free to change it.
+    - question:
+        id: derivation-skipped
+        type: numeric
+        system: s2
+        prompt: |
+          A list is paged by offset, 20 to a page. After a caller reads page 1, two of the posts on page 1 are deleted. How many posts does the caller never see when it asks for page 2 with "skip 20, take 20"?
+        answer: "2"
+        explanation: |
+          Every post after the deleted ones moves up by 2 places, so the first 2 posts that should have opened page 2 now sit at the end of page 1, which the caller has already read.
+    - text: |
+        **Retries and idempotency.** A call across a network can fail in an awkward way: the request reaches the server, the server acts, and the reply is lost. The caller sees only a timeout and cannot tell whether anything happened. Retrying, as [[s4.errors-as-part-of-the-design]] recommended, is then safe only if doing the operation twice has the same effect as doing it once, which is called being **idempotent**. Reading an order is idempotent, and so is "set the delivery address to this". "Charge ₹250" and "create an order" are not: a retry may charge twice.
+
+        The standard remedy is an **idempotency key**. The caller makes up a unique key for each operation it intends, such as one particular payment, and sends the same key with every attempt at it. The server stores each key with the result it produced; when a request arrives with a key it has seen, it returns the stored result instead of acting again. The key belongs to the intention, not to the customer or the amount, since one customer may genuinely make two payments of ₹250 in a day. How long to keep keys and what to do when they are reused with a different request are among the questions of [[d2.idempotency-and-retries]].
+    - question:
+        id: order-idempotency
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of a safely retried payment in order.
+        steps:
+          - "The app makes up a new idempotency key for this payment."
+          - "The app sends the payment request with the key."
+          - "The server charges the card and stores the key with the result."
+          - "The reply is lost, and the app sends the same request with the same key."
+          - "The server finds the key and returns the stored result without charging again."
+        explanation: |
+          The key is made once per intended payment and reused on every attempt, so the server can recognise the retry. Storing the result with the key is what lets it answer without acting twice.
+    - text: |
+        **Changing without breaking.** APIs must grow, and the rules for growing them are the rules of [[q1.schema-evolution-and-compatibility]], seen from the caller's side. For data the API sends back, adding a new field is safe, provided callers ignore fields they do not know, which well-behaved clients do. Removing a field, renaming it, changing its type or its meaning, or letting a field that was always present sometimes be missing, will break someone. For data the API receives, the directions reverse: accepting a new optional parameter is safe, but making an optional parameter required breaks every caller that does not send it.
+
+        When a breaking change is unavoidable, do not make it in place. Offer the new shape alongside the old one, as a new field, a new endpoint or a new version such as `/v2`; announce a date after which the old shape will go; watch who still uses it; and remove it only when they have moved. It is the expand and contract of a schema migration, applied to an interface.
+  formal:
+    - text: |
+        **API.** The functions, requests and responses through which other programs use a piece of software; its shape is a promise to its callers.
+
+        **Hyrum's law.** With enough users, every observable behaviour of an API is relied on by someone, so keep the surface small.
+
+        **Error shape.** One consistent form for every error, with a machine-readable code, a message and the field at fault, saying whether the caller or the server is at fault and so whether a retry can help.
+
+        **Cursor pagination.** Each page is asked for relative to the last item seen, so changes elsewhere in the list cause no repeats or gaps; offset pagination is asked for by position and does not have this property.
+
+        **Idempotent.** Doing it twice has the same effect as doing it once. An idempotency key, made once per intended operation and sent with every attempt, lets a server make a non-idempotent operation safe to retry.
+
+        **Breaking change.** For responses: removing, renaming or retyping a field, or letting an always-present field go missing. For requests: making something required that was optional. Adding optional things is compatible.
+  drill:
+    - text: Seconds each. For every change, think of an old caller that has not been updated.
+    - question:
+        id: drill-add-field
+        type: choice
+        system: s1
+        prompt: |
+          An order response gains a new optional field, `eta_minutes`. Will callers that ignore unknown fields break?
+        options:
+          - "No; an added field is a compatible change"
+          - "Yes; any change to a response breaks callers"
+          - "Only if they are mobile apps"
+          - "Yes, unless the version number changes"
+        answer: 0
+        explanation: Old callers never look for the new field, so they behave exactly as before.
+    - question:
+        id: drill-idempotent
+        type: choice
+        system: s1
+        prompt: |
+          Which of these operations is idempotent?
+        options:
+          - "Set the delivery address of order 41 to 12 MG Road"
+          - "Add ₹50 to the wallet"
+          - "Create a new order"
+          - "Send an SMS to the customer"
+        answer: 0
+        explanation: Setting the address twice leaves it exactly as setting it once; each of the others does something again on every repeat.
+    - question:
+        id: drill-required
+        type: choice
+        system: s1
+        prompt: |
+          A request's optional `note` parameter becomes required. Is this a breaking change?
+        options:
+          - "Yes; callers that never sent a note now fail"
+          - "No; it only adds a rule"
+          - "No; notes are optional text"
+          - "Only for responses"
+        answer: 0
+        explanation: Every existing caller that leaves the note out now gets an error for a request that used to work.
+    - question:
+        id: drill-requests
+        type: numeric
+        system: s1
+        prompt: |
+          A cursor-paged list holds 1,000 orders and returns 50 per page. How many requests does a caller need to read them all?
+        answer: "20"
+        explanation: $1000 / 50 = 20$ pages, each a request carrying the cursor from the one before.
+    - question:
+        id: predict-keys
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          seen = {}
+
+
+          def charge(key, amount):
+              if key not in seen:
+                  seen[key] = len(seen) + 1
+              return seen[key]
+
+
+          print([charge(k, 250) for k in ["a", "a", "b", "a"]])
+        output: "[1, 1, 2, 1]"
+        explanation: Each new key gets the next charge number; a repeated key returns the number it got the first time.
+    - question:
+        id: predict-cursor
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          posts = [9, 8, 7, 6, 5, 4]
+
+
+          def after(cursor, size):
+              return [p for p in posts if p < cursor][:size]
+
+
+          print(after(7, 2), after(5, 2))
+        output: "[6, 5] [4]"
+        explanation: Each page is the posts below the cursor, cut to the page size; below 5 only post 4 remains.
+  work:
+    - text: Slower now. Each problem is about a promise that callers depend on.
+    - question:
+        id: fix-idempotency
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A retried charge with the same idempotency key must return the first result without charging again, while a new key is always a new charge. The program should print `2 [1, 1, 2]`. It prints `3 [1, 2, 3]`. Find the fault and fix it.
+        starter: |
+          class PaymentAPI:
+              def __init__(self):
+                  self.charges = []
+                  self.seen = {}
+
+              def charge(self, key, customer, amount):
+                  if key in self.seen:
+                      return self.seen[key]
+                  charge_id = len(self.charges) + 1
+                  self.charges.append((charge_id, customer, amount))
+                  result = {"id": charge_id, "amount": amount}
+                  self.seen[customer] = result
+                  return result
+
+
+          api = PaymentAPI()
+          results = [
+              api.charge("k1", "asha", 250),
+              api.charge("k1", "asha", 250),  # the app timed out and retried
+              api.charge("k2", "asha", 100),  # a second, separate order
+          ]
+          print(len(api.charges), [r["id"] for r in results])
+        solution: |
+          class PaymentAPI:
+              def __init__(self):
+                  self.charges = []
+                  self.seen = {}
+
+              def charge(self, key, customer, amount):
+                  if key in self.seen:
+                      return self.seen[key]
+                  charge_id = len(self.charges) + 1
+                  self.charges.append((charge_id, customer, amount))
+                  result = {"id": charge_id, "amount": amount}
+                  self.seen[key] = result
+                  return result
+
+
+          api = PaymentAPI()
+          results = [
+              api.charge("k1", "asha", 250),
+              api.charge("k1", "asha", 250),  # the app timed out and retried
+              api.charge("k2", "asha", 100),  # a second, separate order
+          ]
+          print(len(api.charges), [r["id"] for r in results])
+        tests: |
+          _api = PaymentAPI()
+          _a = _api.charge("x1", "ravi", 300)
+          _b = _api.charge("x1", "ravi", 300)
+          assert _b == _a, "A retry with the same key should return the first result, " + str(_a) + ", not " + str(_b)
+          assert len(_api.charges) == 1, "A retry with the same key must not charge again; there are " + str(len(_api.charges)) + " charges"
+          _c = _api.charge("x2", "ravi", 300)
+          assert len(_api.charges) == 2 and _c["id"] != _a["id"], "A new key is a new order and must be charged, even for the same customer and amount"
+          _d = _api.charge("x3", "meera", 120)
+          _e = _api.charge("x2", "ravi", 300)
+          assert _e == _c, "Retrying an older key should still return its first result, " + str(_c) + ", not " + str(_e)
+          assert len(_api.charges) == 3, "Three different keys should give exactly 3 charges, not " + str(len(_api.charges))
+          assert output.strip() == "2 [1, 1, 2]", "The program should print 2 [1, 1, 2]"
+        wrong:
+          - |
+            class PaymentAPI:
+                def __init__(self):
+                    self.charges = []
+                    self.seen = {}
+
+                def charge(self, key, customer, amount):
+                    if customer in self.seen:
+                        return self.seen[customer]
+                    charge_id = len(self.charges) + 1
+                    self.charges.append((charge_id, customer, amount))
+                    result = {"id": charge_id, "amount": amount}
+                    self.seen[customer] = result
+                    return result
+
+
+            api = PaymentAPI()
+            results = [
+                api.charge("k1", "asha", 250),
+                api.charge("k1", "asha", 250),  # the app timed out and retried
+                api.charge("k2", "asha", 100),  # a second, separate order
+            ]
+            print(len(api.charges), [r["id"] for r in results])
+          - |
+            class PaymentAPI:
+                def __init__(self):
+                    self.charges = []
+                    self.seen = {}
+
+                def charge(self, key, customer, amount):
+                    if (customer, amount) in self.seen:
+                        return self.seen[(customer, amount)]
+                    charge_id = len(self.charges) + 1
+                    self.charges.append((charge_id, customer, amount))
+                    result = {"id": charge_id, "amount": amount}
+                    self.seen[(customer, amount)] = result
+                    return result
+
+
+            api = PaymentAPI()
+            results = [
+                api.charge("k1", "asha", 250),
+                api.charge("k1", "asha", 250),  # the app timed out and retried
+                api.charge("k2", "asha", 100),  # a second, separate order
+            ]
+            print(len(api.charges), [r["id"] for r in results])
+          - |
+            class PaymentAPI:
+                def __init__(self):
+                    self.charges = []
+                    self.seen = {}
+
+                def charge(self, key, customer, amount):
+                    if key in self.seen:
+                        return self.seen[key]
+                    charge_id = len(self.charges) + 1
+                    self.charges.append((charge_id, customer, amount))
+                    result = {"id": charge_id, "amount": amount}
+                    self.seen = {key: result}
+                    return result
+
+
+            api = PaymentAPI()
+            results = [
+                api.charge("k1", "asha", 250),
+                api.charge("k1", "asha", 250),  # the app timed out and retried
+                api.charge("k2", "asha", 100),  # a second, separate order
+            ]
+            print(len(api.charges), [r["id"] for r in results])
+        explanation: |
+          The result was stored under the customer's name, so the lookup by key never found it and every retry charged again. Store it under the key. Looking results up by customer, or by customer and amount, swallows a genuine second order; remembering only the latest key forgets earlier payments, so a late retry of an older one charges twice.
+    - question:
+        id: write-cursor
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `page_after(posts, cursor, size)` for a feed whose posts are `(id, text)` pairs, newest first. It returns up to `size` posts with ids below `cursor`, starting from the newest when `cursor` is `None`, together with the next cursor: the id of the last post returned, or `None` if no older posts remain after them. The program should print `30 30 1 None`.
+        starter: |
+          def page_after(posts, cursor, size):
+              # posts are (id, text) pairs, newest first, so ids go down.
+              # Return (items, next_cursor): up to `size` posts with ids below `cursor`
+              # (from the newest if cursor is None), and the id of the last post
+              # returned, or None if no older posts remain after them.
+              return posts[:size], None
+
+
+          posts = [(i, "post " + str(i)) for i in range(30, 0, -1)]
+          arriving = [[(32, "post 32"), (31, "post 31")], [(33, "post 33")]]
+
+          items, cursor = page_after(posts, None, 10)
+          seen = [i for i, _ in items]
+          for new in arriving:
+              posts = new + posts
+              items, cursor = page_after(posts, cursor, 10)
+              seen = seen + [i for i, _ in items]
+          print(len(seen), len(set(seen)), seen[-1], cursor)
+        solution: |
+          def page_after(posts, cursor, size):
+              older = [p for p in posts if cursor is None or p[0] < cursor]
+              items = older[:size]
+              if len(older) > size:
+                  return items, items[-1][0]
+              return items, None
+
+
+          posts = [(i, "post " + str(i)) for i in range(30, 0, -1)]
+          arriving = [[(32, "post 32"), (31, "post 31")], [(33, "post 33")]]
+
+          items, cursor = page_after(posts, None, 10)
+          seen = [i for i, _ in items]
+          for new in arriving:
+              posts = new + posts
+              items, cursor = page_after(posts, cursor, 10)
+              seen = seen + [i for i, _ in items]
+          print(len(seen), len(set(seen)), seen[-1], cursor)
+        tests: |
+          _posts = [(i, "p" + str(i)) for i in [50, 47, 45, 44, 40, 38, 31, 30, 22]]
+          _items, _next = page_after(_posts, None, 4)
+          assert [i for i, _ in _items] == [50, 47, 45, 44], "The first page of size 4 should be posts 50, 47, 45, 44, not " + str([i for i, _ in _items])
+          assert _next == 44, "After posts 50 to 44, the next cursor should be 44, the id of the last post returned, not " + str(_next)
+          _items, _next = page_after([(60, "new")] + _posts, 44, 4)
+          assert [i for i, _ in _items] == [40, 38, 31, 30], "The page after cursor 44 should be posts 40, 38, 31, 30, even after post 60 arrives at the top; got " + str([i for i, _ in _items])
+          assert _next == 30, "The next cursor should be 30, not " + str(_next)
+          _items, _next = page_after(_posts, 30, 4)
+          assert [i for i, _ in _items] == [22] and _next is None, "The last page should be just post 22 with next cursor None, not " + str([i for i, _ in _items]) + " and " + str(_next)
+          _items, _next = page_after(_posts, 40, 4)
+          assert [i for i, _ in _items] == [38, 31, 30, 22] and _next is None, "When exactly 4 older posts remain, return them all with next cursor None; got " + str([i for i, _ in _items]) + " and " + str(_next)
+          _items, _next = page_after(_posts, 45, 2)
+          assert [i for i, _ in _items] == [44, 40], "Posts with ids below 45 start at 44; the page must not repeat post 45 itself; got " + str([i for i, _ in _items])
+          assert output.strip() == "30 30 1 None", "The program should print 30 30 1 None"
+        wrong:
+          - |
+            def page_after(posts, cursor, size):
+                start = 0 if cursor is None else cursor
+                items = posts[start:start + size]
+                if start + size < len(posts):
+                    return items, start + size
+                return items, None
+
+
+            posts = [(i, "post " + str(i)) for i in range(30, 0, -1)]
+            arriving = [[(32, "post 32"), (31, "post 31")], [(33, "post 33")]]
+
+            items, cursor = page_after(posts, None, 10)
+            seen = [i for i, _ in items]
+            for new in arriving:
+                posts = new + posts
+                items, cursor = page_after(posts, cursor, 10)
+                seen = seen + [i for i, _ in items]
+            print(len(seen), len(set(seen)), seen[-1], cursor)
+          - |
+            def page_after(posts, cursor, size):
+                older = [p for p in posts if cursor is None or p[0] <= cursor]
+                items = older[:size]
+                if len(older) > size:
+                    return items, items[-1][0]
+                return items, None
+
+
+            posts = [(i, "post " + str(i)) for i in range(30, 0, -1)]
+            arriving = [[(32, "post 32"), (31, "post 31")], [(33, "post 33")]]
+
+            items, cursor = page_after(posts, None, 10)
+            seen = [i for i, _ in items]
+            for new in arriving:
+                posts = new + posts
+                items, cursor = page_after(posts, cursor, 10)
+                seen = seen + [i for i, _ in items]
+            print(len(seen), len(set(seen)), seen[-1], cursor)
+          - |
+            def page_after(posts, cursor, size):
+                older = [p for p in posts if cursor is None or p[0] < cursor]
+                items = older[:size]
+                if len(items) > 0:
+                    return items, items[-1][0]
+                return items, None
+
+
+            posts = [(i, "post " + str(i)) for i in range(30, 0, -1)]
+            arriving = [[(32, "post 32"), (31, "post 31")], [(33, "post 33")]]
+
+            items, cursor = page_after(posts, None, 10)
+            seen = [i for i, _ in items]
+            for new in arriving:
+                posts = new + posts
+                items, cursor = page_after(posts, cursor, 10)
+                seen = seen + [i for i, _ in items]
+            print(len(seen), len(set(seen)), seen[-1], cursor)
+        explanation: |
+          Filtering by id anchors each page to the last post seen, so the three posts that arrived during reading cause no repeats. Counting posts already returned is an offset by another name and repeats posts as new ones arrive; `<=` repeats the cursor post itself on every page; and returning a cursor even when nothing older remains makes a caller ask for one more, empty page.
+    - question:
+        id: write-breaking
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `breaking(old, new)`, which compares two descriptions of a response, each a dictionary from field name to `(type name, always present)`, and returns a sorted list with a message for each change that could break a client: `"NAME: removed"`, `"NAME: type OLD -> NEW"` or `"NAME: may now be missing"`. The program should print `['amount: type int -> str', 'note: may now be missing', 'phone: removed']`.
+        starter: |
+          def breaking(old, new):
+              # old and new describe a response: field name -> (type name, always present).
+              # Return, sorted, a message for each change that could break a client:
+              # "NAME: removed", "NAME: type OLD -> NEW" or "NAME: may now be missing".
+              return []
+
+
+          old = {
+              "id": ("int", True),
+              "amount": ("int", True),
+              "phone": ("str", True),
+              "note": ("str", True),
+              "coupon": ("str", False),
+          }
+          new = {
+              "id": ("int", True),
+              "amount": ("str", True),
+              "note": ("str", False),
+              "coupon": ("str", True),
+              "eta_minutes": ("int", False),
+          }
+          print(breaking(old, new))
+        solution: |
+          def breaking(old, new):
+              found = []
+              for name in old:
+                  old_type, old_always = old[name]
+                  if name not in new:
+                      found.append(name + ": removed")
+                  else:
+                      new_type, new_always = new[name]
+                      if new_type != old_type:
+                          found.append(name + ": type " + old_type + " -> " + new_type)
+                      if old_always and not new_always:
+                          found.append(name + ": may now be missing")
+              return sorted(found)
+
+
+          old = {
+              "id": ("int", True),
+              "amount": ("int", True),
+              "phone": ("str", True),
+              "note": ("str", True),
+              "coupon": ("str", False),
+          }
+          new = {
+              "id": ("int", True),
+              "amount": ("str", True),
+              "note": ("str", False),
+              "coupon": ("str", True),
+              "eta_minutes": ("int", False),
+          }
+          print(breaking(old, new))
+        tests: |
+          _old = {"a": ("int", True), "b": ("str", False), "c": ("float", True), "d": ("bool", True)}
+          _new = {"a": ("int", True), "b": ("str", True), "c": ("str", False), "e": ("int", True)}
+          _got = breaking(_old, _new)
+          _want = ["c: may now be missing", "c: type float -> str", "d: removed"]
+          assert _got == _want, "breaking should return " + str(_want) + ", not " + str(_got) + ". Adding a field or making an optional field always present cannot break a client that reads responses"
+          _got = breaking(_old, dict(_old))
+          assert _got == [], "An unchanged response has no breaking changes, not " + str(_got)
+          _got = breaking({"x": ("int", False)}, {"x": ("int", True), "y": ("str", False)})
+          assert _got == [], "Making x always present and adding y are both safe for clients; got " + str(_got)
+          _got = breaking({"z": ("int", True), "k": ("str", True)}, {})
+          assert _got == ["k: removed", "z: removed"], "Removing every field should give ['k: removed', 'z: removed'], not " + str(_got)
+          assert output.strip() == "['amount: type int -> str', 'note: may now be missing', 'phone: removed']", "The program should print ['amount: type int -> str', 'note: may now be missing', 'phone: removed']"
+        wrong:
+          - |
+            def breaking(old, new):
+                found = []
+                for name in old:
+                    old_type, old_always = old[name]
+                    if name not in new:
+                        found.append(name + ": removed")
+                    else:
+                        new_type, new_always = new[name]
+                        if new_type != old_type:
+                            found.append(name + ": type " + old_type + " -> " + new_type)
+                        if old_always and not new_always:
+                            found.append(name + ": may now be missing")
+                for name in new:
+                    if name not in old:
+                        found.append(name + ": added")
+                return sorted(found)
+
+
+            old = {
+                "id": ("int", True),
+                "amount": ("int", True),
+                "phone": ("str", True),
+                "note": ("str", True),
+                "coupon": ("str", False),
+            }
+            new = {
+                "id": ("int", True),
+                "amount": ("str", True),
+                "note": ("str", False),
+                "coupon": ("str", True),
+                "eta_minutes": ("int", False),
+            }
+            print(breaking(old, new))
+          - |
+            def breaking(old, new):
+                found = []
+                for name in old:
+                    old_type, old_always = old[name]
+                    if name not in new:
+                        found.append(name + ": removed")
+                    else:
+                        new_type, new_always = new[name]
+                        if new_type != old_type:
+                            found.append(name + ": type " + old_type + " -> " + new_type)
+                        if old_always != new_always:
+                            found.append(name + ": may now be missing")
+                return sorted(found)
+
+
+            old = {
+                "id": ("int", True),
+                "amount": ("int", True),
+                "phone": ("str", True),
+                "note": ("str", True),
+                "coupon": ("str", False),
+            }
+            new = {
+                "id": ("int", True),
+                "amount": ("str", True),
+                "note": ("str", False),
+                "coupon": ("str", True),
+                "eta_minutes": ("int", False),
+            }
+            print(breaking(old, new))
+          - |
+            def breaking(old, new):
+                found = []
+                for name in new:
+                    if name in old:
+                        old_type, old_always = old[name]
+                        new_type, new_always = new[name]
+                        if new_type != old_type:
+                            found.append(name + ": type " + old_type + " -> " + new_type)
+                        if old_always and not new_always:
+                            found.append(name + ": may now be missing")
+                return sorted(found)
+
+
+            old = {
+                "id": ("int", True),
+                "amount": ("int", True),
+                "phone": ("str", True),
+                "note": ("str", True),
+                "coupon": ("str", False),
+            }
+            new = {
+                "id": ("int", True),
+                "amount": ("str", True),
+                "note": ("str", False),
+                "coupon": ("str", True),
+                "eta_minutes": ("int", False),
+            }
+            print(breaking(old, new))
+        explanation: |
+          Walk the old fields, since that is what existing clients read: a missing one is a removal, and a surviving one breaks clients if its type changed or it stopped being always present. Reporting added fields, or a field that became always present, flags safe changes; walking the new fields never notices what was removed.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          How many posts does the puzzle's reader see twice across the three pages?
+        answer: "5"
+        explanation: |
+          The 3 new posts push everything down by 3 before page 2, so page 2 opens with the last 3 posts of page 1. The 2 more push everything down by 2 again before page 3, so page 3 opens with the last 2 posts of page 2. That is $3 + 2 = 5$ repeats.
+    - question:
+        id: work-rename
+        type: choice
+        system: s2
+        prompt: |
+          A delivery API's responses have a field `phone`, and the team wants to call it `mobile`. Old versions of the app, which read `phone`, stay on some customers' phones for months. What should the team do?
+        options:
+          - "Send both fields with the same value, mark phone as deprecated, and remove it only once no supported app version reads it."
+          - "Rename it in the next release; the app store will update everyone."
+          - "Rename it and return an error to old apps telling them to update."
+          - "Keep phone for ever and never add mobile."
+        answer: 0
+        explanation: |
+          Expand, then contract: the new name is added alongside the old, callers move over in their own time, and the old name goes once nothing reads it. A rename in place breaks every old app at once, and an error message does not make it less broken.
+  connections:
+    - text: |
+        5 posts. The 3 posts published during page 1 pushed the old ones down by 3, so page 2 began with the last 3 posts of page 1; the 2 published during page 2 did the same to page 3. A cursor, "the 20 posts older than the last one you saw", would have shown no repeats at all. Nothing in the server was broken; the shape of the request was the bug.
+
+        Decisions like these, offset or cursor, one field name or another, what counts as a retryable error, are cheap to change on paper and expensive once callers exist. That is why teams write them down and ask others to find the flaws before building: [[s4.writing-design-documents]].
+
+        This lesson treated a call to an API as one function calling another. Across a real network, requests travel as messages with status codes and headers, [[d1.http]], over connections that can stall or drop, [[d1.sockets-and-rpc]]; and keeping idempotency keys correct when many servers share the work is the problem of [[d2.idempotency-and-retries]].

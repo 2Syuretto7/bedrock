@@ -1,0 +1,757 @@
+concept: s4.design-patterns-that-earn-their-place
+minutes: 80
+claim: You can recognise strategy, adapter, observer, decorator and factory in Python code, replace a growing if-elif chain with a table of functions, wrap a mismatched library behind your own interface, publish events to handlers safely, add behaviour around a function with a decorator, and decide when a pattern pays for its indirection and when plain code is better.
+recalls: [s4.dependency-injection-and-testable-code]
+uses: [s4.abstraction-and-interfaces, s1.classes-and-objects, s3.dynamic-programming, s1.testing-with-pytest]
+leads: [s4.refactoring, s4.designing-apis]
+starter: |
+  # Scratch space. A strategy table and a decorator.
+  calls = []
+
+
+  def logged(fn):
+      def wrapper(km):
+          calls.append(fn.__name__)
+          return fn(km)
+      return wrapper
+
+
+  @logged
+  def flat(km):
+      return 30
+
+
+  @logged
+  def by_km(km):
+      return 10 + 8 * km
+
+
+  PLANS = {"flat": flat, "km": by_km}
+  print([PLANS[p](3) for p in ["km", "flat", "km"]], calls)
+parts:
+  recall:
+    - text: |
+        [[s4.dependency-injection-and-testable-code]] passed behaviour in as a value: a `send` function, a clock object, a random generator. Once behaviour is a value, the same few arrangements keep turning up in program after program, and they have names. Knowing the names helps you see the arrangement in someone else's code. Knowing their cost helps you leave them out of your own when they would only add ceremony. Three quick pulls first.
+  puzzle:
+    - text: |
+        A team decided that every one of its 40 service functions should be reached through an interface, a factory that builds the implementation, and the implementation itself, "in case we need to swap it later": three extra definitions per function, compared with simply calling it.
+
+        Two years later, 2 of the 40 functions had actually needed a second implementation.
+
+        **How many of the extra definitions never earned their place?**
+  intuition:
+    - text: |
+        A tailor in Chandni Chowk keeps a shelf of paper patterns: a kurta, a sherwani, a blouse with a princess cut. Each is a solution worked out once and reused for every customer, adjusted to their measurements. The names matter as much as the paper: when one tailor tells another "princess cut, boat neck", a whole design travels in three words. But no tailor cuts a paper pattern for a handkerchief. A pattern is worth having when the shape recurs and is hard to get right; for a simple square, it only slows the scissors.
+
+        **Design patterns** in code are the same: named shapes that recur across programs, each with a known purpose and a known cost. The figure shows the simplest, a **strategy**: several ways of computing a delivery fee, kept in a table and chosen by name.
+    - figure: fee-strategy
+      props: { plan: distance, km: 4, total: 300 }
+    - text: |
+        `fee` does not know how any plan works; it looks the plan up and calls it. Switching plans is a different key, and adding one is a new function plus a new row, with `fee` untouched. Compare the if-elif chain it replaces, which grows a branch and is edited, and retested, for every new plan. That is the trade a strategy offers: one level of indirection in exchange for adding behaviour without changing the code that uses it.
+  derivation:
+    - text: |
+        **What a pattern is.** A design pattern is a recurring solution to a recurring problem, with a name. The 1994 book *Design Patterns* by Gamma, Helm, Johnson and Vlissides catalogued 23 of them for object-oriented languages. Several shrink to a few lines in Python, because functions are values that can be stored in dictionaries, passed as arguments and returned from other functions. This lesson covers the five you will meet most.
+
+        **Strategy.** A family of interchangeable behaviours with one signature, chosen at run time. In Python, a dictionary from names to functions is usually enough: `PLANS = {"flat": flat, "distance": by_distance}`, then `PLANS[plan](km, total)`. Two details make it robust. Look the name up deliberately and raise a clear error for an unknown one, rather than letting a `KeyError` escape or, worse, silently falling back to a default. And give every strategy the same parameters, even those that ignore some, so callers never need to know which one they hold.
+    - question:
+        id: derivation-strategy
+        type: choice
+        system: s2
+        prompt: |
+          A shop's `discount(kind, total)` has an if-elif branch for each of 9 festival offers, and marketing adds a new offer every month. What does a strategy table change?
+        options:
+          - "A new offer becomes a new function and a new row; discount itself no longer changes."
+          - "The offers run faster."
+          - "No function needs tests any more."
+          - "Offers can no longer share code."
+        answer: 0
+        explanation: |
+          The variation moves into data, a table of functions, so the code that uses it stays fixed. Speed barely changes, each offer still needs testing, and offers can still call shared helpers.
+    - text: |
+        **Adapter.** A class that wraps something with the wrong interface so that it fits yours, the "foreign plug" of [[s4.abstraction-and-interfaces]]. A payment or SMS library arrives with its own names, argument formats and result shapes; an adapter translates all of them in one place: "98450 12345" into "+919845012345" on the way in, `{"status": "OK"}` into `True` on the way out, and the library's errors into your module's own. The rest of the code never learns the library exists, so changing provider means writing one new adapter.
+
+        **Observer.** Also called publish and subscribe. A publisher keeps a list of handlers and calls each when an event happens: an order is placed, and the kitchen screen, the SMS sender and the loyalty points all react. The publisher does not know who is listening, so adding a reaction does not change it. The price is that control flow becomes hidden: reading `place_order` no longer tells you everything that happens. Three traps follow. Handlers run in an order nobody chose; one handler that raises stops the rest unless the publisher guards each call; and a handler that subscribes or unsubscribes while the list is being walked changes the list under the loop, so the publisher should walk a copy.
+    - question:
+        id: order-adapter
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of an adapter's `send(phone, text)` for a library that wants "+91" numbers and returns a status dictionary in order.
+        steps:
+          - "Remove the space from the ten-digit phone number."
+          - "Put +91 in front of it."
+          - "Call the library's send_message with the number and the text."
+          - "Turn the returned status into True or False for the caller."
+        explanation: |
+          The input is translated before the call and the result after it, so callers see only their own interface on both sides.
+    - text: |
+        **Decorator.** A function that takes a function and returns a wrapped version with extra behaviour around it: logging each call, timing it, retrying it after a timeout, or remembering past results. Python writes it with `@`: placing `@logged` above `def flat(km)` means `flat = logged(flat)`. The standard library's `functools.lru_cache` is a decorator that stores each result by its arguments, which turns a plain recursive function into the memoised dynamic programming of [[s3.dynamic-programming]] in one line.
+
+        **Factory.** A function or class whose job is to build the right object from a name or a setting: `make_sender("sms")` returns an SMS adapter, `make_sender("whatsapp")` another. It keeps knowledge of the concrete classes in one place, which is usually the composition root from [[s4.dependency-injection-and-testable-code]].
+    - question:
+        id: derivation-cache
+        type: numeric
+        system: s2
+        prompt: |
+          `fib(n)` returns `fib(n - 1) + fib(n - 2)`, with `fib(0) = 0` and `fib(1) = 1`. With a caching decorator that stores each result by `n`, how many times does the body of `fib` run to compute `fib(30)`?
+        answer: "31"
+        explanation: |
+          Once for each $n$ from 0 to 30; every repeated call is answered from the cache. Without it, the body runs 26,92,537 times.
+    - text: |
+        **Earning their place.** Every pattern adds indirection: a reader must jump from the call to the table, from the table to the function, from the event to the handlers. That is worth it when the variation is real: several payment providers that exist today, offers that change monthly, reactions that different teams own. It is not worth it "in case": an interface with one implementation, a factory that only ever builds one class, an event with one subscriber. A common rule of thumb is the **rule of three**: write the plain code the first time, tolerate the duplication the second time, and introduce the pattern when the third case arrives and you can see what actually varies. Patterns introduced this way come out of [[s4.refactoring]] rather than being guessed in advance, and they fit the real variation instead of an imagined one.
+  formal:
+    - text: |
+        **Design pattern.** A named, recurring solution to a recurring design problem, with known costs.
+
+        **Strategy.** Interchangeable behaviours with one signature, chosen at run time; in Python often a dictionary of functions with a deliberate error for unknown names.
+
+        **Adapter.** A wrapper that translates another component's interface, arguments, results and errors into yours.
+
+        **Observer.** A publisher calls every subscribed handler on an event, without knowing who they are; walk a copy of the list, and decide what happens when one fails.
+
+        **Decorator.** A function that wraps a function to add behaviour; `@d` above `def f` means `f = d(f)`.
+
+        **Factory.** Builds the right concrete object from a name or setting, in one place.
+
+        **Rule of three.** Introduce a pattern when the third real case appears, not before.
+  drill:
+    - text: Seconds each. For every pattern, ask what varies and whether it really does.
+    - question:
+        id: drill-which-adapter
+        type: choice
+        system: s1
+        prompt: |
+          A new map provider's library returns distances in metres as strings; your code expects kilometres as numbers. Which pattern fits?
+        options:
+          - "Adapter"
+          - "Observer"
+          - "Decorator"
+          - "No pattern; convert at every call"
+        answer: 0
+        explanation: One wrapper translates the provider's results into your interface, so no caller has to.
+    - question:
+        id: drill-which-observer
+        type: choice
+        system: s1
+        prompt: |
+          When an order is placed, four separate teams' features must react, and more are planned. Which pattern fits?
+        options:
+          - "Observer"
+          - "Adapter"
+          - "Strategy"
+          - "Factory"
+        answer: 0
+        explanation: Each feature subscribes to the event, and placing an order does not change when a fifth is added.
+    - question:
+        id: drill-one-impl
+        type: choice
+        system: s1
+        prompt: |
+          A team writes an interface and a factory for a function that has one implementation and no plans for another. What is the likely cost?
+        options:
+          - "Extra indirection for every reader, with nothing gained yet"
+          - "Slower tests"
+          - "A bug in the implementation"
+          - "Nothing; patterns are free"
+        answer: 0
+        explanation: The pattern can be added in minutes when a second implementation appears; until then it only makes the code harder to follow.
+    - question:
+        id: drill-extra
+        type: numeric
+        system: s1
+        prompt: |
+          A strategy table holds 7 plans. How many existing functions change when an eighth plan is added?
+        answer: "0"
+        explanation: The new plan is a new function and a new row; the lookup and the other plans are untouched.
+    - question:
+        id: predict-decorator
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          calls = []
+
+
+          def logged(fn):
+              def wrapper(x):
+                  calls.append(fn.__name__)
+                  return fn(x)
+              return wrapper
+
+
+          @logged
+          def double(x):
+              return 2 * x
+
+
+          print(double(4), double(5), calls)
+        output: "8 10 ['double', 'double']"
+        explanation: "`double` now names the wrapper, which records each call and then runs the original."
+    - question:
+        id: predict-table
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def flat(km):
+              return 30
+
+
+          def by_km(km):
+              return 10 + 8 * km
+
+
+          PLANS = {"flat": flat, "km": by_km}
+          print([PLANS[p](3) for p in ["km", "flat", "km"]])
+        output: "[34, 30, 34]"
+        explanation: Each name picks a function from the table, which is then called with 3.
+  work:
+    - text: Slower now. Each problem uses one pattern; check that it is used safely.
+    - question:
+        id: fix-observer
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          Every handler subscribed when an event is published should run for it, even if a handler unsubscribes itself, as the welcome offer does after the first order. The program should print `['offer order 1', 'sms order 1', 'kitchen order 1', 'sms order 2', 'kitchen order 2']`. It prints `['offer order 1', 'kitchen order 1', 'sms order 2', 'kitchen order 2']`. Find the fault and fix it.
+        starter: |
+          class EventBus:
+              def __init__(self):
+                  self._handlers = []
+
+              def subscribe(self, handler):
+                  self._handlers.append(handler)
+
+              def unsubscribe(self, handler):
+                  self._handlers.remove(handler)
+
+              def publish(self, event):
+                  for handler in self._handlers:
+                      handler(event)
+
+
+          bus = EventBus()
+          seen = []
+
+
+          def welcome_offer(event):
+              seen.append("offer " + event)
+              bus.unsubscribe(welcome_offer)  # only for the first order
+
+
+          bus.subscribe(welcome_offer)
+          bus.subscribe(lambda event: seen.append("sms " + event))
+          bus.subscribe(lambda event: seen.append("kitchen " + event))
+          bus.publish("order 1")
+          bus.publish("order 2")
+          print(seen)
+        solution: |
+          class EventBus:
+              def __init__(self):
+                  self._handlers = []
+
+              def subscribe(self, handler):
+                  self._handlers.append(handler)
+
+              def unsubscribe(self, handler):
+                  self._handlers.remove(handler)
+
+              def publish(self, event):
+                  for handler in list(self._handlers):
+                      handler(event)
+
+
+          bus = EventBus()
+          seen = []
+
+
+          def welcome_offer(event):
+              seen.append("offer " + event)
+              bus.unsubscribe(welcome_offer)  # only for the first order
+
+
+          bus.subscribe(welcome_offer)
+          bus.subscribe(lambda event: seen.append("sms " + event))
+          bus.subscribe(lambda event: seen.append("kitchen " + event))
+          bus.publish("order 1")
+          bus.publish("order 2")
+          print(seen)
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(141)
+          for _ in range(30):
+              _bus = EventBus()
+              _log = []
+              _n = _rng.randint(2, 6)
+              _once = set(_rng.sample(range(_n), _rng.randint(1, _n)))
+
+              def _make(_k):
+                  def _h(_e):
+                      _log.append((_k, _e))
+                      if _k in _once:
+                          _bus.unsubscribe(_h)
+                  return _h
+
+              for _k in range(_n):
+                  _bus.subscribe(_make(_k))
+              _bus.publish("a")
+              _bus.publish("b")
+              _want = [(_k, "a") for _k in range(_n)] + [(_k, "b") for _k in range(_n) if _k not in _once]
+              assert _log == _want, "With " + str(_n) + " handlers, of which " + str(sorted(_once)) + " unsubscribe themselves, publishing a then b should call " + str(_want) + ", not " + str(_log)
+          assert output.strip() == "['offer order 1', 'sms order 1', 'kitchen order 1', 'sms order 2', 'kitchen order 2']", "The program should print ['offer order 1', 'sms order 1', 'kitchen order 1', 'sms order 2', 'kitchen order 2']"
+        wrong:
+          - |
+            class EventBus:
+                def __init__(self):
+                    self._handlers = []
+
+                def subscribe(self, handler):
+                    self._handlers.append(handler)
+
+                def unsubscribe(self, handler):
+                    self._handlers.remove(handler)
+
+                def publish(self, event):
+                    for handler in reversed(self._handlers):
+                        handler(event)
+
+
+            bus = EventBus()
+            seen = []
+
+
+            def welcome_offer(event):
+                seen.append("offer " + event)
+                bus.unsubscribe(welcome_offer)  # only for the first order
+
+
+            bus.subscribe(welcome_offer)
+            bus.subscribe(lambda event: seen.append("sms " + event))
+            bus.subscribe(lambda event: seen.append("kitchen " + event))
+            bus.publish("order 1")
+            bus.publish("order 2")
+            print(seen)
+          - |
+            class EventBus:
+                def __init__(self):
+                    self._handlers = []
+
+                def subscribe(self, handler):
+                    self._handlers.append(handler)
+
+                def unsubscribe(self, handler):
+                    self._handlers.remove(handler)
+
+                def publish(self, event):
+                    handlers = self._handlers
+                    for handler in handlers:
+                        handler(event)
+
+
+            bus = EventBus()
+            seen = []
+
+
+            def welcome_offer(event):
+                seen.append("offer " + event)
+                bus.unsubscribe(welcome_offer)  # only for the first order
+
+
+            bus.subscribe(welcome_offer)
+            bus.subscribe(lambda event: seen.append("sms " + event))
+            bus.subscribe(lambda event: seen.append("kitchen " + event))
+            bus.publish("order 1")
+            bus.publish("order 2")
+            print(seen)
+          - |
+            class EventBus:
+                def __init__(self):
+                    self._handlers = []
+
+                def subscribe(self, handler):
+                    self._handlers.append(handler)
+
+                def unsubscribe(self, handler):
+                    self._handlers.remove(handler)
+
+                def publish(self, event):
+                    for i in range(len(self._handlers)):
+                        if i < len(self._handlers):
+                            self._handlers[i](event)
+
+
+            bus = EventBus()
+            seen = []
+
+
+            def welcome_offer(event):
+                seen.append("offer " + event)
+                bus.unsubscribe(welcome_offer)  # only for the first order
+
+
+            bus.subscribe(welcome_offer)
+            bus.subscribe(lambda event: seen.append("sms " + event))
+            bus.subscribe(lambda event: seen.append("kitchen " + event))
+            bus.publish("order 1")
+            bus.publish("order 2")
+            print(seen)
+        explanation: |
+          The welcome offer removed itself from the list while `publish` was walking it, so the loop skipped the handler that slid into its place. Walking a copy, `list(self._handlers)`, keeps the walk stable. Walking in reverse changes the order handlers run in; another name for the same list is still the same list; and indexing into the shrinking list skips the same handler.
+    - question:
+        id: write-adapter
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `LegacyAdapter.send` so that it fits our interface: turn a phone written as "98450 12345" into the "+91" form the library wants, call `send_message`, and return `True` if the library answered OK and `False` otherwise. The program should print `True False [('+919845012345', 'Your tiffin is on its way')]`.
+        starter: |
+          class LegacySms:
+              # A provider's library, which we cannot change. It wants the number as
+              # "+91" followed by ten digits, and answers {"status": "OK"} or {"status": "FAIL", ...}.
+
+              def __init__(self):
+                  self.delivered = []
+
+              def send_message(self, number, body):
+                  if not (number.startswith("+91") and len(number) == 13 and number[1:].isdigit()):
+                      return {"status": "FAIL", "reason": "bad number " + number}
+                  self.delivered.append((number, body))
+                  return {"status": "OK"}
+
+
+          class LegacyAdapter:
+              # Our interface: send(phone, text) -> True if delivered, False if not,
+              # where phone is ten digits written as "98450 12345".
+
+              def __init__(self, client):
+                  self.client = client
+
+              def send(self, phone, text):
+                  return self.client.send_message(phone, text)
+
+
+          client = LegacySms()
+          sender = LegacyAdapter(client)
+          print(sender.send("98450 12345", "Your tiffin is on its way"), sender.send("1234", "test"), client.delivered)
+        solution: |
+          class LegacySms:
+              # A provider's library, which we cannot change. It wants the number as
+              # "+91" followed by ten digits, and answers {"status": "OK"} or {"status": "FAIL", ...}.
+
+              def __init__(self):
+                  self.delivered = []
+
+              def send_message(self, number, body):
+                  if not (number.startswith("+91") and len(number) == 13 and number[1:].isdigit()):
+                      return {"status": "FAIL", "reason": "bad number " + number}
+                  self.delivered.append((number, body))
+                  return {"status": "OK"}
+
+
+          class LegacyAdapter:
+              # Our interface: send(phone, text) -> True if delivered, False if not,
+              # where phone is ten digits written as "98450 12345".
+
+              def __init__(self, client):
+                  self.client = client
+
+              def send(self, phone, text):
+                  number = "+91" + phone.replace(" ", "")
+                  return self.client.send_message(number, text)["status"] == "OK"
+
+
+          client = LegacySms()
+          sender = LegacyAdapter(client)
+          print(sender.send("98450 12345", "Your tiffin is on its way"), sender.send("1234", "test"), client.delivered)
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(142)
+          for _ in range(30):
+              _c = LegacySms()
+              _s = LegacyAdapter(_c)
+              _digits = str(_rng.randint(6000000000, 9999999999))
+              _good = _rng.random() < 0.7
+              _phone = _digits[:5] + " " + _digits[5:] if _good else _rng.choice(["1234", "98450 1234", "abcde 12345"])
+              _got = _s.send(_phone, "hello")
+              if _good:
+                  assert _got is True, "send(" + repr(_phone) + ", ...) should return True, not " + repr(_got)
+                  assert _c.delivered == [("+91" + _digits, "hello")], "send(" + repr(_phone) + ", ...) should deliver to " + repr("+91" + _digits) + ", but the provider received " + str(_c.delivered)
+              else:
+                  assert _got is False, "send(" + repr(_phone) + ", ...) should return False for a number the provider refuses, not " + repr(_got)
+          assert output.strip() == "True False [('+919845012345', 'Your tiffin is on its way')]", "The program should print True False [('+919845012345', 'Your tiffin is on its way')]"
+        wrong:
+          - |
+            class LegacySms:
+                # A provider's library, which we cannot change. It wants the number as
+                # "+91" followed by ten digits, and answers {"status": "OK"} or {"status": "FAIL", ...}.
+
+                def __init__(self):
+                    self.delivered = []
+
+                def send_message(self, number, body):
+                    if not (number.startswith("+91") and len(number) == 13 and number[1:].isdigit()):
+                        return {"status": "FAIL", "reason": "bad number " + number}
+                    self.delivered.append((number, body))
+                    return {"status": "OK"}
+
+
+            class LegacyAdapter:
+                # Our interface: send(phone, text) -> True if delivered, False if not,
+                # where phone is ten digits written as "98450 12345".
+
+                def __init__(self, client):
+                    self.client = client
+
+                def send(self, phone, text):
+                    number = "+91" + phone
+                    return self.client.send_message(number, text)["status"] == "OK"
+
+
+            client = LegacySms()
+            sender = LegacyAdapter(client)
+            print(sender.send("98450 12345", "Your tiffin is on its way"), sender.send("1234", "test"), client.delivered)
+          - |
+            class LegacySms:
+                # A provider's library, which we cannot change. It wants the number as
+                # "+91" followed by ten digits, and answers {"status": "OK"} or {"status": "FAIL", ...}.
+
+                def __init__(self):
+                    self.delivered = []
+
+                def send_message(self, number, body):
+                    if not (number.startswith("+91") and len(number) == 13 and number[1:].isdigit()):
+                        return {"status": "FAIL", "reason": "bad number " + number}
+                    self.delivered.append((number, body))
+                    return {"status": "OK"}
+
+
+            class LegacyAdapter:
+                # Our interface: send(phone, text) -> True if delivered, False if not,
+                # where phone is ten digits written as "98450 12345".
+
+                def __init__(self, client):
+                    self.client = client
+
+                def send(self, phone, text):
+                    number = "+91" + phone.replace(" ", "")
+                    return self.client.send_message(number, text) is not None
+
+
+            client = LegacySms()
+            sender = LegacyAdapter(client)
+            print(sender.send("98450 12345", "Your tiffin is on its way"), sender.send("1234", "test"), client.delivered)
+          - |
+            class LegacySms:
+                # A provider's library, which we cannot change. It wants the number as
+                # "+91" followed by ten digits, and answers {"status": "OK"} or {"status": "FAIL", ...}.
+
+                def __init__(self):
+                    self.delivered = []
+
+                def send_message(self, number, body):
+                    if not (number.startswith("+91") and len(number) == 13 and number[1:].isdigit()):
+                        return {"status": "FAIL", "reason": "bad number " + number}
+                    self.delivered.append((number, body))
+                    return {"status": "OK"}
+
+
+            class LegacyAdapter:
+                # Our interface: send(phone, text) -> True if delivered, False if not,
+                # where phone is ten digits written as "98450 12345".
+
+                def __init__(self, client):
+                    self.client = client
+
+                def send(self, phone, text):
+                    number = "+91" + phone.replace(" ", "")
+                    return self.client.send_message(number, text)
+
+
+            client = LegacySms()
+            sender = LegacyAdapter(client)
+            print(sender.send("98450 12345", "Your tiffin is on its way"), sender.send("1234", "test"), client.delivered)
+        explanation: |
+          The adapter translates in both directions: the number on the way in, the status on the way out. Leaving the space in makes the library refuse every number; testing only that a dictionary came back reports refusals as success; and returning the dictionary itself hands callers the library's format instead of ours.
+    - question:
+        id: write-fee-table
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Replace the if-elif chain with a strategy table: write each plan as a function of `(km, total)`, add a `free_over_500` plan that charges nothing for orders of ₹500 or more and the distance fee otherwise, keep the functions in a dictionary named `PLANS`, and make `fee` look the plan up there and raise `ValueError` for an unknown plan. The program should print `[30, 42, 63, 0]`.
+        starter: |
+          def fee(plan, km, total):
+              # Delivery fee in rupees for an order of `total` rupees delivered `km` away.
+              if plan == "flat":
+                  return 30
+              elif plan == "distance":
+                  return 10 + 8 * km
+              elif plan == "busy":
+                  return (10 + 8 * km) * 3 // 2
+              else:
+                  return 0
+
+
+          print([fee(plan, 4, 650) for plan in ["flat", "distance", "busy", "free_over_500"]])
+        solution: |
+          def flat(km, total):
+              return 30
+
+
+          def by_distance(km, total):
+              return 10 + 8 * km
+
+
+          def busy(km, total):
+              return by_distance(km, total) * 3 // 2
+
+
+          def free_over_500(km, total):
+              return 0 if total >= 500 else by_distance(km, total)
+
+
+          PLANS = {"flat": flat, "distance": by_distance, "busy": busy, "free_over_500": free_over_500}
+
+
+          def fee(plan, km, total):
+              # Delivery fee in rupees for an order of `total` rupees delivered `km` away.
+              if plan not in PLANS:
+                  raise ValueError("no such delivery plan: " + plan)
+              return PLANS[plan](km, total)
+
+
+          print([fee(plan, 4, 650) for plan in ["flat", "distance", "busy", "free_over_500"]])
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(143)
+          for _ in range(60):
+              _km, _total = _rng.randint(1, 12), _rng.choice([200, 499, 500, 501, 650, 1200])
+              _d = 10 + 8 * _km
+              _want = {"flat": 30, "distance": _d, "busy": _d * 3 // 2, "free_over_500": 0 if _total >= 500 else _d}
+              for _plan, _w in _want.items():
+                  _got = fee(_plan, _km, _total)
+                  assert _got == _w, "fee(" + repr(_plan) + ", " + str(_km) + ", " + str(_total) + ") should be " + str(_w) + ", not " + str(_got)
+          for _bad in ["surge", "Flat", ""]:
+              try:
+                  _got = fee(_bad, 3, 300)
+              except ValueError:
+                  continue
+              except Exception as _e:
+                  assert False, "fee(" + repr(_bad) + ", 3, 300) should raise ValueError, not " + type(_e).__name__
+              assert False, "fee(" + repr(_bad) + ", 3, 300) should raise ValueError, not return " + str(_got)
+          assert "PLANS" in globals() and callable(PLANS.get("free_over_500")), "The plans should be kept in a dictionary named PLANS, from plan name to function"
+          assert output.strip() == "[30, 42, 63, 0]", "The program should print [30, 42, 63, 0]"
+        wrong:
+          - |
+            def flat(km, total):
+                return 30
+
+
+            def by_distance(km, total):
+                return 10 + 8 * km
+
+
+            def busy(km, total):
+                return by_distance(km, total) * 3 // 2
+
+
+            def free_over_500(km, total):
+                return 0 if total >= 500 else by_distance(km, total)
+
+
+            PLANS = {"flat": flat, "distance": by_distance, "busy": busy, "free_over_500": free_over_500}
+
+
+            def fee(plan, km, total):
+                # Delivery fee in rupees for an order of `total` rupees delivered `km` away.
+                return PLANS.get(plan, flat)(km, total)
+
+
+            print([fee(plan, 4, 650) for plan in ["flat", "distance", "busy", "free_over_500"]])
+          - |
+            def flat(km, total):
+                return 30
+
+
+            def by_distance(km, total):
+                return 10 + 8 * km
+
+
+            def busy(km, total):
+                return by_distance(km, total) * 3 // 2
+
+
+            def free_over_500(km, total):
+                return 0 if total > 500 else by_distance(km, total)
+
+
+            PLANS = {"flat": flat, "distance": by_distance, "busy": busy, "free_over_500": free_over_500}
+
+
+            def fee(plan, km, total):
+                # Delivery fee in rupees for an order of `total` rupees delivered `km` away.
+                if plan not in PLANS:
+                    raise ValueError("no such delivery plan: " + plan)
+                return PLANS[plan](km, total)
+
+
+            print([fee(plan, 4, 650) for plan in ["flat", "distance", "busy", "free_over_500"]])
+          - |
+            def flat(km, total):
+                return 30
+
+
+            def by_distance(km, total):
+                return 10 + 8 * km
+
+
+            def busy(km, total):
+                return by_distance(km, total) * 3 // 2
+
+
+            def free_over_500(km, total):
+                return 0 if total >= 500 else by_distance(km, total)
+
+
+            PLANS = {"flat": flat, "distance": by_distance, "busy": busy, "free_over_500": free_over_500}
+
+
+            def fee(plan, km, total):
+                # Delivery fee in rupees for an order of `total` rupees delivered `km` away.
+                return PLANS[plan](km, total)
+
+
+            print([fee(plan, 4, 650) for plan in ["flat", "distance", "busy", "free_over_500"]])
+        explanation: |
+          The starter already printed the right numbers, by accident: its final `else` charged nothing for any unknown plan, including a misspelt one. With a table, each plan is one function and an unknown name is refused clearly. Falling back to the flat fee hides misspellings the same way; `total > 500` charges an order of exactly ₹500; and a bare lookup lets a `KeyError` escape instead of the promised `ValueError`.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          How many of the puzzle's extra definitions never earned their place?
+        answer: "114"
+        explanation: |
+          The 38 functions that never needed a second implementation carry 3 unused definitions each: $38 \times 3 = 114$.
+    - question:
+        id: work-when
+        type: choice
+        system: s2
+        prompt: |
+          A clinic app sends appointment confirmations by SMS only. A product manager says WhatsApp "might come later". What should the team do now?
+        options:
+          - "Call one plain send function from one place, and introduce an interface and a second adapter when WhatsApp is actually needed."
+          - "Build a sender interface, a factory and an abstract base class now, so WhatsApp is easy later."
+          - "Copy the SMS code into every place that confirms an appointment."
+          - "Publish a confirmation event with a single SMS subscriber."
+        answer: 0
+        explanation: |
+          Keeping sending behind one plain function makes the later change small, without paying for indirection that may never be used. Copying the code scatters it, and an interface, factory or event with a single user is ceremony for now.
+  connections:
+    - text: |
+        114 definitions: 38 of the 40 functions never needed swapping, and each carried an interface, a factory and a separate implementation for nothing. Had the team waited, the 2 functions that did change could each have gained an interface in an afternoon, at the moment the second implementation appeared and its real shape was known.
+
+        Waiting is safe only if changing code later is safe. Introducing a strategy table, extracting an adapter, or replacing a chain of conditions with a lookup are all changes to the structure of code that must not change what it does, made in small steps under tests, which is [[s4.refactoring]]. Patterns also shape the interfaces other teams call, where adding a strategy or an event is a promise that is hard to withdraw: [[s4.designing-apis]].

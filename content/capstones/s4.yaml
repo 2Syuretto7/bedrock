@@ -1,0 +1,446 @@
+cluster: S4
+title: Redesigning a pharmacy's ordering app
+minutes: 100
+claim: You will have redesigned a pharmacy chain's ordering backend from one tangled file into a system that can change safely, choosing module boundaries with low coupling, a prescription rule the code cannot break, a checkout that retries the right failures with one idempotency key and is tested with a fake gateway, couriers behind adapters, a tidy-up done under characterisation tests, an order history API that changes without breaking old apps, and an estimate that sizes the whole design.
+brief: |
+  This cluster was about the decisions that decide whether code can keep changing: interfaces that hide what may vary, modules with high cohesion and low coupling, types and invariants that make wrong states impossible, errors designed as carefully as results, dependencies passed in so that code can be tested, patterns used only where they pay, refactoring in small safe steps, APIs that keep their promises, and design documents that make the expensive mistakes on paper.
+
+  **The project.** A pharmacy chain in Pune takes orders through a phone app and delivers medicines across the city. Some medicines need a prescription checked by a pharmacist before the order can be packed. Payments go through a card gateway, and deliveries are booked with three courier companies. The backend started as a weekend project and is now one 900-line file that everyone is afraid to touch. An engineer has been asked to redesign it without stopping the business.
+
+  Each stage below is one decision in that redesign. Every stage draws on one or more lessons of this cluster, and the skill being tested is judging which design will still be easy to change a year from now, and which only looks finished today.
+starter: |
+  # Scratch space for the pharmacy's redesign.
+  class FakeGateway:
+      def __init__(self, script):
+          self.script = list(script)
+          self.calls = []
+
+      def charge(self, key, amount):
+          self.calls.append(key)
+          return self.script.pop(0)
+
+
+  gateway = FakeGateway(["r-1", "r-2"])
+  print(gateway.charge("order-7", 450), gateway.calls)
+stages:
+  - title: Where the boundaries go
+    blocks:
+      - text: |
+          The 900-line file holds functions for the cart, stock levels, prescriptions, payments and courier bookings. They call each other freely and all read and write one global dictionary, `state`. Last month a change to how stock is counted broke the payment receipts, and nobody could say why until a day later.
+      - question:
+          id: boundaries
+          type: choice
+          system: s2
+          concepts: [s4.modules-coupling-and-cohesion, s4.abstraction-and-interfaces]
+          prompt: |
+            What is the best first shape for the new code?
+          options:
+            - "Modules for cart, stock, prescriptions, payments and delivery, each owning its own data behind a few functions that the others call."
+            - "Nine files of 100 lines each, split in the order the functions appear today."
+            - "One class called App with every function as a method."
+            - "A module that holds state, imported and edited by every other module."
+          answer: 0
+          explanation: |
+            Grouping by what the code is about gives each module high cohesion, and letting each own its data behind a small interface keeps coupling low, so a change to stock counting can reach payments only through functions that stock chooses to offer. Splitting by line count groups unrelated code; one class moves the tangle without untying it; and a shared state module keeps the hidden coupling that broke the receipts.
+  - title: Prescription medicines
+    blocks:
+      - text: |
+          An order currently carries three flags: `paid`, `prescription_ok` and `packed`. Twice this year an order containing a prescription-only medicine was packed and sent before a pharmacist had checked the prescription. Each time, a new screen had set `packed` without looking at `prescription_ok`.
+      - question:
+          id: prescription-rule
+          type: choice
+          system: s2
+          concepts: [s4.designing-with-types-and-invariants]
+          prompt: |
+            Which design makes this mistake impossible rather than merely less likely?
+          options:
+            - "One status with a fixed set of values and a single function that allows only listed transitions, with no way to reach packed from awaiting prescription."
+            - "A fourth flag, double_checked, set by a second pharmacist."
+            - "A comment above packed explaining that prescriptions must be checked first."
+            - "A check of prescription_ok in the packing screen."
+          answer: 0
+          explanation: |
+            With one status and one guarded transition function, an order awaiting its prescription simply has no path to packed, whatever screen asks. Another flag adds combinations instead of removing them; a comment guards nothing; and a check in one screen leaves the next new screen free to repeat the mistake.
+  - title: Paying for the order
+    blocks:
+      - text: |
+          The card gateway sometimes times out, and a timed-out payment may or may not have gone through. The gateway accepts an idempotency key: a repeated request with the same key returns the first result instead of charging again. A declined card is final, and retrying it only annoys the bank. The engineer passes the gateway into `checkout` as a parameter, so that tests can use a fake gateway that plays back a script of outcomes instead of charging real cards.
+      - question:
+          id: checkout
+          type: code
+          mode: write
+          system: s2
+          concepts: [s4.errors-as-part-of-the-design, s4.dependency-injection-and-testable-code, s4.designing-apis]
+          prompt: |
+            Change `checkout` so that it retries after `Timeout`, sending the same key each time, for at most `attempts` calls in all, raising `CheckoutError("gateway_unavailable")` if every call times out, and raises `CheckoutError("card_declined")` at once, without retrying, when the card is declined. The program should print `['r-order-7', 1, 'r-order-7', 2, 'gateway_unavailable', 3, 'card_declined', 1]`.
+          starter: |
+            class Timeout(Exception):
+                pass
+
+
+            class Declined(Exception):
+                pass
+
+
+            class CheckoutError(Exception):
+                def __init__(self, code):
+                    super().__init__(code)
+                    self.code = code
+
+
+            def checkout(total, gateway, key, attempts=3):
+                try:
+                    return gateway.charge(key, total)
+                except Timeout:
+                    raise CheckoutError("gateway_unavailable")
+                except Declined:
+                    raise CheckoutError("card_declined")
+
+
+            class FakeGateway:
+                def __init__(self, script):
+                    self.script = list(script)  # what each call does: "ok", "timeout" or "declined"
+                    self.calls = []
+
+                def charge(self, key, amount):
+                    self.calls.append(key)
+                    step = self.script.pop(0)
+                    if step == "timeout":
+                        raise Timeout()
+                    if step == "declined":
+                        raise Declined()
+                    return "r-" + key
+
+
+            results = []
+            for script in [["ok"], ["timeout", "ok"], ["timeout", "timeout", "timeout"], ["declined", "ok"]]:
+                gateway = FakeGateway(script)
+                try:
+                    results.append(checkout(450, gateway, "order-7"))
+                except CheckoutError as error:
+                    results.append(error.code)
+                results.append(len(gateway.calls))
+            print(results)
+          solution: |
+            class Timeout(Exception):
+                pass
+
+
+            class Declined(Exception):
+                pass
+
+
+            class CheckoutError(Exception):
+                def __init__(self, code):
+                    super().__init__(code)
+                    self.code = code
+
+
+            def checkout(total, gateway, key, attempts=3):
+                for _ in range(attempts):
+                    try:
+                        return gateway.charge(key, total)
+                    except Timeout:
+                        pass
+                    except Declined:
+                        raise CheckoutError("card_declined")
+                raise CheckoutError("gateway_unavailable")
+
+
+            class FakeGateway:
+                def __init__(self, script):
+                    self.script = list(script)  # what each call does: "ok", "timeout" or "declined"
+                    self.calls = []
+
+                def charge(self, key, amount):
+                    self.calls.append(key)
+                    step = self.script.pop(0)
+                    if step == "timeout":
+                        raise Timeout()
+                    if step == "declined":
+                        raise Declined()
+                    return "r-" + key
+
+
+            results = []
+            for script in [["ok"], ["timeout", "ok"], ["timeout", "timeout", "timeout"], ["declined", "ok"]]:
+                gateway = FakeGateway(script)
+                try:
+                    results.append(checkout(450, gateway, "order-7"))
+                except CheckoutError as error:
+                    results.append(error.code)
+                results.append(len(gateway.calls))
+            print(results)
+          tests: |
+            class _Gw:
+                def __init__(self, script):
+                    self.script = list(script)
+                    self.calls = []
+
+                def charge(self, key, amount):
+                    self.calls.append((key, amount))
+                    _step = self.script.pop(0) if self.script else "timeout"
+                    if _step == "timeout":
+                        raise Timeout()
+                    if _step == "declined":
+                        raise Declined()
+                    return "rcpt-" + str(len(self.calls))
+
+
+            def _run(script, attempts):
+                _g = _Gw(script)
+                try:
+                    _r = checkout(999, _g, "k-55", attempts)
+                except CheckoutError as _e:
+                    _r = "error " + _e.code
+                return _r, _g.calls
+
+
+            _r, _c = _run(["timeout", "timeout", "ok"], 3)
+            assert _r == "rcpt-3", "Two timeouts then success, with 3 attempts allowed, should return the receipt from the third call, not " + str(_r)
+            assert [k for k, _ in _c] == ["k-55", "k-55", "k-55"], "Every attempt must send the same idempotency key, so the gateway can tell a retry from a new payment; the keys sent were " + str([k for k, _ in _c])
+            assert all(a == 999 for _, a in _c), "Every attempt must charge the same total"
+            _r, _c = _run([], 5)
+            assert _r == "error gateway_unavailable" and len(_c) == 5, "With 5 attempts allowed and every call timing out, checkout should make exactly 5 calls and then raise CheckoutError('gateway_unavailable'); it made " + str(len(_c)) + " calls and gave " + str(_r)
+            _r, _c = _run(["timeout", "declined", "ok"], 4)
+            assert _r == "error card_declined" and len(_c) == 2, "A declined card must not be retried: after a timeout and a decline, checkout should stop with card_declined after 2 calls, not give " + str(_r) + " after " + str(len(_c))
+            _r, _c = _run(["ok"], 1)
+            assert _r == "rcpt-1" and len(_c) == 1, "A first-time success should return its receipt after one call"
+            _r, _c = _run([], 1)
+            assert _r == "error gateway_unavailable" and len(_c) == 1, "With 1 attempt allowed, a single timeout should give gateway_unavailable after one call, not " + str(_r) + " after " + str(len(_c))
+            assert output.strip() == "['r-order-7', 1, 'r-order-7', 2, 'gateway_unavailable', 3, 'card_declined', 1]", "The program should print ['r-order-7', 1, 'r-order-7', 2, 'gateway_unavailable', 3, 'card_declined', 1]"
+          wrong:
+            - |
+              class Timeout(Exception):
+                  pass
+
+
+              class Declined(Exception):
+                  pass
+
+
+              class CheckoutError(Exception):
+                  def __init__(self, code):
+                      super().__init__(code)
+                      self.code = code
+
+
+              def checkout(total, gateway, key, attempts=3):
+                  for attempt in range(attempts):
+                      try:
+                          return gateway.charge(key + "-" + str(attempt), total)
+                      except Timeout:
+                          pass
+                      except Declined:
+                          raise CheckoutError("card_declined")
+                  raise CheckoutError("gateway_unavailable")
+
+
+              class FakeGateway:
+                  def __init__(self, script):
+                      self.script = list(script)  # what each call does: "ok", "timeout" or "declined"
+                      self.calls = []
+
+                  def charge(self, key, amount):
+                      self.calls.append(key)
+                      step = self.script.pop(0)
+                      if step == "timeout":
+                          raise Timeout()
+                      if step == "declined":
+                          raise Declined()
+                      return "r-" + key
+
+
+              results = []
+              for script in [["ok"], ["timeout", "ok"], ["timeout", "timeout", "timeout"], ["declined", "ok"]]:
+                  gateway = FakeGateway(script)
+                  try:
+                      results.append(checkout(450, gateway, "order-7"))
+                  except CheckoutError as error:
+                      results.append(error.code)
+                  results.append(len(gateway.calls))
+              print(results)
+            - |
+              class Timeout(Exception):
+                  pass
+
+
+              class Declined(Exception):
+                  pass
+
+
+              class CheckoutError(Exception):
+                  def __init__(self, code):
+                      super().__init__(code)
+                      self.code = code
+
+
+              def checkout(total, gateway, key, attempts=3):
+                  for _ in range(attempts):
+                      try:
+                          return gateway.charge(key, total)
+                      except Timeout:
+                          pass
+                      except Declined:
+                          pass
+                  raise CheckoutError("gateway_unavailable")
+
+
+              class FakeGateway:
+                  def __init__(self, script):
+                      self.script = list(script)  # what each call does: "ok", "timeout" or "declined"
+                      self.calls = []
+
+                  def charge(self, key, amount):
+                      self.calls.append(key)
+                      step = self.script.pop(0)
+                      if step == "timeout":
+                          raise Timeout()
+                      if step == "declined":
+                          raise Declined()
+                      return "r-" + key
+
+
+              results = []
+              for script in [["ok"], ["timeout", "ok"], ["timeout", "timeout", "timeout"], ["declined", "ok"]]:
+                  gateway = FakeGateway(script)
+                  try:
+                      results.append(checkout(450, gateway, "order-7"))
+                  except CheckoutError as error:
+                      results.append(error.code)
+                  results.append(len(gateway.calls))
+              print(results)
+            - |
+              class Timeout(Exception):
+                  pass
+
+
+              class Declined(Exception):
+                  pass
+
+
+              class CheckoutError(Exception):
+                  def __init__(self, code):
+                      super().__init__(code)
+                      self.code = code
+
+
+              def checkout(total, gateway, key, attempts=3):
+                  for _ in range(attempts + 1):
+                      try:
+                          return gateway.charge(key, total)
+                      except Timeout:
+                          pass
+                      except Declined:
+                          raise CheckoutError("card_declined")
+                  raise CheckoutError("gateway_unavailable")
+
+
+              class FakeGateway:
+                  def __init__(self, script):
+                      self.script = list(script)  # what each call does: "ok", "timeout" or "declined"
+                      self.calls = []
+
+                  def charge(self, key, amount):
+                      self.calls.append(key)
+                      step = self.script.pop(0)
+                      if step == "timeout":
+                          raise Timeout()
+                      if step == "declined":
+                          raise Declined()
+                      return "r-" + key
+
+
+              results = []
+              for script in [["ok"], ["timeout", "ok"], ["timeout", "timeout", "timeout"], ["declined", "ok"]]:
+                  gateway = FakeGateway(script)
+                  try:
+                      results.append(checkout(450, gateway, "order-7"))
+                  except CheckoutError as error:
+                      results.append(error.code)
+                  results.append(len(gateway.calls))
+              print(results)
+          explanation: |
+            A loop of `attempts` calls swallows each timeout and tries again, returns on the first success, turns a decline into `card_declined` straight away, and raises `gateway_unavailable` only after the last attempt. Making a fresh key for each attempt defeats the gateway's protection, so a payment that went through before a timeout is charged again; retrying declines hides a final answer behind a misleading one; and looping `attempts + 1` times makes one call more than allowed. The fake gateway is what made all of this testable in milliseconds, without a real card or a real outage.
+  - title: Three couriers
+    blocks:
+      - text: |
+          Deliveries go through three courier companies, chosen by the customer's pin code. Each company's Python library is different: one wants pin codes as integers and returns `{"status": "BOOKED"}`, one wants strings and raises its own exceptions, and one returns a tracking number or `None`. The business has added a courier about once a year.
+      - question:
+          id: couriers
+          type: choice
+          system: s2
+          concepts: [s4.design-patterns-that-earn-their-place, s4.abstraction-and-interfaces]
+          prompt: |
+            Which design fits?
+          options:
+            - "An adapter for each courier behind one book(order) function, and a table from pin-code area to courier, so a new courier is one adapter and some rows."
+            - "An if-elif chain wherever a delivery is booked, calling each library directly."
+            - "A plugin system, an abstract factory and an event bus per courier, built now in case of growth."
+            - "Ask the three companies to change their libraries to match ours."
+          answer: 0
+          explanation: |
+            The variation here is real and recurring: three mismatched interfaces today and a new one each year. Adapters translate each library in one place, and a table chooses among them, which is the strategy pattern. Scattered if-elif chains repeat the translation everywhere; the plugin system is ceremony for variation nobody has asked for; and the couriers will not change their libraries for one customer.
+  - title: The discount rules
+    blocks:
+      - text: |
+          The discount function is 120 lines of nested if-else, covering loyalty points, first orders and bulk orders, and it has no tests. Next week the business wants a senior citizen discount added. The engineer decides to tidy the function first.
+      - question:
+          id: discount-steps
+          type: order
+          system: s2
+          concepts: [s4.refactoring]
+          prompt: |
+            Put the engineer's steps in order.
+          steps:
+            - "Write characterisation tests that record what the discount function returns now, boundary amounts included."
+            - "Run them on the unchanged code and see them all pass."
+            - "Restructure the function in small steps, running the tests after each and committing when they pass."
+            - "Add the senior citizen discount as a separate change, with new tests of its own."
+          explanation: |
+            The tests must pin today's behaviour, and pass on today's code, before anything changes. The restructuring then proceeds one checked step at a time, and the new discount arrives only once the code makes it easy, as its own change, so that a failure can only come from one kind of change.
+  - title: The order history screen
+    blocks:
+      - text: |
+          The app's order history screen calls `GET /orders?page=N`, 20 orders a page, newest first. Customers who reorder while scrolling sometimes see the same order twice. The app team also wants to rename the response field `amount` to `amount_paise`, since it has always been in paise. Many customers keep an old version of the app for months.
+      - question:
+          id: history-api
+          type: choice
+          system: s2
+          concepts: [s4.designing-apis]
+          prompt: |
+            Which plan fixes the repeats and makes the rename without breaking old apps?
+          options:
+            - "Add cursor paging and an amount_paise field alongside the old ones, and remove page numbers and amount only when no supported app version uses them."
+            - "Switch to cursors and rename the field in the next release."
+            - "Keep page numbers and ask customers not to reorder while scrolling."
+            - "Rename the field now, and leave paging alone because repeats are the app's problem."
+          answer: 0
+          explanation: |
+            A cursor anchors each page to the last order seen, so new orders at the top no longer push old ones onto the next page. Adding the new shapes beside the old ones, and removing the old only once nothing reads them, is expand and contract. Changing both in place breaks every old app at once; the other two leave the repeats in place or break old apps anyway.
+  - title: Sizing the design
+    blocks:
+      - text: |
+          The engineer writes a design document for the redesign, to be reviewed by the operations team before any hosting is bought. The chain expects 8,64,000 orders on the busiest day of the year, its festival sale, and during the busiest hour of that day orders arrive at 4 times the day's average rate.
+      - question:
+          id: peak-rate
+          type: numeric
+          system: s2
+          concepts: [s4.writing-design-documents]
+          prompt: |
+            How many orders a second must the design handle in that busiest hour?
+          answer: "40"
+          explanation: |
+            A day has 86,400 seconds, so 8,64,000 orders a day is an average of 10 a second, and the busiest hour runs at $4 \times 10 = 40$ a second. That number belongs in the document's requirements, where the reviewers can check every later choice against it.
+review: |
+  The redesign is planned, and each decision came from a lesson of this cluster:
+
+  - The module boundaries followed [[s4.modules-coupling-and-cohesion]], each module hiding its data behind an interface in the sense of [[s4.abstraction-and-interfaces]].
+  - The prescription rule became a guarded status, from [[s4.designing-with-types-and-invariants]].
+  - The checkout told retryable failures from final ones, as in [[s4.errors-as-part-of-the-design]], reused one idempotency key, as in [[s4.designing-apis]], and was tested with a fake gateway passed in, from [[s4.dependency-injection-and-testable-code]].
+  - The couriers sat behind adapters and a table, patterns that earned their place in [[s4.design-patterns-that-earn-their-place]].
+  - The discount rules were tidied under characterisation tests before the new discount was added, the method of [[s4.refactoring]].
+  - The order history API changed by expanding and contracting, from [[s4.designing-apis]].
+  - The whole plan was sized with one line of arithmetic in a reviewed document, from [[s4.writing-design-documents]].
+
+  Notice what the wrong answers had in common. Most of them would have worked on the day they shipped: a shared state module, a fourth flag, a fresh key per retry, an if-elif chain, a rename in the next release. They failed later, when someone else changed the code, a payment timed out, a courier was added or an old phone opened the app. Software design is the craft of making tomorrow's change cheap without paying for changes that never come. The next cluster turns to the tools that hold all of this together: version control, review, builds and continuous integration.

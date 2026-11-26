@@ -1,0 +1,772 @@
+concept: s4.designing-with-types-and-invariants
+minutes: 80
+claim: You can state the invariants a value must keep, replace combinations of flags with an enum so impossible states cannot be written down, enforce an invariant once when a value is built and keep it by making the value immutable, parse raw input into a checked type at the boundary instead of validating it everywhere, keep money in whole paise, and write the legal transitions of a status as a table.
+recalls: [s4.modules-coupling-and-cohesion]
+uses: [s1.type-hints-and-dataclasses, s1.classes-and-objects, s1.exceptions, h0.floating-point-and-ieee-754, q0.writes-constraints-and-transactions]
+leads: [s4.errors-as-part-of-the-design, s4.designing-apis, s6.oracles-and-invariants]
+starter: |
+  # Scratch space. A value that checks itself once and can never change.
+  from dataclasses import dataclass, replace
+
+
+  @dataclass(frozen=True)
+  class Stay:
+      check_in: int
+      check_out: int
+
+      def __post_init__(self):
+          if self.check_out <= self.check_in:
+              raise ValueError("check-out must come after check-in")
+
+
+  stay = Stay(100, 103)
+  longer = replace(stay, check_out=105)
+  print(stay, longer)
+  try:
+      replace(stay, check_out=99)
+  except ValueError as error:
+      print("refused:", error)
+parts:
+  recall:
+    - text: |
+        [[s4.modules-coupling-and-cohesion]] drew the boundaries between modules so that changes stay local. What crosses those boundaries is data: amounts, dates, statuses, phone numbers. If any function may receive a negative amount or an order that is both cancelled and delivered, every function must check, and one will forget. This lesson moves the checking into the data itself. Three quick pulls first.
+  puzzle:
+    - text: |
+        A cab app stores each ride with four true-or-false fields: `driver_assigned`, `picked_up`, `completed` and `cancelled`. A ride is requested, gets a driver, picks the rider up and is completed. It can be cancelled only before pickup, with or without a driver. No field ever goes back from true to false.
+
+        **How many combinations of the four fields describe a ride that cannot exist?**
+  intuition:
+    - text: |
+        The railway booking form does not give you a blank line for your berth preference. It offers a list: lower, middle, upper, side lower, side upper. The date picker will not let you choose 31 February, and the age box refuses letters. A paper form with a blank "berth: ______" invites "near the window please", and someone downstream must read it, guess, and sometimes get it wrong. The online form makes nonsense impossible to submit, so everything behind it can trust what it receives.
+
+        Code can do the same. The figure shows an order described by five true-or-false flags. Switch them on and off and see which combinations describe an order that could really exist.
+    - figure: state-flags
+      props: { flags: [paid, shipped] }
+    - text: |
+        Only 8 of the 32 combinations are real states. The other 24, such as "shipped but never packed", can be stored, passed around and shown to a customer, and every function that reads the flags must decide what to do about them. An enum with exactly the 8 real states has no way to say "shipped but never packed", so no function ever has to handle it. Shrinking the set of values a type can hold to the set of situations that can happen is the core idea of this lesson.
+  derivation:
+    - text: |
+        **Invariants.** An invariant is a condition a value must satisfy whenever anyone can see it: an amount of money is never negative, a hotel stay checks out after it checks in, an order's status is one of eight. A database states invariants as constraints, from [[q0.writes-constraints-and-transactions]], and refuses rows that break them. In code, the same idea has three parts: choose a type that cannot express most bad values, check the rest once when the value is built, and never let it change into a bad value afterwards.
+
+        **Make illegal states unrepresentable.** Flags that depend on each other are the commonest source of impossible states. Replace them with one field whose values are exactly the real states, an `Enum`:
+
+        ```python
+        class Status(Enum):
+            PLACED = "placed"
+            PAID = "paid"
+            SHIPPED = "shipped"
+        ```
+
+        `Status.PAID` is one of a fixed set of values; `status.value` is its text and `status.name` its name. The same goes for fields that only make sense together. A tracking number belongs to a shipped order, so an order type with an optional `tracking` field allows "shipped without tracking" and "tracking but not shipped"; putting the tracking number inside the shipped state allows neither.
+    - question:
+        id: derivation-flags
+        type: choice
+        system: s2
+        prompt: |
+          A payment record has `succeeded: bool`, `failed: bool` and `failure_reason: str | None`. Which design allows only real situations?
+        options:
+          - "A status enum PENDING, SUCCEEDED or FAILED, with the failure reason stored only on failed payments"
+          - "Keep both flags and add a check in every function that reads them"
+          - "Replace the two flags with one string field that may hold any text"
+          - "Add a third flag, pending"
+        answer: 0
+        explanation: |
+          Two flags allow succeeded and failed at once, and a reason on a successful payment; an enum with the reason tied to failure cannot express either. Checks in every reader are exactly what this design avoids, and free text or more flags allow more nonsense, not less.
+    - text: |
+        **Check once, when the value is built.** A dataclass, from [[s1.type-hints-and-dataclasses]], runs a method called `__post_init__` right after its fields are set, which is the place to check the invariant and raise `ValueError` if it fails. From then on, the value is known to be good. To keep it good, declare it `@dataclass(frozen=True)`: assigning to a field then raises an error. A change produces a new value instead, with `dataclasses.replace(stay, check_out=105)`, and `replace` builds the new value through `__post_init__`, so the check runs again. A mutable value whose fields anyone may assign keeps its invariant only as long as every piece of code that touches it remembers to.
+
+        **Parse, don't validate.** At the edge of a program, input arrives as raw text: a form, a file, a request. A validating function answers "is this string a valid amount?" with true or false and lets the string continue, so every later function receives text and must wonder whether someone checked it. A parsing function turns the text into a `Money` value or refuses it with an error. After the edge, functions take `Money`, and the question cannot arise. Parse once, at the boundary, into the most precise type you have.
+    - question:
+        id: derivation-paise
+        type: numeric
+        system: s2
+        prompt: |
+          A shop adds ₹0.10 to a total 1,000 times. Kept as whole paise, what is the total in paise?
+        answer: "10000"
+        explanation: |
+          $1{,}000 \times 10 = 10{,}000$ paise exactly. The same sum in floating-point rupees comes out a hair away from 100, because 0.10 has no exact binary form.
+    - text: |
+        **Money in whole paise.** Rupee amounts look like decimals, but floating-point numbers, from [[h0.floating-point-and-ieee-754]], cannot hold 0.10 exactly, so `0.1 + 0.2 == 0.3` is false, and sums drift. Keep money as an integer number of paise, parse "12.50" into 1250 by splitting at the point rather than through `float`, and format back to rupees only for display. The type `Money(paise: int)` then makes the unit part of the value: nobody can add rupees to paise by accident, because there are no bare rupee numbers to add.
+
+        **Types as checked documentation.** Python does not enforce type hints when the program runs. A type checker such as mypy reads them before it runs and reports a function that passes a `str` where `Money` is expected. Even a plain integer can be given a distinct type for checking, with `CustomerId = NewType("CustomerId", int)`, so that an order id cannot be passed where a customer id belongs.
+
+        **Legal transitions.** A status also changes over time, and only some changes are legal: a paid order may be packed, a shipped one may not be cancelled. Writing the legal moves as a table, a dictionary from `(state, event)` to the next state, puts every rule in one place where it can be read and tested. Anything not in the table raises an error, so a new state is impossible to use until someone decides its transitions.
+    - question:
+        id: order-parse
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of turning the text "12.5" into a `Money` value in order.
+        steps:
+          - "Split the text at the point into 12 and 5."
+          - "Check that both parts are digits and the fraction has at most two."
+          - "Pad the fraction to two digits, 50."
+          - "Compute 12 × 100 + 50 = 1250 paise."
+          - "Build Money(1250), whose check confirms it is not negative."
+        explanation: |
+          The text is checked before any arithmetic, the arithmetic stays in whole numbers, and the value's own check runs last, so nothing invalid can come out.
+  formal:
+    - text: |
+        **Invariant.** A condition a value satisfies whenever it can be observed.
+
+        **Unrepresentable illegal states.** Choose types whose possible values are exactly the real situations: an `Enum` instead of dependent flags, and fields placed inside the state they belong to.
+
+        **Construction check.** `__post_init__` checks the invariant and raises `ValueError`; `@dataclass(frozen=True)` forbids later assignment; `dataclasses.replace` builds a changed copy and checks it again.
+
+        **Parse, don't validate.** Convert raw input into a precise type at the boundary, or refuse it; inner code takes only the precise type.
+
+        **Money.** Whole paise in an `int`, never floating-point rupees.
+
+        **Transition table.** A mapping from `(state, event)` to the next state; anything absent is illegal.
+  drill:
+    - text: Seconds each. For every value, ask what it must never be.
+    - question:
+        id: drill-flags
+        type: numeric
+        system: s1
+        prompt: |
+          A record has three true-or-false flags. How many combinations can it store?
+        answer: "8"
+        explanation: $2^3$.
+    - question:
+        id: drill-frozen
+        type: choice
+        system: s1
+        prompt: |
+          What does `frozen=True` add to a dataclass whose `__post_init__` checks an invariant?
+        options:
+          - "Nobody can assign a field later and break the invariant."
+          - "The invariant is checked on every read."
+          - "The class becomes faster to build."
+          - "Fields may hold only numbers."
+        answer: 0
+        explanation: The check runs once, when the value is built; freezing makes sure nothing changes afterwards.
+    - question:
+        id: drill-boundary
+        type: choice
+        system: s1
+        prompt: |
+          Where should a phone number typed into a form become a `Phone` value?
+        options:
+          - "As soon as it arrives, before any other code uses it"
+          - "In each function that needs to dial it"
+          - "Only when saving it to the database"
+          - "Never; keep it as text"
+        answer: 0
+        explanation: Parse at the boundary, so everything inside receives a checked `Phone`.
+    - question:
+        id: drill-transitions
+        type: choice
+        system: s1
+        prompt: |
+          A transition table has no entry for (DELIVERED, "pay"). What should `advance(DELIVERED, "pay")` do?
+        options:
+          - "Raise an error: the move is not allowed."
+          - "Return DELIVERED unchanged, silently."
+          - "Return PAID."
+          - "Return None."
+        answer: 0
+        explanation: A missing entry means an illegal move, and silently ignoring it hides a bug.
+    - question:
+        id: predict-float
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(0.1 + 0.2 == 0.3, 10 + 20 == 30)
+        output: "False True"
+        explanation: The binary fractions nearest 0.1 and 0.2 add to something just above 0.3; whole paise add exactly.
+    - question:
+        id: predict-enum
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          from enum import Enum
+
+
+          class Status(Enum):
+              PLACED = "placed"
+              PAID = "paid"
+
+
+          s = Status("paid")
+          print(s.name, s.value, s == Status.PAID)
+        output: "PAID paid True"
+        explanation: "`Status(\"paid\")` looks the member up by its value; `name` is the member's name and `value` its text."
+  work:
+    - text: Slower now. For each value, decide where its invariant is checked and what keeps it true.
+    - question:
+        id: fix-extend-stay
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A stay must always check out after it checks in, and `extend` must refuse a change that would break that, leaving the stay as it was. The program should print `[-6] 6`. It prints `[] 0`. Find the fault and fix it.
+        starter: |
+          from dataclasses import dataclass
+
+
+          @dataclass
+          class Stay:
+              check_in: int  # day of the year
+              check_out: int
+
+              def __post_init__(self):
+                  if self.check_out <= self.check_in:
+                      raise ValueError("check-out must come after check-in")
+
+              def nights(self):
+                  return self.check_out - self.check_in
+
+
+          def extend(stay, nights):
+              stay.check_out += nights
+              return stay
+
+
+          stay = Stay(100, 103)
+          refused = []
+          for change in [2, -6, 1]:
+              try:
+                  stay = extend(stay, change)
+              except ValueError:
+                  refused.append(change)
+          print(refused, stay.nights())
+        solution: |
+          from dataclasses import dataclass, replace
+
+
+          @dataclass(frozen=True)
+          class Stay:
+              check_in: int  # day of the year
+              check_out: int
+
+              def __post_init__(self):
+                  if self.check_out <= self.check_in:
+                      raise ValueError("check-out must come after check-in")
+
+              def nights(self):
+                  return self.check_out - self.check_in
+
+
+          def extend(stay, nights):
+              return replace(stay, check_out=stay.check_out + nights)
+
+
+          stay = Stay(100, 103)
+          refused = []
+          for change in [2, -6, 1]:
+              try:
+                  stay = extend(stay, change)
+              except ValueError:
+                  refused.append(change)
+          print(refused, stay.nights())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(112)
+          for _ in range(40):
+              _a = _rng.randint(1, 300)
+              _b = _a + _rng.randint(1, 6)
+              _n = _rng.randint(-8, 5)
+              _s = Stay(_a, _b)
+              if _b + _n <= _a:
+                  try:
+                      _got = extend(_s, _n)
+                  except ValueError:
+                      assert (_s.check_in, _s.check_out) == (_a, _b), "A refused extension should leave the stay as it was, " + str((_a, _b)) + ", not " + str((_s.check_in, _s.check_out))
+                      continue
+                  assert False, "Extending Stay(" + str(_a) + ", " + str(_b) + ") by " + str(_n) + " nights should raise ValueError, not give " + repr(_got)
+              _got = extend(_s, _n)
+              assert (_got.check_in, _got.check_out) == (_a, _b + _n), "Extending Stay(" + str(_a) + ", " + str(_b) + ") by " + str(_n) + " should give check-out " + str(_b + _n) + ", not " + repr(_got)
+              assert (_s.check_in, _s.check_out) == (_a, _b), "extend should return a new stay and leave the original " + str((_a, _b)) + " unchanged"
+          assert output.strip() == "[-6] 6", "The program should print [-6] 6"
+        wrong:
+          - |
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Stay:
+                check_in: int  # day of the year
+                check_out: int
+
+                def __post_init__(self):
+                    if self.check_out <= self.check_in:
+                        raise ValueError("check-out must come after check-in")
+
+                def nights(self):
+                    return self.check_out - self.check_in
+
+
+            def extend(stay, nights):
+                stay.check_out += nights
+                if stay.check_out <= stay.check_in:
+                    raise ValueError("check-out must come after check-in")
+                return stay
+
+
+            stay = Stay(100, 103)
+            refused = []
+            for change in [2, -6, 1]:
+                try:
+                    stay = extend(stay, change)
+                except ValueError:
+                    refused.append(change)
+            print(refused, stay.nights())
+          - |
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Stay:
+                check_in: int  # day of the year
+                check_out: int
+
+                def __post_init__(self):
+                    if self.check_out <= self.check_in:
+                        raise ValueError("check-out must come after check-in")
+
+                def nights(self):
+                    return self.check_out - self.check_in
+
+
+            def extend(stay, nights):
+                return Stay(stay.check_out, stay.check_out + nights)
+
+
+            stay = Stay(100, 103)
+            refused = []
+            for change in [2, -6, 1]:
+                try:
+                    stay = extend(stay, change)
+                except ValueError:
+                    refused.append(change)
+            print(refused, stay.nights())
+          - |
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Stay:
+                check_in: int  # day of the year
+                check_out: int
+
+                def __post_init__(self):
+                    if self.check_out <= self.check_in:
+                        raise ValueError("check-out must come after check-in")
+
+                def nights(self):
+                    return self.check_out - self.check_in
+
+
+            def extend(stay, nights):
+                return Stay(stay.check_in, max(stay.check_in + 1, stay.check_out + nights))
+
+
+            stay = Stay(100, 103)
+            refused = []
+            for change in [2, -6, 1]:
+                try:
+                    stay = extend(stay, change)
+                except ValueError:
+                    refused.append(change)
+            print(refused, stay.nights())
+        explanation: |
+          `extend` changed the field directly, so `__post_init__` never ran and the stay went backwards. Freezing the class and building the new stay with `replace` runs the check, and a refused change leaves the old stay untouched. Changing the field and then checking leaves the broken stay behind; building a new stay from the check-out date moves the check-in; and clamping hides the refusal instead of reporting it.
+    - question:
+        id: write-parse-rupees
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `parse_rupees` so that it turns text of one or more digits, optionally followed by a point and one or two digits, into `Money` in exact paise, and raises `ValueError` for anything else. The program should print `[1250, 700, 5, 'refused', 'refused', 'refused', 'refused']`.
+        starter: |
+          from dataclasses import dataclass
+
+
+          @dataclass(frozen=True)
+          class Money:
+              paise: int
+
+              def __post_init__(self):
+                  if not isinstance(self.paise, int) or self.paise < 0:
+                      raise ValueError("money is a whole number of paise, never negative")
+
+
+          def parse_rupees(text):
+              return Money(round(float(text) * 100))
+
+
+          results = []
+          for text in ["12.50", "7", "0.05", "12.345", "-3", "1.2.3", "₹40"]:
+              try:
+                  results.append(parse_rupees(text).paise)
+              except ValueError:
+                  results.append("refused")
+          print(results)
+        solution: |
+          from dataclasses import dataclass
+
+
+          @dataclass(frozen=True)
+          class Money:
+              paise: int
+
+              def __post_init__(self):
+                  if not isinstance(self.paise, int) or self.paise < 0:
+                      raise ValueError("money is a whole number of paise, never negative")
+
+
+          def parse_rupees(text):
+              whole, point, fraction = text.partition(".")
+              if not whole.isdigit() or (point and not (fraction.isdigit() and len(fraction) <= 2)):
+                  raise ValueError("not an amount in rupees: " + text)
+              return Money(int(whole) * 100 + int((fraction + "00")[:2]))
+
+
+          results = []
+          for text in ["12.50", "7", "0.05", "12.345", "-3", "1.2.3", "₹40"]:
+              try:
+                  results.append(parse_rupees(text).paise)
+              except ValueError:
+                  results.append("refused")
+          print(results)
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(111)
+          for _ in range(60):
+              _r, _p = _rng.randint(0, 5000), _rng.randint(0, 99)
+              _form = _rng.randrange(3)
+              if _form == 0:
+                  _text, _want = str(_r), _r * 100
+              elif _form == 1:
+                  _text, _want = str(_r) + "." + str(_p).zfill(2), _r * 100 + _p
+              else:
+                  _text, _want = str(_r) + "." + str(_p // 10), _r * 100 + (_p // 10) * 10
+              _got = parse_rupees(_text)
+              assert isinstance(_got, Money) and _got.paise == _want, "parse_rupees(" + repr(_text) + ") should give Money(paise=" + str(_want) + "), not " + repr(_got)
+          for _bad in ["", "abc", "12.345", "-3", "1.2.3", ".5", "5.", "₹40", "12.5a", " 12", "1e3", "0.001"]:
+              try:
+                  _got = parse_rupees(_bad)
+              except ValueError:
+                  continue
+              assert False, "parse_rupees(" + repr(_bad) + ") should raise ValueError, not return " + repr(_got)
+          assert output.strip() == "[1250, 700, 5, 'refused', 'refused', 'refused', 'refused']", "The program should print [1250, 700, 5, 'refused', 'refused', 'refused', 'refused']"
+        wrong:
+          - |
+            from dataclasses import dataclass
+
+
+            @dataclass(frozen=True)
+            class Money:
+                paise: int
+
+                def __post_init__(self):
+                    if not isinstance(self.paise, int) or self.paise < 0:
+                        raise ValueError("money is a whole number of paise, never negative")
+
+
+            def parse_rupees(text):
+                whole, point, fraction = text.partition(".")
+                if not whole.isdigit() or (point and not (fraction.isdigit() and len(fraction) <= 2)):
+                    raise ValueError("not an amount in rupees: " + text)
+                return Money(int(whole) * 100 + int(fraction or "0"))
+
+
+            results = []
+            for text in ["12.50", "7", "0.05", "12.345", "-3", "1.2.3", "₹40"]:
+                try:
+                    results.append(parse_rupees(text).paise)
+                except ValueError:
+                    results.append("refused")
+            print(results)
+          - |
+            from dataclasses import dataclass
+
+
+            @dataclass(frozen=True)
+            class Money:
+                paise: int
+
+                def __post_init__(self):
+                    if not isinstance(self.paise, int) or self.paise < 0:
+                        raise ValueError("money is a whole number of paise, never negative")
+
+
+            def parse_rupees(text):
+                amount = float(text)
+                if amount < 0 or round(amount, 2) != amount:
+                    raise ValueError("not an amount in rupees: " + text)
+                return Money(int(amount * 100))
+
+
+            results = []
+            for text in ["12.50", "7", "0.05", "12.345", "-3", "1.2.3", "₹40"]:
+                try:
+                    results.append(parse_rupees(text).paise)
+                except ValueError:
+                    results.append("refused")
+            print(results)
+          - |
+            from dataclasses import dataclass
+
+
+            @dataclass(frozen=True)
+            class Money:
+                paise: int
+
+                def __post_init__(self):
+                    if not isinstance(self.paise, int) or self.paise < 0:
+                        raise ValueError("money is a whole number of paise, never negative")
+
+
+            def parse_rupees(text):
+                whole, point, fraction = text.partition(".")
+                if not whole.isdigit():
+                    raise ValueError("not an amount in rupees: " + text)
+                return Money(int(whole) * 100 + int((fraction + "00")[:2]))
+
+
+            results = []
+            for text in ["12.50", "7", "0.05", "12.345", "-3", "1.2.3", "₹40"]:
+                try:
+                    results.append(parse_rupees(text).paise)
+                except ValueError:
+                    results.append("refused")
+            print(results)
+        explanation: |
+          Splitting at the point keeps everything in whole numbers: the rupees times 100, plus the fraction padded to two digits. Adding the fraction unpadded reads "40.4" as 4,004 paise instead of 4,040; going through `float` and truncating turns some amounts a paisa short; and checking only the rupees accepts "12.345".
+    - question:
+        id: write-advance
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `advance` so that it returns the next status for the legal moves only, pay, pack, ship and deliver in that order, and cancel before the order ships, and raises `ValueError` for every other move. The program should print `['paid', 'paid', 'packed', 'shipped', 'shipped', 'delivered']`.
+        starter: |
+          from enum import Enum
+
+
+          class Status(Enum):
+              PLACED = "placed"
+              PAID = "paid"
+              PACKED = "packed"
+              SHIPPED = "shipped"
+              DELIVERED = "delivered"
+              CANCELLED = "cancelled"
+
+
+          def advance(status, event):
+              if event == "cancel":
+                  return Status.CANCELLED
+              return {"pay": Status.PAID, "pack": Status.PACKED, "ship": Status.SHIPPED, "deliver": Status.DELIVERED}[event]
+
+
+          history = []
+          status = Status.PLACED
+          for event in ["pay", "ship", "pack", "ship", "cancel", "deliver"]:
+              try:
+                  status = advance(status, event)
+              except ValueError:
+                  pass
+              history.append(status.value)
+          print(history)
+        solution: |
+          from enum import Enum
+
+
+          class Status(Enum):
+              PLACED = "placed"
+              PAID = "paid"
+              PACKED = "packed"
+              SHIPPED = "shipped"
+              DELIVERED = "delivered"
+              CANCELLED = "cancelled"
+
+
+          NEXT = {
+              (Status.PLACED, "pay"): Status.PAID,
+              (Status.PAID, "pack"): Status.PACKED,
+              (Status.PACKED, "ship"): Status.SHIPPED,
+              (Status.SHIPPED, "deliver"): Status.DELIVERED,
+              (Status.PLACED, "cancel"): Status.CANCELLED,
+              (Status.PAID, "cancel"): Status.CANCELLED,
+              (Status.PACKED, "cancel"): Status.CANCELLED,
+          }
+
+
+          def advance(status, event):
+              if (status, event) not in NEXT:
+                  raise ValueError(f"cannot {event} an order that is {status.value}")
+              return NEXT[(status, event)]
+
+
+          history = []
+          status = Status.PLACED
+          for event in ["pay", "ship", "pack", "ship", "cancel", "deliver"]:
+              try:
+                  status = advance(status, event)
+              except ValueError:
+                  pass
+              history.append(status.value)
+          print(history)
+        tests: |
+          import random as _random
+
+          _legal = {("placed", "pay"): "paid", ("paid", "pack"): "packed", ("packed", "ship"): "shipped", ("shipped", "deliver"): "delivered", ("placed", "cancel"): "cancelled", ("paid", "cancel"): "cancelled", ("packed", "cancel"): "cancelled"}
+          for _st in Status:
+              for _ev in ["pay", "pack", "ship", "deliver", "cancel"]:
+                  _want = _legal.get((_st.value, _ev))
+                  try:
+                      _got = advance(_st, _ev)
+                  except ValueError:
+                      assert _want is None, "advance(" + _st.value + ", " + repr(_ev) + ") should give " + _want + ", not raise ValueError"
+                      continue
+                  assert _want is not None, "advance(" + _st.value + ", " + repr(_ev) + ") should raise ValueError, not give " + str(_got.value if isinstance(_got, Status) else _got)
+                  assert _got == Status(_want), "advance(" + _st.value + ", " + repr(_ev) + ") should give " + _want + ", not " + str(_got)
+          assert output.strip() == "['paid', 'paid', 'packed', 'shipped', 'shipped', 'delivered']", "The program should print ['paid', 'paid', 'packed', 'shipped', 'shipped', 'delivered']"
+        wrong:
+          - |
+            from enum import Enum
+
+
+            class Status(Enum):
+                PLACED = "placed"
+                PAID = "paid"
+                PACKED = "packed"
+                SHIPPED = "shipped"
+                DELIVERED = "delivered"
+                CANCELLED = "cancelled"
+
+
+            NEXT = {
+                (Status.PLACED, "pay"): Status.PAID,
+                (Status.PAID, "pack"): Status.PACKED,
+                (Status.PACKED, "ship"): Status.SHIPPED,
+                (Status.SHIPPED, "deliver"): Status.DELIVERED,
+            }
+
+
+            def advance(status, event):
+                if event == "cancel" and status != Status.DELIVERED:
+                    return Status.CANCELLED
+                if (status, event) not in NEXT:
+                    raise ValueError(f"cannot {event} an order that is {status.value}")
+                return NEXT[(status, event)]
+
+
+            history = []
+            status = Status.PLACED
+            for event in ["pay", "ship", "pack", "ship", "cancel", "deliver"]:
+                try:
+                    status = advance(status, event)
+                except ValueError:
+                    pass
+                history.append(status.value)
+            print(history)
+          - |
+            from enum import Enum
+
+
+            class Status(Enum):
+                PLACED = "placed"
+                PAID = "paid"
+                PACKED = "packed"
+                SHIPPED = "shipped"
+                DELIVERED = "delivered"
+                CANCELLED = "cancelled"
+
+
+            NEXT = {
+                (Status.PLACED, "pay"): Status.PAID,
+                (Status.PAID, "pack"): Status.PACKED,
+                (Status.PACKED, "ship"): Status.SHIPPED,
+                (Status.SHIPPED, "deliver"): Status.DELIVERED,
+                (Status.PLACED, "cancel"): Status.CANCELLED,
+                (Status.PAID, "cancel"): Status.CANCELLED,
+                (Status.PACKED, "cancel"): Status.CANCELLED,
+            }
+
+
+            def advance(status, event):
+                return NEXT.get((status, event), status)
+
+
+            history = []
+            status = Status.PLACED
+            for event in ["pay", "ship", "pack", "ship", "cancel", "deliver"]:
+                try:
+                    status = advance(status, event)
+                except ValueError:
+                    pass
+                history.append(status.value)
+            print(history)
+          - |
+            from enum import Enum
+
+
+            class Status(Enum):
+                PLACED = "placed"
+                PAID = "paid"
+                PACKED = "packed"
+                SHIPPED = "shipped"
+                DELIVERED = "delivered"
+                CANCELLED = "cancelled"
+
+
+            ORDER = [Status.PLACED, Status.PAID, Status.PACKED, Status.SHIPPED, Status.DELIVERED]
+            EVENTS = {"pay": Status.PAID, "pack": Status.PACKED, "ship": Status.SHIPPED, "deliver": Status.DELIVERED}
+
+
+            def advance(status, event):
+                if event == "cancel":
+                    if status in (Status.PLACED, Status.PAID, Status.PACKED):
+                        return Status.CANCELLED
+                    raise ValueError(f"cannot cancel an order that is {status.value}")
+                if status == Status.CANCELLED or ORDER.index(EVENTS[event]) <= ORDER.index(status):
+                    raise ValueError(f"cannot {event} an order that is {status.value}")
+                return EVENTS[event]
+
+
+            history = []
+            status = Status.PLACED
+            for event in ["pay", "ship", "pack", "ship", "cancel", "deliver"]:
+                try:
+                    status = advance(status, event)
+                except ValueError:
+                    pass
+                history.append(status.value)
+            print(history)
+        explanation: |
+          A table of the seven legal moves, with everything else refused, states the rules once. Allowing cancel from any undelivered state cancels shipped orders; returning the old status for an illegal move hides the mistake from the caller; and allowing any forward jump lets an order be packed before it is paid for.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          How many combinations of the puzzle's four ride fields describe a ride that cannot exist?
+        answer: "10"
+        explanation: |
+          The real rides are requested, assigned, picked up, completed, cancelled before a driver and cancelled after one: 6 of the $2^4 = 16$ combinations. The other 10 are impossible.
+    - question:
+        id: work-phone
+        type: choice
+        system: s2
+        prompt: |
+          Phone numbers reach a clinic's app from a form, a CSV import and a partner's API, in formats like "98450 12345", "+91-9845012345" and "09845012345". Many functions later send SMS reminders. Which design keeps them correct?
+        options:
+          - "Each entry point parses the text into a frozen Phone value of exactly ten digits or refuses it; later functions accept only Phone."
+          - "Store the text as received and let each SMS function clean it up."
+          - "Validate with a function that returns True or False, and pass the original text on."
+          - "Strip spaces at each entry point and keep the rest as text."
+        answer: 0
+        explanation: |
+          Parsing at every boundary into one checked type means the SMS functions never see a raw string. Cleaning in each sender repeats the work and lets them disagree; a true-or-false check leaves the original messy text flowing inward; and stripping spaces still leaves "+91-" and the leading zero.
+  connections:
+    - text: |
+        10 impossible rides: of the 16 combinations, only requested, assigned, picked up, completed, cancelled without a driver and cancelled with one can happen. A `RideStatus` enum with those six values removes the other ten for good, along with every `if` that defended against them.
+
+        Parsing at the boundary raises a new question: what happens when the input is bad? `parse_rupees` raised `ValueError`, `advance` refused an illegal move, and someone, somewhere, must decide what the user sees. Designing those failures as carefully as the successes is [[s4.errors-as-part-of-the-design]]. Types and invariants are also the raw material of good public interfaces, [[s4.designing-apis]], and of tests that check invariants on thousands of generated values, [[s6.oracles-and-invariants]].

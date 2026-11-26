@@ -7245,6 +7245,762 @@ function SchemaVersions(props: Props) {
   );
 }
 
+const IS_CALLERS = ["checkout", "refunds", "top-ups", "subscriptions", "invoices", "payouts", "tips", "gift cards"];
+const IS_PROVIDERS = ["UPI", "cards", "net banking", "pay later", "EMI", "wallet"];
+
+/** Places in an app that take payments, wired to payment providers directly or through one interface. */
+function InterfaceSwap(props: Props) {
+  const [callers, setCallers] = useState(clamp(Math.round(num(props.callers, 4)), 1, IS_CALLERS.length));
+  const [providers, setProviders] = useState(clamp(Math.round(num(props.providers, 3)), 1, IS_PROVIDERS.length));
+  const [shared, setShared] = useState(props.mode === "interface");
+  const pieces = shared ? callers + providers : callers * providers;
+  const added = shared ? 1 : callers;
+  const summary = shared
+    ? `${plural(callers, "place", "places")} in the app take payments through one PaymentProvider interface, and each of the ${plural(providers, "provider", "providers")} sits behind it in one adapter: ${callers} + ${providers} = ${pieces} pieces of code, and only the ${plural(providers, "adapter", "adapters")} know anything about a provider. Adding another provider means writing 1 new adapter; no caller changes.`
+    : `${plural(callers, "place", "places")} in the app each talk to each of the ${plural(providers, "provider", "providers")} directly: ${callers} × ${providers} = ${pieces} pieces of provider-specific code. Adding another provider means writing ${plural(added, "new piece", "new pieces")}, one in every place that takes payments.`;
+  const cy = (i: number, n: number) => 130 + (i - (n - 1) / 2) * 27;
+  return (
+    <Frame
+      title="Calling providers directly or through an interface"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!shared} onClick={() => setShared(false)}>
+            direct
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={shared} onClick={() => setShared(true)}>
+            through an interface
+          </button>
+          <Stepper label="places" value={callers} min={1} max={IS_CALLERS.length} onChange={setCallers} />
+          <Stepper label="providers" value={providers} min={1} max={IS_PROVIDERS.length} onChange={setProviders} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 270" role="img" aria-label={`${pieces} pieces of code connecting ${plural(callers, "place", "places")} to ${plural(providers, "provider", "providers")}${shared ? " through one interface" : " directly"}`}>
+        {IS_CALLERS.slice(0, callers).map((name, i) =>
+          shared ? (
+            <line key={`l${name}`} x1={112} y1={cy(i, callers)} x2={178} y2={130} className="fig-axis" />
+          ) : (
+            IS_PROVIDERS.slice(0, providers).map((p, j) => <line key={`l${name}${p}`} x1={112} y1={cy(i, callers)} x2={348} y2={cy(j, providers)} className="fig-axis" />)
+          ),
+        )}
+        {shared &&
+          IS_PROVIDERS.slice(0, providers).map((p, j) => <line key={`r${p}`} x1={282} y1={130} x2={348} y2={cy(j, providers)} className="fig-accent-line" />)}
+        {shared && (
+          <g>
+            <rect x={178} y={112} width={104} height={36} rx={4} className="fig-accent" />
+            <text x={230} y={127} textAnchor="middle" className="fig-small" style={{ fill: "var(--bg)", fontWeight: 600 }}>
+              PaymentProvider
+            </text>
+            <text x={230} y={141} textAnchor="middle" className="fig-small" style={{ fill: "var(--bg)" }}>
+              charge, refund
+            </text>
+          </g>
+        )}
+        {IS_CALLERS.slice(0, callers).map((name, i) => (
+          <g key={name}>
+            <rect x={8} y={cy(i, callers) - 10} width={104} height={20} rx={4} className="fig-fill" />
+            <text x={60} y={cy(i, callers) + 4} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+              {name}
+            </text>
+          </g>
+        ))}
+        {IS_PROVIDERS.slice(0, providers).map((p, j) => (
+          <g key={p}>
+            <rect x={348} y={cy(j, providers) - 10} width={104} height={20} rx={4} className="fig-fill" />
+            <text x={400} y={cy(j, providers) + 4} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+              {p}
+            </text>
+          </g>
+        ))}
+        <text x={8} y={262} className="fig-small">
+          {shared ? `${callers} + ${providers} = ${pieces} pieces; a new provider costs 1 adapter` : `${callers} × ${providers} = ${pieces} pieces; a new provider costs ${added} more`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const CR_MODULES: [string, number, number][] = [
+  ["app", 230, 20],
+  ["delivery", 120, 66],
+  ["orders", 300, 112],
+  ["payments", 380, 158],
+  ["notify", 150, 204],
+  ["menu", 270, 204],
+  ["dates", 110, 252],
+  ["money", 290, 252],
+  ["db", 410, 252],
+];
+const CR_IMPORTS: Record<string, string[]> = {
+  app: ["orders", "delivery"],
+  orders: ["payments", "menu", "money", "db"],
+  payments: ["money", "notify", "db"],
+  delivery: ["orders", "notify", "dates"],
+  menu: ["money", "db"],
+  notify: ["dates"],
+  money: [],
+  dates: [],
+  db: [],
+};
+
+/** Every module that imports a changed module, directly or through others, and so must be checked again. */
+function ChangeRipple(props: Props) {
+  const names = CR_MODULES.map(([n]) => n);
+  const [changed, setChanged] = useState(typeof props.changed === "string" && names.includes(props.changed) ? props.changed : "money");
+  const hit = new Set<string>();
+  const todo = [changed];
+  while (todo.length > 0) {
+    const m = todo.pop()!;
+    for (const [importer, used] of Object.entries(CR_IMPORTS)) {
+      if (used.includes(m) && !hit.has(importer) && importer !== changed) {
+        hit.add(importer);
+        todo.push(importer);
+      }
+    }
+  }
+  const direct = names.filter((n) => CR_IMPORTS[n].includes(changed));
+  const indirect = names.filter((n) => hit.has(n) && !direct.includes(n));
+  const at = (n: string) => CR_MODULES.find(([m]) => m === n)!;
+  const summary =
+    hit.size === 0
+      ? `Changing ${changed}: no module imports it, so nothing else needs checking. Modules at the top of the graph are the cheapest to change.`
+      : `Changing ${changed}: ${direct.join(", ")} ${direct.length === 1 ? "imports" : "import"} it directly${indirect.length > 0 ? `, and ${indirect.join(", ")} ${indirect.length === 1 ? "imports" : "import"} it through them` : ""}. ${plural(hit.size, "module", "modules")} of ${names.length - 1} must be checked again.`;
+  return (
+    <Frame
+      title="How far a change ripples"
+      summary={summary}
+      controls={
+        <>
+          <span className="fig-stepper">
+            <span className="label">change</span>
+          </span>
+          {names.map((n) => (
+            <button key={n} type="button" className="btn btn-secondary btn-small" aria-pressed={changed === n} onClick={() => setChanged(n)}>
+              {n}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 470 276" role="img" aria-label={`Changing ${changed} affects ${plural(hit.size, "module", "modules")}`}>
+        {Object.entries(CR_IMPORTS).flatMap(([from, used]) =>
+          used.map((to) => {
+            const [, x1, y1] = at(from);
+            const [, x2, y2] = at(to);
+            const lit = hit.has(from) && (to === changed || hit.has(to));
+            return <line key={`${from}-${to}`} x1={x1} y1={y1} x2={x2} y2={y2} className={lit ? "fig-accent-line" : "fig-axis"} />;
+          }),
+        )}
+        {CR_MODULES.map(([n, x, y]) => {
+          const isChanged = n === changed;
+          const isHit = hit.has(n);
+          return (
+            <g key={n}>
+              <rect
+                x={x - 36}
+                y={y - 11}
+                width={72}
+                height={22}
+                rx={4}
+                className={isChanged ? "fig-accent" : "fig-fill"}
+                style={isHit ? { stroke: "var(--focus)", strokeWidth: 3 } : undefined}
+              />
+              <text x={x} y={y + 4} textAnchor="middle" className="fig-small" style={{ fill: isChanged ? "var(--bg)" : "var(--text)", fontWeight: isHit || isChanged ? 600 : 400 }}>
+                {n}
+              </text>
+            </g>
+          );
+        })}
+        <text x={8} y={20} className="fig-small">
+          imports point down
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const SF_FLAGS = ["paid", "packed", "shipped", "delivered", "cancelled"];
+const SF_STATES: [number, string][] = [
+  [0, "PLACED"],
+  [1, "PAID"],
+  [3, "PACKED"],
+  [7, "SHIPPED"],
+  [15, "DELIVERED"],
+  [16, "CANCELLED before payment"],
+  [17, "CANCELLED after payment"],
+  [19, "CANCELLED after packing"],
+];
+
+/** Why an impossible combination of order flags is impossible, or an empty string for a real state. */
+function sfProblem(bits: number): string {
+  const has = (f: string) => (bits & (1 << SF_FLAGS.indexOf(f))) !== 0;
+  if (has("cancelled") && has("delivered")) return "cancelled and delivered at once";
+  if (has("cancelled") && has("shipped")) return "cancelled after it shipped";
+  if (has("delivered") && !has("shipped")) return "delivered but never shipped";
+  if (has("shipped") && !has("packed")) return "shipped but never packed";
+  if (has("packed") && !has("paid")) return "packed before it was paid for";
+  return "";
+}
+
+/** Five true-or-false flags on an order against the handful of states an order can really be in. */
+function StateFlags(props: Props) {
+  const start = Array.isArray(props.flags) ? props.flags.filter((f): f is string => typeof f === "string" && SF_FLAGS.includes(f)) : [];
+  const [bits, setBits] = useState(start.reduce((b, f) => b | (1 << SF_FLAGS.indexOf(f)), 0));
+  const toggle = (i: number) => setBits(bits ^ (1 << i));
+  const on = SF_FLAGS.filter((_, i) => (bits & (1 << i)) !== 0);
+  const state = SF_STATES.find(([b]) => b === bits);
+  const problem = sfProblem(bits);
+  const flagsText = on.length === 0 ? "no flags set" : on.join(", ");
+  const summary = state
+    ? `Flags: ${flagsText}. This is a real state, ${state[1]}. Of the 32 combinations five true-or-false flags allow, only ${SF_STATES.length} describe an order that can exist; an enum with those ${SF_STATES.length} values cannot express the other ${32 - SF_STATES.length}.`
+    : `Flags: ${flagsText}. No order can be in this state: ${problem}. The five flags allow it anyway, as they allow ${32 - SF_STATES.length} impossible combinations in all; an enum of the ${SF_STATES.length} real states cannot express it.`;
+  return (
+    <Frame
+      title="Flags against states"
+      summary={summary}
+      controls={
+        <>
+          {SF_FLAGS.map((f, i) => (
+            <button key={f} type="button" className="btn btn-secondary btn-small" aria-pressed={(bits & (1 << i)) !== 0} onClick={() => toggle(i)}>
+              {f}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 214" role="img" aria-label={state ? `A real state: ${state[1]}` : `An impossible combination: ${problem}`}>
+        <text x={8} y={16} className="fig-small" style={{ fontWeight: 600 }}>
+          all 32 combinations of the flags
+        </text>
+        {Array.from({ length: 32 }, (_, i) => {
+          const real = SF_STATES.some(([b]) => b === i);
+          const x = 8 + (i % 8) * 30;
+          const y = 28 + Math.floor(i / 8) * 30;
+          return (
+            <rect
+              key={i}
+              x={x}
+              y={y}
+              width={24}
+              height={24}
+              rx={3}
+              className={real ? "fig-accent" : "fig-ghost"}
+              style={i === bits ? { stroke: "var(--text)", strokeWidth: 3 } : undefined}
+            />
+          );
+        })}
+        <text x={8} y={164} className="fig-small">
+          filled: one of the 8 real states
+        </text>
+        <text x={280} y={16} className="fig-small" style={{ fontWeight: 600 }}>
+          the enum
+        </text>
+        {SF_STATES.map(([b, name], k) => (
+          <text key={name} x={280} y={38 + k * 17} className="fig-small" style={b === bits ? { fill: "var(--text)", fontWeight: 600 } : undefined}>
+            {b === bits ? `▸ ${name}` : `  ${name}`}
+          </text>
+        ))}
+        <text x={8} y={200} className="fig-small" style={{ fill: "var(--text)" }}>
+          {state ? `real: ${state[1]}` : `impossible: ${problem}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const EU_FRAMES: [string, string][] = [
+  ["handle_request", "catches any Exception: logs it, answers 500"],
+  ["place_order", "catches CardDeclined and Timeout: tells the customer"],
+  ["charge_with_retries", "catches Timeout: tries again, at most 3 tries"],
+  ["gateway.charge", "talks to the payment gateway; may raise"],
+];
+const EU_CASES: Record<string, { label: string; raised: string; tries: number; caughtAt: number; outcome: string }> = {
+  declined: { label: "card declined", raised: "CardDeclined", tries: 1, caughtAt: 1, outcome: "Your card was declined. Please try another card." },
+  "timeout-once": { label: "one timeout", raised: "Timeout", tries: 2, caughtAt: 2, outcome: "Order placed. The second try went through, and the customer never knew." },
+  "timeout-thrice": { label: "three timeouts", raised: "Timeout", tries: 3, caughtAt: 1, outcome: "The payment service is not responding. You have not been charged; please try again." },
+  bug: { label: "bug: KeyError", raised: "KeyError", tries: 1, caughtAt: 0, outcome: "Something went wrong. (The KeyError and its traceback go to the log for an engineer.)" },
+};
+
+/** An exception travelling up a call stack until the first frame that handles that kind of error. */
+function ErrorUnwind(props: Props) {
+  const keys = Object.keys(EU_CASES);
+  const [kind, setKind] = useState(typeof props.error === "string" && keys.includes(props.error) ? props.error : "declined");
+  const c = EU_CASES[kind];
+  const recovered = kind === "timeout-once";
+  const unwound = recovered ? [] : [1, 2].filter((i) => i > c.caughtAt);
+  const gaveUp = kind === "timeout-thrice";
+  const summary = gaveUp
+    ? `gateway.charge raises Timeout on all 3 tries. charge_with_retries catches each one and tries again, then gives up after the third and raises the Timeout again. place_order catches it. The customer sees: ${c.outcome}`
+    : recovered
+    ? `gateway.charge raises Timeout on the first try. charge_with_retries catches it and tries again, and the second try succeeds, so nothing above it ever sees an error. The customer sees: ${c.outcome}`
+    : `gateway.charge raises ${c.raised}${c.tries > 1 ? ` on all ${c.tries} tries` : ""}. It travels up through ${[...unwound].reverse().map((i) => EU_FRAMES[i][0]).join(" and then ")}, ${unwound.length === 1 ? "which does not handle it" : "neither of which handles it"}, until ${EU_FRAMES[c.caughtAt][0]} catches it. The customer sees: ${c.outcome}`;
+  return (
+    <Frame
+      title="Where an error is handled"
+      summary={summary}
+      controls={
+        <>
+          {keys.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={kind === k} onClick={() => setKind(k)}>
+              {EU_CASES[k].label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 236" role="img" aria-label={recovered ? "Timeout handled by a retry" : `${c.raised} handled in ${EU_FRAMES[c.caughtAt][0]}`}>
+        {EU_FRAMES.map(([name, note], i) => {
+          const y = 8 + i * 42;
+          const catches = i === c.caughtAt;
+          const passed = unwound.includes(i);
+          const source = i === EU_FRAMES.length - 1;
+          return (
+            <g key={name}>
+              <rect x={8} y={y} width={444} height={34} rx={4} className={catches ? "fig-accent" : passed ? "fig-ghost" : "fig-fill"} style={passed ? { strokeDasharray: "4 4" } : undefined} />
+              <text x={18} y={y + 14} className="fig-small" style={{ fontWeight: 600, fill: catches ? "var(--bg)" : "var(--text)" }}>
+                {passed ? `${name}  (${gaveUp ? "retried, then gave up" : "passed through"})` : source ? `${name}  (raised here)` : name}
+              </text>
+              <text x={18} y={y + 28} className="fig-small" style={catches ? { fill: "var(--bg)" } : undefined}>
+                {note}
+              </text>
+            </g>
+          );
+        })}
+        <text x={8} y={196} className="fig-small" style={{ fill: "var(--text)" }}>
+          {`raised: ${c.raised} in gateway.charge${c.tries > 1 ? `, ${c.tries} tries` : ""}`}
+        </text>
+        <text x={8} y={216} className="fig-small" style={{ fill: "var(--text)" }}>
+          {recovered ? "handled: by the retry; the order goes through" : `handled: in ${EU_FRAMES[c.caughtAt][0]}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** A test of a shop's opening hours, run at different hours, with the clock read inside the function or passed in. */
+function DiClock(props: Props) {
+  const [injected, setInjected] = useState(props.mode === "injected");
+  const [hour, setHour] = useState(clamp(Math.round(num(props.hour, 23)), 0, 23));
+  const open = (h: number) => h >= 9 && h < 21;
+  const passes = (h: number) => injected || open(h);
+  const passing = Array.from({ length: 24 }, (_, h) => h).filter(passes).length;
+  const hh = (h: number) => `${String(h).padStart(2, "0")}:00`;
+  const code = injected
+    ? ["def is_open(clock):", "    return 9 <= clock.now() < 21", "", "test: is_open(FakeClock(10)) is True", "test: is_open(FakeClock(22)) is False"]
+    : ["def is_open():", "    return 9 <= current_hour() < 21", "", "test: is_open() is True"];
+  const summary = injected
+    ? `The clock is passed in. Run at ${hh(hour)}, the test hands is_open a fake clock reading 10:00 and gets True, then one reading 22:00 and gets False: it passes, as it does at every hour of the day, and it now checks closing time too.`
+    : `The clock is read inside is_open. Run at ${hh(hour)}, the test gets ${open(hour) ? "True" : "False"} and ${open(hour) ? "passes" : "fails"}. It passes only when the test happens to run between 09:00 and 21:00, ${passing} of 24 hours, and closing time cannot be tested at all without waiting for it.`;
+  return (
+    <Frame
+      title="A test that depends on the time it runs"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!injected} onClick={() => setInjected(false)}>
+            clock read inside
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={injected} onClick={() => setInjected(true)}>
+            clock passed in
+          </button>
+          <Stepper label="test runs at hour" value={hour} min={0} max={23} onChange={setHour} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 214" role="img" aria-label={`Run at ${hh(hour)}, the test ${passes(hour) ? "passes" : "fails"}; it passes at ${passing} of 24 hours`}>
+        {code.map((line, i) => (
+          <text key={i} x={8 + (line.length - line.trimStart().length) * 6.6} y={18 + i * 16} className="fig-small" style={{ fill: "var(--text)" }}>
+            {line.trimStart()}
+          </text>
+        ))}
+        <text x={8} y={116} className="fig-small">
+          when the test runs: filled = passes
+        </text>
+        {Array.from({ length: 24 }, (_, h) => (
+          <rect
+            key={h}
+            x={8 + h * 18.5}
+            y={124}
+            width={15}
+            height={24}
+            rx={2}
+            className={passes(h) ? "fig-accent" : "fig-ghost"}
+            style={h === hour ? { stroke: "var(--text)", strokeWidth: 3 } : undefined}
+          />
+        ))}
+        {[0, 6, 12, 18, 23].map((h) => (
+          <text key={h} x={8 + h * 18.5 + 7.5} y={164} textAnchor="middle" className="fig-small">
+            {h}
+          </text>
+        ))}
+        <text x={8} y={200} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`run at ${hh(hour)}: ${passes(hour) ? "passes" : "fails"}; passes at ${passing} of 24 hours`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const FS_PLANS: [string, string, string][] = [
+  ["flat", "flat", "₹30 whatever the distance"],
+  ["distance", "by_distance", "₹10 + ₹8 per km"],
+  ["busy", "busy", "by_distance × 1.5, rounded down"],
+  ["free_over_500", "free_over_500", "₹0 from ₹500, else by_distance"],
+];
+
+/** A delivery fee chosen from a table of plans, each plan a function with the same parameters. */
+function FeeStrategy(props: Props) {
+  const keys = FS_PLANS.map(([k]) => k);
+  const [plan, setPlan] = useState(typeof props.plan === "string" && keys.includes(props.plan) ? props.plan : "distance");
+  const [km, setKm] = useState(clamp(Math.round(num(props.km, 4)), 1, 10));
+  const [big, setBig] = useState(props.total === 650);
+  const total = big ? 650 : 300;
+  const feeOf = (p: string, d: number) => {
+    const dist = 10 + 8 * d;
+    if (p === "flat") return 30;
+    if (p === "distance") return dist;
+    if (p === "busy") return Math.floor((dist * 3) / 2);
+    return total >= 500 ? 0 : dist;
+  };
+  const row = FS_PLANS.find(([k]) => k === plan)!;
+  const fee = feeOf(plan, km);
+  const working =
+    plan === "flat"
+      ? "₹30"
+      : plan === "distance"
+        ? `10 + 8 × ${km} = ₹${fee}`
+        : plan === "busy"
+          ? `(10 + 8 × ${km}) × 1.5 = ₹${fee}`
+          : total >= 500
+            ? `₹${total} is at least ₹500, so ₹0`
+            : `₹${total} is under ₹500, so 10 + 8 × ${km} = ₹${fee}`;
+  const summary = `PLANS["${plan}"] is the function ${row[1]}: ${row[2]}. For ${km} km and an order of ₹${total}: ${working}. fee() only looks the plan up and calls it, so adding a plan means writing one function and adding one row to the table; fee() itself never changes.`;
+  const top = 135;
+  return (
+    <Frame
+      title="Choosing behaviour from a table"
+      summary={summary}
+      controls={
+        <>
+          {keys.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={plan === k} onClick={() => setPlan(k)}>
+              {k}
+            </button>
+          ))}
+          <Stepper label="km" value={km} min={1} max={10} onChange={setKm} />
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={big} onClick={() => setBig(!big)}>
+            order of ₹650
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 230" role="img" aria-label={`Plan ${plan}: ₹${fee} for ${km} km`}>
+        <text x={8} y={16} className="fig-small" style={{ fontWeight: 600 }}>
+          PLANS
+        </text>
+        {FS_PLANS.map(([k, fn], i) => (
+          <g key={k}>
+            <rect x={8} y={26 + i * 28} width={214} height={22} rx={3} className={k === plan ? "fig-accent" : "fig-fill"} />
+            <text x={14} y={41 + i * 28} className="fig-small" style={{ fill: k === plan ? "var(--bg)" : "var(--text)" }}>
+              {`"${k}": ${fn}`}
+            </text>
+          </g>
+        ))}
+        <text x={8} y={160} className="fig-small">
+          fee(plan, km, total):
+        </text>
+        <text x={8} y={176} className="fig-small">
+          return PLANS[plan](km, total)
+        </text>
+        <text x={230} y={16} className="fig-small" style={{ fontWeight: 600 }}>
+          {`fee by distance, order ₹${total}`}
+        </text>
+        {Array.from({ length: 10 }, (_, i) => {
+          const d = i + 1;
+          const f = feeOf(plan, d);
+          const h = Math.max(1, (f / top) * 170);
+          return (
+            <g key={d}>
+              <rect x={230 + i * 22} y={200 - h} width={16} height={h} className={d === km ? "fig-accent" : "fig-fill"} />
+              <text x={238 + i * 22} y={216} textAnchor="middle" className="fig-small">
+                {d}
+              </text>
+            </g>
+          );
+        })}
+        <text x={8} y={216} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`${km} km: ₹${fee}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** A refactoring made of many small changes, tested after each change or only once at the end. */
+function RefactorSteps(props: Props) {
+  const [small, setSmall] = useState(props.mode !== "big");
+  const [n, setN] = useState(clamp(Math.round(num(props.changes, 12)), 2, 20));
+  const [slipRaw, setSlip] = useState(clamp(Math.round(num(props.slip, 5)), 0, 20));
+  const slip = Math.min(slipRaw, n);
+  const allRight = Math.round(Math.pow(0.95, n) * 100);
+  const suspects = slip === 0 ? 0 : small ? 1 : n;
+  const runs = small ? (slip === 0 ? n : slip) : 1;
+  const slot = 440 / n;
+  const w = Math.max(6, Math.min(34, slot - 4));
+  const cx = (i: number) => 10 + slot * i + slot / 2;
+  const isSuspect = (i: number) => slip !== 0 && (small ? i + 1 === slip : true);
+  const runState = (i: number): "pass" | "fail" | "skip" | "none" => {
+    if (small) {
+      if (slip === 0 || i + 1 < slip) return "pass";
+      if (i + 1 === slip) return "fail";
+      return "skip";
+    }
+    if (i < n - 1) return "none";
+    return slip === 0 ? "pass" : "fail";
+  };
+  const summary = small
+    ? slip === 0
+      ? `Tests run after each of the ${n} changes, ${n} runs in all, and every run passes: the code was restructured without changing what it does.`
+      : `Tests run after every change. The slip in change ${slip} makes the run straight after it fail, so change ${slip} is the only suspect: undo it and make it again. The work stopped after ${slip} ${slip === 1 ? "run" : "runs"} of a few seconds each.`
+    : slip === 0
+      ? `All ${n} changes are made before the tests run once, and this time they pass. At a 5% chance of a slip per change, that happens only ${allRight}% of the time.`
+      : `All ${n} changes are made before the tests run once. The slip in change ${slip} makes that run fail, and any of the ${n} changes could be the cause. At a 5% chance of a slip per change, all ${n} are right only ${allRight}% of the time.`;
+  return (
+    <Frame
+      title="Small steps or one big change"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={small} onClick={() => setSmall(true)}>
+            test after each change
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!small} onClick={() => setSmall(false)}>
+            test once at the end
+          </button>
+          <Stepper label="changes" value={n} min={2} max={20} onChange={setN} />
+          <Stepper label="slip in change (0 for none)" value={slip} min={0} max={n} onChange={setSlip} />
+        </>
+      }
+    >
+      <svg
+        viewBox="0 0 460 190"
+        role="img"
+        aria-label={`${n} changes, ${small ? "tested after each" : "tested once at the end"}; ${slip === 0 ? "no slip" : `slip in change ${slip}, ${suspects === 1 ? "1 suspect" : `${suspects} suspects`}`}`}
+      >
+        <text x={10} y={16} className="fig-small">
+          changes, in the order they are made (filled = contains the slip)
+        </text>
+        {Array.from({ length: n }, (_, i) => (
+          <rect
+            key={`c${i}`}
+            x={cx(i) - w / 2}
+            y={26}
+            width={w}
+            height={30}
+            rx={3}
+            className={i + 1 === slip ? "fig-accent" : "fig-ghost"}
+            style={isSuspect(i) ? { stroke: "var(--text)", strokeWidth: 3 } : undefined}
+          />
+        ))}
+        {Array.from({ length: n }, (_, i) =>
+          n <= 12 || i === 0 || (i + 1) % 5 === 0 || i + 1 === slip ? (
+            <text key={`l${i}`} x={cx(i)} y={72} textAnchor="middle" className="fig-small">
+              {i + 1}
+            </text>
+          ) : null,
+        )}
+        <text x={10} y={98} className="fig-small">
+          test runs (filled = passes, ring = fails, dash = not run)
+        </text>
+        {Array.from({ length: n }, (_, i) => {
+          const s = runState(i);
+          if (s === "none") return null;
+          if (s === "skip") return <line key={`r${i}`} x1={cx(i) - 5} x2={cx(i) + 5} y1={116} y2={116} className="fig-guide" />;
+          return s === "pass" ? (
+            <circle key={`r${i}`} cx={cx(i)} cy={116} r={6} className="fig-accent" />
+          ) : (
+            <circle key={`r${i}`} cx={cx(i)} cy={116} r={7} className="fig-ghost" style={{ stroke: "var(--text)", strokeWidth: 3 }} />
+          );
+        })}
+        <text x={10} y={152} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`test runs: ${runs}; changes to inspect: ${suspects}`}
+        </text>
+        <text x={10} y={176} className="fig-small">
+          {`chance all ${n} changes are right at 5% per change: ${allRight}%`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** Page 2 of a newest-first feed, asked for by offset or by cursor, after new posts arrive at the top. */
+function PageCursor(props: Props) {
+  const [cursor, setCursor] = useState(props.mode === "cursor");
+  const [arrived, setArrived] = useState(clamp(Math.round(num(props.arrived, 2)), 0, 5));
+  const size = 5;
+  const first = Array.from({ length: size }, (_, i) => 40 - i);
+  const now = [...Array.from({ length: arrived }, (_, i) => 40 + arrived - i), ...Array.from({ length: 40 }, (_, i) => 40 - i)];
+  const last = first[size - 1];
+  const second = cursor ? now.filter((id) => id < last).slice(0, size) : now.slice(size, 2 * size);
+  const repeats = second.filter((id) => first.includes(id));
+  const ask = cursor ? `5 posts older than post ${last}` : "skip 5 posts, take 5";
+  const box = (id: number, i: number, y: number, seen: boolean) => (
+    <g key={`${y}-${i}`}>
+      <rect x={10 + i * 88} y={y} width={80} height={30} rx={3} className={seen ? "fig-accent" : "fig-ghost"} />
+      <text x={50 + i * 88} y={y + 20} textAnchor="middle" className="fig-small" style={{ fill: seen ? "var(--bg)" : "var(--text)", fontWeight: seen ? 600 : 400 }}>
+        {seen ? `${id} (again)` : `post ${id}`}
+      </text>
+    </g>
+  );
+  const arrivedText = arrived === 0 ? "no new posts arrive" : `${arrived} new ${arrived === 1 ? "post arrives" : "posts arrive"} at the top (${Array.from({ length: arrived }, (_, i) => 41 + i).join(", ")})`;
+  const summary = cursor
+    ? `Page 2 asks for the ${ask}. ${arrived ? "New posts at the top do not move that point, so page" : "Page"} 2 is post ${second[0]} to post ${second[size - 1]} with no repeats${arrived ? "; the new posts appear when the feed is refreshed" : ""}.`
+    : arrived === 0
+      ? `Page 2 asks to skip 5 posts and take 5. Nothing arrived, so it is post ${second[0]} to post ${second[size - 1]}, exactly the next five.`
+      : `Page 2 asks to skip 5 posts and take 5. ${arrived === 1 ? "The new post" : `The ${arrived} new posts`} pushed everything down by ${arrived}, so the first ${arrived === 1 ? "post" : `${arrived} posts`} of page 2 ${arrived === 1 ? "is" : "are"} ${arrived === 1 ? "one" : "ones"} the reader already saw on page 1.`;
+  return (
+    <Frame
+      title="Offset or cursor: fetching page 2 of a feed"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!cursor} onClick={() => setCursor(false)}>
+            by offset
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={cursor} onClick={() => setCursor(true)}>
+            by cursor
+          </button>
+          <Stepper label="new posts before page 2" value={arrived} min={0} max={5} onChange={setArrived} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 196" role="img" aria-label={`Page 2 by ${cursor ? "cursor" : "offset"} after ${arrived} new posts: ${repeats.length} repeated from page 1`}>
+        <text x={10} y={16} className="fig-small">
+          page 1, newest first
+        </text>
+        {first.map((id, i) => box(id, i, 24, false))}
+        <text x={10} y={76} className="fig-small">
+          {`then ${arrivedText}`}
+        </text>
+        <text x={10} y={100} className="fig-small">
+          {`page 2: ${ask}`}
+        </text>
+        {second.map((id, i) => box(id, i, 108, repeats.includes(id)))}
+        <text x={10} y={170} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`posts on page 2 already seen on page 1: ${repeats.length}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const DM_CRITERIA: [string, string][] = [
+  ["cost", "cost"],
+  ["effort", "build effort"],
+  ["scale", "scaling"],
+];
+const DM_OPTIONS: [string, number[]][] = [
+  ["one database server", [4, 5, 1]],
+  ["object storage", [3, 4, 5]],
+  ["own file servers", [4, 1, 4]],
+];
+
+/** A weighted decision matrix for where a festival app keeps its photos, with a check of how easily the winner changes. */
+function DecisionMatrix(props: Props) {
+  const start = (key: string, fallback: number) => clamp(Math.round(num(props[key], fallback)), 0, 5);
+  const [weights, setWeights] = useState([start("cost", 3), start("effort", 2), start("scale", 5)]);
+  const totalsFor = (w: number[]) => DM_OPTIONS.map(([, s]) => s.reduce((acc, v, i) => acc + v * w[i], 0));
+  const winnerOf = (w: number[]) => {
+    const t = totalsFor(w);
+    const best = Math.max(...t);
+    const top = t.flatMap((v, i) => (v === best ? [i] : []));
+    return top.length === 1 ? top[0] : -1;
+  };
+  const totals = totalsFor(weights);
+  const winner = winnerOf(weights);
+  let flip: { c: number; to: number } | null = null;
+  for (let d = 1; d <= 5 && !flip; d++) {
+    for (let c = 0; c < 3 && !flip; c++) {
+      for (const to of [weights[c] - d, weights[c] + d]) {
+        if (flip || to < 0 || to > 5) continue;
+        const w = weights.map((v, i) => (i === c ? to : v));
+        const next = winnerOf(w);
+        if (next !== -1 && next !== winner) flip = { c, to };
+      }
+    }
+  }
+  const order = DM_OPTIONS.map((_, i) => i).sort((a, b) => totals[b] - totals[a]);
+  const tied = order.filter((i) => totals[i] === totals[order[0]]).map((i) => DM_OPTIONS[i][0]);
+  const lead =
+    winner === -1
+      ? `With these weights, ${tied.slice(0, -1).join(", ")} and ${tied[tied.length - 1]} tie at ${totals[order[0]]}.`
+      : `With these weights, ${DM_OPTIONS[winner][0]} wins with ${totals[winner]}, ahead of ${DM_OPTIONS[order[1]][0]} at ${totals[order[1]]} and ${DM_OPTIONS[order[2]][0]} at ${totals[order[2]]}.`;
+  const sens = flip
+    ? winner === -1
+      ? ` Changing the weight of ${DM_CRITERIA[flip.c][1]} from ${weights[flip.c]} to ${flip.to} would break the tie.`
+      : ` The winner changes if the weight of ${DM_CRITERIA[flip.c][1]} goes from ${weights[flip.c]} to ${flip.to}, so the decision rests on that weight.`
+    : " No change to a single weight would change the result.";
+  const colX = [196, 246, 296];
+  const barScale = 90 / 75;
+  return (
+    <Frame
+      title="A weighted decision matrix"
+      summary={lead + sens}
+      controls={
+        <>
+          {DM_CRITERIA.map(([, label], c) => (
+            <Stepper key={label} label={`weight of ${label}`} value={weights[c]} min={0} max={5} onChange={(v) => setWeights(weights.map((x, i) => (i === c ? v : x)))} />
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 184" role="img" aria-label={winner === -1 ? "The options tie" : `${DM_OPTIONS[winner][0]} scores highest, ${totals[winner]}`}>
+        <text x={8} y={34} className="fig-small">
+          option
+        </text>
+        <text x={8} y={176} className="fig-small">
+          each score runs from 1 to 5, and higher is better
+        </text>
+        {DM_CRITERIA.map(([key], c) => (
+          <text key={key} x={colX[c]} y={16} textAnchor="middle" className="fig-small">
+            {key}
+          </text>
+        ))}
+        {DM_CRITERIA.map(([key], c) => (
+          <text key={`w${key}`} x={colX[c]} y={34} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+            {`× ${weights[c]}`}
+          </text>
+        ))}
+        <text x={340} y={16} className="fig-small">
+          weighted total
+        </text>
+        <line x1={8} x2={452} y1={44} y2={44} className="fig-grid" />
+        {DM_OPTIONS.map(([name, s], r) => {
+          const y = 70 + r * 36;
+          const win = r === winner;
+          return (
+            <g key={name}>
+              <text x={8} y={y} className="fig-small" style={{ fill: "var(--text)", fontWeight: win ? 600 : 400 }}>
+                {name}
+              </text>
+              {s.map((v, c) => (
+                <text key={c} x={colX[c]} y={y} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+                  {v}
+                </text>
+              ))}
+              <rect x={340} y={y - 13} width={Math.max(1, totals[r] * barScale)} height={18} rx={2} className={win ? "fig-accent" : "fig-ghost"} />
+              <text x={344 + totals[r] * barScale} y={y} className="fig-small" style={{ fill: "var(--text)", fontWeight: win ? 600 : 400 }}>
+                {totals[r]}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -8576,6 +9332,15 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "doc-embed": DocEmbed,
   "graph-hops": GraphHops,
   "schema-versions": SchemaVersions,
+  "interface-swap": InterfaceSwap,
+  "change-ripple": ChangeRipple,
+  "state-flags": StateFlags,
+  "error-unwind": ErrorUnwind,
+  "di-clock": DiClock,
+  "fee-strategy": FeeStrategy,
+  "refactor-steps": RefactorSteps,
+  "page-cursor": PageCursor,
+  "decision-matrix": DecisionMatrix,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

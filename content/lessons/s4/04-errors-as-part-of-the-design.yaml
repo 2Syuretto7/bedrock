@@ -1,0 +1,867 @@
+concept: s4.errors-as-part-of-the-design
+minutes: 80
+claim: You can sort a failure into a bug, an expected outcome or a transient fault and handle each differently, make the errors a function raises part of its interface with a small hierarchy of exception types, translate low-level errors into ones that mean something at the boundary, catch an error only where something useful can be done, retry only what is transient and safe to repeat, and estimate how failures compound along a chain of calls.
+recalls: [s4.designing-with-types-and-invariants]
+uses: [s1.exceptions, s4.abstraction-and-interfaces, f4.independence, s1.classes-and-objects]
+leads: [s4.dependency-injection-and-testable-code, s4.designing-apis, d2.idempotency-and-retries, r4.timeouts-retries-and-backoff]
+starter: |
+  # Scratch space. A small hierarchy of errors, and a handler that treats them differently.
+  class BookingError(Exception):
+      pass
+
+
+  class SlotTaken(BookingError):
+      pass
+
+
+  def book(time):
+      if time == 1000:
+          raise SlotTaken(str(time))
+      return f"booked {time}"
+
+
+  for time in [900, 1000]:
+      try:
+          print(book(time))
+      except SlotTaken as error:
+          print("taken:", error)
+parts:
+  recall:
+    - text: |
+        [[s4.designing-with-types-and-invariants]] refused bad values at the boundary: `parse_rupees` raised `ValueError`, and `advance` refused an illegal move. Refusing is only half of the design. Someone has to decide what the refusal means, who hears about it and what happens next, and the same goes for every card that is declined, every slot already taken and every network call that never answers. Three quick pulls first.
+  puzzle:
+    - text: |
+        A checkout calls six services one after another: stock, prices, coupons, payment, invoicing and notifications. Each succeeds 99% of the time, independently of the others, and a failure anywhere fails the checkout.
+
+        **Out of 10,000 checkouts, about how many fail?**
+  intuition:
+    - text: |
+        Think of the ways a cash withdrawal at an ATM can go wrong. Type the wrong PIN and the machine tells you, and lets you try again. Ask for more than your balance and it says so plainly; nothing is broken, that is simply the answer. If the link to the bank drops, the machine quietly tries again, and if it still cannot get through, it says "Unable to process. Your account has not been debited." And if the cash dispenser jams, the screen goes to "Temporarily out of service" while an alert reaches an engineer, because no customer can fix that.
+
+        Four failures, four different designs, each decided in advance by someone who asked: what kind of failure is this, and who can do something about it? The figure follows an error raised deep inside a checkout as it travels up the chain of calls until some function handles it.
+    - figure: error-unwind
+      props: { error: declined }
+    - text: |
+        A declined card passes straight through the retry layer, which has no business retrying it, and is caught by `place_order`, which can tell the customer what to do. A single timeout never gets that far: the retry absorbs it. Three timeouts in a row exhaust the retries, and the customer is told plainly that nothing was charged. A bug passes every layer, because none of them can fix it, and lands in the top-level handler, which logs it for an engineer and shows a polite generic message.
+  derivation:
+    - text: |
+        **Three kinds of failure.** Most failures fall into one of three kinds, and each wants a different design.
+
+        - **Bugs**: a `KeyError` from a misspelt key, `None` where a value was expected, an index off by one. The program itself is wrong. Do not catch these near where they happen; let them travel to a top-level handler that records the full traceback, and then fix the code.
+        - **Expected outcomes**: a declined card, a slot already taken, input that does not parse. Nothing is broken; this is one of the answers the operation can give. Give each its own exception type, or a result value, and let the caller choose what to do.
+        - **Transient faults**: a timeout, a dropped connection, a service briefly overloaded. Trying again a little later may well succeed, so retry a few times, then report.
+    - question:
+        id: derivation-kinds
+        type: choice
+        system: s2
+        prompt: |
+          A delivery app calls a maps service to estimate travel time. Which failure should be retried automatically?
+        options:
+          - "The maps service did not answer within two seconds."
+          - "The address the customer typed does not exist."
+          - "The code passed latitude and longitude in the wrong order."
+          - "The customer's location is outside the delivery area."
+        answer: 0
+        explanation: |
+          Only the timeout is transient; another try may succeed. A nonexistent address and an out-of-area location are expected outcomes the customer must hear about, and swapped coordinates are a bug that retrying will repeat forever.
+    - text: |
+        **Errors are part of the interface.** Which errors a function can raise, and what each means, belong to its promise, just like its result, as in [[s4.abstraction-and-interfaces]]. In Python, from [[s1.exceptions]], define a small hierarchy for a module: `BookingError(Exception)`, with `SlotTaken(BookingError)` and `ClinicClosed(BookingError)` beneath it. A caller who cares about one case catches that subclass; a caller who only needs to know that booking failed catches the base class.
+
+        **Translate at the boundary.** Inside a module, a missing menu item shows up as a `KeyError` from a dictionary. Outside, that word means nothing, and worse, it looks exactly like a bug. Catch the low-level error where it happens and raise the module's own: `raise UnknownItem(item) from None`, or `from error` to keep the original attached for debugging. What must never happen is `except Exception: return 0`. Catching everything and returning a harmless-looking value turns every bug in that block into a silently wrong answer: a bill that is ₹60 short, with no trace of why.
+    - question:
+        id: order-handlers
+        type: order
+        system: s2
+        prompt: |
+          A request handler catches `SlotTaken`, its base class `BookingError` and any other `Exception`. Python tries `except` clauses from top to bottom. Put the clauses in the order that lets each one be reached.
+        steps:
+          - "except SlotTaken"
+          - "except BookingError"
+          - "except Exception"
+        explanation: |
+          The first matching clause wins, and a subclass matches its base class's clause. Putting `BookingError` first would catch every `SlotTaken` and the specific clause would never run.
+    - text: |
+        **Handle where you can act.** Catch an error only where something useful can be done with it: try again, choose another path, or tell a person. Everywhere else, let it travel. When an exception is raised, Python abandons the current function and each caller in turn until it finds a matching `except`; this is called **unwinding** the stack. One handler at the very top of each request catches whatever is left, logs it with its traceback and an id, and shows the user a short message. The user should never see a traceback; the engineer should never be without one.
+
+        **Retries.** Retry only transient faults, a fixed number of times, waiting longer between tries, an approach called exponential backoff, so that thousands of clients do not hammer a struggling service in step. And retry only what is safe to repeat. Asking for a price twice is harmless; charging a card twice is not, unless the payment service recognises the second request as a repeat of the first, which is the idea of an idempotency key in [[s4.designing-apis]]. If each try fails independently with probability $p$, as in [[f4.independence]], then $n$ tries all fail with probability $p^n$: three tries turn a 1% failure into one in a million.
+    - question:
+        id: derivation-retries
+        type: numeric
+        system: s2
+        prompt: |
+          A call fails 1% of the time, independently on each try. With up to 3 tries, how many of 10,00,000 calls fail every try?
+        answer: "1"
+        explanation: |
+          $0.01^3 = 0.000001$, and $10{,}00{,}000 \times 0.000001 = 1$.
+    - text: |
+        **Failures compound.** A request that needs several steps to succeed succeeds only if all of them do. With independent steps each succeeding with probability $q$, a chain of $n$ steps succeeds with probability $q^n$, which shrinks faster than intuition expects: ten steps at 99.9% each still fail about one request in a hundred. This is why reliable systems retry transient faults at each step, and why removing a step can matter more than polishing one.
+
+        **Messages are part of the design too.** A good message says what happened, why if it is known, and what to do next: "That slot was just taken. Please choose another." A message for the log says more: which request, which user, which ids, and the traceback. Keep the two apart. Raw error text and tracebacks shown to users confuse them and can reveal details about the system that attackers find useful.
+  formal:
+    - text: |
+        **Kinds of failure.** Bugs: let them reach a top-level handler that logs them, then fix the code. Expected outcomes: specific exception types or result values for the caller to handle. Transient faults: bounded retries with backoff, then report.
+
+        **Exception hierarchy.** A base class per module, `class BookingError(Exception)`, with a subclass per case. `except` clauses are tried in order, so specific ones come first.
+
+        **Translation.** Catch low-level errors at a module boundary and raise the module's own, with `raise New(...) from error` or `from None`. Never catch everything and return a default.
+
+        **Unwinding.** An exception leaves each function in turn until a matching `except` is found.
+
+        **Retries.** Only for transient faults on operations safe to repeat; $n$ independent tries that each fail with probability $p$ all fail with probability $p^n$.
+
+        **Compounding.** $n$ independent steps each succeeding with probability $q$ all succeed with probability $q^n$.
+  drill:
+    - text: Seconds each. For every failure, ask what kind it is and who can act on it.
+    - question:
+        id: drill-kind-bug
+        type: choice
+        system: s1
+        prompt: |
+          `order["custmer"]` raises `KeyError`. What kind of failure is it?
+        options:
+          - "A bug"
+          - "An expected outcome"
+          - "A transient fault"
+          - "Not a failure"
+        answer: 0
+        explanation: The key is misspelt; no retry or message to the user will fix the code.
+    - question:
+        id: drill-swallow
+        type: choice
+        system: s1
+        prompt: |
+          What is wrong with `except Exception: return 0` around a price lookup?
+        options:
+          - "Every bug inside becomes a silently wrong price."
+          - "It is slower than a specific except."
+          - "Python does not allow catching Exception."
+          - "Nothing; returning 0 is a safe default."
+        answer: 0
+        explanation: Catching everything hides misspellings and other bugs behind a plausible answer.
+    - question:
+        id: drill-chain
+        type: numeric
+        system: s1
+        prompt: |
+          Two independent steps each succeed 90% of the time. In what percentage of requests do both succeed?
+        answer: "81"
+        explanation: $0.9 \times 0.9 = 0.81$.
+    - question:
+        id: drill-tries
+        type: numeric
+        system: s1
+        prompt: |
+          A call fails 10% of the time, independently on each try. With up to 2 tries, in what percentage of calls do both tries fail?
+        answer: "1"
+        explanation: $0.1 \times 0.1 = 0.01$.
+    - question:
+        id: predict-order
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          class BookingError(Exception):
+              pass
+
+
+          class SlotTaken(BookingError):
+              pass
+
+
+          try:
+              raise SlotTaken("1000")
+          except BookingError:
+              print("booking error")
+          except SlotTaken:
+              print("slot taken")
+        output: "booking error"
+        explanation: The first clause matches, because a `SlotTaken` is a `BookingError`; the second clause can never run.
+    - question:
+        id: predict-unwind
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          steps = []
+
+
+          def inner():
+              steps.append("inner")
+              raise ValueError("bad")
+
+
+          def middle():
+              inner()
+              steps.append("middle")
+
+
+          try:
+              middle()
+          except ValueError:
+              steps.append("caught")
+          print(steps)
+        output: "['inner', 'caught']"
+        explanation: The exception leaves `inner` and then `middle` before its next line runs, and is caught at the top.
+  work:
+    - text: Slower now. Each problem is about one kind of failure and where it belongs.
+    - question:
+        id: fix-swallowed
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          An order with an item not on the menu should be refused with `UnknownItem` naming that item, never billed short. The program should print `[10000, 'unknown: pongal', 3500]`. It prints `[10000, 6000, 3500]`. Find the fault and fix it.
+        starter: |
+          MENU = {"dosa": 6000, "idli": 4000, "vada": 3500}  # prices in paise
+
+
+          class UnknownItem(Exception):
+              pass
+
+
+          def price(item):
+              try:
+                  return MENU[item]
+              except Exception:
+                  return 0
+
+
+          def bill(items):
+              return sum(price(item) for item in items)
+
+
+          results = []
+          for order in [["dosa", "idli"], ["dosa", "pongal"], ["vada"]]:
+              try:
+                  results.append(bill(order))
+              except UnknownItem as error:
+                  results.append(f"unknown: {error}")
+          print(results)
+        solution: |
+          MENU = {"dosa": 6000, "idli": 4000, "vada": 3500}  # prices in paise
+
+
+          class UnknownItem(Exception):
+              pass
+
+
+          def price(item):
+              try:
+                  return MENU[item]
+              except KeyError:
+                  raise UnknownItem(item) from None
+
+
+          def bill(items):
+              return sum(price(item) for item in items)
+
+
+          results = []
+          for order in [["dosa", "idli"], ["dosa", "pongal"], ["vada"]]:
+              try:
+                  results.append(bill(order))
+              except UnknownItem as error:
+                  results.append(f"unknown: {error}")
+          print(results)
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(121)
+          for _ in range(40):
+              _order = [_rng.choice(["dosa", "idli", "vada", "dosa", "idli", "pongal", "upma"]) for _k in range(_rng.randint(1, 4))]
+              _bad = [_i for _i in _order if _i not in MENU]
+              try:
+                  _got = bill(_order)
+              except UnknownItem as _e:
+                  assert _bad, "bill(" + str(_order) + ") should return " + str(sum(MENU[_i] for _i in _order)) + ", not raise UnknownItem"
+                  assert str(_e) == _bad[0], "bill(" + str(_order) + ") should raise UnknownItem naming " + repr(_bad[0]) + ", not " + repr(str(_e))
+                  continue
+              except Exception as _e:
+                  assert False, "bill(" + str(_order) + ") should raise UnknownItem for " + repr(_bad[0] if _bad else "") + ", not " + type(_e).__name__
+              assert not _bad, "bill(" + str(_order) + ") should raise UnknownItem for " + repr(_bad[0]) + ", not return " + repr(_got)
+              assert _got == sum(MENU[_i] for _i in _order), "bill(" + str(_order) + ") should be " + str(sum(MENU[_i] for _i in _order)) + ", not " + repr(_got)
+          assert output.strip() == "[10000, 'unknown: pongal', 3500]", "The program should print [10000, 'unknown: pongal', 3500]"
+        wrong:
+          - |
+            MENU = {"dosa": 6000, "idli": 4000, "vada": 3500}  # prices in paise
+
+
+            class UnknownItem(Exception):
+                pass
+
+
+            def price(item):
+                try:
+                    return MENU[item]
+                except KeyError:
+                    raise UnknownItem from None
+
+
+            def bill(items):
+                return sum(price(item) for item in items)
+
+
+            results = []
+            for order in [["dosa", "idli"], ["dosa", "pongal"], ["vada"]]:
+                try:
+                    results.append(bill(order))
+                except UnknownItem as error:
+                    results.append(f"unknown: {error}")
+            print(results)
+          - |
+            MENU = {"dosa": 6000, "idli": 4000, "vada": 3500}  # prices in paise
+
+
+            class UnknownItem(Exception):
+                pass
+
+
+            def price(item):
+                try:
+                    return MENU[item]
+                except UnknownItem:
+                    return 0
+
+
+            def bill(items):
+                return sum(price(item) for item in items)
+
+
+            results = []
+            for order in [["dosa", "idli"], ["dosa", "pongal"], ["vada"]]:
+                try:
+                    results.append(bill(order))
+                except UnknownItem as error:
+                    results.append(f"unknown: {error}")
+            print(results)
+          - |
+            MENU = {"dosa": 6000, "idli": 4000, "vada": 3500}  # prices in paise
+
+
+            class UnknownItem(Exception):
+                pass
+
+
+            def price(item):
+                try:
+                    return MENU[item]
+                except Exception:
+                    return None
+
+
+            def bill(items):
+                return sum(price(item) for item in items)
+
+
+            results = []
+            for order in [["dosa", "idli"], ["dosa", "pongal"], ["vada"]]:
+                try:
+                    results.append(bill(order))
+                except UnknownItem as error:
+                    results.append(f"unknown: {error}")
+            print(results)
+        explanation: |
+          `price` caught every exception and returned 0, so a missing item was billed as free. Catching only the `KeyError` and raising `UnknownItem(item)` translates it into the module's own error, naming the item. Raising the class without the item loses the name; catching `UnknownItem`, which a dictionary never raises, lets the raw `KeyError` escape; and returning `None` only moves the crash into the sum.
+    - question:
+        id: write-retries
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `with_retries` so that it calls `call` up to `attempts` times in all, returning the first success, trying again only after a `Timeout`, raising the last `Timeout` when every try times out, and letting any other exception, such as `CardDeclined`, through at once. The program should print `[('charged', 1), ('charged', 2), ('Timeout', 3), ('CardDeclined', 1)]`.
+        starter: |
+          class Timeout(Exception):
+              pass
+
+
+          class CardDeclined(Exception):
+              pass
+
+
+          class FakeGateway:
+              # Plays back a script of outcomes: "ok", "timeout" or "declined".
+
+              def __init__(self, script):
+                  self.script = list(script)
+                  self.calls = 0
+
+              def charge(self):
+                  outcome = self.script[self.calls]
+                  self.calls += 1
+                  if outcome == "timeout":
+                      raise Timeout()
+                  if outcome == "declined":
+                      raise CardDeclined()
+                  return "charged"
+
+
+          def with_retries(call, attempts):
+              return call()
+
+
+          report = []
+          for script in [["ok"], ["timeout", "ok"], ["timeout", "timeout", "timeout", "ok"], ["declined", "ok"]]:
+              gateway = FakeGateway(script)
+              try:
+                  report.append((with_retries(gateway.charge, 3), gateway.calls))
+              except (Timeout, CardDeclined) as error:
+                  report.append((type(error).__name__, gateway.calls))
+          print(report)
+        solution: |
+          class Timeout(Exception):
+              pass
+
+
+          class CardDeclined(Exception):
+              pass
+
+
+          class FakeGateway:
+              # Plays back a script of outcomes: "ok", "timeout" or "declined".
+
+              def __init__(self, script):
+                  self.script = list(script)
+                  self.calls = 0
+
+              def charge(self):
+                  outcome = self.script[self.calls]
+                  self.calls += 1
+                  if outcome == "timeout":
+                      raise Timeout()
+                  if outcome == "declined":
+                      raise CardDeclined()
+                  return "charged"
+
+
+          def with_retries(call, attempts):
+              for attempt in range(attempts):
+                  try:
+                      return call()
+                  except Timeout:
+                      if attempt == attempts - 1:
+                          raise
+
+
+          report = []
+          for script in [["ok"], ["timeout", "ok"], ["timeout", "timeout", "timeout", "ok"], ["declined", "ok"]]:
+              gateway = FakeGateway(script)
+              try:
+                  report.append((with_retries(gateway.charge, 3), gateway.calls))
+              except (Timeout, CardDeclined) as error:
+                  report.append((type(error).__name__, gateway.calls))
+          print(report)
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(122)
+          for _ in range(60):
+              _n = _rng.randint(1, 4)
+              _script = [_rng.choice(["timeout", "timeout", "declined", "ok"]) for _k in range(6)]
+              _calls, _want = 0, None
+              for _k in range(_n):
+                  _calls += 1
+                  if _script[_k] == "ok":
+                      _want = ("charged", _calls)
+                      break
+                  if _script[_k] == "declined":
+                      _want = ("CardDeclined", _calls)
+                      break
+              if _want is None:
+                  _want = ("Timeout", _calls)
+              _g = FakeGateway(_script)
+              try:
+                  _got = (with_retries(_g.charge, _n), _g.calls)
+              except (Timeout, CardDeclined) as _e:
+                  _got = (type(_e).__name__, _g.calls)
+              assert _got == _want, "With the script " + str(_script) + " and " + str(_n) + " attempts, the result and number of calls should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('charged', 1), ('charged', 2), ('Timeout', 3), ('CardDeclined', 1)]", "The program should print [('charged', 1), ('charged', 2), ('Timeout', 3), ('CardDeclined', 1)]"
+        wrong:
+          - |
+            class Timeout(Exception):
+                pass
+
+
+            class CardDeclined(Exception):
+                pass
+
+
+            class FakeGateway:
+                # Plays back a script of outcomes: "ok", "timeout" or "declined".
+
+                def __init__(self, script):
+                    self.script = list(script)
+                    self.calls = 0
+
+                def charge(self):
+                    outcome = self.script[self.calls]
+                    self.calls += 1
+                    if outcome == "timeout":
+                        raise Timeout()
+                    if outcome == "declined":
+                        raise CardDeclined()
+                    return "charged"
+
+
+            def with_retries(call, attempts):
+                for attempt in range(attempts):
+                    try:
+                        return call()
+                    except Exception:
+                        if attempt == attempts - 1:
+                            raise
+
+
+            report = []
+            for script in [["ok"], ["timeout", "ok"], ["timeout", "timeout", "timeout", "ok"], ["declined", "ok"]]:
+                gateway = FakeGateway(script)
+                try:
+                    report.append((with_retries(gateway.charge, 3), gateway.calls))
+                except (Timeout, CardDeclined) as error:
+                    report.append((type(error).__name__, gateway.calls))
+            print(report)
+          - |
+            class Timeout(Exception):
+                pass
+
+
+            class CardDeclined(Exception):
+                pass
+
+
+            class FakeGateway:
+                # Plays back a script of outcomes: "ok", "timeout" or "declined".
+
+                def __init__(self, script):
+                    self.script = list(script)
+                    self.calls = 0
+
+                def charge(self):
+                    outcome = self.script[self.calls]
+                    self.calls += 1
+                    if outcome == "timeout":
+                        raise Timeout()
+                    if outcome == "declined":
+                        raise CardDeclined()
+                    return "charged"
+
+
+            def with_retries(call, attempts):
+                for attempt in range(attempts + 1):
+                    try:
+                        return call()
+                    except Timeout:
+                        if attempt == attempts:
+                            raise
+
+
+            report = []
+            for script in [["ok"], ["timeout", "ok"], ["timeout", "timeout", "timeout", "ok"], ["declined", "ok"]]:
+                gateway = FakeGateway(script)
+                try:
+                    report.append((with_retries(gateway.charge, 3), gateway.calls))
+                except (Timeout, CardDeclined) as error:
+                    report.append((type(error).__name__, gateway.calls))
+            print(report)
+          - |
+            class Timeout(Exception):
+                pass
+
+
+            class CardDeclined(Exception):
+                pass
+
+
+            class FakeGateway:
+                # Plays back a script of outcomes: "ok", "timeout" or "declined".
+
+                def __init__(self, script):
+                    self.script = list(script)
+                    self.calls = 0
+
+                def charge(self):
+                    outcome = self.script[self.calls]
+                    self.calls += 1
+                    if outcome == "timeout":
+                        raise Timeout()
+                    if outcome == "declined":
+                        raise CardDeclined()
+                    return "charged"
+
+
+            def with_retries(call, attempts):
+                for attempt in range(attempts):
+                    try:
+                        return call()
+                    except Timeout:
+                        pass
+                return None
+
+
+            report = []
+            for script in [["ok"], ["timeout", "ok"], ["timeout", "timeout", "timeout", "ok"], ["declined", "ok"]]:
+                gateway = FakeGateway(script)
+                try:
+                    report.append((with_retries(gateway.charge, 3), gateway.calls))
+                except (Timeout, CardDeclined) as error:
+                    report.append((type(error).__name__, gateway.calls))
+            print(report)
+        explanation: |
+          Only a timeout is worth another try, and after the last one the error must reach the caller. Retrying every exception charges a declined card a second time; looping `attempts + 1` times makes one try too many; and returning `None` after the last timeout tells the caller nothing went wrong.
+    - question:
+        id: write-handle
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `handle` so that it returns `(200, result)` when booking succeeds, `(409, "that slot was just taken; please choose another")` for `SlotTaken`, `(422, "cannot book: " + message)` for any other `BookingError`, and `(500, "something went wrong")` for any other exception, appending `repr` of that exception to `log`. The program should print `[(200, 'booked monday 900'), (409, 'that slot was just taken; please choose another'), (422, 'cannot book: the clinic is closed on sunday'), (500, 'something went wrong')] 1`.
+        starter: |
+          class BookingError(Exception):
+              pass
+
+
+          class SlotTaken(BookingError):
+              pass
+
+
+          class ClinicClosed(BookingError):
+              pass
+
+
+          TAKEN = {1000, 1130}
+          log = []
+
+
+          def book(day, time):
+              if day == "sunday":
+                  raise ClinicClosed("the clinic is closed on " + day)
+              if time in TAKEN:
+                  raise SlotTaken(str(time))
+              if time % 100 >= 60:
+                  raise ValueError("not a time: " + str(time))
+              TAKEN.add(time)
+              return f"booked {day} {time}"
+
+
+          def handle(day, time):
+              return (200, book(day, time))
+
+
+          print([handle(day, time) for day, time in [("monday", 900), ("monday", 1000), ("sunday", 900), ("monday", 975)]], len(log))
+        solution: |
+          class BookingError(Exception):
+              pass
+
+
+          class SlotTaken(BookingError):
+              pass
+
+
+          class ClinicClosed(BookingError):
+              pass
+
+
+          TAKEN = {1000, 1130}
+          log = []
+
+
+          def book(day, time):
+              if day == "sunday":
+                  raise ClinicClosed("the clinic is closed on " + day)
+              if time in TAKEN:
+                  raise SlotTaken(str(time))
+              if time % 100 >= 60:
+                  raise ValueError("not a time: " + str(time))
+              TAKEN.add(time)
+              return f"booked {day} {time}"
+
+
+          def handle(day, time):
+              try:
+                  return (200, book(day, time))
+              except SlotTaken:
+                  return (409, "that slot was just taken; please choose another")
+              except BookingError as error:
+                  return (422, "cannot book: " + str(error))
+              except Exception as error:
+                  log.append(repr(error))
+                  return (500, "something went wrong")
+
+
+          print([handle(day, time) for day, time in [("monday", 900), ("monday", 1000), ("sunday", 900), ("monday", 975)]], len(log))
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(123)
+          for _ in range(60):
+              TAKEN.clear()
+              TAKEN.update({1000, 1130})
+              log.clear()
+              _day = _rng.choice(["monday", "tuesday", "sunday"])
+              _time = _rng.choice([900, 1000, 1130, 1200, 975, 1260, 1430])
+              if _day == "sunday":
+                  _want = (422, "cannot book: the clinic is closed on sunday")
+              elif _time in (1000, 1130):
+                  _want = (409, "that slot was just taken; please choose another")
+              elif _time % 100 >= 60:
+                  _want = (500, "something went wrong")
+              else:
+                  _want = (200, f"booked {_day} {_time}")
+              _got = handle(_day, _time)
+              assert _got == _want, "handle(" + repr(_day) + ", " + str(_time) + ") should return " + str(_want) + ", not " + str(_got)
+              if _want[0] == 500:
+                  assert log == [repr(ValueError("not a time: " + str(_time)))], "An unexpected error should be logged once, as " + repr(ValueError("not a time: " + str(_time))) + ", but the log is " + str(log)
+              else:
+                  assert log == [], "Only unexpected errors should be logged, but the log is " + str(log)
+          assert output.strip() == "[(200, 'booked monday 900'), (409, 'that slot was just taken; please choose another'), (422, 'cannot book: the clinic is closed on sunday'), (500, 'something went wrong')] 1", "The program should print [(200, 'booked monday 900'), (409, 'that slot was just taken; please choose another'), (422, 'cannot book: the clinic is closed on sunday'), (500, 'something went wrong')] 1"
+        wrong:
+          - |
+            class BookingError(Exception):
+                pass
+
+
+            class SlotTaken(BookingError):
+                pass
+
+
+            class ClinicClosed(BookingError):
+                pass
+
+
+            TAKEN = {1000, 1130}
+            log = []
+
+
+            def book(day, time):
+                if day == "sunday":
+                    raise ClinicClosed("the clinic is closed on " + day)
+                if time in TAKEN:
+                    raise SlotTaken(str(time))
+                if time % 100 >= 60:
+                    raise ValueError("not a time: " + str(time))
+                TAKEN.add(time)
+                return f"booked {day} {time}"
+
+
+            def handle(day, time):
+                try:
+                    return (200, book(day, time))
+                except BookingError as error:
+                    return (422, "cannot book: " + str(error))
+                except SlotTaken:
+                    return (409, "that slot was just taken; please choose another")
+                except Exception as error:
+                    log.append(repr(error))
+                    return (500, "something went wrong")
+
+
+            print([handle(day, time) for day, time in [("monday", 900), ("monday", 1000), ("sunday", 900), ("monday", 975)]], len(log))
+          - |
+            class BookingError(Exception):
+                pass
+
+
+            class SlotTaken(BookingError):
+                pass
+
+
+            class ClinicClosed(BookingError):
+                pass
+
+
+            TAKEN = {1000, 1130}
+            log = []
+
+
+            def book(day, time):
+                if day == "sunday":
+                    raise ClinicClosed("the clinic is closed on " + day)
+                if time in TAKEN:
+                    raise SlotTaken(str(time))
+                if time % 100 >= 60:
+                    raise ValueError("not a time: " + str(time))
+                TAKEN.add(time)
+                return f"booked {day} {time}"
+
+
+            def handle(day, time):
+                try:
+                    return (200, book(day, time))
+                except SlotTaken:
+                    return (409, "that slot was just taken; please choose another")
+                except BookingError as error:
+                    return (422, "cannot book: " + str(error))
+                except Exception:
+                    return (500, "something went wrong")
+
+
+            print([handle(day, time) for day, time in [("monday", 900), ("monday", 1000), ("sunday", 900), ("monday", 975)]], len(log))
+          - |
+            class BookingError(Exception):
+                pass
+
+
+            class SlotTaken(BookingError):
+                pass
+
+
+            class ClinicClosed(BookingError):
+                pass
+
+
+            TAKEN = {1000, 1130}
+            log = []
+
+
+            def book(day, time):
+                if day == "sunday":
+                    raise ClinicClosed("the clinic is closed on " + day)
+                if time in TAKEN:
+                    raise SlotTaken(str(time))
+                if time % 100 >= 60:
+                    raise ValueError("not a time: " + str(time))
+                TAKEN.add(time)
+                return f"booked {day} {time}"
+
+
+            def handle(day, time):
+                try:
+                    return (200, book(day, time))
+                except SlotTaken:
+                    return (409, "that slot was just taken; please choose another")
+                except Exception as error:
+                    log.append(repr(error))
+                    return (500, "something went wrong")
+
+
+            print([handle(day, time) for day, time in [("monday", 900), ("monday", 1000), ("sunday", 900), ("monday", 975)]], len(log))
+        explanation: |
+          The clauses go from most specific to most general, and only the unexpected error is logged, because only it needs an engineer. Catching `BookingError` first makes the `SlotTaken` clause unreachable; a last clause that does not log leaves the bug invisible; and treating a closed clinic as a 500 reports a normal answer as a fault.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Out of the puzzle's 10,000 checkouts, about how many fail?
+        answer: "585"
+        tolerance: "10"
+        explanation: |
+          All six succeed with probability $0.99^6 \approx 0.9415$, so about $10{,}000 \times 0.0585 \approx 585$ checkouts fail, nearly one in seventeen.
+    - question:
+        id: work-retry-safe
+        type: choice
+        system: s2
+        prompt: |
+          A checkout's call to the payment service times out after the request was sent. The service may or may not have charged the card. What should the checkout do?
+        options:
+          - "Retry with the same idempotency key, so the service charges at most once."
+          - "Retry with a new request; the first one probably failed."
+          - "Tell the customer the payment failed and ask them to pay again."
+          - "Record the order as paid, since most payments succeed."
+        answer: 0
+        explanation: |
+          A timeout does not say whether the charge happened. Only a retry the service can recognise as the same request is safe; a fresh request or asking the customer to pay again risks charging twice, and assuming success risks never charging at all.
+  connections:
+    - text: |
+        About 585 of 10,000: six steps at 99% each succeed together only $0.99^6 \approx 94.1\%$ of the time. Retrying each step's transient faults twice more turns each 1% into about one in a million, and the checkout's failures fall from hundreds to almost none, as long as every retried step is safe to repeat.
+
+        Every handler in this lesson was tested with something fake: a gateway that played back a script of timeouts, a booking function with a fixed set of taken slots. That was possible only because the code received those collaborators instead of reaching for the real ones, and designing for that is [[s4.dependency-injection-and-testable-code]]. Errors as seen by other teams' code are part of [[s4.designing-apis]]; making repeated requests safe is [[d2.idempotency-and-retries]]; and choosing timeouts and backoff under real load is [[r4.timeouts-retries-and-backoff]].

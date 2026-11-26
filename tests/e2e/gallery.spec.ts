@@ -709,3 +709,81 @@ test("each change to a record's shape breaks a different pair of versions", asyn
   await figure.getByRole("button", { name: "add required", exact: true }).click();
   await expect(figure).toContainText("The change is forward compatible only: old code reads new data, but new code cannot read old data.");
 });
+
+test("an interface turns places times providers into places plus providers", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="interface-swap"]').first().getByRole("figure");
+  await expect(figure).toContainText("4 places in the app each talk to each of the 3 providers directly: 4 × 3 = 12 pieces of provider-specific code.");
+  await figure.getByRole("button", { name: "through an interface", exact: true }).click();
+  await expect(figure).toContainText("4 + 3 = 7 pieces of code, and only the 3 adapters know anything about a provider.");
+  await figure.getByRole("button", { name: "Increase providers" }).click();
+  await expect(figure).toContainText("4 + 4 = 8 pieces of code");
+});
+
+test("a change ripples up through every module that imports it", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="change-ripple"]').first().getByRole("figure");
+  await expect(figure).toContainText("Changing money: orders, payments, menu import it directly, and app, delivery import it through them. 5 modules of 8 must be checked again.");
+  await figure.getByRole("button", { name: "app", exact: true }).click();
+  await expect(figure).toContainText("Changing app: no module imports it, so nothing else needs checking.");
+});
+
+test("flags allow states that an enum cannot express", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="state-flags"]').first().getByRole("figure");
+  await expect(figure).toContainText("Flags: paid, shipped. No order can be in this state: shipped but never packed.");
+  await figure.getByRole("button", { name: "packed", exact: true }).click();
+  await expect(figure).toContainText("Flags: paid, packed, shipped. This is a real state, SHIPPED.");
+});
+
+test("an error travels up until a caller that can handle it", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="error-unwind"]').first().getByRole("figure");
+  await expect(figure).toContainText("gateway.charge raises CardDeclined. It travels up through charge_with_retries, which does not handle it, until place_order catches it.");
+  await figure.getByRole("button", { name: "three timeouts", exact: true }).click();
+  await expect(figure).toContainText("then gives up after the third and raises the Timeout again. place_order catches it.");
+  await figure.getByRole("button", { name: "bug: KeyError", exact: true }).click();
+  await expect(figure).toContainText("neither of which handles it, until handle_request catches it.");
+});
+
+test("passing the clock in makes a time-dependent test pass at every hour", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="di-clock"]').first().getByRole("figure");
+  await expect(figure).toContainText("The clock is read inside is_open. Run at 23:00, the test gets False and fails.");
+  await figure.getByRole("button", { name: "clock passed in", exact: true }).click();
+  await expect(figure).toContainText("it passes, as it does at every hour of the day, and it now checks closing time too.");
+});
+
+test("a fee is chosen by looking a plan up in a table", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="fee-strategy"]').first().getByRole("figure");
+  await expect(figure).toContainText('PLANS["distance"] is the function by_distance: ₹10 + ₹8 per km. For 4 km and an order of ₹300: 10 + 8 × 4 = ₹42.');
+  await figure.getByRole("button", { name: "free_over_500", exact: true }).click();
+  await figure.getByRole("button", { name: "order of ₹650", exact: true }).click();
+  await expect(figure).toContainText("For 4 km and an order of ₹650: ₹650 is at least ₹500, so ₹0.");
+});
+
+test("testing after each change leaves one suspect, testing at the end leaves them all", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="refactor-steps"]').first().getByRole("figure");
+  await expect(figure).toContainText("The slip in change 5 makes the run straight after it fail, so change 5 is the only suspect");
+  await figure.getByRole("button", { name: "test once at the end", exact: true }).click();
+  for (let i = 0; i < 8; i++) await figure.getByRole("button", { name: "Increase changes" }).click();
+  await expect(figure).toContainText("any of the 20 changes could be the cause. At a 5% chance of a slip per change, all 20 are right only 36% of the time.");
+});
+
+test("new posts repeat items on an offset page but not on a cursor page", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="page-cursor"]').first().getByRole("figure");
+  await expect(figure).toContainText("The 2 new posts pushed everything down by 2, so the first 2 posts of page 2 are ones the reader already saw on page 1.");
+  await figure.getByRole("button", { name: "by cursor", exact: true }).click();
+  await expect(figure).toContainText("Page 2 asks for the 5 posts older than post 36. New posts at the top do not move that point, so page 2 is post 35 to post 31 with no repeats");
+});
+
+test("the weights of a decision matrix decide its winner", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="decision-matrix"]').first().getByRole("figure");
+  await expect(figure).toContainText("With these weights, object storage wins with 42, ahead of own file servers at 34 and one database server at 27. The winner changes if the weight of scaling goes from 5 to 1");
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Decrease weight of scaling" }).click();
+  await expect(figure).toContainText("With these weights, one database server wins with 23, ahead of object storage at 22 and own file servers at 18.");
+});
