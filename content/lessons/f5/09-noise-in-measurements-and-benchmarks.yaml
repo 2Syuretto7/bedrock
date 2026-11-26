@@ -1,0 +1,535 @@
+concept: f5.noise-in-measurements-and-benchmarks
+minutes: 90
+claim: You can name the main sources of noise when timing programs, choose between the minimum, the median and the mean of repeated runs for a given question, discard warm-up runs, interleave and pair the runs of two versions so that drift cannot masquerade as a difference, batch short operations to beat the timer's resolution, summarise speed-ups across benchmarks with a geometric mean, and correct a load test for coordinated omission.
+recalls: [f5.comparing-two-systems-a-b-tests]
+uses: [f5.summaries-mean-median-and-percentiles, f5.distributions-of-latency-and-heavy-tails, f5.histograms, f5.sampling-and-estimators, f5.confidence-intervals, f5.hypothesis-tests, f5.the-bootstrap, f4.independence, f1.logarithms, s1.modules-and-imports, s1.comprehensions-and-iterators, s0.functions, s0.loops, s0.lists-and-tuples]
+leads: [s3.measuring-and-predicting-running-time, f6.arrivals-and-the-poisson-process, h5.measuring-performance-honestly]
+starter: |
+  # Scratch space. Eleven timed runs in the order they were taken, in milliseconds.
+  import statistics
+
+  runs = [180, 131, 104, 101, 99, 103, 100, 160, 102, 98, 101]
+  steady = runs[2:]
+  print(min(steady), statistics.median(steady), statistics.mean(steady), statistics.mean(runs))
+parts:
+  recall:
+    - text: |
+        [[f5.comparing-two-systems-a-b-tests]] compared versions of a system on live users, where the noise came from the people. Timing two versions of a program on one machine sounds easier: same input, same computer, no people. It is not. A modern computer is busy, adaptive and warm, and its timings wander for reasons that have nothing to do with the code. Three quick pulls first.
+  puzzle:
+    - text: |
+        A load tester is meant to send one request every 10 ms for 100 seconds, 10,000 requests in all. It works in a loop: send a request, wait for the answer, record how long it took, then send the next when the next 10 ms slot comes.
+
+        Normally every request takes 1 ms. Once during the test the server freezes for 2 seconds. The request that was in flight when the freeze began takes 2,000 ms, and while the tester waits for it, it sends nothing. The tester records 9,801 times: 9,800 of 1 ms and one of 2,000 ms. Its report says p99 = 1 ms.
+
+        Real users do not wait for each other. If requests had kept arriving every 10 ms through the freeze, each would have waited until the server woke. **By the nearest-rank rule, what would the p99 of those 10,000 users' waits have been, in milliseconds?**
+  intuition:
+    - text: |
+        Time a 100-metre runner once and you learn about that run: the wind, the start, the shoes. Time the same runner fifty times and a shape appears. There is a fastest run, which the runner can approach but never beat; most runs a little slower; and a few much slower, a stumble or a cramp. Nothing makes a run faster than the runner can go, but many things make it slower.
+
+        Program timings have exactly this shape, and for the same reason. The floor is the work the code must do. On top of it, the machine adds delays: the processor changing its clock speed as it heats up, caches that were cold on the first run, another program taking a turn, an interrupt from the network card, a pause for garbage collection, the operating system deciding where the program's memory lands. These delays only ever add time. So repeated timings are right-skewed, as in [[f5.distributions-of-latency-and-heavy-tails]], with a floor near the code's own cost and a tail made of interruptions.
+
+        Two of these delays are not random from run to run but follow the clock. Early runs are slow while caches and the processor warm up, and over a long session the machine may heat and slow down. If version A is timed first and version B second, any such drift becomes part of the measured difference. The figure times two versions eighty times on a machine with warm-up, slow drift and occasional interruptions. Start with the two versions equally fast, timed in two blocks, then interleave them and drop the warm-up runs.
+    - figure: benchmark-runs
+      props: { difference: 0, interleave: false, dropWarmup: false, seed: 0 }
+    - text: |
+        Timed in two blocks, identical versions differ by 3 to 5% by the median and the minimum, because B's runs all came later, on a hotter machine. The mean happens to look closer here only because A's block also holds the slow warm-up runs, two errors partly cancelling. Interleaved, the drift falls equally on both, and every summary comes within about 1% of the truth. Give B a real 5% advantage, and the two-block order hides most of it.
+  derivation:
+    - text: |
+        **Which summary.** Write a run's time as $T = c + N$, where $c$ is the code's own cost and $N \ge 0$ is the noise the machine adds. Then:
+
+        - The **minimum** of many runs approaches $c + \min N$, the cost with the least interference. It is the most stable summary for comparing two pieces of code on the same machine, because the noise is mostly cut away. It answers "how fast can this go?", not "how fast does it usually go?".
+        - The **median** is $c$ plus the typical noise. It is robust to the occasional interrupted run, as in [[f5.summaries-mean-median-and-percentiles]], and it answers "how long does a run usually take?".
+        - The **mean** is $c + E[N]$, and the interruptions in the tail move it a lot. It is the right summary only when the total matters: the time for a million calls in a row is about a million times the mean, interruptions included.
+
+        For anything a user waits for, the tail matters too, and the percentiles of [[f5.histograms]] apply.
+
+        **Warm-up.** The first runs pay for loading code, filling caches, and in some languages compiling the hot paths. Unless the question is about a cold start, discard them. Choose how many before looking at the numbers, for example from a plot of time against run number, rather than trimming whatever looks slow afterwards.
+    - question:
+        id: derivation-batch
+        type: numeric
+        system: s2
+        prompt: |
+          A timer reads in whole microseconds, so each reading can be off by up to 1 µs. An operation takes about 50 nanoseconds. How many operations must be timed together in one batch for the timer's error to be at most 1% of the batch's time?
+        answer: "2000"
+        explanation: |
+          An error of 1 µs is at most 1% of the batch's time if the batch takes at least 100 µs, which is $100{,}000/50 = 2{,}000$ operations. Then divide the batch's time by 2,000 to get the time per operation.
+    - text: |
+        **Short operations.** A timer has a **resolution**, the smallest step it can show, and reading it costs time too. An operation much shorter than the resolution cannot be timed alone. Time a batch of many operations, long enough that the timer's error is small beside it, and divide.
+
+        **Order and pairing.** Runs taken one after another are not independent, as [[f4.independence]] would need: the machine's state carries over from one to the next. Two defences follow. **Interleave**: alternate A and B, or better, shuffle the order of the runs, so that drift and warm-up fall equally on both. **Pair**: time A and B back to back on the same input and compare each pair, so that whatever was slowing the machine at that moment slows both. With $n$ pairs, the number in which B wins can be tested with the sign test of [[f5.hypothesis-tests]]; the differences can be bootstrapped, as in [[f5.the-bootstrap]], for an interval on the size of the speed-up. Pairing only works if each pair stays together: sorting the two lists separately before comparing them matches unrelated runs.
+
+        **Many benchmarks.** A speed-up is a ratio, so speed-ups across several benchmarks should be averaged by the **geometric mean**, the $n$th root of their product. It treats "twice as fast" and "twice as slow" as cancelling, $\sqrt{2 \times 0.5} = 1$, where the arithmetic mean of 2 and 0.5 would claim a 25% gain. Equivalently it is the ordinary mean on a logarithmic scale, as in [[f1.logarithms]].
+    - question:
+        id: derivation-geomean
+        type: numeric
+        system: s2
+        tolerance: "0.01"
+        prompt: |
+          A change makes three benchmarks 2 times, 0.5 times and 4 times as fast. What is the geometric mean speed-up? Give two decimal places.
+        answer: "1.59"
+        explanation: |
+          The product is $2 \times 0.5 \times 4 = 4$, and its cube root is about 1.59. The arithmetic mean, $6.5/3 \approx 2.17$, is pulled up by the one large gain and does not treat a halving as the opposite of a doubling.
+    - text: |
+        **Coordinated omission.** A load tester that waits for each answer before sending the next request coordinates with the server: when the server stalls, the tester stops asking, so the stall is recorded once instead of once for every user who would have waited through it. The result is a tail that looks far better than users experience. The cure is to measure each request from when it *should* have been sent. A tester that sends on schedule, whether or not earlier answers have come, does this directly. For one that did not, a recorded time $r$ with schedule interval $\Delta$ implies missing requests that would have waited $r - \Delta$, $r - 2\Delta$, and so on down to the last positive value, and these can be added back. The puzzle is exactly this case.
+
+        **Reporting.** A benchmark result is an estimate, so it needs an interval: for a median, the bootstrap gives one. Report the machine, the number of runs, the warm-up discarded, the summary used, and the spread, so that another person can tell a real 3% speed-up from the 3% the machine adds by itself.
+    - question:
+        id: derivation-missing
+        type: numeric
+        system: s2
+        prompt: |
+          A load tester should send a request every 10 ms. The server stalls for 500 ms, during which the tester, waiting for one answer, sends nothing. Counting the one in flight, how many scheduled requests should have been waiting through the stall?
+        answer: "50"
+        explanation: |
+          A request was due every 10 ms through 500 ms, so 50 requests, with waits of 500, 490, …, 10 ms. The tester recorded only the first of them.
+    - question:
+        id: order-benchmark
+        type: order
+        system: s2
+        prompt: |
+          Put the steps for comparing two versions of a function on one machine in order.
+        steps:
+          - "Decide the number of runs and the number of warm-up runs to discard."
+          - "Run A and B in an alternating or shuffled order, timing each run."
+          - "Discard the warm-up runs."
+          - "Compare the medians or minimums, with a bootstrap interval for the difference."
+        explanation: |
+          The plan comes first so that the numbers cannot steer it; the order of runs protects against drift; the warm-up can only be discarded once it has been run; and the comparison comes last, with its uncertainty.
+  formal:
+    - text: |
+        **Model.** A run takes $T = c + N$ with $N \ge 0$. Over many runs, the minimum estimates $c + \min N$, the median $c + \operatorname{median}(N)$, and the mean $c + E[N]$.
+
+        **Batching.** With timer error $e$ and a per-operation cost $t$, a batch of $k$ operations has relative error at most $e/(kt)$; for relative error $\epsilon$ take $k \ge e/(\epsilon t)$.
+
+        **Geometric mean.** For speed-ups $r_1, \ldots, r_m$, $\left(\prod r_i\right)^{1/m} = \exp\left(\frac{1}{m}\sum \ln r_i\right)$.
+
+        **Pairing.** With pairs $(a_i, b_i)$ timed together, analyse the differences $d_i = b_i - a_i$ or the signs of $d_i$; under no difference the number of wins is binomial$(n, 1/2)$.
+
+        **Coordinated omission.** With schedule interval $\Delta$, a recorded time $r$ stands for the waits $r, r - \Delta, r - 2\Delta, \ldots$ down to the last positive value.
+  drill:
+    - text: Seconds each. Noise only adds time; drift follows the clock; ratios average geometrically.
+    - question:
+        id: drill-floor
+        type: choice
+        system: s1
+        prompt: |
+          Which summary of 50 timed runs is usually the most stable for comparing two versions of a function on one machine?
+        options:
+          - "The minimum"
+          - "The mean"
+          - "The maximum"
+          - "The first run"
+        answer: 0
+        explanation: Noise only adds time, so the fastest runs are closest to the code's own cost and vary least. The mean is moved by every interruption.
+    - question:
+        id: drill-warmup
+        type: choice
+        system: s1
+        prompt: |
+          Why are the first few runs of a benchmark usually discarded?
+        options:
+          - "They pay for cold caches and loading, which later runs do not."
+          - "They are always the fastest."
+          - "The timer is not accurate at first."
+        answer: 0
+        explanation: Early runs fill caches and load code. Unless the question is about cold starts, they measure something else.
+    - question:
+        id: drill-geomean
+        type: numeric
+        system: s1
+        prompt: |
+          Two benchmarks speed up by 4 times and 1 time. What is the geometric mean speed-up?
+        answer: "2"
+        explanation: $\sqrt{4 \times 1} = 2$.
+    - question:
+        id: drill-batch
+        type: numeric
+        system: s1
+        prompt: |
+          An operation takes 10 µs. How many must be batched for the batch to take 100 ms?
+        answer: "10000"
+        explanation: $100{,}000\ \mu\text{s} / 10\ \mu\text{s} = 10{,}000$.
+    - question:
+        id: drill-interleave
+        type: choice
+        system: s1
+        prompt: |
+          Why alternate the runs of A and B instead of running all of A, then all of B?
+        options:
+          - "So that warm-up and drift over the session fall equally on both"
+          - "So that each run is faster"
+          - "So that fewer runs are needed in total"
+        answer: 0
+        explanation: In two blocks, anything that changes with time, such as the machine heating up, shows up as a difference between A and B.
+    - question:
+        id: drill-missing
+        type: numeric
+        system: s1
+        prompt: |
+          Requests are due every 20 ms. The server stalls for 1 second while a waiting load tester sends nothing. How many scheduled requests wait through the stall?
+        answer: "50"
+        explanation: $1{,}000/20 = 50$, with waits of 1,000, 980, …, 20 ms.
+    - question:
+        id: predict-summaries
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import statistics
+
+          times = [140, 101, 99, 100, 250, 98]
+          print(statistics.median(times), min(times), round(statistics.mean(times), 1))
+        output: "100.5 98 131.3"
+        explanation: Sorted, the times are 98, 99, 100, 101, 140, 250; the median averages 100 and 101. The minimum is 98. The mean, 788/6, is pulled up to 131.3 by one warm-up run and one interrupted run.
+    - question:
+        id: predict-geomean
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(round((2.0 * 0.5 * 4.0) ** (1 / 3), 2))
+        output: "1.59"
+        explanation: The product of the speed-ups is 4, and its cube root is about 1.587, which rounds to 1.59.
+  work:
+    - text: Slower now. For each comparison, ask what else changed between the runs besides the code, and whether the runs being compared really belong together.
+    - question:
+        id: fix-pairs
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `faster_pairs(old, new)` should count the pairs that the new version won. `old[i]` and `new[i]` were timed back to back on the same input. The program should print `7 8`. It prints `4 8`. Find the fault and fix it.
+        starter: |
+          def faster_pairs(old, new):
+              # old[i] and new[i] were timed back to back, as a pair, on the same input.
+              # Return how many pairs the new version won, taking strictly less time.
+              wins = 0
+              for o, n in zip(sorted(old), sorted(new)):
+                  if n < o:
+                      wins += 1
+              return wins
+
+
+          old = [59, 53, 62, 57, 54, 56, 51, 55]
+          new = [58, 57, 60, 56, 52, 55, 50, 54]
+          print(faster_pairs(old, new), len(old))
+        solution: |
+          def faster_pairs(old, new):
+              # old[i] and new[i] were timed back to back, as a pair, on the same input.
+              # Return how many pairs the new version won, taking strictly less time.
+              wins = 0
+              for o, n in zip(old, new):
+                  if n < o:
+                      wins += 1
+              return wins
+
+
+          old = [59, 53, 62, 57, 54, 56, 51, 55]
+          new = [58, 57, 60, 56, 52, 55, 50, 54]
+          print(faster_pairs(old, new), len(old))
+        tests: |
+          for _old, _new in [([5], [4]), ([5], [5]), ([5], [6]), ([1, 9], [8, 2]), ([10, 20, 30], [11, 19, 30]), ([102, 250, 98, 101, 99, 140, 100, 103], [99, 251, 97, 98, 96, 141, 98, 100]), ([3, 1, 2], [2, 3, 1])]:
+              _want = sum(1 for _o, _n in zip(_old, _new) if _n < _o)
+              _got = faster_pairs(_old, _new)
+              assert _got == _want, "faster_pairs(" + str(_old) + ", " + str(_new) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "7 8", "The program should print 7 8"
+        wrong:
+          - |
+            def faster_pairs(old, new):
+                # old[i] and new[i] were timed back to back, as a pair, on the same input.
+                # Return how many pairs the new version won, taking strictly less time.
+                wins = 0
+                for o, n in zip(old, new):
+                    if n <= o:
+                        wins += 1
+                return wins
+
+
+            old = [59, 53, 62, 57, 54, 56, 51, 55]
+            new = [58, 57, 60, 56, 52, 55, 50, 54]
+            print(faster_pairs(old, new), len(old))
+          - |
+            def faster_pairs(old, new):
+                # old[i] and new[i] were timed back to back, as a pair, on the same input.
+                # Return how many pairs the new version won, taking strictly less time.
+                wins = 0
+                for o, n in zip(old, new):
+                    if o < n:
+                        wins += 1
+                return wins
+
+
+            old = [59, 53, 62, 57, 54, 56, 51, 55]
+            new = [58, 57, 60, 56, 52, 55, 50, 54]
+            print(faster_pairs(old, new), len(old))
+          - |
+            def faster_pairs(old, new):
+                # old[i] and new[i] were timed back to back, as a pair, on the same input.
+                # Return how many pairs the new version won, taking strictly less time.
+                wins = 0
+                for o, n in zip(old, sorted(new)):
+                    if n < o:
+                        wins += 1
+                return wins
+
+
+            old = [59, 53, 62, 57, 54, 56, 51, 55]
+            new = [58, 57, 60, 56, 52, 55, 50, 54]
+            print(faster_pairs(old, new), len(old))
+        explanation: |
+          Sorting each list separately throws the pairing away: the fastest old run is compared with the fastest new run, though they ran on different inputs at different moments. The point of pairing is that both members of a pair saw the same input and the same state of the machine, so compare `old[i]` with `new[i]`. A tie is not a win, so the test is `n < o`, and the wins belong to the new version, not the old.
+    - question:
+        id: write-summarise-runs
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `summarise_runs(times, warmup)`. The times are in the order the runs were taken. Drop the first `warmup` runs, and return the minimum and the median of the rest, as a pair. Do not change the list you are given.
+        starter: |
+          import statistics
+
+
+          def summarise_runs(times, warmup):
+              # times are in the order the runs were taken. Drop the first `warmup` runs,
+              # then return the minimum and the median of the rest, as a pair.
+              return (0, 0)
+
+
+          runs = [180, 131, 104, 101, 99, 103, 100, 160, 102, 98, 101]
+          print(summarise_runs(runs, 2), summarise_runs(runs, 0))
+        solution: |
+          import statistics
+
+
+          def summarise_runs(times, warmup):
+              # times are in the order the runs were taken. Drop the first `warmup` runs,
+              # then return the minimum and the median of the rest, as a pair.
+              kept = times[warmup:]
+              return (min(kept), statistics.median(kept))
+
+
+          runs = [180, 131, 104, 101, 99, 103, 100, 160, 102, 98, 101]
+          print(summarise_runs(runs, 2), summarise_runs(runs, 0))
+        tests: |
+          for _times, _warmup in [([5], 0), ([9, 1, 2], 1), ([9, 8, 1, 2, 3], 2), ([180, 131, 104, 101, 99, 103, 100, 160, 102, 98, 101], 2), ([7, 7, 3, 4], 0), ([50, 10, 20, 30, 40], 1)]:
+              _kept = _times[_warmup:]
+              _want = (min(_kept), statistics.median(_kept))
+              _copy = list(_times)
+              _got = summarise_runs(_times, _warmup)
+              assert _times == _copy, "summarise_runs should not change the list it is given"
+              assert tuple(_got) == _want, "summarise_runs(" + str(_times) + ", " + str(_warmup) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "(98, 101) (98, 102)", "The program should print (98, 101) (98, 102)"
+        wrong:
+          - |
+            import statistics
+
+
+            def summarise_runs(times, warmup):
+                # times are in the order the runs were taken. Drop the first `warmup` runs,
+                # then return the minimum and the median of the rest, as a pair.
+                kept = sorted(times)[warmup:]
+                return (min(kept), statistics.median(kept))
+
+
+            runs = [180, 131, 104, 101, 99, 103, 100, 160, 102, 98, 101]
+            print(summarise_runs(runs, 2), summarise_runs(runs, 0))
+          - |
+            import statistics
+
+
+            def summarise_runs(times, warmup):
+                # times are in the order the runs were taken. Drop the first `warmup` runs,
+                # then return the minimum and the median of the rest, as a pair.
+                kept = times[:len(times) - warmup]
+                return (min(kept), statistics.median(kept))
+
+
+            runs = [180, 131, 104, 101, 99, 103, 100, 160, 102, 98, 101]
+            print(summarise_runs(runs, 2), summarise_runs(runs, 0))
+          - |
+            import statistics
+
+
+            def summarise_runs(times, warmup):
+                # times are in the order the runs were taken. Drop the first `warmup` runs,
+                # then return the minimum and the median of the rest, as a pair.
+                kept = times[warmup:]
+                return (min(kept), statistics.mean(kept))
+
+
+            runs = [180, 131, 104, 101, 99, 103, 100, 160, 102, 98, 101]
+            print(summarise_runs(runs, 2), summarise_runs(runs, 0))
+        explanation: |
+          Warm-up is about *when* a run happened, so drop by position, `times[warmup:]`, before any sorting. Sorting first and then dropping removes the fastest runs instead of the earliest. Dropping from the end removes the steady runs and keeps the cold ones, and the mean is not robust to the interrupted run at 160 ms.
+    - question:
+        id: write-coordinated
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `coordinated_waits(recorded, interval)`. A load tester meant to send a request every `interval` ms, but it waited for each answer before sending the next. For each recorded time `r`, keep `r`, and also add the waits `r - interval`, `r - 2 * interval`, and so on, while they are still above 0, of the requests that should have been sent during it. Return the corrected list.
+        starter: |
+          import math
+
+
+          def percentile(values, p):
+              ordered = sorted(values)
+              return ordered[math.ceil(p * len(ordered) / 100) - 1]
+
+
+          def coordinated_waits(recorded, interval):
+              # A load tester meant to send one request every `interval` ms, but it waited for each
+              # answer before sending the next. For each recorded time r, keep r, and also add the
+              # waits r - interval, r - 2 * interval, ... (while still above 0) of the requests that
+              # should have been sent during it. Return the corrected list.
+              return list(recorded)
+
+
+          recorded = [1] * 9800 + [2000]
+          print(len(coordinated_waits(recorded, 10)), percentile(recorded, 99), percentile(coordinated_waits(recorded, 10), 99))
+        solution: |
+          import math
+
+
+          def percentile(values, p):
+              ordered = sorted(values)
+              return ordered[math.ceil(p * len(ordered) / 100) - 1]
+
+
+          def coordinated_waits(recorded, interval):
+              # A load tester meant to send one request every `interval` ms, but it waited for each
+              # answer before sending the next. For each recorded time r, keep r, and also add the
+              # waits r - interval, r - 2 * interval, ... (while still above 0) of the requests that
+              # should have been sent during it. Return the corrected list.
+              waits = []
+              for r in recorded:
+                  waits.append(r)
+                  extra = r - interval
+                  while extra > 0:
+                      waits.append(extra)
+                      extra -= interval
+              return waits
+
+
+          recorded = [1] * 9800 + [2000]
+          print(len(coordinated_waits(recorded, 10)), percentile(recorded, 99), percentile(coordinated_waits(recorded, 10), 99))
+        tests: |
+          for _recorded, _interval in [([], 10), ([5], 10), ([10], 10), ([25], 10), ([1, 30, 2], 10), ([1, 1, 1, 100], 20), ([7, 3, 12], 5)]:
+              _want = []
+              for _r in _recorded:
+                  _want.append(_r)
+                  _x = _r - _interval
+                  while _x > 0:
+                      _want.append(_x)
+                      _x -= _interval
+              _got = coordinated_waits(_recorded, _interval)
+              assert sorted(_got) == sorted(_want), "coordinated_waits(" + str(_recorded) + ", " + str(_interval) + ") should give, in some order, " + str(sorted(_want)) + ", not " + str(sorted(_got))
+          assert output.strip() == "10000 1 1000", "The program should print 10000 1 1000"
+        wrong:
+          - |
+            import math
+
+
+            def percentile(values, p):
+                ordered = sorted(values)
+                return ordered[math.ceil(p * len(ordered) / 100) - 1]
+
+
+            def coordinated_waits(recorded, interval):
+                # A load tester meant to send one request every `interval` ms, but it waited for each
+                # answer before sending the next. For each recorded time r, keep r, and also add the
+                # waits r - interval, r - 2 * interval, ... (while still above 0) of the requests that
+                # should have been sent during it. Return the corrected list.
+                waits = []
+                for r in recorded:
+                    waits.append(r)
+                    extra = r - interval
+                    while extra >= 0:
+                        waits.append(extra)
+                        extra -= interval
+                return waits
+
+
+            recorded = [1] * 9800 + [2000]
+            print(len(coordinated_waits(recorded, 10)), percentile(recorded, 99), percentile(coordinated_waits(recorded, 10), 99))
+          - |
+            import math
+
+
+            def percentile(values, p):
+                ordered = sorted(values)
+                return ordered[math.ceil(p * len(ordered) / 100) - 1]
+
+
+            def coordinated_waits(recorded, interval):
+                # A load tester meant to send one request every `interval` ms, but it waited for each
+                # answer before sending the next. For each recorded time r, keep r, and also add the
+                # waits r - interval, r - 2 * interval, ... (while still above 0) of the requests that
+                # should have been sent during it. Return the corrected list.
+                waits = []
+                for r in recorded:
+                    extra = r - interval
+                    while extra > 0:
+                        waits.append(extra)
+                        extra -= interval
+                return waits
+
+
+            recorded = [1] * 9800 + [2000]
+            print(len(coordinated_waits(recorded, 10)), percentile(recorded, 99), percentile(coordinated_waits(recorded, 10), 99))
+          - |
+            import math
+
+
+            def percentile(values, p):
+                ordered = sorted(values)
+                return ordered[math.ceil(p * len(ordered) / 100) - 1]
+
+
+            def coordinated_waits(recorded, interval):
+                # A load tester meant to send one request every `interval` ms, but it waited for each
+                # answer before sending the next. For each recorded time r, keep r, and also add the
+                # waits r - interval, r - 2 * interval, ... (while still above 0) of the requests that
+                # should have been sent during it. Return the corrected list.
+                waits = []
+                for r in recorded:
+                    waits.append(r)
+                    extra = r - interval
+                    while extra > 0:
+                        waits.append(r)
+                        extra -= interval
+                return waits
+
+
+            recorded = [1] * 9800 + [2000]
+            print(len(coordinated_waits(recorded, 10)), percentile(recorded, 99), percentile(coordinated_waits(recorded, 10), 99))
+        explanation: |
+          Each long wait hides the requests that were due during it, and each of those waited a little less than the one before. Stopping at `>= 0` adds a request that waited no time at all when `r` is a multiple of the interval; forgetting to keep `r` itself loses the request that was actually recorded; and adding copies of `r` pretends that every hidden request waited the full stall. Corrected, the p99 is 1,000 ms where the raw recording said 1 ms.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          10,000 requests are due every 10 ms; 9,800 of them take 1 ms, and the 200 that fall in a 2-second freeze wait 2,000, 1,990, …, 10 ms. What is the nearest-rank p99 of the 10,000 waits, in milliseconds?
+        answer: "1000"
+        explanation: |
+          The rank is $\lceil 0.99 \times 10{,}000 \rceil = 9{,}900$. The first 9,800 sorted waits are 1 ms, so the 9,900th is the 100th smallest of the stalled waits 10, 20, …, 2,000, which is 1,000 ms.
+    - question:
+        id: work-blocks
+        type: choice
+        system: s2
+        prompt: |
+          An engineer times the old build 30 times, then the new build 30 times, on a laptop. The new build's median is 4% slower. Before believing it, what is the most important thing to do?
+        options:
+          - "Rerun with the builds interleaved or in shuffled order, since a laptop that heats up over the session would make whichever ran second look slower."
+          - "Report the mean instead of the median."
+          - "Run each build 30 more times in the same order."
+          - "Discard the slowest run of the new build."
+        answer: 0
+        explanation: |
+          Two blocks confound the build with the time of the run. More runs in the same order repeat the same bias, and switching summaries or trimming one build's runs does not touch it. Interleaving, or pairing the builds back to back, puts the drift on both.
+  connections:
+    - text: |
+        The true p99 is 1,000 ms. Of the 10,000 users, 200 met the freeze, waiting anywhere from 10 ms to 2 seconds, and the slowest 1% of all users waited a second or more. The tester saw one slow request instead of two hundred, because it stopped asking while the server was frozen, and so it reported p99 = 1 ms. Measuring from the intended send time, or adding back the hidden requests, recovers the truth.
+
+        This cluster has built the tools to measure honestly: summaries that suit skewed data, intervals, tests, the bootstrap, and the habits of randomising, pairing and planning before looking. [[s3.measuring-and-predicting-running-time]] puts them to work on algorithms, timing code as inputs grow and checking the timings against a prediction. [[f6.arrivals-and-the-poisson-process]] models where queues and their long waits come from, and [[h5.measuring-performance-honestly]] returns to benchmarking at the level of the processor's own counters.

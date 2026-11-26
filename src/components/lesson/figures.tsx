@@ -5167,6 +5167,83 @@ function AbTest(props: Props) {
   );
 }
 
+const BENCH_RUNS = 80;
+
+/** Eighty timed runs of two versions on one machine, with warm-up, drift and the odd interruption: the order of the runs and the summary chosen decide what the comparison says. */
+function BenchmarkRuns(props: Props) {
+  const [diff, setDiff] = useState(clamp(Math.round(num(props.difference, 0)), -10, 10));
+  const [interleave, setInterleave] = useState(props.interleave === true);
+  const [dropWarm, setDropWarm] = useState(props.dropWarmup === true);
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const noise = draws(120 + seed, BENCH_RUNS * 2, false);
+  const runs = Array.from({ length: BENCH_RUNS }, (_, k) => {
+    const version = interleave ? (k % 2 === 0 ? "A" : "B") : k < BENCH_RUNS / 2 ? "A" : "B";
+    const base = version === "A" ? 100 : 100 * (1 + diff / 100);
+    const warm = k < 5 ? 0.4 * (1 - k / 5) : 0;
+    const drift = (0.08 * k) / (BENCH_RUNS - 1);
+    const jitter = 0.03 * -Math.log(1 - noise[2 * k]);
+    const spike = noise[2 * k + 1] < 0.05 ? 0.3 : 0;
+    return { k, version, time: base * (1 + warm + drift + jitter + spike) };
+  });
+  const kept = runs.filter((r) => !dropWarm || r.k >= 5);
+  const times = (v: string) => kept.filter((r) => r.version === v).map((r) => r.time);
+  const median = (xs: number[]) => {
+    const s = [...xs].sort((a, b) => a - b);
+    return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+  };
+  const a = times("A");
+  const b = times("B");
+  const ratio = median(b) / median(a);
+  const minRatio = Math.min(...b) / Math.min(...a);
+  const meanRatio = b.reduce((s, x) => s + x, 0) / b.length / (a.reduce((s, x) => s + x, 0) / a.length);
+  const truth = 1 + diff / 100;
+  const sx = (k: number) => 40 + (k / (BENCH_RUNS - 1)) * 380;
+  const sy = (t: number) => 210 - ((clamp(t, 90, 170) - 90) / 80) * 190;
+  const pct = (r: number) => `${r >= 1 ? "+" : "−"}${dp(Math.abs(r - 1) * 100, 1)}%`;
+  return (
+    <Frame
+      title="Timing two versions"
+      summary={`80 timed runs on one machine, ${interleave ? "alternating A and B" : "all 40 of A first, then all 40 of B"}, ${dropWarm ? "with the first 5 runs dropped as warm-up" : "keeping every run"}. B is truly ${diff === 0 ? "exactly as fast as A" : `${Math.abs(diff)}% ${diff > 0 ? "slower" : "faster"} than A`}. The machine warms up over the first few runs and drifts about 8% slower over the session, and about one run in twenty is interrupted. Measured B against A: median ${pct(ratio)}, minimum ${pct(minRatio)}, mean ${pct(meanRatio)}, against a true ${pct(truth)}.`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={interleave} onClick={() => setInterleave(!interleave)}>
+            Interleave the runs
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={dropWarm} onClick={() => setDropWarm(!dropWarm)}>
+            Drop the first 5 runs
+          </button>
+          <Slider label="true difference" value={diff} onChange={setDiff} min={-10} max={10} text={`${diff > 0 ? "+" : diff < 0 ? "−" : ""}${Math.abs(diff)}%`} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`80 run times in the order they were taken, A as filled dots and B as rings, ${interleave ? "alternating" : "A first, then B"}`}>
+        {[100, 120, 140, 160].map((t) => (
+          <g key={t}>
+            <line x1="40" y1={sy(t)} x2="420" y2={sy(t)} className="fig-grid" />
+            <text x="36" y={sy(t) + 4} textAnchor="end" className="fig-small">
+              {t}
+            </text>
+          </g>
+        ))}
+        <line x1="40" y1="210" x2="420" y2="210" className="fig-axis" />
+        {runs.map((r) => (
+          <circle key={r.k} cx={sx(r.k)} cy={sy(r.time)} r="3.5" className={r.version === "A" ? "fig-accent" : "fig-line"} opacity={dropWarm && r.k < 5 ? 0.25 : 1} />
+        ))}
+        <text x="40" y="228" textAnchor="middle" className="fig-small">
+          run 1
+        </text>
+        <text x="420" y="228" textAnchor="middle" className="fig-small">
+          run 80
+        </text>
+        <text x="230" y="244" textAnchor="middle" className="fig-small">
+          filled: A, rings: B, time in ms
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -6475,6 +6552,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "null-test": NullTest,
   "bootstrap": Bootstrap,
   "ab-test": AbTest,
+  "benchmark-runs": BenchmarkRuns,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
