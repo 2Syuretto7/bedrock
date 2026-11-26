@@ -4679,6 +4679,68 @@ function SummaryMarks(props: Props) {
   );
 }
 
+/** The chance that a response takes longer than t, on logarithmic axes: an exponential tail bends away, a power-law tail is a straight line. */
+function TailPlot(props: Props) {
+  const [tenths, setTenths] = useState(clamp(Math.round(num(props.alpha, 2) * 10), 10, 30));
+  const alpha = tenths / 10;
+  const floor = Math.pow(2, -1 / alpha) * 20;
+  const sx = (logT: number) => 50 + ((logT - 1) / 4) * 370;
+  const sy = (logP: number) => 20 + (Math.min(6, -logP) / 6) * 200;
+  const logs = Array.from({ length: 201 }, (_, i) => 1 + (4 * i) / 200);
+  const exponential = logs.map((x) => `${dp(sx(x), 2)},${dp(sy(-(10 ** x / 20) * Math.log10(2)), 2)}`).join(" ");
+  const power = logs.map((x) => `${dp(sx(x), 2)},${dp(sy(Math.min(0, alpha * (Math.log10(floor) - x))), 2)}`).join(" ");
+  const paretoAt = (p: number) => floor * Math.pow(p, -1 / alpha);
+  const expAt = (p: number) => 20 * Math.log2(1 / p);
+  const ms = (t: number) => group(Math.round(t));
+  const mean = alpha > 1 ? `${ms((alpha * floor) / (alpha - 1))} ms` : "infinite: the tail falls too slowly for an average to settle";
+  const ticks: [number, string][] = [
+    [1, "10 ms"],
+    [2, "100 ms"],
+    [3, "1 s"],
+    [4, "10 s"],
+    [5, "100 s"],
+  ];
+  const levels: [number, string][] = [
+    [0, "1"],
+    [-2, "1 in 100"],
+    [-4, "1 in 10⁴"],
+    [-6, "1 in 10⁶"],
+  ];
+  return (
+    <Frame
+      title="How fast a tail falls"
+      summary={`Both curves give the chance that a response takes longer than a time, and both have a median of 20 ms. The exponential tail bends down and away: every extra 20 ms halves the chance, so its p99 is ${ms(expAt(0.01))} ms, its p99.9 ${ms(expAt(0.001))} ms and its p99.99 ${ms(expAt(0.0001))} ms, and its mean is 29 ms. The power-law tail with exponent ${dp(alpha, 1)} is a straight line of slope −${dp(alpha, 1)} on these logarithmic axes: every doubling of the time divides the chance by ${dp(2 ** alpha, 2)}, so its p99 is ${ms(paretoAt(0.01))} ms, its p99.9 ${ms(paretoAt(0.001))} ms and its p99.99 ${ms(paretoAt(0.0001))} ms. Its mean is ${mean}.`}
+      controls={<Slider label="tail exponent" value={tenths} onChange={setTenths} min={10} max={30} text={dp(alpha, 1)} />}
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`Two falling curves on logarithmic axes, time from 10 milliseconds to 100 seconds and chance from 1 down to 1 in a million: an exponential tail that bends down steeply and a power-law tail of exponent ${dp(alpha, 1)} that falls in a straight line`}>
+        {levels.map(([logP, label]) => (
+          <g key={label}>
+            <line x1="50" y1={sy(logP)} x2="420" y2={sy(logP)} className="fig-guide" />
+            <text x="46" y={sy(logP) + 4} textAnchor="end" className="fig-small">
+              {label}
+            </text>
+          </g>
+        ))}
+        {ticks.map(([logT, label]) => (
+          <text key={label} x={sx(logT)} y="240" textAnchor="middle" className="fig-small">
+            {label}
+          </text>
+        ))}
+        <line x1="50" y1="220" x2="420" y2="220" className="fig-axis" />
+        <line x1="50" y1="20" x2="50" y2="220" className="fig-axis" />
+        <polyline points={exponential} className="fig-line" />
+        <polyline points={power} className="fig-accent-line" />
+        <text x={sx(Math.log10(expAt(0.0001)))} y={sy(-4.6)} className="fig-small">
+          exponential
+        </text>
+        <text x={sx(Math.min(4.3, Math.log10(paretoAt(0.001))))} y={sy(alpha * (Math.log10(floor) - Math.min(4.3, Math.log10(paretoAt(0.001))))) - 8} className="fig-small">
+          power law
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5980,6 +6042,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "sample-means": SampleMeans,
   "monte-carlo": MonteCarlo,
   "summary-marks": SummaryMarks,
+  "tail-plot": TailPlot,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
