@@ -3358,7 +3358,7 @@ function ModClock(props: Props) {
       controls={
         <>
           <Stepper label="positions" value={m} onChange={setM} min={2} max={24} />
-          <Stepper label="jump" value={jump} onChange={setJump} min={0} max={24} />
+          <Stepper label="jump size" value={jump} onChange={setJump} min={0} max={24} />
           <Stepper label="jumps" value={jumps} onChange={setJumps} min={0} max={24} />
         </>
       }
@@ -3628,7 +3628,7 @@ function BoundWitness(props: Props) {
         <text x="46" y="18" className="fig-small">
           {`f(n) = ${fName}, thick; ${c} × ${gName}, thin`}
         </text>
-        <text x={Math.min(gx(start) + 4, 360)} y="244" className="fig-small">
+        <text x={Math.min(gx(start) + 4, 372)} y="40" className="fig-small">
           {`n₀ = ${start}`}
         </text>
         <text x="428" y="272" textAnchor="end" className="fig-small">
@@ -3719,7 +3719,7 @@ function OneStroke(props: Props) {
         {names.map((v) => (
           <Dot key={v} at={spots[v]} name={v} mark={trail.length > 0 && v === trail[shown] ? "now" : odd.includes(v) ? "done" : "wait"} note={`deg ${degree(v)}`} above={spots[v][1] < 140} />
         ))}
-        <text x="12" y="262" className="fig-small">
+        <text x="12" y="22" className="fig-small">
           {`odd degree: ${odd.length === 0 ? "none" : odd.join(", ")}`}
         </text>
       </svg>
