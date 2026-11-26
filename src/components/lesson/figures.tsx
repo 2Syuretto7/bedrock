@@ -4469,6 +4469,83 @@ function TailBounds(props: Props) {
   );
 }
 
+type MeanSource = "die" | "wait" | "rare" | "even";
+const MEAN_SOURCES: MeanSource[] = ["die", "wait", "rare", "even"];
+const MEAN_SPECS: Record<MeanSource, { name: string; mean: number; sd: number; low: number; high: number; draw: (u: number) => number }> = {
+  die: { name: "throws of a fair die", mean: 3.5, sd: Math.sqrt(35 / 12), low: 1, high: 6, draw: (u) => Math.floor(u * 6) + 1 },
+  wait: { name: "exponential waits with mean 1 minute", mean: 1, sd: 1, low: 0, high: 4, draw: (u) => -Math.log(1 - u) },
+  rare: { name: "requests that each fail with chance 0.1, counted as 1 for a failure", mean: 0.1, sd: 0.3, low: 0, high: 1, draw: (u) => (u < 0.1 ? 1 : 0) },
+  even: { name: "numbers spread evenly between 0 and 1", mean: 0.5, sd: Math.sqrt(1 / 12), low: 0, high: 1, draw: (u) => u },
+};
+const MEAN_SIZES = [1, 2, 4, 10, 30, 100];
+
+/** Two thousand averages of n draws each: they gather at the mean, their spread shrinks like 1/√n, and their shape turns into a bell. */
+function SampleMeans(props: Props) {
+  const [source, setSource] = useState<MeanSource>(typeof props.source === "string" && props.source in MEAN_SPECS ? (props.source as MeanSource) : "die");
+  const [sizeAt, setSizeAt] = useState(Math.max(0, MEAN_SIZES.indexOf(num(props.n, 1))));
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const spec = MEAN_SPECS[source];
+  const n = MEAN_SIZES[sizeAt];
+  const repeats = 2000;
+  const raw = draws(seed, repeats * n, false);
+  const averages = Array.from({ length: repeats }, (_, r) => {
+    let total = 0;
+    for (let i = 0; i < n; i++) total += spec.draw(raw[r * n + i]);
+    return total / n;
+  });
+  const bins = 30;
+  const span = spec.high - spec.low;
+  const counts = Array.from({ length: bins }, () => 0);
+  for (const a of averages) counts[clamp(Math.floor(((a - spec.low) / span) * bins), 0, bins - 1)]++;
+  const center = averages.reduce((a, b) => a + b, 0) / repeats;
+  const spread = Math.sqrt(averages.reduce((a, b) => a + (b - center) ** 2, 0) / repeats);
+  const theory = spec.sd / Math.sqrt(n);
+  const near = averages.filter((a) => Math.abs(a - spec.mean) <= 2 * theory).length / repeats;
+  const bell = (x: number) => (repeats * (span / bins) * Math.exp(-((x - spec.mean) ** 2) / (2 * theory * theory))) / (theory * Math.sqrt(2 * Math.PI));
+  const xs = Array.from({ length: 121 }, (_, i) => spec.low + (span * i) / 120);
+  const top = Math.max(...counts, ...xs.map(bell));
+  const sx = (x: number) => 40 + ((x - spec.low) / span) * 360;
+  const sy = (c: number) => 200 - (Math.min(c, top) / top) * 160;
+  const curve = xs.map((x) => `${dp(sx(x), 2)},${dp(sy(bell(x)), 2)}`).join(" ");
+  const nextSource = MEAN_SOURCES[(MEAN_SOURCES.indexOf(source) + 1) % MEAN_SOURCES.length];
+  return (
+    <Frame
+      title="Averages of many draws"
+      summary={`${group(repeats)} averages, each of ${plural(n, "draw")} from ${spec.name}. The averages centre on ${dp(center, 3)}, against a true mean of ${dp(spec.mean, 3)}. Their standard deviation is ${dp(spread, 3)}, close to σ/√n = ${dp(spec.sd, 3)}/√${n} = ${dp(theory, 3)}. ${dp(near * 100, 1)}% of them lie within two of those of the mean, against 95% for a normal. The curve is the normal distribution with that mean and standard deviation.`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setSource(nextSource)}>
+            {`Average ${MEAN_SPECS[nextSource].name.split(",")[0]}`}
+          </button>
+          <Slider label="draws in each average" value={sizeAt} onChange={setSizeAt} min={0} max={MEAN_SIZES.length - 1} text={`${n}`} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 240" role="img" aria-label={`A histogram of ${group(repeats)} averages of ${n} draws, with a normal curve over it`}>
+        {counts.map((c, i) => (
+          <rect key={i} x={40 + (i * 360) / bins + 1} y={sy(c)} width={360 / bins - 2} height={200 - sy(c)} className="fig-accent" opacity={0.7} />
+        ))}
+        <polyline points={curve} className="fig-line" />
+        <line x1="40" y1="200" x2="400" y2="200" className="fig-axis" />
+        <line x1={sx(spec.mean)} y1="30" x2={sx(spec.mean)} y2="200" className="fig-guide" />
+        <text x="40" y="218" textAnchor="middle" className="fig-small">
+          {dp(spec.low, 2)}
+        </text>
+        <text x="400" y="218" textAnchor="middle" className="fig-small">
+          {dp(spec.high, 2)}
+        </text>
+        <text x={sx(spec.mean)} y="234" textAnchor="middle" className="fig-small">
+          {`mean ${dp(spec.mean, 2)}`}
+        </text>
+        <text x="40" y="22" className="fig-small">
+          {`averages of ${n}: spread ${dp(spread, 3)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5767,6 +5844,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "density-area": DensityArea,
   "birthday-curve": BirthdayCurve,
   "tail-bounds": TailBounds,
+  "sample-means": SampleMeans,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

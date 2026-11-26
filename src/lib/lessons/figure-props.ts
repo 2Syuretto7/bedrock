@@ -82,6 +82,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "density-area": z.strictObject({ shape: z.enum(["uniform", "triangle", "exponential", "normal"]).optional(), from: z.number().min(0).max(10).optional(), to: z.number().min(0).max(10).optional() }),
   "birthday-curve": z.strictObject({ space: z.enum(["days", "pins", "codes", "hashes"]).optional(), people: z.number().int().min(1).optional() }),
   "tail-bounds": z.strictObject({ variable: z.enum(["heads", "requests", "response"]).optional(), threshold: z.number().optional() }),
+  "sample-means": z.strictObject({ source: z.enum(["die", "wait", "rare", "even"]).optional(), n: z.number().int().optional(), seed: z.number().int().optional() }),
   "union-find": z.strictObject({ bySize: z.boolean().optional(), find: z.number().optional(), joins: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
