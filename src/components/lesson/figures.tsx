@@ -7420,6 +7420,95 @@ function ChangeRipple(props: Props) {
   );
 }
 
+const SF_FLAGS = ["paid", "packed", "shipped", "delivered", "cancelled"];
+const SF_STATES: [number, string][] = [
+  [0, "PLACED"],
+  [1, "PAID"],
+  [3, "PACKED"],
+  [7, "SHIPPED"],
+  [15, "DELIVERED"],
+  [16, "CANCELLED before payment"],
+  [17, "CANCELLED after payment"],
+  [19, "CANCELLED after packing"],
+];
+
+/** Why an impossible combination of order flags is impossible, or an empty string for a real state. */
+function sfProblem(bits: number): string {
+  const has = (f: string) => (bits & (1 << SF_FLAGS.indexOf(f))) !== 0;
+  if (has("cancelled") && has("delivered")) return "cancelled and delivered at once";
+  if (has("cancelled") && has("shipped")) return "cancelled after it shipped";
+  if (has("delivered") && !has("shipped")) return "delivered but never shipped";
+  if (has("shipped") && !has("packed")) return "shipped but never packed";
+  if (has("packed") && !has("paid")) return "packed before it was paid for";
+  return "";
+}
+
+/** Five true-or-false flags on an order against the handful of states an order can really be in. */
+function StateFlags(props: Props) {
+  const start = Array.isArray(props.flags) ? props.flags.filter((f): f is string => typeof f === "string" && SF_FLAGS.includes(f)) : [];
+  const [bits, setBits] = useState(start.reduce((b, f) => b | (1 << SF_FLAGS.indexOf(f)), 0));
+  const toggle = (i: number) => setBits(bits ^ (1 << i));
+  const on = SF_FLAGS.filter((_, i) => (bits & (1 << i)) !== 0);
+  const state = SF_STATES.find(([b]) => b === bits);
+  const problem = sfProblem(bits);
+  const flagsText = on.length === 0 ? "no flags set" : on.join(", ");
+  const summary = state
+    ? `Flags: ${flagsText}. This is a real state, ${state[1]}. Of the 32 combinations five true-or-false flags allow, only ${SF_STATES.length} describe an order that can exist; an enum with those ${SF_STATES.length} values cannot express the other ${32 - SF_STATES.length}.`
+    : `Flags: ${flagsText}. No order can be in this state: ${problem}. The five flags allow it anyway, as they allow ${32 - SF_STATES.length} impossible combinations in all; an enum of the ${SF_STATES.length} real states cannot express it.`;
+  return (
+    <Frame
+      title="Flags against states"
+      summary={summary}
+      controls={
+        <>
+          {SF_FLAGS.map((f, i) => (
+            <button key={f} type="button" className="btn btn-secondary btn-small" aria-pressed={(bits & (1 << i)) !== 0} onClick={() => toggle(i)}>
+              {f}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 214" role="img" aria-label={state ? `A real state: ${state[1]}` : `An impossible combination: ${problem}`}>
+        <text x={8} y={16} className="fig-small" style={{ fontWeight: 600 }}>
+          all 32 combinations of the flags
+        </text>
+        {Array.from({ length: 32 }, (_, i) => {
+          const real = SF_STATES.some(([b]) => b === i);
+          const x = 8 + (i % 8) * 30;
+          const y = 28 + Math.floor(i / 8) * 30;
+          return (
+            <rect
+              key={i}
+              x={x}
+              y={y}
+              width={24}
+              height={24}
+              rx={3}
+              className={real ? "fig-accent" : "fig-ghost"}
+              style={i === bits ? { stroke: "var(--text)", strokeWidth: 3 } : undefined}
+            />
+          );
+        })}
+        <text x={8} y={164} className="fig-small">
+          filled: one of the 8 real states
+        </text>
+        <text x={280} y={16} className="fig-small" style={{ fontWeight: 600 }}>
+          the enum
+        </text>
+        {SF_STATES.map(([b, name], k) => (
+          <text key={name} x={280} y={38 + k * 17} className="fig-small" style={b === bits ? { fill: "var(--text)", fontWeight: 600 } : undefined}>
+            {b === bits ? `▸ ${name}` : `  ${name}`}
+          </text>
+        ))}
+        <text x={8} y={200} className="fig-small" style={{ fill: "var(--text)" }}>
+          {state ? `real: ${state[1]}` : `impossible: ${problem}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -8753,6 +8842,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "schema-versions": SchemaVersions,
   "interface-swap": InterfaceSwap,
   "change-ripple": ChangeRipple,
+  "state-flags": StateFlags,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
