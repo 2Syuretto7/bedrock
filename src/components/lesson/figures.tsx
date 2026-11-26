@@ -6945,6 +6945,104 @@ function DenormTradeoff(props: Props) {
   );
 }
 
+const DE_ORDERS = [1, 10, 100, 1000];
+
+/** One line of a document listing, indented by its leading spaces, on a marked band when lit. */
+function DeLine({ x, y, line, lit }: { x: number; y: number; line: string; lit: boolean }) {
+  const indent = line.length - line.trimStart().length;
+  const text = line.trimStart();
+  const left = x + indent * 6.6;
+  return (
+    <g>
+      {lit && <rect x={left - 3} y={y - 11} width={text.length * 6.6 + 6} height={15} className="fig-accent" />}
+      <text x={left} y={y} className="fig-small" style={lit ? { fill: "var(--bg)" } : undefined}>
+        {text}
+      </text>
+    </g>
+  );
+}
+
+/** One order document with its customer embedded or referenced, and what each choice costs to read and to change. */
+function DocEmbed(props: Props) {
+  const [mode, setMode] = useState(props.mode === "reference" ? "reference" : "embed");
+  const [orders, setOrders] = useState(DE_ORDERS.includes(num(props.orders, 10)) ? num(props.orders, 10) : 10);
+  const embed = mode === "embed";
+  const reads = embed ? 1 : 2;
+  const writes = embed ? orders : 1;
+  const ordersText = `${group(orders)} ${plural(orders, "order", "orders")}`;
+  const summary = embed
+    ? `The customer is embedded: each of Asha's ${ordersText} carries its own copy of her name and phone number, next to its lines. Showing an order with its customer takes ${reads} read. When Asha changes her phone number, ${group(writes)} ${plural(writes, "document", "documents")} must be rewritten, and any one missed shows the old number.`
+    : `The customer is referenced: each of Asha's ${ordersText} stores only her id, 77, next to its lines, and her name and phone number live once, in customer document 77. Showing an order with its customer takes ${reads} reads. When Asha changes her phone number, ${group(writes)} document is rewritten.`;
+  const order = embed
+    ? ['{ "id": 5012,', '  "customer": {', '    "name": "Asha Rao",', '    "phone": "98450 12345" },', '  "lines": [', '    { "item": "dosa", "qty": 2 },', '    { "item": "coffee", "qty": 1 } ] }']
+    : ['{ "id": 5012,', '  "customer": 77,', '  "lines": [', '    { "item": "dosa", "qty": 2 },', '    { "item": "coffee", "qty": 1 } ] }'];
+  const lit = (line: string) => line.includes('"phone"');
+  const customer = ['{ "id": 77,', '  "name": "Asha Rao",', '  "phone": "98450 12345" }'];
+  const stats: [string, string][] = [
+    ["reads to show an order with its customer", group(reads)],
+    ["writes when Asha changes her phone number", group(writes)],
+    ["copies of her phone number", group(embed ? orders : 1)],
+  ];
+  return (
+    <Frame
+      title="Embedding or referencing the customer"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={embed} onClick={() => setMode("embed")}>
+            embed
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!embed} onClick={() => setMode("reference")}>
+            reference
+          </button>
+          <span className="fig-stepper">
+            <span className="label">Asha&apos;s orders</span>
+          </span>
+          {DE_ORDERS.map((n) => (
+            <button key={n} type="button" className="btn btn-secondary btn-small" aria-pressed={orders === n} aria-label={`${n} ${plural(n, "order", "orders")}`} onClick={() => setOrders(n)}>
+              {group(n)}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 480 250" role="img" aria-label={`${embed ? "Embedded" : "Referenced"} customer: ${reads} ${plural(reads, "read", "reads")} to show an order, ${group(writes)} ${plural(writes, "write", "writes")} to change her phone number`}>
+        <text x={8} y={16} className="fig-small" style={{ fontWeight: 600 }}>
+          {embed ? `order 5012, one of ${ordersText}` : "order 5012"}
+        </text>
+        {order.map((line, i) => (
+          <DeLine key={i} x={8} y={36 + i * 15} line={line} lit={lit(line)} />
+        ))}
+        {!embed && (
+          <g>
+            <text x={286} y={16} className="fig-small" style={{ fontWeight: 600 }}>
+              customer 77, stored once
+            </text>
+            {customer.map((line, i) => (
+              <DeLine key={i} x={286} y={36 + i * 15} line={line} lit={lit(line)} />
+            ))}
+            <line x1={132} y1={47} x2={278} y2={32} className="fig-guide" />
+          </g>
+        )}
+        <line x1={8} y1={148} x2={472} y2={148} className="fig-line" />
+        {stats.map(([label, value], i) => (
+          <g key={label}>
+            <text x={8} y={170 + i * 20} className="fig-small">
+              {label}
+            </text>
+            <text x={420} y={170 + i * 20} className="fig-small" style={{ fontWeight: 600 }}>
+              {value}
+            </text>
+          </g>
+        ))}
+        <text x={8} y={240} className="fig-small">
+          {embed ? "one read, but every copy must be rewritten on a change" : "one write on a change, but one more read to show"}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -8273,6 +8371,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "fd-closure": FdClosure,
   "normalise-steps": NormaliseSteps,
   "denorm-tradeoff": DenormTradeoff,
+  "doc-embed": DocEmbed,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
