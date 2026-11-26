@@ -6078,7 +6078,7 @@ function GroupBuckets(props: Props) {
   const value = (v: number) => (agg === "avg" ? dp(v, 2) : group(v));
   const expr = agg === "count" ? "count(*)" : `${agg}(amount)`;
   const summary = `select store, ${expr} from orders group by store having count(*) >= ${least}. The ${GB_ORDERS.length} rows fall into ${groups.length} groups, one per store: ${groups.map((g) => `${g.store} with ${plural(g.size, "row")}`).join(", ")}. Each group becomes one row: ${groups.map((g) => `${g.store} ${value(g.value)}`).join(", ")}. ${
-    kept.length === groups.length ? `Every group has at least ${least} rows, so having keeps them all.` : `Having drops ${groups.filter((g) => g.size < least).map((g) => g.store).join(" and ") || "none"}, with fewer than ${least} rows.`
+    kept.length === groups.length ? `Every group has at least ${plural(least, "row")}, so having keeps them all.` : `Having drops ${groups.filter((g) => g.size < least).map((g) => g.store).join(" and ") || "none"}, with fewer than ${least} rows.`
   } Result: ${kept.length === 0 ? "no rows" : kept.map((g) => `${g.store} ${value(g.value)}`).join("; ")}.`;
   const isKept = (s: string) => kept.some((g) => g.store === s);
   return (
@@ -6221,7 +6221,18 @@ function WindowFrame(props: Props) {
           frameRows.map((r) => group(r[2])).join(" + "),
           kind === "moving" ? `÷ ${frameRows.length} = ${show(value(cur))}` : `= ${show(value(cur))}`,
         ];
-  const summary = `${WF_SQL[kind].join(" ").replace(/\s+/g, " ").replace("( ", "(")}. Each of the ${WF_ROWS.length} rows stays in the result and gains one value, computed from the rows of its own store that its window covers. Current row ${row}: ${store}, day ${day}, ₹${group(amount)}. ${working.join(" ")}. The other store's rows are outside this row's partition. Results for every row: ${WF_ROWS.map((r, i) => `${r[0]} day ${r[1]} ${show(value(i))}`).join(", ")}.`;
+  const amounts = frameRows.map((r) => group(r[2]));
+  const explain =
+    kind === "rank"
+      ? frameRows.length === 0
+        ? `No ${store} amount is above ₹${group(amount)}, so its rank is 1.`
+        : `${store} amounts above ₹${group(amount)}: ${amounts.join(", ")}, so its rank is 1 + ${frameRows.length} = ${1 + frameRows.length}.`
+      : kind === "whole"
+        ? `Its window is all of ${store}: ${amounts.join(" + ")} = ${show(value(cur))}.`
+        : kind === "moving"
+          ? `Its frame is ${store} days ${frameRows[0][1]} to ${day}: (${amounts.join(" + ")}) ÷ ${frameRows.length} = ${show(value(cur))}.`
+          : `Its frame is ${store} days ${frameRows[0][1]} to ${day}: ${amounts.join(" + ")} = ${show(value(cur))}.`;
+  const summary = `${WF_SQL[kind].join(" ").replace(/\s+/g, " ").replace("( ", "(")}. Each of the ${WF_ROWS.length} rows stays in the result and gains one value, computed from the rows of its own store that its window covers. Current row ${row}: ${store}, day ${day}, ₹${group(amount)}. ${explain} The other store's rows are outside this row's partition. Results for every row: ${WF_ROWS.map((r, i) => `${r[0]} day ${r[1]} ${show(value(i))}`).join(", ")}.`;
   return (
     <Frame
       title="A window over each row"
@@ -6295,7 +6306,7 @@ function ThreeValued(props: Props) {
   const tries = outcomes(a, b).map((o) => `${expr(tvName(o.a), tvName(o.b))} = ${tvName(o.r)}`);
   const verdict = tries.length === 1 ? `Nothing is unknown: ordinary logic gives ${r}.` : r === "unknown" ? `The fillings disagree, so the result is unknown.` : `Every filling gives ${r}, so the result is ${r}.`;
   const table = op === "not" ? TV_VALUES.map((v) => `not ${v} is ${result(v, "true")}`).join("; ") : TV_VALUES.flatMap((x) => TV_VALUES.map((y) => `${x} ${op} ${y} is ${result(x, y)}`)).join("; ");
-  const summary = `The truth table of ${op} with three values. Unknown means true or false, not yet known. Selected: ${expr(a, b)}. ${tries.length > 1 ? `Filling in the unknown: ${tries.join("; ")}.` : ""} ${verdict} The whole table: ${table}. A where clause keeps a row only when its condition is true, so unknown rows are dropped along with false ones.`;
+  const summary = `The truth table of ${op} with three values. Unknown means true or false, not yet known. Selected: ${expr(a, b)}. ${tries.length > 1 ? `Filling in the unknown: ${tries.join("; ")}. ` : ""}${verdict} The whole table: ${table}. A where clause keeps a row only when its condition is true, so unknown rows are dropped along with false ones.`;
   const x0 = 120;
   const w = op === "not" ? 120 : 96;
   const h = 32;
@@ -6395,12 +6406,12 @@ function TransferCrash(props: Props) {
   const verdict =
     step < last
       ? pending
-        ? "Inside the transaction: changes are visible here but not yet committed."
-        : "Each statement is committed on its own as soon as it runs."
+        ? "Inside the transaction: visible here, not yet committed."
+        : "Each statement is committed as soon as it runs."
       : crash
         ? inTx
-          ? "The half-done transaction is undone: no money lost."
-          : `The debit was already saved and the credit never ran: ${money(1200 - total)} lost.`
+          ? "The unfinished transaction is undone: nothing lost."
+          : `The debit was saved and the credit never ran: ${money(1200 - total)} lost.`
         : "Both updates are saved: the money has moved.";
   const summary = `${inTx ? "A transaction wraps the two updates." : "No transaction: each update is committed by itself."} ${crash ? "The power fails between the debit and the credit." : "Nothing fails."} Step ${step} of ${last}${step > 0 ? `, after: ${statements[step - 1]}` : ", before anything runs"}. This connection sees Asha ${money(seen.Asha)} and Bilal ${money(seen.Bilal)}; on disk, Asha ${money(disk.Asha)} and Bilal ${money(disk.Bilal)}, ${money(total)} in all. ${verdict}`;
   return (
@@ -6419,12 +6430,12 @@ function TransferCrash(props: Props) {
         </>
       }
     >
-      <svg viewBox="0 0 440 236" role="img" aria-label={`Wallet transfer, step ${step} of ${last}; on disk Asha ${money(disk.Asha)}, Bilal ${money(disk.Bilal)}`}>
+      <svg viewBox="0 0 470 236" role="img" aria-label={`Wallet transfer, step ${step} of ${last}; on disk Asha ${money(disk.Asha)}, Bilal ${money(disk.Bilal)}`}>
         {statements.map((s, i) => (
           <g key={s}>
-            <rect x={8} y={8 + i * 24} width={424} height={20} className={i === step - 1 ? "fig-accent" : i < step ? "fig-fill" : "fig-ghost"} />
+            <rect x={8} y={8 + i * 24} width={454} height={20} className={i === step - 1 ? "fig-accent" : i < step ? "fig-fill" : "fig-ghost"} />
             <text x={14} y={22 + i * 24} className="fig-small" style={i === step - 1 ? { fill: "var(--bg)" } : undefined}>
-              {s.startsWith("update") ? s.replace("update wallets set ", "").replace(" where name =", ", where name =") : s}
+              {s}
             </text>
           </g>
         ))}
@@ -6483,6 +6494,10 @@ function IndexLookup(props: Props) {
   const last = method === "scan" ? IX_ORDERS.length : IX_SEARCH.length;
   const [stepRaw, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, IX_ORDERS.length));
   const step = Math.min(stepRaw, last);
+  const choose = (m: IxMethod) => {
+    setMethod(m);
+    setStep(0);
+  };
   const first = IX_SEARCH[IX_SEARCH.length - 1].lo;
   const matches = IX_ENTRIES.map((e, i) => i).filter((i) => IX_ENTRIES[i][1] === IX_TARGET);
   const done = step === last;
@@ -6510,7 +6525,7 @@ function IndexLookup(props: Props) {
         ? `The index keeps every (customer, id) pair sorted by customer.`
         : now
           ? `Comparison ${step}: entry ${now.mid + 1} is ${IX_ENTRIES[now.mid][1]}, ${IX_ENTRIES[now.mid][1] < IX_TARGET ? `before ${IX_TARGET}, so look later` : `not before ${IX_TARGET}, so look here or earlier`}.`
-          : `After ${IX_SEARCH.length - 1} comparisons, entries ${first + 1} to ${first + matches.length} hold ${IX_TARGET}: orders ${matches.map((i) => IX_ENTRIES[i][0]).join(" and ")}.`;
+          : `After ${IX_SEARCH.length - 1} comparisons, entries ${first + 1} and ${first + matches.length} hold ${IX_TARGET}: orders ${matches.map((i) => IX_ENTRIES[i][0]).join(" and ")}.`;
   const tail =
     method === "scan"
       ? done
@@ -6519,24 +6534,35 @@ function IndexLookup(props: Props) {
       : done
         ? `About log₂ ${IX_ORDERS.length} = ${Math.log2(IX_ORDERS.length)} comparisons, then one read per match.`
         : "";
-  const summary = `select id from orders where customer = '${IX_TARGET}'. ${method === "scan" ? "Full scan of the table." : "Search in an index on customer."} Step ${step} of ${last}. ${line} ${tail} The table holds ${IX_ORDERS.length} orders; ${IX_TARGET} placed orders ${matches.map((i) => IX_ENTRIES[i][0]).join(" and ")}.`;
+  const ids = found.map((o) => o[0]).join(", ");
+  const notes =
+    method === "scan"
+      ? step === 0
+        ? ["full scan: read every", "row in stored order"]
+        : [`rows read: ${step} of ${IX_ORDERS.length}`, `found: ${ids || "none"}`, ...(done ? [`another ${IX_TARGET} could`, "be anywhere"] : [])]
+      : step === 0
+        ? ["index search: entries", "sorted by customer"]
+        : now
+          ? [`comparison ${step}:`, `entry ${now.mid + 1} is ${IX_ENTRIES[now.mid][1]}`, IX_ENTRIES[now.mid][1] < IX_TARGET ? `before ${IX_TARGET}:` : `not before ${IX_TARGET}:`, IX_ENTRIES[now.mid][1] < IX_TARGET ? "look later" : "look here or earlier"]
+          : [`${IX_SEARCH.length - 1} comparisons, then`, `entries ${first + 1} and ${first + matches.length} give`, `orders ${matches.map((i) => IX_ENTRIES[i][0]).join(" and ")}`];
+  const summary = `select id from orders where customer = '${IX_TARGET}'. ${method === "scan" ? "Full scan of the table." : "Search in an index on customer."} Step ${step} of ${last}. ${[line, tail].filter((t) => t).join(" ")} The table holds ${IX_ORDERS.length} orders; ${IX_TARGET} placed orders ${matches.map((i) => IX_ENTRIES[i][0]).join(" and ")}.`;
   return (
     <Frame
       title="Finding rows with and without an index"
       summary={summary}
       controls={
         <>
-          <button type="button" className="btn btn-secondary btn-small" aria-pressed={method === "scan"} onClick={() => setMethod("scan")}>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={method === "scan"} onClick={() => choose("scan")}>
             full scan
           </button>
-          <button type="button" className="btn btn-secondary btn-small" aria-pressed={method === "index"} onClick={() => setMethod("index")}>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={method === "index"} onClick={() => choose("index")}>
             index search
           </button>
           <Stepper label="step" value={step} onChange={setStep} min={0} max={last} />
         </>
       }
     >
-      <svg viewBox="0 0 440 340" role="img" aria-label={`Looking for ${IX_TARGET}'s orders by ${method === "scan" ? "full scan" : "index search"}, step ${step} of ${last}`}>
+      <svg viewBox="0 0 412 300" role="img" aria-label={`Looking for ${IX_TARGET}'s orders by ${method === "scan" ? "full scan" : "index search"}, step ${step} of ${last}`}>
         <SqlTable x={8} y={22} widths={[32, 72]} head={["id", "customer"]} rows={IX_ORDERS.map((o) => [o[0], o[1]])} title="orders, as stored" height={h} mark={(r) => rowMark(r)} />
         <SqlTable
           x={300}
@@ -6554,12 +6580,11 @@ function IndexLookup(props: Props) {
               return <line key={i} x1={300} y1={rowY(i)} x2={112} y2={rowY(r)} className="fig-axis" />;
             })
           : null}
-        <text x={8} y={318} className="fig-small">
-          {line}
-        </text>
-        <text x={8} y={334} className="fig-small">
-          {tail}
-        </text>
+        {notes.map((note, i) => (
+          <text key={i} x={124} y={236 + i * 16} className="fig-small">
+            {note}
+          </text>
+        ))}
       </svg>
     </Frame>
   );
