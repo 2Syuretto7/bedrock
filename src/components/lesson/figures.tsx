@@ -6265,6 +6265,108 @@ function WindowFrame(props: Props) {
   );
 }
 
+type TvValue = "true" | "unknown" | "false";
+type TvOp = "and" | "or" | "not";
+const TV_VALUES: TvValue[] = ["true", "unknown", "false"];
+const TV_OPS: TvOp[] = ["and", "or", "not"];
+const tvKnown = (v: TvValue): boolean[] => (v === "true" ? [true] : v === "false" ? [false] : [true, false]);
+const tvName = (b: boolean): TvValue => (b ? "true" : "false");
+
+/** Three-valued logic: unknown stands for "true or false, not yet known", and a result is known only when every way of filling it in agrees. */
+function ThreeValued(props: Props) {
+  const [op, setOp] = useState<TvOp>(TV_OPS.includes(props.op as TvOp) ? (props.op as TvOp) : "and");
+  const [cellRaw, setCell] = useState(clamp(Math.round(num(props.cell, 2)), 1, 9));
+  const cells = op === "not" ? 3 : 9;
+  const cell = Math.min(cellRaw, cells);
+  const apply = (a: boolean, b: boolean) => (op === "and" ? a && b : op === "or" ? a || b : !a);
+  const outcomes = (a: TvValue, b: TvValue) => {
+    const seen: { a: boolean; b: boolean; r: boolean }[] = [];
+    for (const x of tvKnown(a)) for (const y of op === "not" ? [true] : tvKnown(b)) seen.push({ a: x, b: y, r: apply(x, y) });
+    return seen;
+  };
+  const result = (a: TvValue, b: TvValue): TvValue => {
+    const rs = outcomes(a, b).map((o) => o.r);
+    return rs.every((r) => r) ? "true" : rs.every((r) => !r) ? "false" : "unknown";
+  };
+  const a = TV_VALUES[op === "not" ? cell - 1 : Math.floor((cell - 1) / 3)];
+  const b = TV_VALUES[op === "not" ? 0 : (cell - 1) % 3];
+  const r = result(a, b);
+  const expr = (x: string, y: string) => (op === "not" ? `not ${x}` : `${x} ${op} ${y}`);
+  const tries = outcomes(a, b).map((o) => `${expr(tvName(o.a), tvName(o.b))} = ${tvName(o.r)}`);
+  const verdict = tries.length === 1 ? `Nothing is unknown: ordinary logic gives ${r}.` : r === "unknown" ? `The fillings disagree, so the result is unknown.` : `Every filling gives ${r}, so the result is ${r}.`;
+  const table = op === "not" ? TV_VALUES.map((v) => `not ${v} is ${result(v, "true")}`).join("; ") : TV_VALUES.flatMap((x) => TV_VALUES.map((y) => `${x} ${op} ${y} is ${result(x, y)}`)).join("; ");
+  const summary = `The truth table of ${op} with three values. Unknown means true or false, not yet known. Selected: ${expr(a, b)}. ${tries.length > 1 ? `Filling in the unknown: ${tries.join("; ")}.` : ""} ${verdict} The whole table: ${table}. A where clause keeps a row only when its condition is true, so unknown rows are dropped along with false ones.`;
+  const x0 = 120;
+  const w = op === "not" ? 120 : 96;
+  const h = 32;
+  const cls = (v: TvValue, selected: boolean) => (selected ? "fig-accent" : v === "unknown" ? "fig-fill" : "fig-cell");
+  return (
+    <Frame
+      title="Logic with a third value"
+      summary={summary}
+      controls={
+        <>
+          {TV_OPS.map((o) => (
+            <button key={o} type="button" className="btn btn-secondary btn-small" aria-pressed={op === o} onClick={() => setOp(o)}>
+              {o}
+            </button>
+          ))}
+          <Stepper label="cell" value={cell} onChange={setCell} min={1} max={cells} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 248" role="img" aria-label={`Truth table of ${op} with true, unknown and false; selected cell ${expr(a, b)} is ${r}`}>
+        <text x={8} y={22} className="fig-small" style={{ fontWeight: 600 }}>
+          {op === "not" ? "A ↓" : "A ↓  B →"}
+        </text>
+        {op === "not" ? (
+          <text x={x0 + 4} y={22} className="fig-small" style={{ fontWeight: 600 }}>
+            not A
+          </text>
+        ) : (
+          TV_VALUES.map((v, c) => (
+            <text key={"h" + v} x={x0 + c * w + 4} y={22} className="fig-small" style={{ fontWeight: 600 }}>
+              {v}
+            </text>
+          ))
+        )}
+        {TV_VALUES.map((ra, i) => (
+          <g key={"r" + ra}>
+            <text x={8} y={30 + i * h + 21} className="fig-small" style={{ fontWeight: 600 }}>
+              {ra}
+            </text>
+            {(op === "not" ? ["true" as TvValue] : TV_VALUES).map((cb, j) => {
+              const v = result(ra, cb);
+              const selected = (op === "not" ? i + 1 : i * 3 + j + 1) === cell;
+              return (
+                <g key={"c" + cb}>
+                  <rect x={x0 + j * w} y={30 + i * h} width={w - 4} height={h - 4} className={cls(v, selected)} />
+                  <text x={x0 + j * w + 8} y={30 + i * h + 19} className="fig-small" style={selected ? { fill: "var(--bg)" } : undefined}>
+                    {v}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        ))}
+        <text x={8} y={148} className="fig-small" style={{ fontWeight: 600 }}>
+          {`${expr(a, b)} = ${r}`}
+        </text>
+        {tries.length > 1
+          ? tries.map((t, i) => (
+              <text key={"t" + i} x={8} y={168 + i * 16} className="fig-small">
+                {`fill in: ${t}`}
+              </text>
+            ))
+          : null}
+        <text x={8} y={tries.length > 1 ? 168 + tries.length * 16 + 4 : 168} className="fig-small">
+          {verdict}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -7586,6 +7688,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "group-buckets": GroupBuckets,
   "subquery-steps": SubquerySteps,
   "window-frame": WindowFrame,
+  "three-valued": ThreeValued,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
