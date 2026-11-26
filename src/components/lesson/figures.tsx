@@ -7578,6 +7578,70 @@ function ErrorUnwind(props: Props) {
   );
 }
 
+/** A test of a shop's opening hours, run at different hours, with the clock read inside the function or passed in. */
+function DiClock(props: Props) {
+  const [injected, setInjected] = useState(props.mode === "injected");
+  const [hour, setHour] = useState(clamp(Math.round(num(props.hour, 23)), 0, 23));
+  const open = (h: number) => h >= 9 && h < 21;
+  const passes = (h: number) => injected || open(h);
+  const passing = Array.from({ length: 24 }, (_, h) => h).filter(passes).length;
+  const hh = (h: number) => `${String(h).padStart(2, "0")}:00`;
+  const code = injected
+    ? ["def is_open(clock):", "    return 9 <= clock.now() < 21", "", "test: is_open(FakeClock(10)) is True", "test: is_open(FakeClock(22)) is False"]
+    : ["def is_open():", "    return 9 <= current_hour() < 21", "", "test: is_open() is True"];
+  const summary = injected
+    ? `The clock is passed in. Run at ${hh(hour)}, the test hands is_open a fake clock reading 10:00 and gets True, then one reading 22:00 and gets False: it passes, as it does at every hour of the day, and it now checks closing time too.`
+    : `The clock is read inside is_open. Run at ${hh(hour)}, the test gets ${open(hour) ? "True" : "False"} and ${open(hour) ? "passes" : "fails"}. It passes only when the test happens to run between 09:00 and 21:00, ${passing} of 24 hours, and closing time cannot be tested at all without waiting for it.`;
+  return (
+    <Frame
+      title="A test that depends on the time it runs"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!injected} onClick={() => setInjected(false)}>
+            clock read inside
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={injected} onClick={() => setInjected(true)}>
+            clock passed in
+          </button>
+          <Stepper label="test runs at hour" value={hour} min={0} max={23} onChange={setHour} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 214" role="img" aria-label={`Run at ${hh(hour)}, the test ${passes(hour) ? "passes" : "fails"}; it passes at ${passing} of 24 hours`}>
+        {code.map((line, i) => (
+          <text key={i} x={8 + (line.length - line.trimStart().length) * 6.6} y={18 + i * 16} className="fig-small" style={{ fill: "var(--text)" }}>
+            {line.trimStart()}
+          </text>
+        ))}
+        <text x={8} y={116} className="fig-small">
+          when the test runs: filled = passes
+        </text>
+        {Array.from({ length: 24 }, (_, h) => (
+          <rect
+            key={h}
+            x={8 + h * 18.5}
+            y={124}
+            width={15}
+            height={24}
+            rx={2}
+            className={passes(h) ? "fig-accent" : "fig-ghost"}
+            style={h === hour ? { stroke: "var(--text)", strokeWidth: 3 } : undefined}
+          />
+        ))}
+        {[0, 6, 12, 18, 23].map((h) => (
+          <text key={h} x={8 + h * 18.5 + 7.5} y={164} textAnchor="middle" className="fig-small">
+            {h}
+          </text>
+        ))}
+        <text x={8} y={200} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`run at ${hh(hour)}: ${passes(hour) ? "passes" : "fails"}; passes at ${passing} of 24 hours`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -8913,6 +8977,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "change-ripple": ChangeRipple,
   "state-flags": StateFlags,
   "error-unwind": ErrorUnwind,
+  "di-clock": DiClock,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

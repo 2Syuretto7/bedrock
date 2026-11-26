@@ -120,6 +120,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "change-ripple": z.strictObject({ changed: z.string().optional() }),
   "state-flags": z.strictObject({ flags: z.array(z.enum(["paid", "packed", "shipped", "delivered", "cancelled"])).optional() }),
   "error-unwind": z.strictObject({ error: z.enum(["declined", "timeout-once", "timeout-thrice", "bug"]).optional() }),
+  "di-clock": z.strictObject({ mode: z.enum(["inside", "injected"]).optional(), hour: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
