@@ -112,6 +112,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "er-cardinality": z.strictObject({ kind: z.enum(["one-one", "one-many", "many-many"]).optional() }),
   "fd-closure": z.strictObject({ start: z.array(z.enum(["pnr", "pax", "name", "train", "train_name", "date", "coach", "berth"])).optional(), step: z.number().optional() }),
   "normalise-steps": z.strictObject({ step: z.number().optional() }),
+  "denorm-tradeoff": z.strictObject({ views: z.number().optional(), likes: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),

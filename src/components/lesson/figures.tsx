@@ -6869,6 +6869,82 @@ function NormaliseSteps(props: Props) {
   );
 }
 
+const DN_VIEWS = [0.01, 0.1, 1, 10, 100, 1000];
+const DN_LIKES = [10, 100, 1000];
+const DN_WRITES = 2000;
+
+/** Rows touched per hour by counting likes on every view, against keeping a count column up to date. */
+function DenormTradeoff(props: Props) {
+  const [views, setViews] = useState(DN_VIEWS.includes(num(props.views, 100)) ? num(props.views, 100) : 100);
+  const [likes, setLikes] = useState(DN_LIKES.includes(num(props.likes, 100)) ? num(props.likes, 100) : 100);
+  const reads = DN_WRITES * views;
+  const plain = { read: reads * likes, write: DN_WRITES };
+  const kept = { read: reads, write: DN_WRITES * 2 };
+  const total = (c: { read: number; write: number }) => c.read + c.write;
+  const show = (n: number) => group(Math.round(n));
+  const bar = (n: number) => Math.max(4, ((Math.log10(n) - 2) / 9) * 250);
+  const better = total(kept) < total(plain) ? "kept" : "plain";
+  const ratio = better === "kept" ? total(plain) / total(kept) : total(kept) / total(plain);
+  const verdict =
+    better === "kept"
+      ? `The count column touches ${dp(ratio, 1)} times fewer rows.`
+      : `Counting on each view touches ${dp(ratio, 1)} times fewer rows; the column is not worth keeping.`;
+  const summary = `${show(DN_WRITES)} likes an hour, ${show(reads)} views an hour (${views} per like), ${show(likes)} likes on a typical post. Counting likes on every view reads ${show(plain.read)} rows and writes ${show(plain.write)}: ${show(total(plain))} in all. Keeping a likes column reads ${show(kept.read)} rows and writes ${show(kept.write)}, since each like also updates its post: ${show(total(kept))} in all. ${verdict}`;
+  const rows: [string, { read: number; write: number }][] = [
+    ["count on every view", plain],
+    ["keep a likes column", kept],
+  ];
+  return (
+    <Frame
+      title="Reading a count against keeping one"
+      summary={summary}
+      controls={
+        <>
+          <span className="fig-stepper">
+            <span className="label">views per like</span>
+          </span>
+          {DN_VIEWS.map((v) => (
+            <button key={v} type="button" className="btn btn-secondary btn-small" aria-pressed={views === v} aria-label={`${v} views per like`} onClick={() => setViews(v)}>
+              {group(v)}
+            </button>
+          ))}
+          <span className="fig-stepper">
+            <span className="label">likes per post</span>
+          </span>
+          {DN_LIKES.map((l) => (
+            <button key={l} type="button" className="btn btn-secondary btn-small" aria-pressed={likes === l} aria-label={`${l} likes per post`} onClick={() => setLikes(l)}>
+              {group(l)}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 176" role="img" aria-label={`Rows touched per hour: ${show(total(plain))} counting on every view, ${show(total(kept))} keeping a column`}>
+        <text x={8} y={16} className="fig-small">
+          rows touched per hour, on a log scale
+        </text>
+        {rows.map(([label, c], i) => (
+          <g key={label}>
+            <text x={8} y={46 + i * 56} className="fig-small" style={{ fontWeight: 600 }}>
+              {label}
+            </text>
+            <rect x={8} y={54 + i * 56} width={bar(total(c))} height={16} className={(better === "kept") === (i === 1) ? "fig-accent" : "fig-fill"} />
+            <text x={16 + bar(total(c))} y={66 + i * 56} className="fig-small">
+              {show(total(c))}
+            </text>
+            <text x={8} y={84 + i * 56} className="fig-small">
+              {`${show(c.read)} read, ${show(c.write)} written`}
+            </text>
+          </g>
+        ))}
+        <text x={8} y={168} className="fig-small">
+          {better === "kept" ? `the column is ${dp(ratio, 1)} times cheaper` : `counting is ${dp(ratio, 1)} times cheaper`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -8196,6 +8272,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "er-cardinality": ErCardinality,
   "fd-closure": FdClosure,
   "normalise-steps": NormaliseSteps,
+  "denorm-tradeoff": DenormTradeoff,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

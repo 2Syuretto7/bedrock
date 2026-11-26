@@ -1,0 +1,684 @@
+concept: q1.denormalisation-and-its-costs
+minutes: 80
+claim: You can say when storing a fact twice on purpose is worth it, by comparing the work saved on reads with the work added to writes, tell a derived copy from a historical fact that only looks like one, keep a copy right within the same transaction, with a trigger or by periodic rebuilding, detect copies that have drifted with a reconciliation query, and name the risks each choice brings.
+recalls: [q1.normal-forms]
+uses: [q0.indexes-from-the-outside, q0.writes-constraints-and-transactions, q0.joins, q0.grouping-and-aggregation, s3.measuring-and-predicting-running-time, f1.logarithms]
+leads: [q1.document-models, q8.materialised-views, q8.facts-dimensions-and-star-schemas]
+starter: |
+  # Scratch space. A like count kept by a trigger.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.executescript("""
+      create table posts (id integer primary key, likes integer not null default 0);
+      create table likes (post integer not null, user text not null, primary key (post, user));
+      create trigger like_added after insert on likes
+      begin
+          update posts set likes = likes + 1 where id = new.post;
+      end;
+      insert into posts (id) values (1);
+      insert into likes values (1, 'asha'), (1, 'bilal');
+  """)
+  print(db.execute("select id, likes from posts").fetchall())
+parts:
+  recall:
+    - text: |
+        [[q1.normal-forms]] split tables until every fact lived in one row, so that no update could leave two copies disagreeing. The price is paid on reads: a report that once read one wide table now joins several, and a count that could have been a column must be recomputed every time. Usually that price is small. Sometimes it is not, and a well-run system stores a fact twice on purpose. This lesson is about deciding when, and about paying the cost honestly. Three quick pulls first.
+  puzzle:
+    - text: |
+        A photo-sharing app shows a like count under every post. The posts are viewed 2,00,000 times an hour in all, and the app receives 2,000 likes an hour. A typical post that is viewed has 500 likes.
+
+        The app stores one row per like, and computes each count when the post is shown, with `select count(*) from likes where post = ?`.
+
+        **How many like rows does it read per hour to show the counts?**
+  intuition:
+    - text: |
+        A kirana shop keeps each regular customer's credit in a notebook, an entry for every purchase on credit and every payment. Adding up a page of entries each time a customer asks "how much do I owe?" is slow, so the shopkeeper also writes the running balance at the top of the page. Now the question takes a glance. But every new entry must also update the balance, and the day he forgets, the balance is wrong until someone adds up the whole page again.
+
+        That balance is **denormalisation**: a fact stored a second time, in a form that is quick to read, at the cost of keeping it right on every write. Whether it pays depends on how often each happens. The figure compares rows touched per hour for counting likes on every view against keeping a likes column on each post.
+    - figure: denorm-tradeoff
+      props: { views: 100, likes: 100 }
+    - text: |
+        With many views per like, counting on each view reads every like row of the post again and again, while the column costs one extra write per like and one row per view. Move the views per like down to 0.01, a count that is updated constantly and hardly ever shown, and the column becomes the waste. The decision is arithmetic, in the style of [[s3.measuring-and-predicting-running-time]]: count the work per operation, multiply by how often each operation happens, and compare.
+  derivation:
+    - text: |
+        **What gets stored twice.** Denormalisation takes several forms. A **derived value**: a count, total or balance that could be computed from other rows, such as `posts.likes`. A **copied column**: the customer's name copied into every order so that the orders page needs no join. A **summary table**: daily sales per store, computed from orders. A **pre-joined table**: a wide reporting table built from several normalised ones. Each is a deliberate step back down the ladder of [[q1.normal-forms]], and each brings back the update anomaly it was designed to avoid, unless something keeps the copies in step.
+
+        **What only looks like a copy.** The price on an order line looks like a copy of the product's price, but it is a different fact: the price the customer paid on that day. When the product's price changes next month, the old orders must not change. The same goes for the delivery address an order was sent to, or the exchange rate a payment used. Storing such a value with the event is correct normalised design, because no dependency makes it follow today's value. The test is to ask: if the source changes, should this change too? If yes, it is a copy that must be maintained; if no, it is history.
+    - question:
+        id: derivation-history
+        type: choice
+        system: s2
+        prompt: |
+          Which of these is a historical fact rather than a copy that must be kept in step?
+        options:
+          - "The unit price stored on each order line at the time of sale"
+          - "A customer's name copied into every one of their orders for display"
+          - "A post's like count stored on the post"
+          - "A store's total sales stored in a summary table"
+        answer: 0
+        explanation: |
+          When the product's price changes, past orders must keep the price that was paid, so the order line's price has no reason to follow it. The other three must change whenever their source changes.
+    - text: |
+        **What it costs.** Every write must now update every copy. One like becomes two writes, the like and the count, and a count kept in three places makes one like four writes. Each copy must also be updated in the same all-or-nothing step as its source, or a failure between the two leaves them disagreeing, the half-done transfer of [[q0.writes-constraints-and-transactions]] in another form. Copies also take space, and every later change to the schema must remember them.
+
+        **Ways to keep a copy right.** There are three, and each copy should have exactly one.
+
+        - **In the same transaction.** The code that inserts a like also updates the count, inside `with db:`. Simple, but every program that writes likes must remember to do it.
+        - **With a trigger.** `create trigger … after insert on likes begin update posts … end` makes the database run the update itself, inside the same statement, whichever program inserted the like. A matching trigger is needed for every way the source can change: insert, delete and update.
+        - **By rebuilding.** Recompute the summary from the source on a schedule, say every 15 minutes or after midnight, and accept that it may be that old. This suits summaries read far more often than they need to be current.
+    - question:
+        id: order-like
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of recording a like with its count kept in the same transaction in order.
+        steps:
+          - "Begin a transaction."
+          - "Insert the like row, which the unique key refuses if the user already liked the post."
+          - "Add one to the post's like count."
+          - "Commit both changes together."
+        explanation: |
+          The count must change only if the like was accepted, so it comes after the insert, and only the commit makes both permanent at once. A refused insert rolls back before the count is touched.
+    - text: |
+        **Checking for drift.** However a copy is maintained, a bug, a manual fix or a forgotten code path will one day make it wrong. A **reconciliation query** recomputes the truth and compares: posts whose stored count differs from `count(*)` of their likes, found with a left join and `having`, from [[q0.joins]] and [[q0.grouping-and-aggregation]]. Running it nightly and alerting on any row it returns turns silent corruption into a ticket.
+
+        **Before denormalising.** Measure first. An index from [[q0.indexes-from-the-outside]] on `likes (post)` makes each count a search instead of a scan, which may be enough; counting 500 index entries is cheap if it happens a few times a second, and expensive if it happens thousands of times. Denormalise the hot path only, write down which copies exist and what keeps each one right, and keep the normalised tables as the source of truth from which any copy can be rebuilt.
+    - question:
+        id: derivation-saving
+        type: numeric
+        system: s2
+        prompt: |
+          A post has 500 likes. Showing it with a stored count reads 1 row instead of 500 like rows. How many rows are saved over 1,000 views?
+        answer: "499000"
+        explanation: |
+          Each view saves $500 - 1 = 499$ rows, so 1,000 views save $4{,}99{,}000$. Against that, each new like costs one extra write.
+  formal:
+    - text: |
+        **Denormalisation.** Storing a fact, or a value derivable from facts, more than once, to make reads cheaper. Forms: derived values, copied columns, summary tables, pre-joined tables.
+
+        **Historical value.** A value recorded with an event, such as the price paid, that must not follow later changes to its source; not a copy.
+
+        **Cost model.** Saving per read times reads per hour, against extra writes per write times writes per hour, plus the risk of drift.
+
+        **Maintenance.** In the same transaction as the source; by triggers on every insert, update and delete of the source; or by periodic rebuild, accepting staleness up to the rebuild interval.
+
+        **Reconciliation.** A query comparing each copy with a recomputation from the source, run regularly.
+
+        **Trigger syntax in SQLite.** `create trigger name after insert on t begin …; end`, with `new.col` for the inserted row and `old.col` for a deleted one.
+  drill:
+    - text: Seconds each. For every copy, ask what keeps it right.
+    - question:
+        id: drill-copied-name
+        type: choice
+        system: s1
+        prompt: |
+          Orders store a copy of the customer's name for display. A customer changes their name. What must happen?
+        options:
+          - "Every one of their orders must be updated too, or the copies disagree."
+          - "Nothing; old orders keep the old name."
+          - "Only the latest order is updated."
+          - "The customer row stays the same."
+        answer: 0
+        explanation: A display copy must follow its source. If the business wanted the name as it was at the time of ordering, it would be history, not a copy.
+    - question:
+        id: drill-writes
+        type: numeric
+        system: s1
+        prompt: |
+          A like count is stored on the post, in the author's profile and in a daily summary. How many rows does one like write?
+        answer: "4"
+        explanation: The like row itself and three copies of the count.
+    - question:
+        id: drill-stale
+        type: numeric
+        system: s1
+        prompt: |
+          A summary table is rebuilt every 15 minutes. At most how many minutes behind the source can it be?
+        answer: "15"
+        explanation: Just before the next rebuild, it reflects the source as it was at the last one.
+    - question:
+        id: drill-trigger
+        type: choice
+        system: s1
+        prompt: |
+          Why keep a count with a trigger rather than in application code?
+        options:
+          - "The database runs it on every insert, whichever program made it."
+          - "Triggers make reads faster."
+          - "Triggers need no transaction."
+          - "Application code cannot update two tables."
+        answer: 0
+        explanation: A forgotten code path cannot skip a trigger.
+    - question:
+        id: drill-delete
+        type: choice
+        system: s1
+        prompt: |
+          A trigger adds one to the count when a like is inserted. What else is needed?
+        options:
+          - "A trigger that subtracts one when a like is deleted"
+          - "Nothing"
+          - "An index on posts"
+          - "A unique key on the count"
+        answer: 0
+        explanation: Every way the source can change needs a matching change to the copy, or unlikes leave the count too high.
+    - question:
+        id: predict-trigger
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table posts (id integer primary key, likes integer not null default 0);
+              create table likes (post integer, user text);
+              create trigger added after insert on likes begin update posts set likes = likes + 1 where id = new.post; end;
+              insert into posts (id) values (1), (2);
+              insert into likes values (1, 'asha'), (2, 'asha'), (1, 'dev');
+              delete from likes where user = 'dev';
+          """)
+          print(db.execute("select id, likes from posts").fetchall())
+        output: "[(1, 2), (2, 1)]"
+        explanation: Three inserts fired the trigger, but the delete fired nothing, so post 1 still counts Dev's removed like.
+    - question:
+        id: predict-history
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table products (id integer primary key, price integer);
+              create table lines (product integer, price integer);
+              insert into products values (1, 120);
+              insert into lines values (1, 120);
+              update products set price = 140 where id = 1;
+          """)
+          print(db.execute("select l.price, p.price from lines l join products p on p.id = l.product").fetchone())
+        output: "(120, 140)"
+        explanation: The order line keeps the price paid; the product shows today's price. Both are right.
+  work:
+    - text: Slower now. For each copy, check every way its source can change.
+    - question:
+        id: fix-like-trigger
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `posts.likes` should always equal the number of like rows for that post, as likes are added and removed. The program should print `[(1, 2, 2), (2, 1, 1)]`, each post with its stored and real count. It prints `[(1, 4, 2), (2, 3, 1)]`. Find the fault and fix it.
+        starter: |
+          import sqlite3
+
+          triggers = """
+              create trigger like_added after insert on likes
+              begin
+                  update posts set likes = likes + 1 where id = new.post;
+              end;
+              create trigger like_removed after delete on likes
+              begin
+                  update posts set likes = likes + 1 where id = old.post;
+              end;
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table posts (id integer primary key, likes integer not null default 0);
+              create table likes (id integer primary key, post integer not null references posts (id), user text not null, unique (post, user));
+              insert into posts (id) values (1), (2);
+          """)
+          db.executescript(triggers)
+          db.executemany("insert into likes (post, user) values (?, ?)", [(1, "asha"), (1, "bilal"), (2, "asha"), (1, "chitra"), (2, "dev")])
+          db.execute("delete from likes where post = 1 and user = 'bilal'")
+          db.execute("delete from likes where post = 2 and user = 'asha'")
+          print(db.execute("select p.id, p.likes, (select count(*) from likes l where l.post = p.id) from posts p order by p.id").fetchall())
+        solution: |
+          import sqlite3
+
+          triggers = """
+              create trigger like_added after insert on likes
+              begin
+                  update posts set likes = likes + 1 where id = new.post;
+              end;
+              create trigger like_removed after delete on likes
+              begin
+                  update posts set likes = likes - 1 where id = old.post;
+              end;
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table posts (id integer primary key, likes integer not null default 0);
+              create table likes (id integer primary key, post integer not null references posts (id), user text not null, unique (post, user));
+              insert into posts (id) values (1), (2);
+          """)
+          db.executescript(triggers)
+          db.executemany("insert into likes (post, user) values (?, ?)", [(1, "asha"), (1, "bilal"), (2, "asha"), (1, "chitra"), (2, "dev")])
+          db.execute("delete from likes where post = 1 and user = 'bilal'")
+          db.execute("delete from likes where post = 2 and user = 'asha'")
+          print(db.execute("select p.id, p.likes, (select count(*) from likes l where l.post = p.id) from posts p order by p.id").fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(61)
+          for _ in range(20):
+              _db = sqlite3.connect(":memory:")
+              _db.executescript("""
+                  create table posts (id integer primary key, likes integer not null default 0);
+                  create table likes (id integer primary key, post integer not null references posts (id), user text not null, unique (post, user));
+                  insert into posts (id) values (1), (2), (3);
+              """)
+              _db.executescript(triggers)
+              _held = []
+              for _k in range(15):
+                  if _held and _rng.random() < 0.35:
+                      _p, _u = _held.pop(_rng.randrange(len(_held)))
+                      _db.execute("delete from likes where post = ? and user = ?", (_p, _u))
+                  else:
+                      _p, _u = _rng.randint(1, 3), _rng.choice(["asha", "bilal", "chitra", "dev", "esha"])
+                      if (_p, _u) not in _held:
+                          _db.execute("insert into likes (post, user) values (?, ?)", (_p, _u))
+                          _held.append((_p, _u))
+                  _stored = dict(_db.execute("select id, likes from posts").fetchall())
+                  _real = {_q: sum(1 for _h in _held if _h[0] == _q) for _q in [1, 2, 3]}
+                  assert _stored == _real, "After the likes " + str(sorted(_held)) + ", the stored counts should be " + str(_real) + ", not " + str(_stored)
+          assert output.strip() == "[(1, 2, 2), (2, 1, 1)]", "The program should print [(1, 2, 2), (2, 1, 1)]"
+        wrong:
+          - |
+            import sqlite3
+
+            triggers = """
+                create trigger like_added after insert on likes
+                begin
+                    update posts set likes = likes + 1 where id = new.post;
+                end;
+                create trigger like_removed after delete on likes
+                begin
+                    update posts set likes = likes - 1;
+                end;
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table posts (id integer primary key, likes integer not null default 0);
+                create table likes (id integer primary key, post integer not null references posts (id), user text not null, unique (post, user));
+                insert into posts (id) values (1), (2);
+            """)
+            db.executescript(triggers)
+            db.executemany("insert into likes (post, user) values (?, ?)", [(1, "asha"), (1, "bilal"), (2, "asha"), (1, "chitra"), (2, "dev")])
+            db.execute("delete from likes where post = 1 and user = 'bilal'")
+            db.execute("delete from likes where post = 2 and user = 'asha'")
+            print(db.execute("select p.id, p.likes, (select count(*) from likes l where l.post = p.id) from posts p order by p.id").fetchall())
+          - |
+            import sqlite3
+
+            triggers = """
+                create trigger like_added after insert on likes
+                begin
+                    update posts set likes = likes + 1 where id = new.post;
+                end;
+                create trigger like_removed after delete on likes
+                begin
+                    select 1;
+                end;
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table posts (id integer primary key, likes integer not null default 0);
+                create table likes (id integer primary key, post integer not null references posts (id), user text not null, unique (post, user));
+                insert into posts (id) values (1), (2);
+            """)
+            db.executescript(triggers)
+            db.executemany("insert into likes (post, user) values (?, ?)", [(1, "asha"), (1, "bilal"), (2, "asha"), (1, "chitra"), (2, "dev")])
+            db.execute("delete from likes where post = 1 and user = 'bilal'")
+            db.execute("delete from likes where post = 2 and user = 'asha'")
+            print(db.execute("select p.id, p.likes, (select count(*) from likes l where l.post = p.id) from posts p order by p.id").fetchall())
+          - |
+            import sqlite3
+
+            triggers = """
+                create trigger like_added after insert on likes
+                begin
+                    update posts set likes = likes + 1 where id = new.post;
+                end;
+                create trigger like_removed after delete on likes
+                begin
+                    update posts set likes = likes - 1 where id = old.id;
+                end;
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table posts (id integer primary key, likes integer not null default 0);
+                create table likes (id integer primary key, post integer not null references posts (id), user text not null, unique (post, user));
+                insert into posts (id) values (1), (2);
+            """)
+            db.executescript(triggers)
+            db.executemany("insert into likes (post, user) values (?, ?)", [(1, "asha"), (1, "bilal"), (2, "asha"), (1, "chitra"), (2, "dev")])
+            db.execute("delete from likes where post = 1 and user = 'bilal'")
+            db.execute("delete from likes where post = 2 and user = 'asha'")
+            print(db.execute("select p.id, p.likes, (select count(*) from likes l where l.post = p.id) from posts p order by p.id").fetchall())
+        explanation: |
+          The delete trigger added one instead of subtracting, so every unlike raised the count. Subtracting from the post the deleted like belonged to, `old.post`, keeps the copy right. Without a `where`, every post loses a like; a trigger that does nothing leaves unliked posts too high; and `old.id` is the like's own id, not its post.
+    - question:
+        id: write-reconcile
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `query` so that it returns `(post, stored count, real count)` for every post whose stored `likes` differs from its number of like rows, in order of post, including posts with no likes at all.
+        starter: |
+          import sqlite3
+
+          query = """
+              select p.id, p.likes
+              from posts p
+              order by p.id
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table posts (id integer primary key, likes integer not null);
+              create table likes (post integer not null, user text not null, primary key (post, user));
+              insert into posts values (1, 3), (2, 1), (3, 2), (4, 0);
+              insert into likes values (1, 'asha'), (1, 'bilal'), (1, 'chitra'), (2, 'asha'), (2, 'dev');
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select p.id, p.likes, count(l.post)
+              from posts p
+              left join likes l on l.post = p.id
+              group by p.id, p.likes
+              having p.likes <> count(l.post)
+              order by p.id
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table posts (id integer primary key, likes integer not null);
+              create table likes (post integer not null, user text not null, primary key (post, user));
+              insert into posts values (1, 3), (2, 1), (3, 2), (4, 0);
+              insert into likes values (1, 'asha'), (1, 'bilal'), (1, 'chitra'), (2, 'asha'), (2, 'dev');
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(67)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table posts (id integer primary key, likes integer not null)")
+              _db.execute("create table likes (post integer not null, user text not null, primary key (post, user))")
+              _n = _rng.randint(1, 6)
+              _real = {}
+              for _p in range(1, _n + 1):
+                  _users = _rng.sample(["asha", "bilal", "chitra", "dev", "esha"], _rng.randint(0, 4))
+                  _db.executemany("insert into likes values (?, ?)", [(_p, _u) for _u in _users])
+                  _real[_p] = len(_users)
+              _stored = {_p: (_real[_p] if _rng.random() < 0.6 else max(0, _real[_p] + _rng.choice([-1, 1, 2]))) for _p in _real}
+              _db.executemany("insert into posts values (?, ?)", list(_stored.items()))
+              _want = [(_p, _stored[_p], _real[_p]) for _p in sorted(_real) if _stored[_p] != _real[_p]]
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "With stored counts " + str(_stored) + " and real counts " + str(_real) + ", the mismatches are " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[(2, 1, 2), (3, 2, 0)]", "The program should print [(2, 1, 2), (3, 2, 0)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select p.id, p.likes, count(l.post)
+                from posts p
+                join likes l on l.post = p.id
+                group by p.id, p.likes
+                having p.likes <> count(l.post)
+                order by p.id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table posts (id integer primary key, likes integer not null);
+                create table likes (post integer not null, user text not null, primary key (post, user));
+                insert into posts values (1, 3), (2, 1), (3, 2), (4, 0);
+                insert into likes values (1, 'asha'), (1, 'bilal'), (1, 'chitra'), (2, 'asha'), (2, 'dev');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select p.id, p.likes, count(*)
+                from posts p
+                left join likes l on l.post = p.id
+                group by p.id, p.likes
+                having p.likes <> count(*)
+                order by p.id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table posts (id integer primary key, likes integer not null);
+                create table likes (post integer not null, user text not null, primary key (post, user));
+                insert into posts values (1, 3), (2, 1), (3, 2), (4, 0);
+                insert into likes values (1, 'asha'), (1, 'bilal'), (1, 'chitra'), (2, 'asha'), (2, 'dev');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select p.id, p.likes, count(l.post)
+                from posts p
+                left join likes l on l.post = p.id
+                group by p.id, p.likes
+                order by p.id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table posts (id integer primary key, likes integer not null);
+                create table likes (post integer not null, user text not null, primary key (post, user));
+                insert into posts values (1, 3), (2, 1), (3, 2), (4, 0);
+                insert into likes values (1, 'asha'), (1, 'bilal'), (1, 'chitra'), (2, 'asha'), (2, 'dev');
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          A left join keeps posts with no likes, `count(l.post)` counts only real like rows, and `having` keeps the mismatches. An inner join misses post 3, which claims two likes but has none; `count(*)` counts the padded row of a post with no likes as one like; and without `having` every post is reported.
+    - question:
+        id: write-record-order
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          `daily_sales` holds, for each store and day, the number of orders and their total. Change `record_order` so that it inserts the order and updates `daily_sales` as one all-or-nothing step, adding a new summary row for a store's first order of the day, and lets `IntegrityError` reach the caller when the order is refused. The program should print `[-50] [('IND', '2026-11-26', 1, 900), ('KOR', '2026-11-26', 2, 730)]`.
+        starter: |
+          import sqlite3
+
+
+          def record_order(db, store, day, amount):
+              # Add the order and keep daily_sales (store, day, orders, total) right, all or nothing.
+              db.execute("insert into orders (store, day, amount) values (?, ?, ?)", (store, day, amount))
+              db.commit()
+
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text not null, day text not null, amount integer not null check (amount > 0));
+              create table daily_sales (store text, day text, orders integer not null, total integer not null, primary key (store, day));
+          """)
+          refused = []
+          for store, day, amount in [("KOR", "2026-11-26", 250), ("KOR", "2026-11-26", 480), ("IND", "2026-11-26", 900), ("KOR", "2026-11-26", -50)]:
+              try:
+                  record_order(db, store, day, amount)
+              except sqlite3.IntegrityError:
+                  refused.append(amount)
+          print(refused, db.execute("select * from daily_sales order by store").fetchall())
+        solution: |
+          import sqlite3
+
+
+          def record_order(db, store, day, amount):
+              # Add the order and keep daily_sales (store, day, orders, total) right, all or nothing.
+              with db:
+                  db.execute("insert into orders (store, day, amount) values (?, ?, ?)", (store, day, amount))
+                  db.execute(
+                      "insert into daily_sales values (?, ?, 1, ?) "
+                      "on conflict (store, day) do update set orders = orders + 1, total = total + excluded.total",
+                      (store, day, amount),
+                  )
+
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text not null, day text not null, amount integer not null check (amount > 0));
+              create table daily_sales (store text, day text, orders integer not null, total integer not null, primary key (store, day));
+          """)
+          refused = []
+          for store, day, amount in [("KOR", "2026-11-26", 250), ("KOR", "2026-11-26", 480), ("IND", "2026-11-26", 900), ("KOR", "2026-11-26", -50)]:
+              try:
+                  record_order(db, store, day, amount)
+              except sqlite3.IntegrityError:
+                  refused.append(amount)
+          print(refused, db.execute("select * from daily_sales order by store").fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(71)
+          for _ in range(20):
+              _db = sqlite3.connect(":memory:")
+              _db.executescript("""
+                  create table orders (id integer primary key, store text not null, day text not null, amount integer not null check (amount > 0));
+                  create table daily_sales (store text, day text, orders integer not null, total integer not null, primary key (store, day));
+              """)
+              _good = []
+              for _k in range(10):
+                  _s = _rng.choice(["KOR", "IND"])
+                  _d = _rng.choice(["2026-11-25", "2026-11-26"])
+                  _a = _rng.choice([-100, 0, 150, 300, 450])
+                  _raised = False
+                  try:
+                      record_order(_db, _s, _d, _a)
+                  except sqlite3.IntegrityError:
+                      _raised = True
+                  _db.commit()
+                  assert _raised == (_a <= 0), "An order of " + str(_a) + " should " + ("be refused with IntegrityError" if _a <= 0 else "be recorded")
+                  if _a > 0:
+                      _good.append((_s, _d, _a))
+                  _want = sorted((_s2, _d2, sum(1 for _g in _good if _g[:2] == (_s2, _d2)), sum(_g[2] for _g in _good if _g[:2] == (_s2, _d2))) for _s2, _d2 in set(_g[:2] for _g in _good))
+                  _got = sorted(_db.execute("select store, day, orders, total from daily_sales").fetchall())
+                  assert _got == _want, "After the orders " + str(_good) + ", daily_sales should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[-50] [('IND', '2026-11-26', 1, 900), ('KOR', '2026-11-26', 2, 730)]", "The program should print [-50] [('IND', '2026-11-26', 1, 900), ('KOR', '2026-11-26', 2, 730)]"
+        wrong:
+          - |
+            import sqlite3
+
+
+            def record_order(db, store, day, amount):
+                # Add the order and keep daily_sales (store, day, orders, total) right, all or nothing.
+                with db:
+                    db.execute("insert into orders (store, day, amount) values (?, ?, ?)", (store, day, amount))
+                    db.execute("update daily_sales set orders = orders + 1, total = total + ? where store = ? and day = ?", (amount, store, day))
+
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text not null, day text not null, amount integer not null check (amount > 0));
+                create table daily_sales (store text, day text, orders integer not null, total integer not null, primary key (store, day));
+            """)
+            refused = []
+            for store, day, amount in [("KOR", "2026-11-26", 250), ("KOR", "2026-11-26", 480), ("IND", "2026-11-26", 900), ("KOR", "2026-11-26", -50)]:
+                try:
+                    record_order(db, store, day, amount)
+                except sqlite3.IntegrityError:
+                    refused.append(amount)
+            print(refused, db.execute("select * from daily_sales order by store").fetchall())
+          - |
+            import sqlite3
+
+
+            def record_order(db, store, day, amount):
+                # Add the order and keep daily_sales (store, day, orders, total) right, all or nothing.
+                db.execute(
+                    "insert into daily_sales values (?, ?, 1, ?) "
+                    "on conflict (store, day) do update set orders = orders + 1, total = total + excluded.total",
+                    (store, day, amount),
+                )
+                db.commit()
+                db.execute("insert into orders (store, day, amount) values (?, ?, ?)", (store, day, amount))
+                db.commit()
+
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text not null, day text not null, amount integer not null check (amount > 0));
+                create table daily_sales (store text, day text, orders integer not null, total integer not null, primary key (store, day));
+            """)
+            refused = []
+            for store, day, amount in [("KOR", "2026-11-26", 250), ("KOR", "2026-11-26", 480), ("IND", "2026-11-26", 900), ("KOR", "2026-11-26", -50)]:
+                try:
+                    record_order(db, store, day, amount)
+                except sqlite3.IntegrityError:
+                    refused.append(amount)
+            print(refused, db.execute("select * from daily_sales order by store").fetchall())
+          - |
+            import sqlite3
+
+
+            def record_order(db, store, day, amount):
+                # Add the order and keep daily_sales (store, day, orders, total) right, all or nothing.
+                with db:
+                    db.execute("insert into orders (store, day, amount) values (?, ?, ?)", (store, day, amount))
+                    db.execute(
+                        "insert into daily_sales values (?, ?, 1, ?) "
+                        "on conflict (store, day) do update set orders = orders + 1, total = excluded.total",
+                        (store, day, amount),
+                    )
+
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text not null, day text not null, amount integer not null check (amount > 0));
+                create table daily_sales (store text, day text, orders integer not null, total integer not null, primary key (store, day));
+            """)
+            refused = []
+            for store, day, amount in [("KOR", "2026-11-26", 250), ("KOR", "2026-11-26", 480), ("IND", "2026-11-26", 900), ("KOR", "2026-11-26", -50)]:
+                try:
+                    record_order(db, store, day, amount)
+                except sqlite3.IntegrityError:
+                    refused.append(amount)
+            print(refused, db.execute("select * from daily_sales order by store").fetchall())
+        explanation: |
+          Inside `with db:`, the order and an upsert on `daily_sales` commit together, and a refused order rolls the summary back. A plain `update` never creates the first row of a day; updating the summary first and committing it separately counts the refused order of ₹-50 anyway; and `total = excluded.total` replaces the day's total with the latest order.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          How many like rows does the puzzle's app read per hour to show the counts?
+        answer: "100000000"
+        explanation: |
+          Each of the 2,00,000 views counts about 500 like rows: $2{,}00{,}000 \times 500 = 10$ crore rows an hour. A likes column would cost 2,000 extra writes an hour and read one row per view.
+    - question:
+        id: work-dashboard
+        type: choice
+        system: s2
+        prompt: |
+          A dashboard shows yesterday's sales per store and is opened 2,000 times a day. Yesterday's orders table has 50 lakh rows, and nobody changes yesterday's orders. What is the best design?
+        options:
+          - "A daily summary table rebuilt once after midnight, read by the dashboard."
+          - "Recompute the totals from the orders on every dashboard view."
+          - "A trigger that updates the summary on every order, plus the rebuild."
+          - "Copy each store's total into every one of its order rows."
+        answer: 0
+        explanation: |
+          Yesterday's data never changes, so one rebuild a day is always current for this question, and each view reads a handful of rows instead of 50 lakh. A trigger adds work to every order for no gain here, and copying totals into orders multiplies the copies to keep right.
+  connections:
+    - text: |
+        10 crore rows an hour: 2,00,000 views, each counting about 500 likes. A likes column turns each view into a one-row read for the price of 2,000 extra writes an hour, a saving of about 50,000 to 1, which is why almost every social app stores its counts. It also needs a trigger or a transaction for every like and every unlike, and a nightly reconciliation to catch the day the copy drifts.
+
+        Denormalisation in a relational database is an exception, made table by table. Some systems make it the rule: a document database stores an order with its lines, its customer's name and its address nested in one record, so that one read fetches everything the page needs. That is [[q1.document-models]]. Summary tables kept by the database itself are [[q8.materialised-views]], and the wide, deliberately redundant tables of analytics are the star schemas of [[q8.facts-dimensions-and-star-schemas]].
