@@ -5512,6 +5512,93 @@ function IntervalSchedule(props: Props) {
   );
 }
 
+const QS_N = 16;
+const QS_SHUFFLED = (() => {
+  const items = Array.from({ length: QS_N }, (_, i) => i + 1);
+  const u = draws(42, QS_N, false);
+  for (let i = QS_N - 1; i > 0; i--) {
+    const j = Math.floor(u[i] * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+  return items;
+})();
+type QsPart = { depth: number; low: number; size: number; pivot: number };
+
+/** Quicksort's partitions, level by level; the pivot is the first item, or one chosen with the uniform numbers given. */
+function quicksortRun(items: number[], random: number[] | null) {
+  const parts: QsPart[] = [];
+  let comparisons = 0;
+  let used = 0;
+  const sort = (list: number[], depth: number) => {
+    if (list.length < 2) return;
+    const at = random ? Math.floor(random[used++ % random.length] * list.length) : 0;
+    const pivot = list[at];
+    comparisons += list.length - 1;
+    parts.push({ depth, low: Math.min(...list), size: list.length, pivot });
+    sort(
+      list.filter((x) => x < pivot),
+      depth + 1,
+    );
+    sort(
+      list.filter((x) => x > pivot),
+      depth + 1,
+    );
+  };
+  sort(items, 0);
+  return { parts, comparisons, levels: parts.length === 0 ? 0 : Math.max(...parts.map((p) => p.depth)) + 1 };
+}
+
+const QS_RANDOM_RUNS = (() => {
+  const counts = Array.from({ length: 1000 }, (_, k) => quicksortRun(QS_SHUFFLED, draws(1000 + k, QS_N, false)).comparisons);
+  return { mean: counts.reduce((s, c) => s + c, 0) / counts.length, most: Math.max(...counts), least: Math.min(...counts) };
+})();
+
+/** Quicksort with the first item as pivot, or a random one, on numbers already in order or shuffled. */
+function QuickPivot(props: Props) {
+  const [sorted, setSorted] = useState(props.input !== "shuffled");
+  const [random, setRandom] = useState(props.pivot === "random");
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const items = sorted ? Array.from({ length: QS_N }, (_, i) => i + 1) : QS_SHUFFLED;
+  const run = quicksortRun(items, random ? draws(seed, QS_N, false) : null);
+  const note = random
+    ? `Over 1,000 runs with random pivots, on any order of the input, the comparisons average ${dp(QS_RANDOM_RUNS.mean, 1)}, ranging from ${QS_RANDOM_RUNS.least} to ${QS_RANDOM_RUNS.most}.`
+    : sorted
+      ? "Every pivot is the smallest item left, so each partition peels off a single item: 15 + 14 + … + 1 = 120 comparisons, the most possible."
+      : "On this shuffled input the first item happens to be a fair pivot, but an input already in order would make it the worst.";
+  const w = 24;
+  const top = 26;
+  const row = Math.min(13, 190 / Math.max(run.levels, 1));
+  return (
+    <Frame
+      title="Quicksort's pivots"
+      summary={`Quicksort on ${QS_N} numbers ${sorted ? "already in order" : "in a shuffled order"}, taking ${random ? `a pivot chosen at random, seed ${seed}` : "the first item as the pivot"}. It partitions on ${plural(run.levels, "level")} and makes ${run.comparisons} comparisons. ${note}`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={random} onClick={() => setRandom(!random)}>
+            Choose pivots at random
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!sorted} onClick={() => setSorted(!sorted)}>
+            Shuffle the input
+          </button>
+          {random ? <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} /> : null}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 236" role="img" aria-label={`Quicksort's partitions drawn level by level: ${run.levels} levels and ${run.comparisons} comparisons`}>
+        <text x="12" y="16" className="fig-small">
+          each row is one level of partitioning; the marked square is the pivot
+        </text>
+        {run.parts.map((p, i) => (
+          <g key={i}>
+            <rect x={28 + (p.low - 1) * w} y={top + p.depth * row} width={p.size * w - 2} height={row - 3} className="fig-fill" />
+            <rect x={28 + (p.pivot - 1) * w} y={top + p.depth * row} width={w - 2} height={row - 3} className="fig-accent" />
+          </g>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -6824,6 +6911,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "recursion-tree": RecursionTree,
   "spanning-tree": SpanningTree,
   "interval-schedule": IntervalSchedule,
+  "quick-pivot": QuickPivot,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

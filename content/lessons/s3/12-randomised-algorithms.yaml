@@ -1,0 +1,596 @@
+concept: s3.randomised-algorithms
+minutes: 90
+claim: You can explain why letting an algorithm flip its own coins removes the bad inputs that defeat any fixed rule, tell a Las Vegas algorithm, always right with a random running time, from a Monte Carlo one, fixed time with a small chance of a wrong answer, prove with indicators and linearity of expectation that quicksort with a random pivot makes fewer than $2n \ln n$ comparisons on average for every input, and write quicksort, quickselect and reservoir sampling with random choices that are correct and fast.
+recalls: [s3.amortised-analysis, f4.expectation-and-linearity]
+uses: [s3.sorting, s3.divide-and-conquer-and-the-master-theorem, s2.hash-tables, f4.independence, f4.tail-bounds, f4.simulation-and-pseudo-random-numbers, f3.modular-arithmetic, f2.induction-and-strong-induction, s1.modules-and-imports]
+leads: [s3.intractability-p-np-and-heuristics, f7.fingerprints-and-content-hashes, q8.sketches-hyperloglog-and-count-min, d1.load-balancers-and-proxies]
+bridges:
+  f4.expectation-and-linearity: The probability cluster defined the expected value of a random quantity, the average of its values weighted by their chances, and proved linearity, that the expectation of a sum is the sum of the expectations, even when the parts depend on one another. The trick was to write a count as a sum of indicators, each 1 if some event happens and 0 if not, whose expectation is just the event's probability. This lesson uses exactly that to count quicksort's comparisons, with one indicator for each pair of items saying whether the pair is ever compared. The expected total is the sum of the pairs' probabilities, though the indicators are far from independent.
+starter: |
+  # Scratch space. Count quicksort's comparisons with a random pivot.
+  import random
+
+
+  def comparisons(xs):
+      if len(xs) <= 1:
+          return 0
+      pivot = random.choice(xs)
+      smaller = [x for x in xs if x < pivot]
+      larger = [x for x in xs if x > pivot]
+      return len(xs) - 1 + comparisons(smaller) + comparisons(larger)
+
+
+  random.seed(0)
+  runs = [comparisons(list(range(16))) for i in range(1000)]
+  print(sum(runs) / len(runs), min(runs), max(runs))
+parts:
+  recall:
+    - text: |
+        [[s3.amortised-analysis]] gave guarantees with no chance in them: every sequence of operations, however unlucky, costs at most a constant each on average. [[f4.expectation-and-linearity]] gave the tool for the opposite approach, where chance is the point. This lesson lets an algorithm make its own random choices, so that no input is bad for it, and uses expectation to say how fast it is. Three quick pulls first.
+  puzzle:
+    - text: |
+        A delivery app gets 1,000 orders in a lunch hour and has 1,000 riders. To keep things simple it hands each order to a rider chosen at random, each of the 1,000 equally likely, independently of the other orders. Some riders get two or three orders; some get none.
+
+        **On average, how many riders get no order at all?**
+  intuition:
+    - text: |
+        A batter who plays the same shot to every ball is easy to bowl to: the bowler studies the shot and bowls the one ball it cannot handle. A batter who mixes shots unpredictably cannot be set up that way, even by a bowler who knows every shot in the batter's book. **Randomised algorithms** use the same idea. Any fixed rule for making a choice has some input that defeats it, and an adversary, or just bad luck in the shape of real data, can supply that input. A rule that flips its own coins has no such input: the bad luck now lives in the coins, which the input cannot see.
+
+        Quicksort, from [[s3.sorting]], is the textbook case. It picks a **pivot**, splits the list into the items smaller than the pivot and the items larger, and sorts each part the same way. Taking the first item as the pivot works well on shuffled data and disastrously on data already in order, which is common: timestamps, IDs, yesterday's sorted file with a few rows added. The figure runs quicksort on 16 numbers and draws its partitions level by level. Switch between pivots chosen at random and the first item, and between input in order and shuffled.
+    - figure: quick-pivot
+      props: { input: sorted, pivot: first }
+    - text: |
+        On the numbers already in order, the first item is always the smallest left, so each level peels off one item: 15 levels and $15 + 14 + \cdots + 1 = 120$ comparisons, the worst possible. With random pivots, the order of the input stops mattering. Each run differs, but over 1,000 runs the comparisons averaged about 51, and the most in any run was 89. The guarantee is about the algorithm's own coins, for every input, not about which inputs are likely.
+  derivation:
+    - text: |
+        **Two kinds of randomised algorithm.** A **Las Vegas** algorithm always gives the right answer, and only its running time depends on the coins. Quicksort with a random pivot is one: the list always comes out sorted. A **Monte Carlo** algorithm runs for a fixed time but may give a wrong answer, with a probability it can bound. Both are useful, and one can sometimes become the other: a Monte Carlo answer that can be checked cheaply can be repeated until a check passes, which makes it Las Vegas.
+
+        **Counting quicksort's comparisons.** Name the items by rank, $z_1 < z_2 < \cdots < z_n$, all different. Two items are compared only when one of them is the pivot and both are in the list being split, and after the split the pivot is set aside, so each pair is compared at most once. The total number of comparisons $C$ is therefore a sum of indicators, one for each pair $i < j$, equal to 1 if $z_i$ and $z_j$ are ever compared.
+
+        When are they? Look at the ranks $z_i, z_{i+1}, \ldots, z_j$. As long as no pivot has been chosen from among them, they all stay together in the same list, because every pivot so far was smaller than all of them or larger than all of them. The first pivot chosen from among them decides everything. If it is $z_i$ or $z_j$, the two are compared. If it is any rank strictly between, they are split into different lists and never meet. Every one of the $j - i + 1$ ranks is equally likely to be that first pivot, so
+
+        $$P(z_i \text{ and } z_j \text{ are compared}) = \frac{2}{j - i + 1}.$$
+
+        Neighbours in rank are always compared; the smallest and largest of a million are compared with probability two in a million.
+    - question:
+        id: derivation-pair
+        type: numeric
+        system: s2
+        prompt: |
+          Quicksort with a random pivot sorts the numbers 1 to 10. What is the probability that 3 and 7 are ever compared with each other?
+        answer: "0.4"
+        tolerance: "0.001"
+        explanation: |
+          The ranks from 3 to 7 are five numbers. They are compared exactly when the first pivot chosen from among those five is 3 or 7, which has probability $2/5 = 0.4$.
+    - text: |
+        **Adding up.** By linearity of expectation, which needs no independence, and these indicators are far from independent, the expected number of comparisons is the sum of the probabilities. Group the pairs by their gap $d = j - i$: there are $n - d$ pairs with gap $d$, each compared with probability $2/(d + 1)$, so
+
+        $$E[C] = \sum_{d=1}^{n-1} (n - d)\frac{2}{d + 1} < 2n \sum_{d=1}^{n-1} \frac{1}{d + 1} < 2n \ln n.$$
+
+        The last step uses the harmonic sum $1/2 + 1/3 + \cdots + 1/n < \ln n$. Since $\ln n = 0.69 \log_2 n$, that is about $1.39\, n \log_2 n$, close to the $n \log_2 n$ that [[s3.divide-and-conquer-and-the-master-theorem]] gave merge sort. For $n = 16$ the exact value is 50.9, the average the figure showed. For a million items it is about 2.5 crore comparisons, against 50,000 crore for the first-item pivot on sorted input.
+
+        **For every input.** This expectation is over the algorithm's own coins, and the same bound holds whatever list it is given. Nothing is assumed about the data. A run could still be slow by bad luck, but [[f4.tail-bounds]] limits how often: by Markov's inequality, at most half of all runs take twice the expected comparisons, and finer arguments show that for large $n$ runs much above the mean are vanishingly rare.
+    - question:
+        id: order-pairs
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of the argument for quicksort's expected comparisons in order.
+        steps:
+          - "Two items are compared at most once, and only when one is the pivot while both are in the list being split."
+          - "Ranks i and j are compared exactly when the first pivot chosen from ranks i to j is i or j."
+          - "So the pair is compared with probability 2 / (j − i + 1)."
+          - "By linearity, the expected number of comparisons is the sum of these probabilities over all pairs."
+        explanation: |
+          Knowing when a pair can be compared gives the condition on the first pivot among their ranks; that condition gives the probability; and the probabilities add up to the expected total.
+    - text: |
+        **Quickselect.** To find the $k$-th smallest item, say the median delivery time, sorting is more than needed. Partition around a random pivot as quicksort does, then recurse into the one part that contains the $k$-th item, and ignore the other. A pivot from the middle half of the items, which happens with probability $1/2$, leaves at most three quarters of them. On average it takes two tries to get one, so the expected work is at most $2(n + \tfrac34 n + \tfrac{9}{16} n + \cdots) = 8n$: linear. The true figure for the median is about $3.4n$ comparisons.
+
+        **Monte Carlo and amplification.** Suppose a supplier claims that $c = a \times b$ for two 1,000-digit numbers, and you want to check without doing the long multiplication. Choose a prime $p$ below a million at random and compare $(a \bmod p)(b \bmod p) \bmod p$ with $c \bmod p$, which needs only small numbers, by [[f3.modular-arithmetic]]. If the claim is right, they always agree. If it is wrong, they agree only when $p$ divides $ab - c$, a nonzero number of about 2,000 digits, which has fewer than 6,650 different prime factors, while there are 78,498 primes below a million. So a wrong claim passes one check with probability below $0.085$. Run the check with $k$ primes chosen independently, and by [[f4.independence]] a wrong claim passes all of them with probability below $0.085^k$: about $2 \times 10^{-11}$ for $k = 10$. Repeating a Monte Carlo test drives its error down exponentially fast.
+    - question:
+        id: derivation-runs
+        type: numeric
+        system: s2
+        prompt: |
+          A check wrongly says "the copy is intact" with probability at most $1/2$ each time, independently. What is the fewest number of runs that brings the chance of every run being wrong below one in a million?
+        answer: "20"
+        explanation: |
+          All $k$ runs are wrong with probability at most $(1/2)^k$. $2^{19} = 5{,}24{,}288$ is not quite a million, and $2^{20} = 10{,}48{,}576$ is, so 20 runs.
+    - text: |
+        **Reservoir sampling.** A server sees a stream of requests, too many to keep, of a length it does not know in advance, and wants $k$ of them chosen uniformly at random to inspect later. Keep the first $k$. When item number $t$ arrives, counting from 1, keep it with probability $k/t$, replacing one of the $k$ kept items chosen at random. In Python, with items counted from 0 by `enumerate`, item `i` draws `j = random.randint(0, i)` and replaces `chosen[j]` when `j < k`.
+
+        Why is it fair? By [[f2.induction-and-strong-induction]], suppose that after $t$ items each one is kept with probability $k/t$. Item $t + 1$ is kept with probability $k/(t + 1)$. An earlier item survives unless the new item comes in and replaces exactly it, which has probability $\frac{k}{t+1} \cdot \frac{1}{k} = \frac{1}{t+1}$, so it is still kept with probability $\frac{k}{t}\cdot\frac{t}{t+1} = \frac{k}{t+1}$. Every item has the same chance, $k$ over the number seen so far, whenever the stream stops.
+
+        **Spreading load.** The puzzle's riders are a model of load balancing: requests to servers, keys to hash buckets as in [[s2.hash-tables]]. Choosing at random needs no coordination, but some riders get several orders. Over 200 simulated lunch hours, the busiest of the 1,000 riders got 4 to 8 orders, usually 5 or 6. A small change helps enormously: pick **two** riders at random and give the order to the one with fewer. In the same simulation the busiest rider then got 3 orders in 199 runs out of 200. The **power of two choices** is used in real load balancers for exactly this reason.
+
+        **Where the coins come from.** Programs use pseudo-random numbers, from [[f4.simulation-and-pseudo-random-numbers]], produced by a deterministic generator from a **seed**. Fixing the seed with `random.seed`, from [[s1.modules-and-imports]], makes a run repeatable, which is what a test needs. When an adversary is the threat, the seed must be unpredictable instead. In 2011, researchers showed that one request could keep a web server busy for minutes by sending form fields whose names all landed in the same hash bucket, turning each insertion into a scan of a long chain. Python has chosen a random seed for its string hashing each time it starts since version 3.3, so no list of names collides for every run.
+  formal:
+    - text: |
+        **Randomised algorithm.** An algorithm that makes random choices as it runs. Its **expected running time** is the expectation over its own choices, for the worst input: $\max_x E[T(x)]$.
+
+        **Las Vegas.** Always correct; running time random. **Monte Carlo.** Running time bounded; wrong with probability at most $p$. If runs are independent, $k$ runs all err with probability at most $p^k$.
+
+        **Random-pivot quicksort.** Ranks $i < j$ are compared with probability $2/(j - i + 1)$; $E[C] = \sum_{i<j} \frac{2}{j-i+1} = 2(n+1)H_n - 4n < 2n \ln n$, where $H_n = 1 + \frac12 + \cdots + \frac1n$. Worst case still $n(n-1)/2$, with tiny probability.
+
+        **Quickselect.** The $k$-th smallest of $n$ items in expected $O(n)$ time, recursing only into the part that holds it.
+
+        **Reservoir sampling.** $k$ items uniformly from a stream of unknown length, in one pass and $O(k)$ memory: item $t$ is kept with probability $k/t$, replacing a random kept item; after $t$ items each is kept with probability $k/t$.
+
+        **Balls into bins.** $n$ balls into $n$ bins at random: about $n/e$ bins stay empty, and the fullest holds $\Theta(\log n / \log \log n)$. With the less loaded of two random bins, the fullest holds $\log_2 \log_2 n + O(1)$.
+  drill:
+    - text: Seconds each. Ask what the coins decide.
+    - question:
+        id: drill-neighbours
+        type: numeric
+        system: s1
+        prompt: |
+          Quicksort with a random pivot sorts 1 to 100. What is the probability that 41 and 42 are compared?
+        answer: "1"
+        explanation: No rank lies between them, so whichever of the two is chosen first as a pivot is compared with the other.
+    - question:
+        id: drill-ends
+        type: numeric
+        system: s1
+        prompt: |
+          Quicksort with a random pivot sorts 1 to 10. What is the probability that 1 and 10 are compared?
+        answer: "0.2"
+        tolerance: "0.001"
+        explanation: All ten ranks lie from 1 to 10, and the two are compared only if the very first pivot is 1 or 10, probability $2/10$.
+    - question:
+        id: drill-amplify
+        type: numeric
+        system: s1
+        prompt: |
+          A test errs with probability $1/10$, independently each run. What is the probability that three runs all err?
+        answer: "0.001"
+        tolerance: "0.00001"
+        explanation: $(1/10)^3 = 0.001$.
+    - question:
+        id: drill-reservoir
+        type: numeric
+        system: s1
+        prompt: |
+          Reservoir sampling keeps 5 items. The 50th item of the stream has just arrived. With what probability is it kept?
+        answer: "0.1"
+        tolerance: "0.001"
+        explanation: Item $t$ is kept with probability $k/t = 5/50$.
+    - question:
+        id: drill-kind
+        type: choice
+        system: s1
+        prompt: |
+          Quicksort with a random pivot is which kind of algorithm?
+        options:
+          - "Las Vegas: always sorted, with a running time that depends on the coins."
+          - "Monte Carlo: a fixed running time, with a small chance of an unsorted list."
+          - "Neither, because it is deterministic once the input is known."
+          - "Both, depending on the input."
+        answer: 0
+        explanation: The output is always sorted; only the number of comparisons varies with the pivots chosen.
+    - question:
+        id: predict-seed
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import random
+          random.seed(7)
+          a = [random.randint(1, 6) for i in range(3)]
+          random.seed(7)
+          b = [random.randint(1, 6) for i in range(3)]
+          print(a == b)
+        output: "True"
+        explanation: The same seed starts the generator in the same state, so it produces the same numbers again.
+    - question:
+        id: predict-partition
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          xs = [5, 3, 8, 3, 1]
+          pivot = 3
+          print([x for x in xs if x < pivot], [x for x in xs if x == pivot], [x for x in xs if x > pivot])
+        output: "[1] [3, 3] [5, 8]"
+        explanation: The three parts hold the items below, equal to and above the pivot, each in its original order.
+  work:
+    - text: Slower now. Each answer must be right for every input; only the time may depend on luck.
+    - question:
+        id: fix-quicksort
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `quicksort` should return a sorted copy of a list, choosing each pivot at random. The program should print `[1, 3, 3, 5, 5, 5, 8]`. It prints `[1, 3, 5, 8]`. Find the fault and fix it.
+        starter: |
+          import random
+
+
+          def quicksort(xs):
+              # Return a new list of the items of xs in increasing order, with a random pivot.
+              if len(xs) <= 1:
+                  return list(xs)
+              pivot = random.choice(xs)
+              smaller = [x for x in xs if x < pivot]
+              equal = [x for x in xs if x == pivot]
+              larger = [x for x in xs if x > pivot]
+              return quicksort(smaller) + [pivot] + quicksort(larger)
+
+
+          random.seed(1)
+          print(quicksort([5, 3, 8, 3, 1, 5, 5]))
+        solution: |
+          import random
+
+
+          def quicksort(xs):
+              # Return a new list of the items of xs in increasing order, with a random pivot.
+              if len(xs) <= 1:
+                  return list(xs)
+              pivot = random.choice(xs)
+              smaller = [x for x in xs if x < pivot]
+              equal = [x for x in xs if x == pivot]
+              larger = [x for x in xs if x > pivot]
+              return quicksort(smaller) + equal + quicksort(larger)
+
+
+          random.seed(1)
+          print(quicksort([5, 3, 8, 3, 1, 5, 5]))
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(79)
+          _cases = [[], [1], [2, 1], [5, 3, 8, 3, 1, 5, 5], [4, 4, 4, 4], list(range(10, 0, -1))]
+          for _ in range(40):
+              _cases.append([_rng.randint(0, 9) for _ in range(_rng.randint(0, 15))])
+          for _xs in _cases:
+              _copy = list(_xs)
+              _got = quicksort(_xs)
+              assert _got == sorted(_copy), "quicksort(" + str(_copy) + ") should be " + str(sorted(_copy)) + ", not " + str(_got)
+              assert _xs == _copy, "quicksort should not change the list it is given"
+          _big = list(range(3000))
+          _got = quicksort(_big)
+          assert _got == _big, "quicksort should sort a list of 3,000 numbers already in order"
+          assert output.strip() == "[1, 3, 3, 5, 5, 5, 8]", "The program should print [1, 3, 3, 5, 5, 5, 8]"
+        wrong:
+          - |
+            import random
+
+
+            def quicksort(xs):
+                # Return a new list of the items of xs in increasing order, with a random pivot.
+                if len(xs) <= 1:
+                    return list(xs)
+                pivot = xs[0]
+                smaller = [x for x in xs if x < pivot]
+                equal = [x for x in xs if x == pivot]
+                larger = [x for x in xs if x > pivot]
+                return quicksort(smaller) + equal + quicksort(larger)
+
+
+            random.seed(1)
+            print(quicksort([5, 3, 8, 3, 1, 5, 5]))
+          - |
+            import random
+
+
+            def quicksort(xs):
+                # Return a new list of the items of xs in increasing order, with a random pivot.
+                if len(xs) <= 1:
+                    return list(xs)
+                pivot = random.choice(xs)
+                smaller = [x for x in xs if x <= pivot]
+                equal = [x for x in xs if x == pivot]
+                larger = [x for x in xs if x > pivot]
+                return quicksort(smaller) + equal + quicksort(larger)
+
+
+            random.seed(1)
+            print(quicksort([5, 3, 8, 3, 1, 5, 5]))
+          - |
+            import random
+
+
+            def quicksort(xs):
+                # Return a new list of the items of xs in increasing order, with a random pivot.
+                if len(xs) <= 1:
+                    return list(xs)
+                pivot = random.choice(xs)
+                smaller = [x for x in xs if x < pivot]
+                equal = [x for x in xs if x == pivot]
+                larger = [x for x in xs if x > pivot]
+                return quicksort(smaller) + equal + larger
+
+
+            random.seed(1)
+            print(quicksort([5, 3, 8, 3, 1, 5, 5]))
+        explanation: |
+          The program collects every copy of the pivot in `equal` and then puts back only one, so repeated values vanish. Returning `equal` keeps them all. Taking `xs[0]` as the pivot sorts correctly but makes 3,000 numbers already in order recurse 3,000 levels deep, past Python's limit; putting the pivot's copies in `smaller` with `<=` duplicates them and, when the pivot is the largest item, hands the whole list back to the same call forever; and leaving `larger` unsorted returns its items in whatever order they arrived.
+    - question:
+        id: write-quickselect
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `kth_smallest(xs, k)`, the `k`-th smallest item of a non-empty list `xs`, counting from 1, with `k` from 1 to `len(xs)`. Choose a pivot with `random.choice`, split the items into those smaller than, equal to and larger than it, and recurse only into the part that holds the answer. Do not change `xs`.
+        starter: |
+          import random
+
+
+          def kth_smallest(xs, k):
+              # Return the k-th smallest item of xs, counting from 1, with a random pivot.
+              return None
+
+
+          random.seed(4)
+          minutes = [41, 18, 95, 27, 18, 63, 30, 52, 77]
+          print(kth_smallest(minutes, 1), kth_smallest(minutes, 5), kth_smallest(minutes, 9))
+        solution: |
+          import random
+
+
+          def kth_smallest(xs, k):
+              # Return the k-th smallest item of xs, counting from 1, with a random pivot.
+              pivot = random.choice(xs)
+              smaller = [x for x in xs if x < pivot]
+              equal = [x for x in xs if x == pivot]
+              larger = [x for x in xs if x > pivot]
+              if k <= len(smaller):
+                  return kth_smallest(smaller, k)
+              if k <= len(smaller) + len(equal):
+                  return pivot
+              return kth_smallest(larger, k - len(smaller) - len(equal))
+
+
+          random.seed(4)
+          minutes = [41, 18, 95, 27, 18, 63, 30, 52, 77]
+          print(kth_smallest(minutes, 1), kth_smallest(minutes, 5), kth_smallest(minutes, 9))
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(83)
+          _cases = [([7], 1), ([2, 1], 1), ([2, 1], 2), ([4, 4, 4, 4], 3), ([41, 18, 95, 27, 18, 63, 30, 52, 77], 2)]
+          for _ in range(60):
+              _xs = [_rng.randint(0, 9) for _ in range(_rng.randint(1, 15))]
+              _cases.append((_xs, _rng.randint(1, len(_xs))))
+          for _xs, _k in _cases:
+              _copy = list(_xs)
+              _want = sorted(_copy)[_k - 1]
+              _got = kth_smallest(_xs, _k)
+              assert _got == _want, "kth_smallest(" + str(_copy) + ", " + str(_k) + ") should be " + str(_want) + ", not " + str(_got)
+              assert _xs == _copy, "kth_smallest should not change the list it is given"
+          _big = list(range(3000))
+          for _k in [1, 1500, 3000]:
+              _got = kth_smallest(_big, _k)
+              assert _got == _k - 1, "In the numbers 0 to 2,999 in order, item " + str(_k) + " should be " + str(_k - 1) + ", not " + str(_got)
+          assert output.strip() == "18 41 95", "The program should print 18 41 95"
+        wrong:
+          - |
+            import random
+
+
+            def kth_smallest(xs, k):
+                # Return the k-th smallest item of xs, counting from 1, with a random pivot.
+                pivot = xs[0]
+                smaller = [x for x in xs if x < pivot]
+                equal = [x for x in xs if x == pivot]
+                larger = [x for x in xs if x > pivot]
+                if k <= len(smaller):
+                    return kth_smallest(smaller, k)
+                if k <= len(smaller) + len(equal):
+                    return pivot
+                return kth_smallest(larger, k - len(smaller) - len(equal))
+
+
+            random.seed(4)
+            minutes = [41, 18, 95, 27, 18, 63, 30, 52, 77]
+            print(kth_smallest(minutes, 1), kth_smallest(minutes, 5), kth_smallest(minutes, 9))
+          - |
+            import random
+
+
+            def kth_smallest(xs, k):
+                # Return the k-th smallest item of xs, counting from 1, with a random pivot.
+                pivot = random.choice(xs)
+                smaller = [x for x in xs if x < pivot]
+                equal = [x for x in xs if x == pivot]
+                larger = [x for x in xs if x > pivot]
+                if k <= len(smaller):
+                    return kth_smallest(smaller, k)
+                if k <= len(smaller) + len(equal):
+                    return pivot
+                return kth_smallest(larger, k - len(smaller))
+
+
+            random.seed(4)
+            minutes = [41, 18, 95, 27, 18, 63, 30, 52, 77]
+            print(kth_smallest(minutes, 1), kth_smallest(minutes, 5), kth_smallest(minutes, 9))
+          - |
+            import random
+
+
+            def kth_smallest(xs, k):
+                # Return the k-th smallest item of xs, counting from 1, with a random pivot.
+                pivot = random.choice(xs)
+                smaller = [x for x in xs if x < pivot]
+                equal = [x for x in xs if x == pivot]
+                larger = [x for x in xs if x > pivot]
+                if k <= len(smaller):
+                    return kth_smallest(smaller, k)
+                if k == len(smaller) + 1:
+                    return pivot
+                return kth_smallest(larger, k - len(smaller) - 1)
+
+
+            random.seed(4)
+            minutes = [41, 18, 95, 27, 18, 63, 30, 52, 77]
+            print(kth_smallest(minutes, 1), kth_smallest(minutes, 5), kth_smallest(minutes, 9))
+        explanation: |
+          If `k` is at most the number of smaller items, the answer is among them, at the same position. If it is within the copies of the pivot, the pivot is the answer. Otherwise it is among the larger items, at position `k` minus everything smaller or equal. Taking the first item as pivot recurses once per item on a list already in order; subtracting only the smaller items puts `k` past the end of the larger part; and assuming the pivot occurs once fails when values repeat.
+    - question:
+        id: write-reservoir
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Complete `sample(stream, k)`, which reads `stream` once, from start to end, and returns a list of `k` of its items, each set of `k` equally likely; if the stream has fewer than `k` items, return them all. Keep the first `k` items; for item `i`, counting from 0, draw `j` with `random.randint(0, i)` and put the item in place `j` when `j` is less than `k`.
+        starter: |
+          import random
+
+
+          def sample(stream, k):
+              # Return k items chosen uniformly at random from stream, reading it once.
+              chosen = []
+              for i, item in enumerate(stream):
+                  if i < k:
+                      chosen.append(item)
+              return chosen
+
+
+          random.seed(2)
+          pings = (n * n for n in range(100000))
+          print(len(sample(pings, 5)), sorted(sample("ba", 5)))
+        solution: |
+          import random
+
+
+          def sample(stream, k):
+              # Return k items chosen uniformly at random from stream, reading it once.
+              chosen = []
+              for i, item in enumerate(stream):
+                  if i < k:
+                      chosen.append(item)
+                  else:
+                      j = random.randint(0, i)
+                      if j < k:
+                          chosen[j] = item
+              return chosen
+
+
+          random.seed(2)
+          pings = (n * n for n in range(100000))
+          print(len(sample(pings, 5)), sorted(sample("ba", 5)))
+        tests: |
+          import random as _random
+
+          assert sorted(sample("ba", 5)) == ["a", "b"], "With fewer than k items, sample should return them all"
+          assert sample([], 3) == [], "sample([], 3) should be []"
+          _random.seed(11)
+          _counts = [0] * 10
+          for _ in range(10000):
+              _got = sample(iter(range(10)), 3)
+              assert len(_got) == 3 and len(set(_got)) == 3, "sample(range(10), 3) should give 3 different items, not " + str(_got)
+              for _x in _got:
+                  _counts[_x] += 1
+          for _x in range(10):
+              assert 2700 <= _counts[_x] <= 3300, "Over 10,000 samples of 3 from 0 to 9, each number should be chosen about 3,000 times, but " + str(_x) + " was chosen " + str(_counts[_x]) + " times: " + str(_counts)
+          _pairs = {}
+          for _ in range(6000):
+              _got = tuple(sorted(sample(iter(range(4)), 2)))
+              _pairs[_got] = _pairs.get(_got, 0) + 1
+          assert len(_pairs) == 6, "Every pair from 0 to 3 should be possible, but only " + str(sorted(_pairs)) + " appeared"
+          for _p in _pairs:
+              assert 850 <= _pairs[_p] <= 1150, "Over 6,000 samples of 2 from 0 to 3, each of the 6 pairs should appear about 1,000 times, but " + str(_p) + " appeared " + str(_pairs[_p]) + " times"
+          assert output.strip() == "5 ['a', 'b']", "The program should print 5 ['a', 'b']"
+        wrong:
+          - |
+            import random
+
+
+            def sample(stream, k):
+                # Return k items chosen uniformly at random from stream, reading it once.
+                chosen = []
+                for i, item in enumerate(stream):
+                    if i < k:
+                        chosen.append(item)
+                    else:
+                        j = random.randint(0, i - 1)
+                        if j < k:
+                            chosen[j] = item
+                return chosen
+
+
+            random.seed(2)
+            pings = (n * n for n in range(100000))
+            print(len(sample(pings, 5)), sorted(sample("ba", 5)))
+          - |
+            import random
+
+
+            def sample(stream, k):
+                # Return k items chosen uniformly at random from stream, reading it once.
+                chosen = []
+                for i, item in enumerate(stream):
+                    if i < k:
+                        chosen.append(item)
+                    else:
+                        j = random.randint(0, k - 1)
+                        chosen[j] = item
+                return chosen
+
+
+            random.seed(2)
+            pings = (n * n for n in range(100000))
+            print(len(sample(pings, 5)), sorted(sample("ba", 5)))
+          - |
+            import random
+
+
+            def sample(stream, k):
+                # Return k items chosen uniformly at random from stream, reading it once.
+                chosen = []
+                for i, item in enumerate(stream):
+                    if i < k:
+                        chosen.append(item)
+                    else:
+                        j = random.randint(0, i + 1)
+                        if j < k:
+                            chosen[j] = item
+                return chosen
+
+
+            random.seed(2)
+            pings = (n * n for n in range(100000))
+            print(len(sample(pings, 5)), sorted(sample("ba", 5)))
+        explanation: |
+          Item `i` is the $(i+1)$-th seen, and `j` is below `k` with probability $k/(i+1)$, the chance it should be kept; when it is, `j` is also a uniformly random place to put it. Drawing from 0 to `i - 1` keeps late items too often; replacing a kept item on every arrival leaves mostly the last few; and drawing from 0 to `i + 1` keeps them too rarely. The tests count how often each item is chosen over thousands of samples, and only the fair rule comes out even.
+    - question:
+        id: work-four
+        type: numeric
+        system: s2
+        prompt: |
+          Quicksort with a random pivot sorts four different numbers. What is the expected number of comparisons, to two decimal places?
+        answer: "4.83"
+        tolerance: "0.01"
+        explanation: |
+          The three pairs of neighbours are always compared, $3 \times 1$; the two pairs with one rank between them are compared with probability $2/3$; and the smallest and largest with probability $2/4$. In all, $3 + \tfrac43 + \tfrac12 = 4.83$.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          1,000 orders are each given to one of 1,000 riders chosen at random, independently. On average, how many riders get no order?
+        answer: "368"
+        tolerance: "1"
+        explanation: |
+          A rider misses one order with probability $999/1000$, and all 1,000 orders with probability $(999/1000)^{1000} \approx 0.368$, close to $1/e$. Summing that indicator over the 1,000 riders gives an expected $1000 \times 0.368 \approx 368$ idle riders.
+    - question:
+        id: work-flood
+        type: choice
+        system: s2
+        prompt: |
+          A web service stores each request's parameters in a hash table, keyed by the parameter's name, with a hash function fixed in the code. An attacker sends requests with thousands of parameters whose names all hash to the same bucket, and the servers slow to a crawl. What is the best fix?
+        options:
+          - "Choose the hash function's seed at random when each server starts, so the attacker cannot know which names collide."
+          - "Replace the hash function with a different fixed one that spreads names better."
+          - "Make the table larger so that each bucket holds fewer names."
+          - "Sort the parameter names before inserting them."
+        answer: 0
+        explanation: |
+          Any fixed hash function has sets of names that collide, and an attacker who knows the function can find them; a better fixed function only moves the problem. A random seed chosen at start-up makes the collisions unpredictable, which is the randomised algorithm's defence against an adversary. A larger table does not help when every name lands in the same bucket, and sorting changes the order of insertions, not where they land.
+  connections:
+    - text: |
+        About 368 riders, more than a third, get no order. Each rider misses all 1,000 orders with probability $(999/1000)^{1000} \approx 1/e$, and linearity adds those chances over the riders without caring that they depend on one another, the same step that counted quicksort's comparisons pair by pair.
+
+        Randomness also appears where an exact answer is too expensive to compute or store. [[f7.fingerprints-and-content-hashes]] compares huge files by short random-looking fingerprints, Monte Carlo style, and [[q8.sketches-hyperloglog-and-count-min]] counts distinct visitors in a few kilobytes by hashing. [[d1.load-balancers-and-proxies]] spreads requests across servers, where the power of two choices earns its keep.
+
+        Every problem so far had an algorithm whose time grew as a modest power of $n$, with or without coins. [[s3.intractability-p-np-and-heuristics]] meets problems, such as finding the shortest tour through many towns, for which no such algorithm is known, and asks what to do when an exact answer would take longer than the age of the universe.
