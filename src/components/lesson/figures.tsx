@@ -5082,6 +5082,91 @@ function Bootstrap(props: Props) {
   );
 }
 
+const AB_LOOKS = [1, 2, 3, 5, 10, 15, 30];
+const AB_DAYS = 30;
+const AB_USERS = 1000;
+const AB_BASE = 0.05;
+const phi = (z: number) => {
+  // The standard normal distribution function, from the error function by a rational approximation.
+  const t = 1 / (1 + 0.3275911 * (Math.abs(z) / Math.SQRT2));
+  const erf = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-(z * z) / 2);
+  return z >= 0 ? (1 + erf) / 2 : (1 - erf) / 2;
+};
+
+/** One A/B test, run for 30 days and looked at along the way, and how often stopping at the first significant look declares a winner by chance. */
+function AbTest(props: Props) {
+  const [lift, setLift] = useState(clamp(Math.round(num(props.lift, 0)), 0, 20));
+  const [looksAt, setLooksAt] = useState(Math.max(0, AB_LOOKS.indexOf(num(props.looks, 30))));
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const looks = AB_LOOKS[looksAt];
+  const rateB = AB_BASE * (1 + lift / 100);
+  const lookDays = Array.from({ length: looks }, (_, i) => Math.round(((i + 1) * AB_DAYS) / looks));
+  const run = (noise: number[]) => {
+    let a = 0;
+    let b = 0;
+    return Array.from({ length: AB_DAYS }, (_, d) => {
+      a += AB_USERS * AB_BASE + Math.sqrt(AB_USERS * AB_BASE * (1 - AB_BASE)) * noise[2 * d];
+      b += AB_USERS * rateB + Math.sqrt(AB_USERS * rateB * (1 - rateB)) * noise[2 * d + 1];
+      const n = AB_USERS * (d + 1);
+      const pooled = (a + b) / (2 * n);
+      const z = (b / n - a / n) / Math.sqrt((2 * pooled * (1 - pooled)) / n);
+      return 2 * (1 - phi(Math.abs(z)));
+    });
+  };
+  const tests = 400;
+  const noise = draws(100 + seed, tests * 2 * AB_DAYS, true);
+  const paths = Array.from({ length: tests }, (_, t) => run(noise.slice(t * 2 * AB_DAYS, (t + 1) * 2 * AB_DAYS)));
+  const firstHit = (path: number[]) => lookDays.find((day) => path[day - 1] < 0.05);
+  const declared = paths.filter((path) => firstHit(path) !== undefined).length;
+  // Show the first test whose p-value ever dips below 0.05, if any does, since that is the one a peeker could be fooled by.
+  const shown = paths[Math.max(0, paths.findIndex((path) => path.some((p) => p < 0.05)))];
+  const hit = firstHit(shown);
+  const dip = shown.findIndex((p) => p < 0.05);
+  const sx = (day: number) => 40 + ((day - 1) / (AB_DAYS - 1)) * 380;
+  const sy = (p: number) => 20 + (Math.min(3, -Math.log10(Math.max(p, 1e-3))) / 3) * 190;
+  const line = shown.map((p, d) => `${dp(sx(d + 1), 2)},${dp(sy(p), 2)}`).join(" ");
+  return (
+    <Frame
+      title="Peeking at an A/B test"
+      summary={`Version B's true conversion rate is ${lift === 0 ? "the same as A's, 5%" : `${lift}% higher than A's 5%, ${dp(rateB * 100, 2)}%`}, with ${group(AB_USERS)} users a day on each version for ${AB_DAYS} days. The test is looked at ${looks === 1 ? "once, at the end" : `${looks} times, every ${dp(AB_DAYS / looks, 1)} days`}. The test drawn ${dip < 0 ? "never dips below 0.05" : `dips below 0.05 on day ${dip + 1}`} and ${hit === undefined ? "is not below 0.05 at any look, so it is reported as no difference" : `is below 0.05 at the look on day ${hit}, so stopping there declares a difference`}. Over ${tests} tests like it, stopping at the first look with p below 0.05 declares the versions different in ${dp((declared / tests) * 100, 1)}% of them${lift === 0 ? ", every one a false alarm" : ""}.`}
+      controls={
+        <>
+          <Slider label="true lift" value={lift} onChange={setLift} min={0} max={20} text={`${lift}%`} />
+          <Slider label="looks" value={looksAt} onChange={setLooksAt} min={0} max={AB_LOOKS.length - 1} text={`${looks}`} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`The p-value of one A/B test day by day over ${AB_DAYS} days, on a logarithmic scale, with a line at 0.05 and the ${looks} looks marked`}>
+        <line x1="40" y1={sy(0.05)} x2="420" y2={sy(0.05)} className="fig-guide" />
+        <text x="420" y={sy(0.05) - 4} textAnchor="end" className="fig-small">
+          0.05
+        </text>
+        {[1, 0.1, 0.01, 0.001].map((p) => (
+          <text key={p} x="36" y={sy(p) + 4} textAnchor="end" className="fig-small">
+            {p}
+          </text>
+        ))}
+        <line x1="40" y1="20" x2="40" y2="210" className="fig-axis" />
+        <line x1="40" y1="210" x2="420" y2="210" className="fig-axis" />
+        <polyline points={line} className="fig-line" />
+        {lookDays.map((day) => (
+          <circle key={day} cx={sx(day)} cy={sy(shown[day - 1])} r={day === hit ? 5 : 3} className="fig-accent" />
+        ))}
+        <text x="40" y="228" textAnchor="middle" className="fig-small">
+          day 1
+        </text>
+        <text x="420" y="228" textAnchor="middle" className="fig-small">
+          {`day ${AB_DAYS}`}
+        </text>
+        <text x="230" y="244" textAnchor="middle" className="fig-small">
+          p-value so far, at each day
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -6389,6 +6474,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "interval-catch": IntervalCatch,
   "null-test": NullTest,
   "bootstrap": Bootstrap,
+  "ab-test": AbTest,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

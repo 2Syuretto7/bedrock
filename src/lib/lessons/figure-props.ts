@@ -92,6 +92,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "interval-catch": z.strictObject({ n: z.number().int().min(5).max(200).optional(), level: z.number().int().min(80).max(99).optional(), seed: z.number().int().min(0).max(9).optional() }),
   "null-test": z.strictObject({ effect: z.number().int().min(0).max(15).optional(), n: z.number().int().min(10).max(200).optional(), seed: z.number().int().min(0).max(9).optional() }),
   "bootstrap": z.strictObject({ estimator: z.enum(["mean", "median", "p90"]).optional(), n: z.number().int().min(10).max(200).optional(), seed: z.number().int().min(0).max(9).optional() }),
+  "ab-test": z.strictObject({ lift: z.number().int().min(0).max(20).optional(), looks: z.number().int().min(1).max(30).optional(), seed: z.number().int().min(0).max(9).optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
