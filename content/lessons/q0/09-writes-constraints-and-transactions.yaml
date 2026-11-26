@@ -1,0 +1,719 @@
+concept: q0.writes-constraints-and-transactions
+minutes: 85
+claim: You can add, change and remove rows with INSERT, UPDATE and DELETE, write an upsert with ON CONFLICT, declare NOT NULL, UNIQUE, CHECK and foreign key constraints so that the database refuses bad data from every program, group several writes into a transaction that commits or rolls back as a whole, use transactions correctly from Python's sqlite3, and say what each letter of ACID promises.
+recalls: [q0.null-and-three-valued-logic]
+uses: [q0.tables-rows-and-keys, q0.selecting-and-filtering, q0.subqueries-and-common-table-expressions, s1.exceptions, s1.generators-and-context-managers]
+leads: [q0.indexes-from-the-outside, q2.write-ahead-logging, q4.acid-precisely]
+starter: |
+  # Scratch space. A constraint refuses a write, and a transaction undoes the rest.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.execute("create table wallets (name text primary key, balance integer not null check (balance >= 0))")
+  db.executemany("insert into wallets values (?, ?)", [("Asha", 1000), ("Bilal", 200)])
+  db.commit()
+  try:
+      with db:
+          db.execute("update wallets set balance = balance + 1500 where name = 'Bilal'")
+          db.execute("update wallets set balance = balance - 1500 where name = 'Asha'")
+  except sqlite3.IntegrityError:
+      print("refused, and the credit to Bilal was undone")
+  print(db.execute("select name, balance from wallets order by name").fetchall())
+parts:
+  recall:
+    - text: |
+        Every lesson so far has read data. This one changes it, and changing data is where most of the danger lies: a write can store a missing value that [[q0.null-and-three-valued-logic]] showed will confuse every later query, store a duplicate, point at a customer who does not exist, or stop halfway because a program crashed. Databases answer with two tools, rules that every write must obey and transactions that make several writes succeed or fail together. Three quick pulls first.
+  puzzle:
+    - text: |
+        A wallet app moves ₹500 from Asha to Bilal with two statements, run one after the other:
+
+        ```sql
+        update wallets set balance = balance - 500 where name = 'Asha';
+        update wallets set balance = balance + 500 where name = 'Bilal';
+        ```
+
+        Before the transfer, Asha has ₹1,000 and Bilal has ₹200. Each statement is saved to disk the moment it finishes, and the server loses power just after the first statement finishes.
+
+        **When the server restarts, how many rupees do the two wallets hold in total?**
+  intuition:
+    - text: |
+        When a UPI payment goes through, money leaves your bank account and arrives in the shopkeeper's. The bank must never let one half happen without the other: a debit with no credit makes money vanish, and a credit with no debit prints it. If anything goes wrong in the middle, a network drop or a server restart, the only acceptable outcomes are "the payment happened" and "the payment did not happen". Every shopkeeper's ledger has the same rule: an entry on one side has its matching entry on the other.
+
+        A **transaction** gives a database this property. Several statements are grouped between `begin` and `commit`, and the database promises that either all of their changes become permanent together, or none of them do. Until `commit`, the changes are provisional; `rollback`, or a crash, throws them all away. The figure runs the puzzle's transfer with and without a transaction, and with and without a power cut between the two updates.
+    - figure: transfer-crash
+      props: { transaction: false, crash: true, step: 0 }
+    - text: |
+        Without a transaction, each statement is committed on its own, so the debit is safe on disk before the credit has even started; the power cut then loses ₹500. Inside a transaction, the debit is provisional, so after the restart the database finds an unfinished transaction and undoes it, and both wallets are as they were. Switch the power cut off and step through again: inside the transaction nothing reaches the disk until `commit`, and then both changes arrive at once.
+  derivation:
+    - text: |
+        **Writing rows.** `insert into wallets (name, balance) values ('Chitra', 0), ('Dev', 50)` adds rows; naming the columns keeps the statement correct if columns are added later. `insert into archive select * from orders where placed < '2026-01-01'` copies the result of a query. `update wallets set balance = balance - 500 where name = 'Asha'` changes every row the `where` keeps, and `delete from wallets where balance = 0` removes every row it keeps. Both act on **every** row that passes the `where`, so an `update` with no `where` changes the whole table. A safe habit is to run `select` with the same `where` first and count what it returns. From Python, pass values as `?` placeholders with a tuple, as the earlier lessons did, and never paste them into the SQL text: the database then treats them strictly as values, whatever characters they contain.
+
+        **Insert or update.** Receiving stock should add to an item already on the shelf, and insert a new row otherwise. One statement does both, an **upsert**:
+
+        ```sql
+        insert into stock (item, qty) values ('tea', 10)
+        on conflict (item) do update set qty = qty + excluded.qty
+        ```
+
+        If inserting would break the uniqueness of `item`, the existing row is updated instead, and `excluded` names the row that was refused. SQLite's `insert or ignore` drops the new row, and `insert or replace` deletes the old row and inserts the new one, losing the old quantity.
+    - question:
+        id: derivation-update
+        type: choice
+        system: s2
+        prompt: |
+          A clerk means to reset one wallet and runs `update wallets set balance = 0`. What happens?
+        options:
+          - "Every wallet's balance becomes 0."
+          - "Only the first wallet changes."
+          - "The database refuses an update without where."
+          - "Nothing, because no wallet was named."
+        answer: 0
+        explanation: |
+          `update` changes every row that passes its `where`, and with no `where` every row passes. Running the matching `select` first, and working inside a transaction that can be rolled back, are the defences.
+    - text: |
+        **Constraints.** A table can carry rules that every write must obey, whichever program makes it. `not null` forbids a missing value; `unique` forbids two rows with the same value; `primary key`, met in [[q0.tables-rows-and-keys]], is both; `check (balance >= 0)` tests a condition on each row; `default 0` fills a column the insert leaves out. A **foreign key**, `customer integer references customers (id)`, requires the value to match an existing row of the other table, so no order can point at a customer who does not exist. By default, deleting a customer who still has orders is refused; `on delete cascade` deletes the orders too, and `on delete set null` blanks their customer. SQLite checks foreign keys only after `pragma foreign_keys = on` on each connection.
+
+        A refused write raises `sqlite3.IntegrityError` in Python, an exception like those of [[s1.exceptions]]. Two details follow from three-valued logic. A `check` refuses a row only when its condition is **false**, so `check (amount > 0)` lets a NULL amount through, and a column that must hold a positive amount needs `not null` as well. And `unique` treats NULLs as different from each other, so a unique column can hold many NULLs.
+    - question:
+        id: derivation-cascade
+        type: numeric
+        system: s2
+        prompt: |
+          `orders.customer` references `customers (id)` with `on delete cascade`. A customer with 3 orders is deleted. How many rows are removed from the two tables in all?
+        answer: "4"
+        explanation: |
+          The customer's row and, by the cascade, the 3 orders that refer to it. Without `on delete cascade`, the deletion would have been refused and nothing removed.
+    - text: |
+        **Transactions in Python.** Python's `sqlite3` begins a transaction automatically before the first `insert`, `update` or `delete`, and keeps it open until `db.commit()` makes the changes permanent or `db.rollback()` discards them. Changes not committed when the program ends are lost. A connection is also a context manager, as in [[s1.generators-and-context-managers]]: `with db:` commits when the block finishes and rolls back if an exception escapes it.
+
+        When one statement in a transaction is refused, SQLite undoes that statement only. The earlier statements of the transaction stay pending, and a program that catches the error and then commits saves half a transfer. The cure is to roll back the whole transaction whenever any part of it fails, which `with db:` does without being asked.
+    - question:
+        id: order-refused
+        type: order
+        system: s2
+        prompt: |
+          Put the events in order when a transaction's second update breaks a check constraint and the program rolls back.
+        steps:
+          - "The program's first update starts a transaction and is applied provisionally."
+          - "The second update would make a balance negative, and the check constraint refuses it."
+          - "sqlite3 raises IntegrityError in the program."
+          - "The program calls rollback."
+          - "The first update is undone, and the table is as it was before the transaction."
+        explanation: |
+          The refusal undoes only the statement that broke the rule; the earlier update is still pending until the program decides. Rolling back, which `with db:` does automatically when the exception passes through it, removes it too.
+    - text: |
+        **ACID.** The guarantees a transaction gives are summed up in four letters. **Atomicity**: all of its changes or none. **Consistency**: every constraint holds whenever a transaction commits, so a rule-breaking transaction cannot commit. **Isolation**: other connections do not see a transaction's provisional changes, and transactions running at once behave, in the strictest setting, as if they had run one after another. **Durability**: once `commit` returns, the changes survive a crash, because the database has written them to a log on disk before replying. How a database keeps the last of these promises is [[q2.write-ahead-logging]], and what isolation guarantees at each of its settings is [[q4.acid-precisely]].
+  formal:
+    - text: |
+        **Insert.** `insert into t (c1, c2) values (v1, v2), …` or `insert into t (c1, c2) select …`.
+
+        **Update and delete.** `update t set c = expr, … where cond` and `delete from t where cond` act on every row for which `cond` is true; with no `where`, on every row.
+
+        **Upsert.** `insert … on conflict (key) do update set c = excluded.c` or `on conflict (key) do nothing`; `excluded` is the row that would have been inserted.
+
+        **Constraints.** `not null`, `unique`, `primary key`, `check (cond)` (refuses a row only when `cond` is false), `default value`, and `references other (col)` with `on delete restrict`, `cascade` or `set null`. SQLite enforces foreign keys after `pragma foreign_keys = on`.
+
+        **Transaction.** `begin; … commit;` or `rollback;`. In Python's `sqlite3`: a transaction opens before the first write; `db.commit()`, `db.rollback()`; `with db:` commits on success and rolls back on an exception. A refused write raises `sqlite3.IntegrityError`.
+
+        **ACID.** Atomicity, consistency, isolation, durability.
+  drill:
+    - text: Seconds each. Ask which rows a write touches, and what the database will refuse.
+    - question:
+        id: drill-check-null
+        type: choice
+        system: s1
+        prompt: |
+          A column is declared `amount integer check (amount > 0)`. An insert gives it NULL. What happens?
+        options:
+          - "The row is accepted, because the check is unknown rather than false."
+          - "The row is refused."
+          - "The amount is stored as 0."
+          - "The database raises a type error."
+        answer: 0
+        explanation: A check refuses only a false condition. Add `not null` to forbid the missing amount.
+    - question:
+        id: drill-unique
+        type: choice
+        system: s1
+        prompt: |
+          A `unique` column already holds one NULL. Can another row store NULL there?
+        options:
+          - "Yes; NULLs are not equal to each other, so they do not clash."
+          - "No; that would be a duplicate."
+          - "Only if the table has no primary key."
+          - "Only inside a transaction."
+        answer: 0
+        explanation: Uniqueness compares values with `=`, and NULL is never equal to anything, so any number of NULLs fit.
+    - question:
+        id: drill-rollback
+        type: numeric
+        system: s1
+        prompt: |
+          A transaction inserts 3 rows and then rolls back. How many rows did it add?
+        answer: "0"
+        explanation: Rollback discards every change since the transaction began.
+    - question:
+        id: drill-pragma
+        type: choice
+        system: s1
+        prompt: |
+          A SQLite table declares a foreign key, but an order for a missing customer is accepted. What is the likely cause?
+        options:
+          - "The connection never ran pragma foreign_keys = on."
+          - "Foreign keys only work on primary keys."
+          - "The order was inserted inside a transaction."
+          - "SQLite does not support foreign keys."
+        answer: 0
+        explanation: SQLite checks foreign keys only when each connection switches them on.
+    - question:
+        id: drill-acid
+        type: choice
+        system: s1
+        prompt: |
+          Which letter of ACID promises that a committed change survives a power cut?
+        options:
+          - "D, durability"
+          - "A, atomicity"
+          - "C, consistency"
+          - "I, isolation"
+        answer: 0
+        explanation: Durability is about committed changes; atomicity is about all-or-nothing.
+    - question:
+        id: predict-rollback
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.execute("create table t (x integer)")
+          db.execute("insert into t values (1)")
+          db.rollback()
+          db.execute("insert into t values (2)")
+          db.commit()
+          print(db.execute("select x from t").fetchall())
+        output: "[(2,)]"
+        explanation: The first insert opened a transaction that was rolled back; the second was committed.
+    - question:
+        id: predict-upsert
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.execute("create table stock (item text primary key, qty integer)")
+          db.execute("insert into stock values ('tea', 3)")
+          db.execute("insert into stock values ('tea', 5) on conflict (item) do update set qty = qty + excluded.qty")
+          print(db.execute("select * from stock").fetchall())
+        output: "[('tea', 8)]"
+        explanation: The second insert clashes on the key, so the existing row is updated with 3 + 5.
+  work:
+    - text: Slower now. For every write, ask what happens if it is refused, and what happens if the program stops just after it.
+    - question:
+        id: fix-transfer
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          Wallets must stay between ₹0 and ₹10,000. `transfer` should move money as a whole or not at all, and let `IntegrityError` reach its caller when the move is refused. The program should print `1 [('Asha', 700), ('Bilal', 500)]`. It prints `1 [('Asha', 700), ('Bilal', 1400)]`. Find the fault and fix it.
+        starter: |
+          import sqlite3
+
+
+          def transfer(db, source, target, amount):
+              db.execute("update wallets set balance = balance + ? where name = ?", (amount, target))
+              db.execute("update wallets set balance = balance - ? where name = ?", (amount, source))
+              db.commit()
+
+
+          db = sqlite3.connect(":memory:")
+          db.execute("create table wallets (name text primary key, balance integer not null check (balance >= 0 and balance <= 10000))")
+          db.executemany("insert into wallets values (?, ?)", [("Asha", 1000), ("Bilal", 200)])
+          db.commit()
+          refused = 0
+          for amount in [300, 900]:
+              try:
+                  transfer(db, "Asha", "Bilal", amount)
+              except sqlite3.IntegrityError:
+                  refused = refused + 1
+          db.commit()
+          print(refused, db.execute("select name, balance from wallets order by name").fetchall())
+        solution: |
+          import sqlite3
+
+
+          def transfer(db, source, target, amount):
+              with db:
+                  db.execute("update wallets set balance = balance + ? where name = ?", (amount, target))
+                  db.execute("update wallets set balance = balance - ? where name = ?", (amount, source))
+
+
+          db = sqlite3.connect(":memory:")
+          db.execute("create table wallets (name text primary key, balance integer not null check (balance >= 0 and balance <= 10000))")
+          db.executemany("insert into wallets values (?, ?)", [("Asha", 1000), ("Bilal", 200)])
+          db.commit()
+          refused = 0
+          for amount in [300, 900]:
+              try:
+                  transfer(db, "Asha", "Bilal", amount)
+              except sqlite3.IntegrityError:
+                  refused = refused + 1
+          db.commit()
+          print(refused, db.execute("select name, balance from wallets order by name").fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(37)
+          _names = ["Asha", "Bilal", "Chitra"]
+          for _ in range(30):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table wallets (name text primary key, balance integer not null check (balance >= 0 and balance <= 10000))")
+              _model = {_n: _rng.randint(0, 100) * 100 for _n in _names}
+              _db.executemany("insert into wallets values (?, ?)", list(_model.items()))
+              _db.commit()
+              for _step in range(6):
+                  _s, _t = _rng.sample(_names, 2)
+                  _a = _rng.randint(1, 60) * 100
+                  _ok = _model[_s] - _a >= 0 and _model[_t] + _a <= 10000
+                  _raised = False
+                  try:
+                      transfer(_db, _s, _t, _a)
+                  except sqlite3.IntegrityError:
+                      _raised = True
+                  _db.commit()
+                  if _ok:
+                      _model[_s] = _model[_s] - _a
+                      _model[_t] = _model[_t] + _a
+                  _got = dict(_db.execute("select name, balance from wallets").fetchall())
+                  assert _raised == (not _ok), "Moving " + str(_a) + " from " + _s + " to " + _t + " should " + ("succeed" if _ok else "raise IntegrityError to the caller") + ", but it " + ("raised" if _raised else "did not raise")
+                  assert _got == _model, "Moving " + str(_a) + " from " + _s + " to " + _t + " should leave the wallets at " + str(_model) + ", not " + str(_got)
+          assert output.strip() == "1 [('Asha', 700), ('Bilal', 500)]", "The program should print 1 [('Asha', 700), ('Bilal', 500)]"
+        wrong:
+          - |
+            import sqlite3
+
+
+            def transfer(db, source, target, amount):
+                db.execute("update wallets set balance = balance - ? where name = ?", (amount, source))
+                db.execute("update wallets set balance = balance + ? where name = ?", (amount, target))
+                db.commit()
+
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table wallets (name text primary key, balance integer not null check (balance >= 0 and balance <= 10000))")
+            db.executemany("insert into wallets values (?, ?)", [("Asha", 1000), ("Bilal", 200)])
+            db.commit()
+            refused = 0
+            for amount in [300, 900]:
+                try:
+                    transfer(db, "Asha", "Bilal", amount)
+                except sqlite3.IntegrityError:
+                    refused = refused + 1
+            db.commit()
+            print(refused, db.execute("select name, balance from wallets order by name").fetchall())
+          - |
+            import sqlite3
+
+
+            def transfer(db, source, target, amount):
+                try:
+                    db.execute("update wallets set balance = balance + ? where name = ?", (amount, target))
+                    db.execute("update wallets set balance = balance - ? where name = ?", (amount, source))
+                    db.commit()
+                except sqlite3.IntegrityError:
+                    db.rollback()
+
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table wallets (name text primary key, balance integer not null check (balance >= 0 and balance <= 10000))")
+            db.executemany("insert into wallets values (?, ?)", [("Asha", 1000), ("Bilal", 200)])
+            db.commit()
+            refused = 0
+            for amount in [300, 900]:
+                try:
+                    transfer(db, "Asha", "Bilal", amount)
+                except sqlite3.IntegrityError:
+                    refused = refused + 1
+            db.commit()
+            print(refused, db.execute("select name, balance from wallets order by name").fetchall())
+          - |
+            import sqlite3
+
+
+            def transfer(db, source, target, amount):
+                db.execute("update wallets set balance = balance + ? where name = ?", (amount, target))
+                db.commit()
+                db.execute("update wallets set balance = balance - ? where name = ?", (amount, source))
+                db.commit()
+
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table wallets (name text primary key, balance integer not null check (balance >= 0 and balance <= 10000))")
+            db.executemany("insert into wallets values (?, ?)", [("Asha", 1000), ("Bilal", 200)])
+            db.commit()
+            refused = 0
+            for amount in [300, 900]:
+                try:
+                    transfer(db, "Asha", "Bilal", amount)
+                except sqlite3.IntegrityError:
+                    refused = refused + 1
+            db.commit()
+            print(refused, db.execute("select name, balance from wallets order by name").fetchall())
+        explanation: |
+          When the debit is refused, SQLite undoes only the debit, and the caller's `commit` then saves the credit: Bilal gains ₹900 that Asha never paid. `with db:` rolls back the whole transfer when the exception passes and still lets it reach the caller. Debiting first only moves the problem, since a credit that breaks the ₹10,000 limit leaves the debit behind; rolling back but swallowing the error hides the refusal from the caller; and committing after each update saves each half on its own.
+    - question:
+        id: write-stock
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `query` so that a delivery of `(item, qty)` adds `qty` to an item already in stock, and adds a new row for an item not yet in stock, in one statement.
+        starter: |
+          import sqlite3
+
+          query = """
+              insert into stock (item, qty) values (?, ?)
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.execute("create table stock (item text primary key, qty integer not null)")
+          db.executemany("insert into stock values (?, ?)", [("tea", 40), ("sugar", 25)])
+          deliveries = [("tea", 10), ("milk", 12), ("sugar", 5), ("milk", 6)]
+          for item, qty in deliveries:
+              try:
+                  db.execute(query, (item, qty))
+              except sqlite3.IntegrityError:
+                  print("refused", item)
+          print(db.execute("select item, qty from stock order by item").fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              insert into stock (item, qty) values (?, ?)
+              on conflict (item) do update set qty = qty + excluded.qty
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.execute("create table stock (item text primary key, qty integer not null)")
+          db.executemany("insert into stock values (?, ?)", [("tea", 40), ("sugar", 25)])
+          deliveries = [("tea", 10), ("milk", 12), ("sugar", 5), ("milk", 6)]
+          for item, qty in deliveries:
+              try:
+                  db.execute(query, (item, qty))
+              except sqlite3.IntegrityError:
+                  print("refused", item)
+          print(db.execute("select item, qty from stock order by item").fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(19)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table stock (item text primary key, qty integer not null)")
+              _model = {}
+              for _item in ["tea", "sugar", "milk", "rusk"]:
+                  if _rng.random() < 0.5:
+                      _model[_item] = _rng.randint(0, 50)
+              _db.executemany("insert into stock values (?, ?)", list(_model.items()))
+              for _k in range(_rng.randint(1, 8)):
+                  _item = _rng.choice(["tea", "sugar", "milk", "rusk"])
+                  _qty = _rng.randint(1, 20)
+                  _db.execute(query, (_item, _qty))
+                  _model[_item] = _model.get(_item, 0) + _qty
+                  _got = dict(_db.execute("select item, qty from stock").fetchall())
+                  assert _got == _model, "After a delivery of " + str(_qty) + " " + _item + ", the stock should be " + str(_model) + ", not " + str(_got)
+          assert output.strip() == "[('milk', 18), ('sugar', 30), ('tea', 50)]", "The program should print [('milk', 18), ('sugar', 30), ('tea', 50)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                insert or replace into stock (item, qty) values (?, ?)
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table stock (item text primary key, qty integer not null)")
+            db.executemany("insert into stock values (?, ?)", [("tea", 40), ("sugar", 25)])
+            deliveries = [("tea", 10), ("milk", 12), ("sugar", 5), ("milk", 6)]
+            for item, qty in deliveries:
+                try:
+                    db.execute(query, (item, qty))
+                except sqlite3.IntegrityError:
+                    print("refused", item)
+            print(db.execute("select item, qty from stock order by item").fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                insert into stock (item, qty) values (?, ?)
+                on conflict (item) do update set qty = excluded.qty
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table stock (item text primary key, qty integer not null)")
+            db.executemany("insert into stock values (?, ?)", [("tea", 40), ("sugar", 25)])
+            deliveries = [("tea", 10), ("milk", 12), ("sugar", 5), ("milk", 6)]
+            for item, qty in deliveries:
+                try:
+                    db.execute(query, (item, qty))
+                except sqlite3.IntegrityError:
+                    print("refused", item)
+            print(db.execute("select item, qty from stock order by item").fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                insert or ignore into stock (item, qty) values (?, ?)
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table stock (item text primary key, qty integer not null)")
+            db.executemany("insert into stock values (?, ?)", [("tea", 40), ("sugar", 25)])
+            deliveries = [("tea", 10), ("milk", 12), ("sugar", 5), ("milk", 6)]
+            for item, qty in deliveries:
+                try:
+                    db.execute(query, (item, qty))
+                except sqlite3.IntegrityError:
+                    print("refused", item)
+            print(db.execute("select item, qty from stock order by item").fetchall())
+        explanation: |
+          `on conflict (item) do update set qty = qty + excluded.qty` adds the delivery to the row already there. `insert or replace` and `set qty = excluded.qty` both throw away the old quantity, and `insert or ignore` throws away the delivery.
+    - question:
+        id: write-orders-schema
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `schema` so that the database refuses an order without a customer, an order for a customer who does not exist, an order without an amount or with an amount that is not positive, and the deletion of a customer who still has orders. The program should print `2 of 7 accepted`.
+        starter: |
+          import sqlite3
+
+          schema = """
+              create table orders (
+                  id integer primary key,
+                  customer integer,
+                  amount integer
+              )
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.execute("pragma foreign_keys = on")
+          db.execute("create table customers (id integer primary key, name text not null)")
+          db.execute(schema)
+          db.executemany("insert into customers values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+          attempts = [
+              "insert into orders values (1, 1, 250)",
+              "insert into orders values (2, 3, 400)",
+              "insert into orders values (3, null, 300)",
+              "insert into orders values (4, 2, 0)",
+              "insert into orders values (5, 2, null)",
+              "delete from customers where id = 1",
+              "delete from customers where id = 2",
+          ]
+          accepted = 0
+          for statement in attempts:
+              try:
+                  db.execute(statement)
+                  accepted = accepted + 1
+              except sqlite3.IntegrityError:
+                  pass
+          print(accepted, "of", len(attempts), "accepted")
+        solution: |
+          import sqlite3
+
+          schema = """
+              create table orders (
+                  id integer primary key,
+                  customer integer not null references customers (id),
+                  amount integer not null check (amount > 0)
+              )
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.execute("pragma foreign_keys = on")
+          db.execute("create table customers (id integer primary key, name text not null)")
+          db.execute(schema)
+          db.executemany("insert into customers values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+          attempts = [
+              "insert into orders values (1, 1, 250)",
+              "insert into orders values (2, 3, 400)",
+              "insert into orders values (3, null, 300)",
+              "insert into orders values (4, 2, 0)",
+              "insert into orders values (5, 2, null)",
+              "delete from customers where id = 1",
+              "delete from customers where id = 2",
+          ]
+          accepted = 0
+          for statement in attempts:
+              try:
+                  db.execute(statement)
+                  accepted = accepted + 1
+              except sqlite3.IntegrityError:
+                  pass
+          print(accepted, "of", len(attempts), "accepted")
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(23)
+          for _ in range(30):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("pragma foreign_keys = on")
+              _db.execute("create table customers (id integer primary key, name text not null)")
+              _db.execute(schema)
+              _customers = set(range(1, _rng.randint(2, 4)))
+              _db.executemany("insert into customers values (?, ?)", [(_c, "C" + str(_c)) for _c in _customers])
+              _orders = {}
+              for _id in range(1, 10):
+                  if _rng.random() < 0.6:
+                      _c = _rng.choice([None, 1, 2, 3, 4])
+                      _a = _rng.choice([None, -50, 0, 1, 120, 900])
+                      _sql = "insert into orders values (" + str(_id) + ", " + ("null" if _c is None else str(_c)) + ", " + ("null" if _a is None else str(_a)) + ")"
+                      _ok = _c is not None and _c in _customers and _a is not None and _a > 0
+                  else:
+                      _c = _rng.randint(1, 4)
+                      _sql = "delete from customers where id = " + str(_c)
+                      _ok = _c not in _orders.values()
+                  try:
+                      _db.execute(_sql)
+                      _done = True
+                  except sqlite3.IntegrityError:
+                      _done = False
+                  assert _done == _ok, "With customers " + str(sorted(_customers)) + " and orders " + str(_orders) + ", the statement " + _sql + " should be " + ("accepted" if _ok else "refused")
+                  if _ok and _sql.startswith("insert"):
+                      _orders[_id] = _c
+                  if _ok and _sql.startswith("delete"):
+                      _customers.discard(_c)
+                  _left = _db.execute("select count(*) from orders").fetchone()[0]
+                  assert _left == len(_orders), "After " + _sql + ", there should be " + str(len(_orders)) + " orders, not " + str(_left)
+          assert output.strip() == "2 of 7 accepted", "The program should print 2 of 7 accepted"
+        wrong:
+          - |
+            import sqlite3
+
+            schema = """
+                create table orders (
+                    id integer primary key,
+                    customer integer references customers (id),
+                    amount integer not null check (amount > 0)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("pragma foreign_keys = on")
+            db.execute("create table customers (id integer primary key, name text not null)")
+            db.execute(schema)
+            db.executemany("insert into customers values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+            attempts = [
+                "insert into orders values (1, 1, 250)",
+                "insert into orders values (2, 3, 400)",
+                "insert into orders values (3, null, 300)",
+                "insert into orders values (4, 2, 0)",
+                "insert into orders values (5, 2, null)",
+                "delete from customers where id = 1",
+                "delete from customers where id = 2",
+            ]
+            accepted = 0
+            for statement in attempts:
+                try:
+                    db.execute(statement)
+                    accepted = accepted + 1
+                except sqlite3.IntegrityError:
+                    pass
+            print(accepted, "of", len(attempts), "accepted")
+          - |
+            import sqlite3
+
+            schema = """
+                create table orders (
+                    id integer primary key,
+                    customer integer not null references customers (id),
+                    amount integer check (amount > 0)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("pragma foreign_keys = on")
+            db.execute("create table customers (id integer primary key, name text not null)")
+            db.execute(schema)
+            db.executemany("insert into customers values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+            attempts = [
+                "insert into orders values (1, 1, 250)",
+                "insert into orders values (2, 3, 400)",
+                "insert into orders values (3, null, 300)",
+                "insert into orders values (4, 2, 0)",
+                "insert into orders values (5, 2, null)",
+                "delete from customers where id = 1",
+                "delete from customers where id = 2",
+            ]
+            accepted = 0
+            for statement in attempts:
+                try:
+                    db.execute(statement)
+                    accepted = accepted + 1
+                except sqlite3.IntegrityError:
+                    pass
+            print(accepted, "of", len(attempts), "accepted")
+          - |
+            import sqlite3
+
+            schema = """
+                create table orders (
+                    id integer primary key,
+                    customer integer not null references customers (id) on delete cascade,
+                    amount integer not null check (amount > 0)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("pragma foreign_keys = on")
+            db.execute("create table customers (id integer primary key, name text not null)")
+            db.execute(schema)
+            db.executemany("insert into customers values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+            attempts = [
+                "insert into orders values (1, 1, 250)",
+                "insert into orders values (2, 3, 400)",
+                "insert into orders values (3, null, 300)",
+                "insert into orders values (4, 2, 0)",
+                "insert into orders values (5, 2, null)",
+                "delete from customers where id = 1",
+                "delete from customers where id = 2",
+            ]
+            accepted = 0
+            for statement in attempts:
+                try:
+                    db.execute(statement)
+                    accepted = accepted + 1
+                except sqlite3.IntegrityError:
+                    pass
+            print(accepted, "of", len(attempts), "accepted")
+        explanation: |
+          `not null` with `references customers (id)` demands a real customer, and `not null` with `check (amount > 0)` demands a positive amount; the default action refuses deleting a customer with orders. A foreign key allows NULL unless told otherwise; a check lets a NULL amount through, since its condition is unknown; and `on delete cascade` deletes the orders instead of refusing.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, how many rupees do the two wallets hold in total after the restart?
+        answer: "700"
+        explanation: |
+          The debit was saved, leaving Asha ₹500, and the credit never ran, leaving Bilal ₹200: ₹700, with ₹500 lost.
+    - question:
+        id: work-durable
+        type: choice
+        system: s2
+        prompt: |
+          A payment service commits a transfer and tells the customer "done". A second later the server loses power. What should the customer see after the restart?
+        options:
+          - "The transfer, because a committed transaction is durable."
+          - "No transfer, because the server crashed."
+          - "Half of the transfer."
+          - "Whatever the last backup held."
+        answer: 0
+        explanation: |
+          `commit` returns only after the change is safely logged on disk, so a crash after it cannot undo it. A crash before `commit` returns would undo the whole transaction, never half of it.
+  connections:
+    - text: |
+        ₹700. The debit was committed by itself, and the credit never ran, so ₹500 vanished from the system. Wrapped in a transaction, the same power cut leaves an unfinished transaction that the database undoes on restart: Asha ₹1,000, Bilal ₹200, ₹1,200 in all, as if the transfer had never been tried, and the app can try again.
+
+        Constraints and transactions turn a database from a store of rows into a keeper of promises. Several of those promises need the database to find rows fast: checking `unique` or a foreign key means looking up a value among millions, at every write. The structure that makes this, and fast reads, possible is an index, and [[q0.indexes-from-the-outside]] shows how to use one without yet opening it up. The machinery behind `commit` surviving a crash is [[q2.write-ahead-logging]], and the full meaning of isolation when many connections write at once is [[q4.acid-precisely]].

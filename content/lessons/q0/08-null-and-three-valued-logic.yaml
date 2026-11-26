@@ -1,0 +1,589 @@
+concept: q0.null-and-three-valued-logic
+minutes: 80
+claim: You can say what NULL means and why a comparison with it is unknown rather than true or false, work out and, or and not over true, false and unknown, predict which rows where, having and on keep, test for missing values with IS NULL, avoid the NOT IN trap, know how count, sum and avg treat NULL, and decide when a column should forbid missing values altogether.
+recalls: [q0.window-functions, f2.propositions-and-connectives]
+uses: [q0.selecting-and-filtering, q0.joins, q0.grouping-and-aggregation, q0.subqueries-and-common-table-expressions, f2.boolean-algebra, f2.quantifiers-and-their-negation]
+leads: [q0.writes-constraints-and-transactions, r2.validating-input]
+bridges:
+  f2.propositions-and-connectives: The logic cluster built every compound statement from true and false with not, and and or, and worked out truth tables by trying each combination. Databases need a third value, because a fact may be missing, such as a city never recorded or a delivery not yet made. A comparison with a missing value is neither true nor false, so SQL calls it unknown. The old truth tables still decide everything. Read unknown as "true or false, we do not know which", try both, and the answer is known exactly when both tries agree. De Morgan's laws survive this change; the rule that every statement is either true or false does not.
+starter: |
+  # Scratch space. NULL is not a value, and comparing with it gives unknown.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.executescript("""
+      create table customers (id integer primary key, name text, city text);
+      insert into customers values (1, 'Asha', 'Pune'), (2, 'Bilal', null), (3, 'Chitra', 'Mumbai');
+  """)
+  print(db.execute("select null = null, null is null, 5 + null").fetchone())
+  print(db.execute("select name from customers where city <> 'Pune'").fetchall())
+  print(db.execute("select name from customers where city is not 'Pune'").fetchall())
+parts:
+  recall:
+    - text: |
+        [[q0.window-functions]] met a row with nothing before it, where `lag` returned NULL, and [[q0.joins]] padded unmatched rows with NULL. Missing values turn up everywhere in real data: a customer who never gave a city, an order not yet delivered, a rating never left. SQL handles them with a third truth value, and the rules of [[f2.propositions-and-connectives]] extend to it in one consistent way, which this lesson works out. Three quick pulls first.
+  puzzle:
+    - text: |
+        A shop rewards customers who bring in friends, and records who referred whom:
+
+        | id | name | referred_by |
+        | --- | --- | --- |
+        | 1 | Asha | NULL |
+        | 2 | Bilal | 1 |
+        | 3 | Chitra | 1 |
+        | 4 | Dev | 2 |
+        | 5 | Esha | NULL |
+        | 6 | Farhan | 4 |
+
+        Asha and Esha came on their own. To nudge the customers who have not yet referred anyone, an analyst writes:
+
+        ```sql
+        select name from customers
+        where id not in (select referred_by from customers)
+        ```
+
+        **How many names does this query return?**
+  intuition:
+    - text: |
+        A school mark sheet has a row for every student, and a few cells say "absent" or "result awaited". Ask whether Rohan scored above 40 when his cell says "result awaited", and the honest answer is neither yes nor no; it is "we do not know yet". Ask whether he scored above 40 **or** at most 40, and the answer is yes, whatever his mark turns out to be. Ask whether he scored above 40 **and** the class topper scored below 10, and the answer is no, because the second part is already false.
+
+        SQL writes a missing value as **NULL**, and a comparison involving NULL gives the third truth value, **unknown**. The rule for combining it is the one the mark sheet suggests: treat unknown as "true or false, not yet known", fill it in both ways, and if both give the same answer, that is the answer; if they disagree, the answer is unknown. The figure applies the rule to every cell of the tables for and, or and not.
+    - figure: three-valued
+      props: { op: and, cell: 6 }
+    - text: |
+        False wins an `and`, since one false part makes the whole false; true wins an `or`; and `not unknown` is unknown, because the negation of a fact we do not know is also a fact we do not know. Everything else follows from one more rule: `where` keeps a row only when its condition is **true**. Unknown rows are thrown out along with false ones, silently.
+  derivation:
+    - text: |
+        **NULL is a marker, not a value.** NULL means that a value is absent: unknown, not yet decided, or not applicable. Any comparison with it, `=`, `<>`, `<` or `>`, gives unknown, and so does almost any arithmetic: `price + NULL` is NULL, and so is `'Mr ' || NULL`. Even `NULL = NULL` is unknown, because two unknown amounts might or might not be equal. So `where city = NULL` never keeps a row. The test for a missing value is `city is null`, and its opposite is `city is not null`; these are always true or false.
+
+        **The excluded middle fails.** In two-valued logic, "the city is Pune or the city is not Pune" is true of every row. In SQL, `where city = 'Pune' or city <> 'Pune'` keeps only the rows whose city is known: for a NULL city both parts are unknown, and unknown or unknown is unknown. A query meant to split a table into two parts, "Pune" and "not Pune", loses the rows in neither. To say "not known to be Pune", write `city <> 'Pune' or city is null`, or SQLite's null-safe comparison `city is not 'Pune'`, which treats NULL as an ordinary value; standard SQL spells it `city is distinct from 'Pune'`.
+    - question:
+        id: derivation-split
+        type: choice
+        system: s2
+        prompt: |
+          A table of 100 customers has 12 with a NULL city and 30 in Pune. How many rows does `where city = 'Pune' or city <> 'Pune'` return?
+        options:
+          - "88"
+          - "100"
+          - "70"
+          - "30"
+        answer: 0
+        explanation: |
+          For the 88 customers with a known city, one of the two parts is true. For the 12 with NULL, both parts are unknown, and the `or` is unknown, so `where` drops them.
+    - text: |
+        **The NOT IN trap.** `x in (1, 2, NULL)` means `x = 1 or x = 2 or x = NULL`. For `x = 1` it is true; for `x = 3` it is false or false or unknown, which is unknown. Negating it with [[f2.boolean-algebra]]'s De Morgan law gives `x <> 1 and x <> 2 and x <> NULL`, and the last part is unknown for every `x`, so `not in` a list containing NULL is never true. A subquery returns a list, and one NULL in it empties the whole result. Two cures: filter the NULLs out inside the subquery, `select referred_by from customers where referred_by is not null`, or use `not exists` from [[q0.subqueries-and-common-table-expressions]], which asks whether a matching row exists and never meets a comparison with NULL in the list.
+    - question:
+        id: order-not-in
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of evaluating `where 3 not in (1, 2, NULL)` in order.
+        steps:
+          - "Rewrite it as 3 <> 1 and 3 <> 2 and 3 <> NULL."
+          - "Evaluate 3 <> 1 and 3 <> 2: both are true."
+          - "Evaluate 3 <> NULL: it is unknown."
+          - "Combine: true and true and unknown is unknown."
+          - "Drop the row, because where keeps only true."
+        explanation: |
+          `not in` is a chain of `<>` joined by `and`. The known parts are true, the NULL part is unknown, and an `and` with an unknown part and no false part is unknown, which `where` treats like false.
+    - text: |
+        **Aggregates skip NULL.** `count(*)` counts rows, while `count(stars)` counts rows whose `stars` is not NULL. `sum`, `avg`, `min` and `max` ignore NULLs, so `avg(stars)` is the average of the ratings actually given, which is usually what a report means; treating a missing rating as 0 would invent bad reviews. When every value in a group is NULL, or the group is empty, `sum` and `avg` return NULL rather than 0, and `coalesce(sum(x), 0)` turns that into 0 when 0 is the right reading. `group by` puts all the NULLs together in one group, and `distinct` treats them as equal, so these two places, unlike `=`, treat NULLs as the same; SQLite also sorts NULL before every value.
+
+        **Where NULLs come from.** Some arrive with the data. Others are made by queries: an outer join of [[q0.joins]] pads with NULL, `lag` returns NULL at the start of a partition, and a scalar subquery that finds no row returns NULL. Each is a place to ask what the missing value should mean in the answer.
+
+        **Whether to allow NULL at all.** A column should allow NULL only when "missing" is a real possibility with a real meaning. If an order with no discount has a discount of 0, store 0, so that sums and averages behave. If every customer must have a phone number, say so with `not null` and the database will refuse a row without one, which is the subject of the next lesson. Each column that allows NULL is a column every query must think about.
+    - question:
+        id: derivation-avg
+        type: numeric
+        system: s2
+        prompt: |
+          A store's orders have ratings 5, NULL, 3, NULL and 4. What is `avg(stars)`?
+        answer: "4"
+        explanation: |
+          The NULLs are skipped: $(5 + 3 + 4) / 3 = 4$. Counting the missing ratings as 0 would give $12 / 5 = 2.4$.
+  formal:
+    - text: |
+        **NULL.** A marker for an absent value. `x is null` and `x is not null` test for it and are always true or false.
+
+        **Three-valued logic.** Comparisons involving NULL are unknown. With T, U and F for true, unknown and false: `not U = U`; `T and U = U`, `F and U = F`, `U and U = U`; `T or U = T`, `F or U = U`, `U or U = U`. A result is known exactly when every way of replacing each U by T or F gives the same answer. De Morgan's laws hold.
+
+        **Filters.** `where`, `having` and join conditions in `on` keep a row only when the condition is true.
+
+        **Membership.** `x in (…)` is a chain of `=` joined by `or`; `x not in (…)` is a chain of `<>` joined by `and`, never true if the list contains NULL.
+
+        **Null-safe comparison.** In SQLite, `a is b` and `a is not b`; in standard SQL, `a is not distinct from b` and `a is distinct from b`. Two NULLs compare as equal.
+
+        **Aggregates.** `count(*)` counts rows; `count(x)`, `sum`, `avg`, `min` and `max` ignore NULLs. Over no non-NULL values, `count(x)` is 0 and the others are NULL. `coalesce(a, b, …)` returns its first argument that is not NULL.
+  drill:
+    - text: Seconds each. Fill in every unknown both ways.
+    - question:
+        id: drill-equal
+        type: choice
+        system: s1
+        prompt: |
+          What is `NULL = NULL`?
+        options:
+          - "Unknown, which SQLite shows as NULL"
+          - "True"
+          - "False"
+          - "An error"
+        answer: 0
+        explanation: Two unknown values might or might not be equal. Use `is null` to test for NULL.
+    - question:
+        id: drill-and
+        type: choice
+        system: s1
+        prompt: |
+          What is `unknown and false`?
+        options:
+          - "False"
+          - "Unknown"
+          - "True"
+          - "NULL and false cannot be combined"
+        answer: 0
+        explanation: Filling the unknown with true or with false, the `and` is false either way.
+    - question:
+        id: drill-or
+        type: choice
+        system: s1
+        prompt: |
+          What is `unknown or false`?
+        options:
+          - "Unknown"
+          - "False"
+          - "True"
+          - "An error"
+        answer: 0
+        explanation: Filled with true it gives true, filled with false it gives false, so the result is unknown.
+    - question:
+        id: drill-count
+        type: numeric
+        system: s1
+        prompt: |
+          A column has 10 rows, 3 of them NULL. What is `count(col)`?
+        answer: "7"
+        explanation: "`count(col)` skips NULLs; `count(*)` would give 10."
+    - question:
+        id: drill-not-in
+        type: choice
+        system: s1
+        prompt: |
+          A subquery returns 1, 2 and NULL. Which ids does `where id not in (subquery)` keep?
+        options:
+          - "None"
+          - "Every id except 1 and 2"
+          - "Only NULL ids"
+          - "Every id"
+        answer: 0
+        explanation: The comparison with NULL is unknown for every id, so the chain of `and` is never true.
+    - question:
+        id: predict-arith
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          print(db.execute("select 5 + null, null = null, null is null").fetchone())
+        output: "(None, None, 1)"
+        explanation: Arithmetic with NULL gives NULL, comparing with NULL gives unknown, which SQLite returns as NULL and Python as None, and `is null` is true, shown as 1.
+    - question:
+        id: predict-sum
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("create table t (x); insert into t values (10), (20);")
+          print(db.execute("select count(x), sum(x), coalesce(sum(x), 0) from t where x > 100").fetchone())
+        output: "(0, None, 0)"
+        explanation: No row passes the filter. `count` of nothing is 0, `sum` of nothing is NULL, and `coalesce` turns that NULL into 0.
+  work:
+    - text: Slower now. For every condition you write, ask what it does on a row where each column it mentions is NULL.
+    - question:
+        id: fix-not-in
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The query should list the customers who have not referred anyone, in order of name. The program should print `[('Chitra',), ('Esha',), ('Farhan',)]`. It prints `[]`. Find the fault and fix it.
+        starter: |
+          import sqlite3
+
+          query = """
+              select name
+              from customers
+              where id not in (select referred_by from customers)
+              order by name
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table customers (id integer primary key, name text, referred_by integer);
+              insert into customers values
+                  (1, 'Asha', null), (2, 'Bilal', 1), (3, 'Chitra', 1),
+                  (4, 'Dev', 2), (5, 'Esha', null), (6, 'Farhan', 4);
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select name
+              from customers
+              where id not in (select referred_by from customers where referred_by is not null)
+              order by name
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table customers (id integer primary key, name text, referred_by integer);
+              insert into customers values
+                  (1, 'Asha', null), (2, 'Bilal', 1), (3, 'Chitra', 1),
+                  (4, 'Dev', 2), (5, 'Esha', null), (6, 'Farhan', 4);
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _names = ["Asha", "Bilal", "Chitra", "Dev", "Esha", "Farhan", "Gita", "Hari", "Isha", "Jai", "Kavya", "Lalit"]
+          _rng = _random.Random(83)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table customers (id integer primary key, name text, referred_by integer)")
+              _n = _rng.randint(2, 12)
+              _rows = [(_i, _names[_i - 1], None if _i == 1 or _rng.random() < 0.3 else _rng.randint(1, _i - 1)) for _i in range(1, _n + 1)]
+              _db.executemany("insert into customers values (?, ?, ?)", _rows)
+              _referrers = set(_r[2] for _r in _rows if _r[2] is not None)
+              _want = sorted([(_r[1],) for _r in _rows if _r[0] not in _referrers])
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For the customers " + str(_rows) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('Chitra',), ('Esha',), ('Farhan',)]", "The program should print [('Chitra',), ('Esha',), ('Farhan',)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select name
+                from customers
+                where id in (select referred_by from customers)
+                order by name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table customers (id integer primary key, name text, referred_by integer);
+                insert into customers values
+                    (1, 'Asha', null), (2, 'Bilal', 1), (3, 'Chitra', 1),
+                    (4, 'Dev', 2), (5, 'Esha', null), (6, 'Farhan', 4);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select name
+                from customers
+                where id not in (select referred_by from customers where referred_by = null)
+                order by name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table customers (id integer primary key, name text, referred_by integer);
+                insert into customers values
+                    (1, 'Asha', null), (2, 'Bilal', 1), (3, 'Chitra', 1),
+                    (4, 'Dev', 2), (5, 'Esha', null), (6, 'Farhan', 4);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select name
+                from customers
+                where referred_by is null
+                order by name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table customers (id integer primary key, name text, referred_by integer);
+                insert into customers values
+                    (1, 'Asha', null), (2, 'Bilal', 1), (3, 'Chitra', 1),
+                    (4, 'Dev', 2), (5, 'Esha', null), (6, 'Farhan', 4);
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          The subquery's list includes NULL for the customers nobody referred, and `not in` a list containing NULL is never true. Removing the NULLs inside the subquery, or rewriting with `not exists`, fixes it. `in` lists the referrers instead; `referred_by = null` is never true, so that subquery is empty and everyone is listed; and `referred_by is null` finds the customers who were not referred, a different question.
+    - question:
+        id: write-ratings
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          `stars` is NULL when a customer left no rating. Change `query` so that it returns `(store, orders, rated, average)` for every store in order of code: the number of orders, the number with a rating, and the average of the ratings given, rounded to 2 places, or NULL when the store has no ratings.
+        starter: |
+          import sqlite3
+
+          query = """
+              select store, count(*)
+              from orders
+              group by store
+              order by store
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text, stars integer);
+              insert into orders values
+                  (1, 'KOR', 5), (2, 'IND', null), (3, 'KOR', 3), (4, 'HSR', null), (5, 'KOR', null),
+                  (6, 'IND', 4), (7, 'KOR', 4), (8, 'HSR', null), (9, 'IND', 2);
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select store, count(*), count(stars), round(avg(stars), 2)
+              from orders
+              group by store
+              order by store
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text, stars integer);
+              insert into orders values
+                  (1, 'KOR', 5), (2, 'IND', null), (3, 'KOR', 3), (4, 'HSR', null), (5, 'KOR', null),
+                  (6, 'IND', 4), (7, 'KOR', 4), (8, 'HSR', null), (9, 'IND', 2);
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(61)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table orders (id integer primary key, store text, stars integer)")
+              _rows = [(_i, _rng.choice(["KOR", "IND", "HSR"]), None if _rng.random() < 0.4 else _rng.randint(1, 5)) for _i in range(1, _rng.randint(2, 16))]
+              _db.executemany("insert into orders values (?, ?, ?)", _rows)
+              _want = []
+              for _s in sorted(set(_r[1] for _r in _rows)):
+                  _all = [_r for _r in _rows if _r[1] == _s]
+                  _stars = [_r[2] for _r in _all if _r[2] is not None]
+                  _want.append((_s, len(_all), len(_stars), round(sum(_stars) / len(_stars), 2) if _stars else None))
+              _got = _db.execute(query).fetchall()
+              _same = len(_got) == len(_want)
+              for _g, _w in zip(_got, _want):
+                  if len(_g) != 4 or _g[:3] != _w[:3]:
+                      _same = False
+                  elif (_g[3] is None) != (_w[3] is None):
+                      _same = False
+                  elif _w[3] is not None and abs(_g[3] - _w[3]) > 0.006:
+                      _same = False
+              assert _same, "For the orders " + str(_rows) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('HSR', 2, 0, None), ('IND', 3, 2, 3.0), ('KOR', 4, 3, 4.0)]", "The program should print [('HSR', 2, 0, None), ('IND', 3, 2, 3.0), ('KOR', 4, 3, 4.0)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select store, count(*), count(*), round(avg(stars), 2)
+                from orders
+                group by store
+                order by store
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, stars integer);
+                insert into orders values
+                    (1, 'KOR', 5), (2, 'IND', null), (3, 'KOR', 3), (4, 'HSR', null), (5, 'KOR', null),
+                    (6, 'IND', 4), (7, 'KOR', 4), (8, 'HSR', null), (9, 'IND', 2);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select store, count(*), count(stars), round(avg(coalesce(stars, 0)), 2)
+                from orders
+                group by store
+                order by store
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, stars integer);
+                insert into orders values
+                    (1, 'KOR', 5), (2, 'IND', null), (3, 'KOR', 3), (4, 'HSR', null), (5, 'KOR', null),
+                    (6, 'IND', 4), (7, 'KOR', 4), (8, 'HSR', null), (9, 'IND', 2);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select store, count(*), count(stars), round(sum(stars) * 1.0 / count(*), 2)
+                from orders
+                group by store
+                order by store
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, stars integer);
+                insert into orders values
+                    (1, 'KOR', 5), (2, 'IND', null), (3, 'KOR', 3), (4, 'HSR', null), (5, 'KOR', null),
+                    (6, 'IND', 4), (7, 'KOR', 4), (8, 'HSR', null), (9, 'IND', 2);
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          `count(*)` counts orders, `count(stars)` counts ratings, and `avg(stars)` averages only the ratings given, NULL when there are none. Counting ratings with `count(*)` includes the unrated orders; `coalesce(stars, 0)` turns every missing rating into a zero-star review; and dividing the sum by `count(*)` does the same through the back door.
+    - question:
+        id: write-late
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          `delivered` is NULL while an order is still on its way. Change `query` so that it returns the ids of the orders not delivered on time, those delivered after the promised time or not delivered yet, in order of id. Times are text such as '19:45' and compare correctly as text.
+        starter: |
+          import sqlite3
+
+          query = """
+              select id
+              from orders
+              order by id
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, promised text, delivered text);
+              insert into orders values
+                  (1, '19:30', '19:25'), (2, '19:40', '19:55'), (3, '19:45', null),
+                  (4, '20:00', '20:00'), (5, '20:10', null), (6, '20:15', '20:40');
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select id
+              from orders
+              where delivered > promised or delivered is null
+              order by id
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, promised text, delivered text);
+              insert into orders values
+                  (1, '19:30', '19:25'), (2, '19:40', '19:55'), (3, '19:45', null),
+                  (4, '20:00', '20:00'), (5, '20:10', null), (6, '20:15', '20:40');
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(47)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table orders (id integer primary key, promised text, delivered text)")
+              _rows = []
+              for _i in range(1, _rng.randint(2, 12)):
+                  _p = _rng.randint(18 * 60, 22 * 60)
+                  _d = None if _rng.random() < 0.3 else _p + _rng.randint(-20, 30)
+                  _rows.append((_i, "%02d:%02d" % (_p // 60, _p % 60), None if _d is None else "%02d:%02d" % (_d // 60, _d % 60)))
+              _db.executemany("insert into orders values (?, ?, ?)", _rows)
+              _want = [(_r[0],) for _r in _rows if _r[2] is None or _r[2] > _r[1]]
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For the orders " + str(_rows) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[(2,), (3,), (5,), (6,)]", "The program should print [(2,), (3,), (5,), (6,)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select id
+                from orders
+                where delivered > promised
+                order by id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, promised text, delivered text);
+                insert into orders values
+                    (1, '19:30', '19:25'), (2, '19:40', '19:55'), (3, '19:45', null),
+                    (4, '20:00', '20:00'), (5, '20:10', null), (6, '20:15', '20:40');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select id
+                from orders
+                where not (delivered <= promised)
+                order by id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, promised text, delivered text);
+                insert into orders values
+                    (1, '19:30', '19:25'), (2, '19:40', '19:55'), (3, '19:45', null),
+                    (4, '20:00', '20:00'), (5, '20:10', null), (6, '20:15', '20:40');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select id
+                from orders
+                where coalesce(delivered, promised) > promised
+                order by id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, promised text, delivered text);
+                insert into orders values
+                    (1, '19:30', '19:25'), (2, '19:40', '19:55'), (3, '19:45', null),
+                    (4, '20:00', '20:00'), (5, '20:10', null), (6, '20:15', '20:40');
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          For an order on its way, `delivered > promised` is unknown, so the undelivered orders need their own `delivered is null`. Negating the condition, `not (delivered <= promised)`, does not help, because not unknown is still unknown; and `coalesce(delivered, promised)` pretends every undelivered order arrived exactly on time.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          How many names does the puzzle's query return?
+        answer: "0"
+        explanation: |
+          The subquery returns 1, 1, 2, 4 and two NULLs. For any id, `id not in (…)` includes `id <> NULL`, which is unknown, so the condition is never true.
+    - question:
+        id: work-design
+        type: choice
+        system: s2
+        prompt: |
+          An orders table needs a `discount` column. Most orders have no discount. How should "no discount" be stored?
+        options:
+          - "As 0, with the column declared not null, because no discount is a known amount."
+          - "As NULL, because nothing was given."
+          - "As an empty string."
+          - "As -1, to stand out."
+        answer: 0
+        explanation: |
+          "No discount" is a known fact with a natural value, so 0 keeps sums and averages right without `coalesce` everywhere. NULL should mean that something is genuinely missing or unknown; an empty string and a magic -1 break arithmetic in other ways.
+  connections:
+    - text: |
+        None. The subquery's result contains NULL, for Asha and Esha, whom nobody referred, so `id not in (…)` contains a comparison with NULL for every customer and is never true. Chitra, Esha and Farhan, the intended answer, come back once the NULLs are filtered out of the subquery or the query is written with `not exists`.
+
+        Three-valued logic is the price of letting values be missing, and it is paid in every query that touches a column allowing NULL. The cheapest place to pay is at the door: a `not null` constraint stops a missing value from being stored at all, and other constraints stop duplicates and dangling references. Those rules, and the transactions that keep several changes together, are [[q0.writes-constraints-and-transactions]]. Checking data before it reaches a database, so that missing and malformed values are caught at the edge of a system, returns in [[r2.validating-input]].

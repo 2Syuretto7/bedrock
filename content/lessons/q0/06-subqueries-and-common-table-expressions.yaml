@@ -1,0 +1,660 @@
+concept: q0.subqueries-and-common-table-expressions
+minutes: 85
+claim: You can use a query's result inside another query, as a single value, as a list for IN, as a test with EXISTS, or as a table, write correlated subqueries that are evaluated for each outer row, name intermediate results with WITH so a long query reads as a sequence of steps, aggregate tables separately before joining them, and generate rows such as a calendar with a recursive common table expression.
+recalls: [q0.grouping-and-aggregation]
+uses: [q0.joins, q0.selecting-and-filtering, f1.composition-and-inverses, s1.recursion, s3.breadth-first-and-depth-first-search]
+leads: [q0.window-functions, q0.null-and-three-valued-logic, q3.from-sql-to-a-plan]
+starter: |
+  # Scratch space. A subquery and a common table expression.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.executescript("""
+      create table orders (id integer primary key, store text, amount integer);
+      insert into orders values (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 1200), (4, 'HSR', 150);
+  """)
+  print(db.execute("select id from orders where amount > (select avg(amount) from orders)").fetchall())
+  print(db.execute("with totals as (select store, sum(amount) as t from orders group by store) select * from totals where t > 500").fetchall())
+parts:
+  recall:
+    - text: |
+        [[q0.grouping-and-aggregation]] folded rows into totals, and left one problem open: summing two one-to-many tables at once counts some rows many times. The cure is to compute each total separately and then combine them, which needs a query whose input is the result of other queries. This lesson shows the ways SQL nests queries, and a way to name the pieces so the whole stays readable. Three quick pulls first.
+  puzzle:
+    - text: |
+        A store chain's orders:
+
+        | id | store | amount |
+        | --- | --- | --- |
+        | 1 | KOR | 250 |
+        | 2 | IND | 900 |
+        | 3 | KOR | 480 |
+        | 4 | HSR | 150 |
+        | 5 | KOR | 1,200 |
+        | 6 | IND | 300 |
+        | 7 | KOR | 650 |
+        | 8 | HSR | 410 |
+        | 9 | IND | 720 |
+
+        A manager asks for every order larger than the average order **of its own store**.
+
+        **How many orders qualify?**
+  intuition:
+    - text: |
+        A teacher asks for the students who scored above their own section's average. For each student, someone must first work out that section's average, a small calculation inside the bigger one, and its answer depends on which student is being looked at. SQL allows exactly this: a query in brackets, a **subquery**, used inside another. When the inner query mentions a column of the outer row, as "their own section" does, it is **correlated**, and conceptually it is run again for every outer row.
+
+        The figure runs the puzzle's query, `amount > (select avg(amount) from orders where store = o.store)`, one outer row at a time.
+    - figure: subquery-steps
+      props: { step: 0 }
+    - text: |
+        Each order is compared with its own store's average: ₹645 for KOR, ₹640 for IND, ₹280 for HSR. Order 8, ₹410 at HSR, is small by the chain's standards but above its store's average, while order 1, ₹250, is below KOR's. Run naively, the subquery reads the whole table once per order; a real database usually rewrites it to compute each store's average once and join, which is also how a person would write it by hand with the tools later in this lesson.
+  derivation:
+    - text: |
+        **A single value.** A subquery that returns one row and one column can stand wherever a value can: `where amount > (select avg(amount) from orders)` compares each order with the overall average. This is the composition of [[f1.composition-and-inverses]] again, one query's output feeding another's input. If such a subquery returns several rows, SQLite quietly uses the first, where most databases report an error; make sure it cannot.
+
+        **A list.** `where customer in (select id from customers where city = 'Pune')` keeps orders whose customer appears in the subquery's result. `not in` keeps the rest, with a trap involving missing values that [[q0.null-and-three-valued-logic]] explains.
+
+        **A test.** `where exists (select 1 from orders o where o.customer = c.id and o.amount > 1000)` is true when the correlated subquery returns at least one row. It answers "customers with at least one large order" with each customer once, where a join would repeat a customer for each large order. `not exists` gives the anti-join of [[q0.joins]] without a left join.
+    - question:
+        id: derivation-naive
+        type: numeric
+        system: s2
+        prompt: |
+          A correlated subquery computes a store's average by reading all 2,000 orders, and it is run once for each of the 2,000 orders in the outer query. Run naively, how many rows does it read in all?
+        answer: "4000000"
+        explanation: |
+          $2{,}000 \times 2{,}000 = 40{,}00{,}000$ reads. Computing the averages once, in one pass of 2,000 rows, and joining them, does the same job with a tiny fraction of the work; optimisers often make that rewrite themselves.
+    - text: |
+        **A table.** A subquery in `from` is a table like any other: `select avg(t) from (select store, sum(amount) as t from orders group by store)` averages the stores' totals. Nesting several such tables inside each other soon becomes unreadable, which is what common table expressions fix.
+
+        **Common table expressions.** `with` names one or more subqueries before the main query uses them:
+
+        ```sql
+        with sales as (select store, sum(amount) as total from orders group by store),
+             returned as (select store, sum(amount) as total from refunds group by store)
+        select s.code, coalesce(sa.total, 0), coalesce(r.total, 0)
+        from stores s
+        left join sales sa on sa.store = s.code
+        left join returned r on r.store = s.code
+        ```
+
+        Each name is a step with its own meaning, which can be run and checked on its own, much as a long calculation is split into functions. This query also completes the repair begun in [[q0.grouping-and-aggregation]]: orders and refunds are summed separately, one row per store each, so joining the two small results multiplies nothing. `coalesce(x, 0)` gives its first argument unless that is missing, and then 0, so a store with no refunds shows 0 rather than nothing.
+    - question:
+        id: derivation-exists
+        type: choice
+        system: s2
+        prompt: |
+          Which query lists each customer with at least one order over ₹1,000 exactly once?
+        options:
+          - "select name from customers c where exists (select 1 from orders o where o.customer = c.id and o.amount > 1000)"
+          - "select name from customers c join orders o on o.customer = c.id where o.amount > 1000"
+          - "select name from customers c where exists (select 1 from orders o where o.amount > 1000)"
+          - "select name from customers c where c.id = (select customer from orders where amount > 1000)"
+        answer: 0
+        explanation: |
+          The correlated `exists` asks one yes-or-no question per customer. The join repeats a customer once per large order; the uncorrelated `exists` is true for every customer as soon as anyone has a large order; and `=` with a subquery returning many rows compares with only one of them.
+    - text: |
+        **Recursive common table expressions.** `with recursive` lets a named table refer to itself, which generates rows a step at a time:
+
+        ```sql
+        with recursive days(day) as (
+            select '2026-11-01'
+            union all
+            select date(day, '+1 day') from days where day < '2026-11-30'
+        )
+        select day from days
+        ```
+
+        The first select, the **anchor**, gives the starting row. The second, the **recursive part**, is applied to the rows produced in the previous round, giving the next day, until its `where` stops it. SQLite's `date(day, '+1 day')` moves a date stored as text forward by a day. The result is a calendar of 30 rows, exactly what [[q0.grouping-and-aggregation]] needed to show days with no orders: left join the calendar to the orders and count. Recursion over rows also walks hierarchies, such as each employee's chain of managers, much as the searches of [[s3.breadth-first-and-depth-first-search]] walked a graph, and like [[s1.recursion]] it needs a condition that ends it.
+
+        The word between the two parts matters. `union all` keeps every row each round produces, which is right for a calendar, where no day repeats. `union` throws away a row the result already holds, and a round that produces only such rows produces nothing new, so the recursion stops by itself. That is how a recursive query walks a graph with cycles without going round for ever: a city reached a second time is not a new row, exactly as the visited set did the job in a breadth-first search. Without either guard, a runaway query can be stopped by adding `limit 1000` to the outer select, which SQLite honours by ending the recursion once it has enough rows.
+    - question:
+        id: order-recursive
+        type: order
+        system: s2
+        prompt: |
+          Put the steps by which a recursive common table expression is evaluated in order.
+        steps:
+          - "Run the anchor query to get the first rows."
+          - "Run the recursive part on the rows produced in the last round."
+          - "Add those new rows to the result, and repeat the previous step on them."
+          - "Stop when the recursive part produces no new rows."
+        explanation: |
+          The recursive part needs rows to work on, which the anchor supplies; each round feeds the next; and the process ends only when a round produces nothing.
+  formal:
+    - text: |
+        **Scalar subquery.** `( select … )` returning one value, usable wherever a value is. In SQLite, extra rows are ignored.
+
+        **In.** `x in (select …)`; **exists.** `exists (select …)` is true when the subquery returns a row; with `not`, the semi-join and anti-join.
+
+        **Correlated subquery.** Mentions columns of the outer query; conceptually evaluated once per outer row.
+
+        **Derived table.** `from (select …) as name`. **Common table expression.** `with name as (select …), … select …`.
+
+        **Recursive CTE.** `with recursive t(cols) as (anchor union all recursive-part) …`; the recursive part reads the previous round's rows and must eventually return none.
+
+        **Useful functions.** `coalesce(a, b, …)`, the first argument that is not NULL; in SQLite, `date(text, '+1 day')`.
+  drill:
+    - text: Seconds each. Ask how many rows the inner query returns.
+    - question:
+        id: drill-scalar
+        type: choice
+        system: s1
+        prompt: |
+          A subquery used as a single value returns three rows in SQLite. What happens?
+        options:
+          - "SQLite silently uses the first row."
+          - "SQLite raises an error."
+          - "The outer query runs three times."
+          - "SQLite averages the three values."
+        answer: 0
+        explanation: Most databases report an error; SQLite takes the first row, which makes the mistake easy to miss.
+    - question:
+        id: drill-correlated
+        type: choice
+        system: s1
+        prompt: |
+          What makes a subquery correlated?
+        options:
+          - "It mentions a column of the outer query's current row."
+          - "It uses an aggregate."
+          - "It appears in the from clause."
+          - "It returns more than one row."
+        answer: 0
+        explanation: A reference to the outer row means its result can differ from row to row.
+    - question:
+        id: drill-calendar
+        type: numeric
+        system: s1
+        prompt: |
+          A recursive CTE starts at '2026-11-01' and adds a day while the day is before '2026-11-30'. How many rows does it produce?
+        answer: "30"
+        explanation: From 1 to 30 November inclusive; the row for the 30th is produced, and then the condition stops further rows.
+    - question:
+        id: drill-coalesce
+        type: choice
+        system: s1
+        prompt: |
+          What is `coalesce(NULL, 0)`?
+        options:
+          - "0"
+          - "NULL"
+          - "An error"
+          - "False"
+        answer: 0
+        explanation: "`coalesce` returns its first argument that is not NULL."
+    - question:
+        id: drill-exists
+        type: choice
+        system: s1
+        prompt: |
+          A customer has five orders over ₹1,000. How many times does `where exists (…)` list them?
+        options:
+          - "Once"
+          - "Five times"
+          - "Not at all"
+          - "Twice"
+        answer: 0
+        explanation: "`exists` is a yes-or-no test on each customer row; the number of matching orders does not matter."
+    - question:
+        id: predict-recursive
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          print(db.execute("with recursive n(i) as (select 1 union all select i + 1 from n where i < 5) select sum(i) from n").fetchone())
+        output: "(15,)"
+        explanation: The CTE produces 1, 2, 3, 4 and 5, and their sum is 15.
+    - question:
+        id: predict-scalar
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("create table t (x); insert into t values (2), (4), (9);")
+          print(db.execute("select count(*) from t where x > (select avg(x) from t)").fetchone())
+        output: "(1,)"
+        explanation: The average is 5, and only 9 is above it.
+  work:
+    - text: Slower now. Build each answer from named steps, and check each step on its own.
+    - question:
+        id: fix-correlated
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The query should list `(id, amount)` for every order larger than the average order of its own store. The program should print `[(2, 900), (5, 1200), (7, 650), (8, 410), (9, 720)]`. It prints `[(2, 900), (5, 1200), (7, 650), (9, 720)]`. Find the fault and fix it.
+        starter: |
+          import sqlite3
+
+          query = """
+              select o.id, o.amount
+              from orders o
+              where o.amount > (select avg(i.amount) from orders i)
+              order by o.id
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text, amount integer);
+              insert into orders values
+                  (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150), (5, 'KOR', 1200),
+                  (6, 'IND', 300), (7, 'KOR', 650), (8, 'HSR', 410), (9, 'IND', 720);
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select o.id, o.amount
+              from orders o
+              where o.amount > (select avg(i.amount) from orders i where i.store = o.store)
+              order by o.id
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text, amount integer);
+              insert into orders values
+                  (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150), (5, 'KOR', 1200),
+                  (6, 'IND', 300), (7, 'KOR', 650), (8, 'HSR', 410), (9, 'IND', 720);
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(127)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table orders (id integer primary key, store text, amount integer)")
+              _rows = [(_i, _rng.choice(["KOR", "IND", "HSR"]), _rng.randint(2, 30) * 50) for _i in range(1, _rng.randint(2, 15))]
+              _db.executemany("insert into orders values (?, ?, ?)", _rows)
+              _avg = {}
+              for _s in set(_r[1] for _r in _rows):
+                  _a = [_r[2] for _r in _rows if _r[1] == _s]
+                  _avg[_s] = sum(_a) / len(_a)
+              _want = [(_r[0], _r[2]) for _r in _rows if _r[2] > _avg[_r[1]]]
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For the orders " + str(_rows) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[(2, 900), (5, 1200), (7, 650), (8, 410), (9, 720)]", "The program should print [(2, 900), (5, 1200), (7, 650), (8, 410), (9, 720)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select o.id, o.amount
+                from orders o
+                where o.amount >= (select avg(i.amount) from orders i where i.store = o.store)
+                order by o.id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer);
+                insert into orders values
+                    (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150), (5, 'KOR', 1200),
+                    (6, 'IND', 300), (7, 'KOR', 650), (8, 'HSR', 410), (9, 'IND', 720);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select o.id, o.amount
+                from orders o
+                where o.amount > (select avg(i.amount) from orders i where i.id = o.id)
+                order by o.id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer);
+                insert into orders values
+                    (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150), (5, 'KOR', 1200),
+                    (6, 'IND', 300), (7, 'KOR', 650), (8, 'HSR', 410), (9, 'IND', 720);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select o.id, o.amount
+                from orders o
+                where o.amount > (select avg(i.amount) from orders i where i.store = 'KOR')
+                order by o.id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer);
+                insert into orders values
+                    (1, 'KOR', 250), (2, 'IND', 900), (3, 'KOR', 480), (4, 'HSR', 150), (5, 'KOR', 1200),
+                    (6, 'IND', 300), (7, 'KOR', 650), (8, 'HSR', 410), (9, 'IND', 720);
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          The subquery averaged every order in the chain, about ₹562, so HSR's ₹410 order looked small. Correlating it with `where i.store = o.store` gives each order its own store's average. `>=` keeps an order equal to its average, such as a store's only order; matching on id averages each order with itself, so nothing is above; and fixing the store to KOR compares everyone with KOR.
+    - question:
+        id: write-store-totals
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `query` so that it returns `(code, total sales, total refunds)` for every store in `stores`, in order of code, with 0 where a store has no sales or no refunds. Orders and refunds each name their store.
+        starter: |
+          import sqlite3
+
+          query = """
+              select code from stores order by code
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table stores (code text primary key);
+              create table orders (id integer primary key, store text, amount integer);
+              create table refunds (id integer primary key, store text, amount integer);
+              insert into stores values ('HSR'), ('IND'), ('KOR');
+              insert into orders values (1, 'KOR', 250), (2, 'KOR', 480), (3, 'KOR', 1200), (4, 'IND', 900), (5, 'IND', 300);
+              insert into refunds values (1, 'KOR', 250), (2, 'KOR', 100);
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              with sales as (
+                  select store, sum(amount) as total from orders group by store
+              ),
+              returned as (
+                  select store, sum(amount) as total from refunds group by store
+              )
+              select s.code, coalesce(sa.total, 0), coalesce(r.total, 0)
+              from stores s
+              left join sales sa on sa.store = s.code
+              left join returned r on r.store = s.code
+              order by s.code
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table stores (code text primary key);
+              create table orders (id integer primary key, store text, amount integer);
+              create table refunds (id integer primary key, store text, amount integer);
+              insert into stores values ('HSR'), ('IND'), ('KOR');
+              insert into orders values (1, 'KOR', 250), (2, 'KOR', 480), (3, 'KOR', 1200), (4, 'IND', 900), (5, 'IND', 300);
+              insert into refunds values (1, 'KOR', 250), (2, 'KOR', 100);
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(131)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.executescript("create table stores (code text primary key); create table orders (id integer primary key, store text, amount integer); create table refunds (id integer primary key, store text, amount integer);")
+              _st = sorted(_rng.sample(["BTM", "HSR", "IND", "KOR"], _rng.randint(1, 4)))
+              _os = [(_k, _rng.choice(_st), _rng.randint(1, 20) * 50) for _k in range(1, _rng.randint(1, 10))]
+              _fs = [(_k, _rng.choice(_st), _rng.randint(1, 5) * 50) for _k in range(1, _rng.randint(1, 6))]
+              _db.executemany("insert into stores values (?)", [(_c,) for _c in _st])
+              _db.executemany("insert into orders values (?, ?, ?)", _os)
+              _db.executemany("insert into refunds values (?, ?, ?)", _fs)
+              _want = [(_c, sum(_o[2] for _o in _os if _o[1] == _c), sum(_f[2] for _f in _fs if _f[1] == _c)) for _c in _st]
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For stores " + str(_st) + ", orders " + str(_os) + " and refunds " + str(_fs) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('HSR', 0, 0), ('IND', 1200, 0), ('KOR', 1930, 350)]", "The program should print [('HSR', 0, 0), ('IND', 1200, 0), ('KOR', 1930, 350)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select s.code, coalesce(sum(o.amount), 0), coalesce(sum(f.amount), 0)
+                from stores s
+                left join orders o on o.store = s.code
+                left join refunds f on f.store = s.code
+                group by s.code
+                order by s.code
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table stores (code text primary key);
+                create table orders (id integer primary key, store text, amount integer);
+                create table refunds (id integer primary key, store text, amount integer);
+                insert into stores values ('HSR'), ('IND'), ('KOR');
+                insert into orders values (1, 'KOR', 250), (2, 'KOR', 480), (3, 'KOR', 1200), (4, 'IND', 900), (5, 'IND', 300);
+                insert into refunds values (1, 'KOR', 250), (2, 'KOR', 100);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                with sales as (
+                    select store, sum(amount) as total from orders group by store
+                ),
+                returned as (
+                    select store, sum(amount) as total from refunds group by store
+                )
+                select s.code, coalesce(sa.total, 0), coalesce(r.total, 0)
+                from stores s
+                join sales sa on sa.store = s.code
+                join returned r on r.store = s.code
+                order by s.code
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table stores (code text primary key);
+                create table orders (id integer primary key, store text, amount integer);
+                create table refunds (id integer primary key, store text, amount integer);
+                insert into stores values ('HSR'), ('IND'), ('KOR');
+                insert into orders values (1, 'KOR', 250), (2, 'KOR', 480), (3, 'KOR', 1200), (4, 'IND', 900), (5, 'IND', 300);
+                insert into refunds values (1, 'KOR', 250), (2, 'KOR', 100);
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                with sales as (
+                    select store, sum(amount) as total from orders group by store
+                ),
+                returned as (
+                    select store, sum(amount) as total from refunds group by store
+                )
+                select s.code, sa.total, r.total
+                from stores s
+                left join sales sa on sa.store = s.code
+                left join returned r on r.store = s.code
+                order by s.code
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table stores (code text primary key);
+                create table orders (id integer primary key, store text, amount integer);
+                create table refunds (id integer primary key, store text, amount integer);
+                insert into stores values ('HSR'), ('IND'), ('KOR');
+                insert into orders values (1, 'KOR', 250), (2, 'KOR', 480), (3, 'KOR', 1200), (4, 'IND', 900), (5, 'IND', 300);
+                insert into refunds values (1, 'KOR', 250), (2, 'KOR', 100);
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          Summing orders and refunds in separate CTEs gives at most one row per store from each, so the left joins from stores multiply nothing, and `coalesce` turns a missing total into 0. Joining both raw tables and summing counts each order once per refund and each refund once per order, doubling KOR's figures; inner joins drop stores missing either total; and without `coalesce` those stores show None.
+    - question:
+        id: write-calendar
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `query` so that it returns `(day, number of orders)` for every day of November 2026, in order, including days with no orders. Order times are stored as text such as '2026-11-30 22:30', and `date(placed)` gives the day part. Use a recursive common table expression for the days.
+        starter: |
+          import sqlite3
+
+          query = """
+              select date(placed), count(*)
+              from orders
+              group by date(placed)
+              order by date(placed)
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, placed text);
+              insert into orders values
+                  (1, '2026-11-01 09:10'), (2, '2026-11-01 20:45'), (3, '2026-11-03 13:00'),
+                  (4, '2026-11-30 22:30'), (5, '2026-12-01 00:15');
+          """)
+          rows = db.execute(query).fetchall()
+          print(len(rows), rows[:3], rows[-1])
+        solution: |
+          import sqlite3
+
+          query = """
+              with recursive days(day) as (
+                  select '2026-11-01'
+                  union all
+                  select date(day, '+1 day') from days where day < '2026-11-30'
+              )
+              select d.day, count(o.id)
+              from days d
+              left join orders o on date(o.placed) = d.day
+              group by d.day
+              order by d.day
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, placed text);
+              insert into orders values
+                  (1, '2026-11-01 09:10'), (2, '2026-11-01 20:45'), (3, '2026-11-03 13:00'),
+                  (4, '2026-11-30 22:30'), (5, '2026-12-01 00:15');
+          """)
+          rows = db.execute(query).fetchall()
+          print(len(rows), rows[:3], rows[-1])
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(137)
+          for _ in range(15):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table orders (id integer primary key, placed text)")
+              _os = []
+              for _k in range(1, _rng.randint(1, 25)):
+                  _m, _d = _rng.choice([("10", 31), ("11", 1), ("11", 15), ("11", 30), ("12", 1)])
+                  _day = _d if _rng.random() < 0.4 else _rng.randint(1, 30 if _m == "11" else 28)
+                  _os.append((_k, "2026-" + _m + "-" + str(_day).rjust(2, "0") + " " + str(_rng.randint(0, 23)).rjust(2, "0") + ":30"))
+              _db.executemany("insert into orders values (?, ?)", _os)
+              _want = [("2026-11-" + str(_d).rjust(2, "0"), sum(1 for _o in _os if _o[1].startswith("2026-11-" + str(_d).rjust(2, "0")))) for _d in range(1, 31)]
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For the orders " + str(_os) + ", the query should give 30 rows, one per day of November with its count, but gave " + str(_got)
+          assert output.strip() == "30 [('2026-11-01', 2), ('2026-11-02', 0), ('2026-11-03', 1)] ('2026-11-30', 1)", "The program should print 30 [('2026-11-01', 2), ('2026-11-02', 0), ('2026-11-03', 1)] ('2026-11-30', 1)"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                with recursive days(day) as (
+                    select '2026-11-01'
+                    union all
+                    select date(day, '+1 day') from days where day < '2026-11-30'
+                )
+                select d.day, count(o.id)
+                from days d
+                join orders o on date(o.placed) = d.day
+                group by d.day
+                order by d.day
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, placed text);
+                insert into orders values
+                    (1, '2026-11-01 09:10'), (2, '2026-11-01 20:45'), (3, '2026-11-03 13:00'),
+                    (4, '2026-11-30 22:30'), (5, '2026-12-01 00:15');
+            """)
+            rows = db.execute(query).fetchall()
+            print(len(rows), rows[:3], rows[-1])
+          - |
+            import sqlite3
+
+            query = """
+                with recursive days(day) as (
+                    select '2026-11-01'
+                    union all
+                    select date(day, '+1 day') from days where day < '2026-11-30'
+                )
+                select d.day, count(*)
+                from days d
+                left join orders o on date(o.placed) = d.day
+                group by d.day
+                order by d.day
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, placed text);
+                insert into orders values
+                    (1, '2026-11-01 09:10'), (2, '2026-11-01 20:45'), (3, '2026-11-03 13:00'),
+                    (4, '2026-11-30 22:30'), (5, '2026-12-01 00:15');
+            """)
+            rows = db.execute(query).fetchall()
+            print(len(rows), rows[:3], rows[-1])
+          - |
+            import sqlite3
+
+            query = """
+                with recursive days(day) as (
+                    select '2026-11-01'
+                    union all
+                    select date(day, '+1 day') from days where day < '2026-11-29'
+                )
+                select d.day, count(o.id)
+                from days d
+                left join orders o on date(o.placed) = d.day
+                group by d.day
+                order by d.day
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, placed text);
+                insert into orders values
+                    (1, '2026-11-01 09:10'), (2, '2026-11-01 20:45'), (3, '2026-11-03 13:00'),
+                    (4, '2026-11-30 22:30'), (5, '2026-12-01 00:15');
+            """)
+            rows = db.execute(query).fetchall()
+            print(len(rows), rows[:3], rows[-1])
+        explanation: |
+          The recursive CTE supplies all 30 days, the left join keeps days with no orders, and `count(o.id)` counts only real orders, giving 0 for a padded row. An inner join loses the empty days; `count(*)` counts the padded row, so an empty day shows 1; and stopping the recursion at '2026-11-29' produces only 29 days.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle's table, how many orders are larger than the average order of their own store?
+        answer: "5"
+        explanation: |
+          The averages are ₹645 for KOR, ₹640 for IND and ₹280 for HSR. Above them: orders 5 and 7 at KOR, 2 and 9 at IND, and 8 at HSR.
+    - question:
+        id: work-readable
+        type: choice
+        system: s2
+        prompt: |
+          A monthly report is one query with subqueries nested four deep, and nobody on the team can check it. What is the best change?
+        options:
+          - "Rewrite it as a chain of named common table expressions, one per step, each of which can be run and checked on its own."
+          - "Split it into four separate reports."
+          - "Add comments at the end of the query."
+          - "Move the calculation into a spreadsheet."
+        answer: 0
+        explanation: |
+          A `with` chain keeps one query, and so one consistent answer, while giving every intermediate result a name and making it testable by selecting from it directly. The database can still optimise the whole.
+  connections:
+    - text: |
+        Five orders: 2, 5, 7, 8 and 9. Comparing with the chain-wide average would have found only four, missing HSR's ₹410 order, which is unusually large for a small store. The correlated subquery, or equally a CTE of store averages joined back to the orders, puts each row next to a summary of its own group.
+
+        Putting each row beside a summary of its group is so common that SQL has a dedicated tool for it, which avoids both the subquery and the join: [[q0.window-functions]] computes running totals, ranks and averages over a row's group without collapsing the rows. How a database turns nested queries into a plan, often by removing the nesting, is part of [[q3.from-sql-to-a-plan]].

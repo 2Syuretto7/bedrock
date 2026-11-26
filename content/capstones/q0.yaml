@@ -1,0 +1,322 @@
+cluster: Q0
+title: The database behind a cloud kitchen
+minutes: 100
+claim: You will have taken a cloud kitchen's database through a week of real requests, choosing keys and constraints for its menu, writing a daily report that keeps quiet brands and missing ratings honest, ranking best sellers with ties in mind, finding lapsed customers without the NOT IN trap, recording an order and its stock safely in one transaction, and choosing the index that makes the busiest lookup fast.
+brief: |
+  This cluster treated a relational database from the outside: tables, rows and keys; the algebra of selecting, projecting and joining; filtering, grouping, nesting and windows; the third truth value that NULL brings; the writes, rules and transactions that keep data trustworthy; and the indexes that keep it fast. Each lesson had its own small tables. A working application needs all of them at once, and most of its bugs live where two of them meet.
+
+  **The project.** A cloud kitchen in Pune cooks for three brands from one kitchen, Biryani Box, Dosa Den and Thali Tales, and takes orders only through delivery apps. It keeps everything in one SQLite database: brands, menu items and their prices, customers, orders and the items in each order, and the kitchen's stock of ingredients. During one week its single engineer gets six requests.
+
+  Each stage below is one of those requests. Nothing here is new; every stage applies one or two lessons of this cluster. The skill being tested is recognising which tool a request needs, and noticing what a careless answer would get quietly wrong.
+starter: |
+  # Scratch space for the week's requests.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.executescript("""
+      create table brands (id integer primary key, name text not null unique);
+      create table orders (id integer primary key, brand integer not null references brands (id),
+                           placed text not null, amount integer not null check (amount > 0), stars integer);
+      insert into brands values (1, 'Biryani Box'), (2, 'Dosa Den'), (3, 'Thali Tales');
+      insert into orders values (1, 1, '2026-11-26 13:05', 380, 4), (2, 2, '2026-11-26 19:45', 240, null);
+  """)
+  print(db.execute("select b.name, count(o.id) from brands b left join orders o on o.brand = b.id group by b.id order by b.name").fetchall())
+stages:
+  - title: Prices that change
+    blocks:
+      - text: |
+          Menu prices change, and old orders must still show what the customer paid at the time. The engineer plans a table `prices (brand, item, valid_from, price)`, one row each time an item's price changes, so that Dosa Den's masala dosa might have rows for 1 June at ₹120 and 1 November at ₹140. The same item name can appear under two brands with different prices.
+      - question:
+          id: price-key
+          type: choice
+          system: s2
+          concepts: [q0.tables-rows-and-keys, q0.writes-constraints-and-transactions]
+          prompt: |
+            Which declaration makes the database refuse exactly the rows that would make a price ambiguous?
+          options:
+            - "primary key (brand, item, valid_from), with price not null check (price > 0)"
+            - "primary key (item)"
+            - "primary key (brand, item)"
+            - "unique (price)"
+          answer: 0
+          explanation: |
+            Two rows for the same brand, item and starting date would leave the price on that date ambiguous, so those three columns together are the key. `item` alone forbids the same dish at two brands, `(brand, item)` forbids any price change, and two dishes may well cost the same. `not null` with the check keeps a missing or nonsensical price out, since a check alone lets NULL through.
+  - title: The daily report
+    blocks:
+      - text: |
+          The owner wants a report each morning for the previous day: for every brand, the number of orders, the revenue and the average rating. Customers rate only some orders, and `stars` is NULL when they did not. Thali Tales sometimes has a day with no orders at all, and the owner wants to see that as a row of zeros, not as a missing line.
+      - question:
+          id: brand-report
+          type: code
+          mode: write
+          system: s2
+          concepts: [q0.joins, q0.grouping-and-aggregation, q0.null-and-three-valued-logic, q0.subqueries-and-common-table-expressions]
+          prompt: |
+            Change `query` so that it returns `(name, orders, revenue, average stars)` for every brand, in order of name, counting only orders placed on the day `:day`, with `:next` the following day. A brand with no orders shows 0 orders and 0 revenue; the average, rounded to 1 place, covers only rated orders and is NULL when there are none.
+          starter: |
+            import sqlite3
+
+            query = """
+                select b.name, count(*)
+                from brands b
+                join orders o on o.brand = b.id
+                group by b.id, b.name
+                order by b.name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table brands (id integer primary key, name text not null);
+                create table orders (id integer primary key, brand integer not null references brands (id),
+                                     placed text not null, amount integer not null, stars integer);
+                insert into brands values (1, 'Biryani Box'), (2, 'Dosa Den'), (3, 'Thali Tales');
+                insert into orders values
+                    (1, 1, '2026-11-25 20:10', 420, 5), (2, 2, '2026-11-26 08:30', 180, null),
+                    (3, 1, '2026-11-26 13:05', 380, 4), (4, 2, '2026-11-26 19:45', 240, 3),
+                    (5, 1, '2026-11-26 21:30', 450, null), (6, 2, '2026-11-26 22:10', 200, 4),
+                    (7, 3, '2026-11-27 12:00', 300, 5);
+            """)
+            print(db.execute(query, {"day": "2026-11-26", "next": "2026-11-27"}).fetchall())
+          solution: |
+            import sqlite3
+
+            query = """
+                with today as (
+                    select * from orders where placed >= :day and placed < :next
+                )
+                select b.name, count(t.id), coalesce(sum(t.amount), 0), round(avg(t.stars), 1)
+                from brands b
+                left join today t on t.brand = b.id
+                group by b.id, b.name
+                order by b.name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table brands (id integer primary key, name text not null);
+                create table orders (id integer primary key, brand integer not null references brands (id),
+                                     placed text not null, amount integer not null, stars integer);
+                insert into brands values (1, 'Biryani Box'), (2, 'Dosa Den'), (3, 'Thali Tales');
+                insert into orders values
+                    (1, 1, '2026-11-25 20:10', 420, 5), (2, 2, '2026-11-26 08:30', 180, null),
+                    (3, 1, '2026-11-26 13:05', 380, 4), (4, 2, '2026-11-26 19:45', 240, 3),
+                    (5, 1, '2026-11-26 21:30', 450, null), (6, 2, '2026-11-26 22:10', 200, 4),
+                    (7, 3, '2026-11-27 12:00', 300, 5);
+            """)
+            print(db.execute(query, {"day": "2026-11-26", "next": "2026-11-27"}).fetchall())
+          tests: |
+            import random as _random
+
+            _rng = _random.Random(7)
+            _names = ["Biryani Box", "Dosa Den", "Thali Tales", "Wrap Wala"]
+            for _ in range(25):
+                _db = sqlite3.connect(":memory:")
+                _db.execute("create table brands (id integer primary key, name text not null)")
+                _db.execute("create table orders (id integer primary key, brand integer not null references brands (id), placed text not null, amount integer not null, stars integer)")
+                _nb = _rng.randint(1, 4)
+                _db.executemany("insert into brands values (?, ?)", [(_i + 1, _names[_i]) for _i in range(_nb)])
+                _rows = []
+                for _k in range(_rng.randint(0, 14)):
+                    _d = _rng.randint(25, 27)
+                    _m = _rng.choice([0, _rng.randint(0, 1439), 1439])
+                    _rows.append((_k + 1, _rng.randint(1, _nb), "2026-11-%d %02d:%02d" % (_d, _m // 60, _m % 60), _rng.randint(1, 20) * 20, None if _rng.random() < 0.35 else _rng.randint(1, 5)))
+                _db.executemany("insert into orders values (?, ?, ?, ?, ?)", _rows)
+                _want = []
+                for _b in sorted(range(1, _nb + 1), key=lambda _b: _names[_b - 1]):
+                    _mine = [_r for _r in _rows if _r[1] == _b and _r[2][:10] == "2026-11-26"]
+                    _stars = [_r[4] for _r in _mine if _r[4] is not None]
+                    _want.append((_names[_b - 1], len(_mine), sum(_r[3] for _r in _mine), sum(_stars) / len(_stars) if _stars else None))
+                _got = _db.execute(query, {"day": "2026-11-26", "next": "2026-11-27"}).fetchall()
+                _same = len(_got) == len(_want)
+                for _g, _w in zip(_got, _want):
+                    if len(_g) != 4 or tuple(_g[:3]) != _w[:3] or (_g[3] is None) != (_w[3] is None) or (_w[3] is not None and abs(_g[3] - _w[3]) > 0.051):
+                        _same = False
+                assert _same, "For the orders " + str(_rows) + ", the report for 2026-11-26 should be " + str([(_w[0], _w[1], _w[2], None if _w[3] is None else round(_w[3], 1)) for _w in _want]) + ", not " + str(_got)
+            assert output.strip() == "[('Biryani Box', 2, 830, 4.0), ('Dosa Den', 3, 620, 3.5), ('Thali Tales', 0, 0, None)]", "The program should print [('Biryani Box', 2, 830, 4.0), ('Dosa Den', 3, 620, 3.5), ('Thali Tales', 0, 0, None)]"
+          wrong:
+            - |
+              import sqlite3
+
+              query = """
+                  select b.name, count(o.id), coalesce(sum(o.amount), 0), round(avg(o.stars), 1)
+                  from brands b
+                  left join orders o on o.brand = b.id
+                  where o.placed >= :day and o.placed < :next
+                  group by b.id, b.name
+                  order by b.name
+              """
+
+              db = sqlite3.connect(":memory:")
+              db.executescript("""
+                  create table brands (id integer primary key, name text not null);
+                  create table orders (id integer primary key, brand integer not null references brands (id),
+                                       placed text not null, amount integer not null, stars integer);
+                  insert into brands values (1, 'Biryani Box'), (2, 'Dosa Den'), (3, 'Thali Tales');
+                  insert into orders values
+                      (1, 1, '2026-11-25 20:10', 420, 5), (2, 2, '2026-11-26 08:30', 180, null),
+                      (3, 1, '2026-11-26 13:05', 380, 4), (4, 2, '2026-11-26 19:45', 240, 3),
+                      (5, 1, '2026-11-26 21:30', 450, null), (6, 2, '2026-11-26 22:10', 200, 4),
+                      (7, 3, '2026-11-27 12:00', 300, 5);
+              """)
+              print(db.execute(query, {"day": "2026-11-26", "next": "2026-11-27"}).fetchall())
+            - |
+              import sqlite3
+
+              query = """
+                  with today as (
+                      select * from orders where placed >= :day and placed < :next
+                  )
+                  select b.name, count(*), coalesce(sum(t.amount), 0), round(avg(t.stars), 1)
+                  from brands b
+                  left join today t on t.brand = b.id
+                  group by b.id, b.name
+                  order by b.name
+              """
+
+              db = sqlite3.connect(":memory:")
+              db.executescript("""
+                  create table brands (id integer primary key, name text not null);
+                  create table orders (id integer primary key, brand integer not null references brands (id),
+                                       placed text not null, amount integer not null, stars integer);
+                  insert into brands values (1, 'Biryani Box'), (2, 'Dosa Den'), (3, 'Thali Tales');
+                  insert into orders values
+                      (1, 1, '2026-11-25 20:10', 420, 5), (2, 2, '2026-11-26 08:30', 180, null),
+                      (3, 1, '2026-11-26 13:05', 380, 4), (4, 2, '2026-11-26 19:45', 240, 3),
+                      (5, 1, '2026-11-26 21:30', 450, null), (6, 2, '2026-11-26 22:10', 200, 4),
+                      (7, 3, '2026-11-27 12:00', 300, 5);
+              """)
+              print(db.execute(query, {"day": "2026-11-26", "next": "2026-11-27"}).fetchall())
+            - |
+              import sqlite3
+
+              query = """
+                  with today as (
+                      select * from orders where placed >= :day and placed < :next
+                  )
+                  select b.name, count(t.id), coalesce(sum(t.amount), 0), round(avg(coalesce(t.stars, 0)), 1)
+                  from brands b
+                  left join today t on t.brand = b.id
+                  group by b.id, b.name
+                  order by b.name
+              """
+
+              db = sqlite3.connect(":memory:")
+              db.executescript("""
+                  create table brands (id integer primary key, name text not null);
+                  create table orders (id integer primary key, brand integer not null references brands (id),
+                                       placed text not null, amount integer not null, stars integer);
+                  insert into brands values (1, 'Biryani Box'), (2, 'Dosa Den'), (3, 'Thali Tales');
+                  insert into orders values
+                      (1, 1, '2026-11-25 20:10', 420, 5), (2, 2, '2026-11-26 08:30', 180, null),
+                      (3, 1, '2026-11-26 13:05', 380, 4), (4, 2, '2026-11-26 19:45', 240, 3),
+                      (5, 1, '2026-11-26 21:30', 450, null), (6, 2, '2026-11-26 22:10', 200, 4),
+                      (7, 3, '2026-11-27 12:00', 300, 5);
+              """)
+              print(db.execute(query, {"day": "2026-11-26", "next": "2026-11-27"}).fetchall())
+          explanation: |
+            Choosing the day's orders first, in a common table expression, and then left joining brands to them keeps every brand; `count(t.id)` counts only real orders, `coalesce` turns a missing sum into 0, and `avg` skips unrated orders. Filtering the day in `where` after the left join throws away the padded row of a quiet brand; `count(*)` counts that padded row as an order; and `coalesce(stars, 0)` invents zero-star reviews.
+  - title: Best sellers
+    blocks:
+      - text: |
+          Each brand's menu page should feature its best-selling dish of the month, by number of portions sold. Last month, Dosa Den sold exactly 312 portions each of masala dosa and rava dosa, more than any other dish. The engineer computes the counts per brand and dish, then numbers them within each brand by count, largest first, and keeps the dishes numbered 1.
+      - question:
+          id: best-seller-ties
+          type: choice
+          system: s2
+          concepts: [q0.window-functions, q0.grouping-and-aggregation]
+          prompt: |
+            The marketing team wants both tied dishes featured when there is a tie. Which numbering should the query use?
+          options:
+            - "rank() over (partition by brand order by portions desc), keeping rank 1"
+            - "row_number() over (partition by brand order by portions desc), keeping number 1"
+            - "rank() over (order by portions desc), keeping rank 1"
+            - "max(portions) with group by brand and dish"
+          answer: 0
+          explanation: |
+            `rank` gives tied dishes the same number, so both of Dosa Den's dishes get 1. `row_number` picks one of them arbitrarily; without `partition by brand` only the kitchen's single best seller survives; and grouping by dish as well returns every dish, not the best.
+  - title: Customers who drifted away
+    blocks:
+      - text: |
+          The owner wants to send a discount to customers who have not ordered in the last 30 days. The orders table has a `customer` column, which is NULL for orders placed as a guest. The first draft is:
+
+          ```sql
+          select name from customers
+          where id not in (select customer from orders where placed >= :cutoff)
+          ```
+
+          On a test copy it returns no one at all, though dozens of customers have clearly not ordered for months.
+      - question:
+          id: lapsed-fix
+          type: choice
+          system: s2
+          concepts: [q0.null-and-three-valued-logic, q0.subqueries-and-common-table-expressions]
+          prompt: |
+            What is wrong, and what is the fix?
+          options:
+            - "Guest orders put NULL in the subquery's list, so not in is never true; use not exists with a correlated subquery, or add where customer is not null inside."
+            - "The cutoff date compares as text; convert it to a number."
+            - "not in cannot take a subquery; list the ids by hand."
+            - "The customers table needs an index on id."
+          answer: 0
+          explanation: |
+            `id not in (…, NULL)` contains `id <> NULL`, which is unknown for every id, so no row passes. `not exists (select 1 from orders o where o.customer = c.id and o.placed >= :cutoff)` never compares with the NULL, and filtering the NULLs out of the list works too. Dates stored as 'YYYY-MM-DD' text compare correctly, and an index changes speed, not answers.
+  - title: Taking an order
+    blocks:
+      - text: |
+          When an order arrives, the system inserts the order, inserts one row per dish into `order_items`, and subtracts each dish's ingredients from `stock`, whose quantity has a `check (qty >= 0)`. One evening the kitchen ran out of paneer halfway through a big order: the stock update for the fourth dish was refused, the program caught the error, logged it, and carried on. The next morning the order was in the database with three of its five dishes, and the stock had been reduced for those three.
+      - question:
+          id: order-transaction
+          type: choice
+          system: s2
+          concepts: [q0.writes-constraints-and-transactions]
+          prompt: |
+            What change makes a refused order leave no trace?
+          options:
+            - "Do all the inserts and stock updates inside one with db: block, so that the refusal rolls back the whole order and reaches the caller."
+            - "Commit after every statement, so that nothing is lost."
+            - "Remove the check constraint, so that stock can go negative."
+            - "Insert the order last."
+          answer: 0
+          explanation: |
+            The refused statement alone was undone; the earlier ones were still pending, and a later commit saved them. One transaction around the whole order makes it atomic, and letting the error reach the caller tells the app to refuse the order. Committing each statement makes partial orders certain, removing the check hides the shortage, and reordering the statements only changes which half is left behind.
+  - title: The slow lookup
+    blocks:
+      - text: |
+          After two years the orders table holds 40 lakh rows. The busiest screen in the kitchen shows, for one brand, its orders of the last hour, newest first, and it has become slow. Its query is `select id, placed, amount from orders where brand = ? and placed >= ? order by placed desc`, and `explain query plan` shows `SCAN orders` followed by `USE TEMP B-TREE FOR ORDER BY`.
+      - question:
+          id: lookup-index
+          type: choice
+          system: s2
+          concepts: [q0.indexes-from-the-outside, q0.selecting-and-filtering]
+          prompt: |
+            Which index serves this query best?
+          options:
+            - "create index orders_by_brand_placed on orders (brand, placed)"
+            - "create index orders_by_placed_brand on orders (placed, brand)"
+            - "create index orders_by_amount on orders (amount)"
+            - "one index on each of brand, placed and amount"
+          answer: 0
+          explanation: |
+            With `brand` first, the index finds the brand by equality and then walks its entries by `placed`, which handles both the range and the newest-first order without a separate sort. With `placed` first, the brand's orders are scattered through the range; an index on amount is irrelevant; and three single-column indexes slow every insert while the database can use only one of them for this query.
+      - question:
+          id: lookup-steps
+          type: numeric
+          system: s1
+          concepts: [q0.indexes-from-the-outside]
+          prompt: |
+            About how many halving steps does a search among 40 lakh sorted index entries take?
+          answer: "22"
+          tolerance: "1"
+          explanation: |
+            $2^{22} = 41{,}94{,}304$, just above 40 lakh, so about 22 steps, against 40 lakh rows for the scan.
+review: |
+  The week's six requests are done, and each answer came from a lesson of this cluster:
+
+  - The price table's key followed the business rule, as in [[q0.tables-rows-and-keys]], and its constraints came from [[q0.writes-constraints-and-transactions]].
+  - The daily report needed a left join from [[q0.joins]], counting from [[q0.grouping-and-aggregation]], a common table expression from [[q0.subqueries-and-common-table-expressions]], and care with missing ratings from [[q0.null-and-three-valued-logic]].
+  - The best sellers were a question about ties, answered with [[q0.window-functions]].
+  - The lapsed customers were hidden by NULL in a `not in` list, the trap of [[q0.null-and-three-valued-logic]].
+  - The half-recorded order was cured by one transaction, from [[q0.writes-constraints-and-transactions]].
+  - The slow screen needed a composite index in the right column order, from [[q0.indexes-from-the-outside]], and a condition written on the stored column, as in [[q0.selecting-and-filtering]].
+
+  Notice where the bugs were. Not one request failed because SQL lacked a feature; each careless answer returned something plausible and wrong, such as a missing brand, a zero-star review, an empty list or half an order. Reading every query for what it does to padded rows, NULLs, ties and partial failures is the habit this cluster was building. The next cluster steps back from queries to design, and asks which tables an application should have in the first place.

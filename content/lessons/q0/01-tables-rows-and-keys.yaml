@@ -1,0 +1,716 @@
+concept: q0.tables-rows-and-keys
+minutes: 80
+claim: You can describe data as relations, tables whose rows are facts and whose columns have types, explain why row order means nothing, tell superkeys, candidate keys and primary keys apart and choose a key from the rules of the business rather than from today's rows, prefer a surrogate key when natural identifiers change, and create tables in SQLite from Python so that the database itself rejects a duplicate.
+recalls: [s3.intractability-p-np-and-heuristics, f2.equivalence-relations-and-partial-orders]
+uses: [f2.relations-and-functions-between-sets, f3.counting-with-products-and-sums, s2.balanced-search-trees, s1.exceptions, s1.files-and-data-formats]
+leads: [q0.relational-algebra, q0.writes-constraints-and-transactions, q1.keys-and-functional-dependencies]
+bridges:
+  s3.intractability-p-np-and-heuristics: The algorithms cluster ended with problems too hard to solve exactly and with a habit worth keeping, asking what a method guarantees and what it does not. This cluster turns from computing answers to keeping data, and the habit carries over. A database makes promises, such as never holding two rows with the same key, and an engineer's job is to know which promises it makes. The sorted structures and searches of that cluster reappear here too, hidden inside the database, whenever it finds a row by its key.
+  f2.equivalence-relations-and-partial-orders: The logic cluster defined an equivalence relation, one that is reflexive, symmetric and transitive, and showed that it splits a set into classes, each element in exactly one class. Saying that two rows agree on some chosen columns is such a relation, so the columns split the rows into classes of rows that look alike. A key is the special case in which every class holds a single row, so the key's values name one row and no other.
+starter: |
+  # Scratch space. A table in an in-memory SQLite database.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.execute("create table riders (id integer primary key, name text, phone text unique)")
+  db.execute("insert into riders (name, phone) values (?, ?)", ("Asha", "98450 11111"))
+  db.execute("insert into riders (name, phone) values (?, ?)", ("Bilal", "98450 22222"))
+  print(db.execute("select * from riders").fetchall())
+parts:
+  recall:
+    - text: |
+        [[s3.intractability-p-np-and-heuristics]] ended the algorithms cluster by asking what a method can promise. Every system in this course also keeps data, and almost every one keeps it in tables. This lesson says what a table is, precisely, and how a database can promise that no fact is recorded twice. It leans on [[f2.equivalence-relations-and-partial-orders]], because deciding whether two rows are the same is deciding which rows fall in one class. Three quick pulls first.
+  puzzle:
+    - text: |
+        A dark store keeps its riders' shifts in this table:
+
+        | rider | day | store | slot |
+        | --- | --- | --- | --- |
+        | Asha | Mon | Koramangala | morning |
+        | Asha | Mon | Koramangala | evening |
+        | Asha | Tue | Indiranagar | morning |
+        | Bilal | Mon | Indiranagar | morning |
+        | Bilal | Tue | Indiranagar | evening |
+        | Chitra | Mon | Koramangala | morning |
+        | Chitra | Tue | Koramangala | evening |
+        | Dev | Tue | Indiranagar | morning |
+
+        A set of columns **singles out every row** if no two rows agree on all of those columns. There are 15 non-empty sets of the four columns.
+
+        **How many of them single out every row of this table?**
+  intuition:
+    - text: |
+        A railway reservation chart pasted on a coach door is a table. Each line records one fact, that a passenger holds a seat on this train on this date, and each column holds one kind of value: coach, seat, name, age. Nobody reads the chart as a story whose order matters; they look up their own line. In 1970 Edgar Codd, at IBM, proposed that all of a business's data be kept this way, as tables of facts that programs query by what the facts say rather than by where they are stored. Nearly every database since descends from that idea, the **relational model**.
+
+        A table needs a way to tell its rows apart. A **key** is a set of columns whose values are never shared by two rows, so that naming the key's values names one fact. On a reservation chart, the passenger's name is not a key, since two people can share a name, but coach and seat together are, for one train on one date. The figure shows the shifts table from the puzzle. Choose columns and see whether they single out every row; then add next Wednesday's shift.
+    - figure: table-keys
+      props: { columns: [rider, day] }
+    - text: |
+        Rider and day are not enough: Asha works two slots on Monday. Rider, day and slot single out every row, and so, in these eight rows, do rider, store and slot. Adding one ordinary Wednesday shift breaks the second set, because Asha can work the Koramangala morning slot on any day. A key is a rule about every table the business could ever produce, not a pattern in the rows it has today.
+  derivation:
+    - text: |
+        **Tables are relations.** A table's **schema** names its columns and the type of value each may hold, its **domain**: text for a rider's name, one of seven days, a whole number of rupees. A **row** is one value from each domain, a tuple, so the rows that could possibly exist are the Cartesian product of the domains, and a table is a subset of it: exactly a relation in the sense of [[f2.relations-and-functions-between-sets]]. Two consequences follow. A relation is a set, so its rows have no order; a query that needs them in an order must ask for one. And a set holds each element once, so in the pure model no two rows are identical. SQL relaxes this, letting a table hold duplicate rows unless a key forbids them, which is one more reason to declare keys.
+    - question:
+        id: derivation-product
+        type: numeric
+        system: s2
+        prompt: |
+          A table records which rider covers each slot, with columns store, day, slot and rider. There are 4 stores, 7 days and 2 slots a day, and (store, day, slot) is a key. At most how many rows can the table hold?
+        answer: "56"
+        explanation: |
+          No two rows may share a (store, day, slot) combination, and by [[f3.counting-with-products-and-sums]] there are $4 \times 7 \times 2 = 56$ of them. The rider column adds nothing to the count, since each combination appears at most once.
+    - text: |
+        **Superkeys, candidate keys and the primary key.** Any set of columns that singles out every row in every table the business allows is a **superkey**. Adding columns to a superkey keeps it a superkey, so all four columns of the shifts table form one. A **candidate key** is a superkey with nothing to spare: drop any column and it stops working. Rider, day and slot is a candidate key; rider, day, slot and store is a superkey that is not a candidate key. A table can have several candidate keys. One is chosen as the **primary key**, the one other tables use to refer to a row, and the rest are declared **unique**, so the database enforces them too.
+
+        In the language of [[f2.equivalence-relations-and-partial-orders]], agreeing on a set of columns is an equivalence relation on the rows. A set of columns is a superkey exactly when every class has one row. Adding columns can only split classes, never merge them, which is why a superkey with more columns is still a superkey.
+
+        **Choosing a key from the rules.** Whether a set of columns is a key is a fact about the business, not about the data. Rider and day would look like a key in a week when nobody worked twice in a day, until someone did. The question to ask is what the rules allow: can a rider work two slots in a day? Can two riders cover one slot? The answers, written as keys, then hold for every row ever stored.
+
+        **Natural and surrogate keys.** A **natural key** is made of facts about the thing itself: a phone number, an email address, a PAN. Such facts are often worse keys than they look. People change phone numbers, and operators reassign old numbers to new customers; emails change; identity numbers are private and must not be copied into every table that refers to a person. A **surrogate key** is an identifier the database makes up, usually a whole number that means nothing outside it, such as rider 1, 2, 3. It never needs to change, because nothing about the rider can make it wrong. The usual practice is a surrogate primary key, with the natural identifiers that must still be unique declared unique, so that two riders cannot share a phone number today, while one rider's number can still change tomorrow.
+    - question:
+        id: derivation-phone
+        type: choice
+        system: s2
+        prompt: |
+          A delivery app's customers table uses the phone number as its primary key, and orders refer to customers by phone number. What is the best design?
+        options:
+          - "Give each customer a surrogate id as the primary key, refer to customers by id, and keep the phone number in a unique column that can change."
+          - "Keep the phone number as the key, since every customer has exactly one."
+          - "Use the customer's name as the key instead, since names rarely change."
+          - "Use phone number and name together as the key."
+        answer: 0
+        explanation: |
+          A changed number would have to be changed in every order too, and a reassigned number would attach a stranger to the old customer's orders. A surrogate id never changes, and the unique phone column still stops two current customers sharing a number. Names are not unique at all, and adding a name to a phone number inherits both problems.
+    - text: |
+        **Keys in SQLite.** Python's `sqlite3` module, from the standard library, runs a complete SQL database inside the program, held in memory when it is opened as `":memory:"`. `connect` opens it; `execute` runs one SQL statement; a `select` returns rows that `fetchall` gathers into a list of tuples, or `fetchone` takes one at a time:
+
+        ```python
+        import sqlite3
+
+        db = sqlite3.connect(":memory:")
+        db.execute("create table shifts (rider text, day text, slot text, store text, primary key (rider, day, slot))")
+        db.execute("insert into shifts values (?, ?, ?, ?)", ("Asha", "Mon", "morning", "Koramangala"))
+        print(db.execute("select * from shifts").fetchall())
+        ```
+
+        The `?` marks are **placeholders**: the values travel separately from the SQL text and can never be mistaken for SQL, however strange they are. Gluing values into the SQL string with `+` is how injection attacks happen, so this course always uses placeholders. A second insert of Asha's Monday morning shift raises `sqlite3.IntegrityError`, an exception the program can catch as in [[s1.exceptions]]. The database checks every insert against every key, using a sorted index of the key's values, a search tree like those of [[s2.balanced-search-trees]], so each check takes about $\log n$ steps rather than a scan of the table.
+
+        SQLite treats a column declared `integer primary key` specially: it becomes the row's own number, and an insert that leaves it out gets the next free number automatically, which makes it the natural home for a surrogate key.
+    - question:
+        id: order-key
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of choosing a table's keys in order.
+        steps:
+          - "Decide what single fact one row records."
+          - "From the rules of the business, find the sets of columns that no two such facts may ever share."
+          - "Keep only the minimal sets, the candidate keys."
+          - "Choose one candidate key as the primary key, or add a surrogate id, and declare the others unique."
+        explanation: |
+          Which columns may not repeat depends on what a row means; minimality is a property of those sets; and the primary key is chosen among the minimal ones.
+  formal:
+    - text: |
+        **Relation.** A set of tuples over a schema $(A_1 : D_1, \ldots, A_k : D_k)$, a subset of $D_1 \times \cdots \times D_k$. Rows have no order. In SQL a table may hold duplicate rows unless a key forbids them.
+
+        **Superkey.** A set of columns $K$ such that no two rows of any allowed table agree on all of $K$. **Candidate key.** A superkey none of whose proper subsets is a superkey. **Primary key.** The candidate key chosen to identify rows; others are declared `unique`.
+
+        **Natural key.** Made of real-world facts. **Surrogate key.** An identifier made up by the database, with no meaning outside it.
+
+        **SQLite from Python.** `sqlite3.connect(":memory:")`; `db.execute(sql, values)` with `?` placeholders; `fetchall()` and `fetchone()`; a broken key raises `sqlite3.IntegrityError`. A column declared `integer primary key` is filled automatically when left out.
+  drill:
+    - text: Seconds each. Ask what the rules allow, not what the rows show.
+    - question:
+        id: drill-superset
+        type: choice
+        system: s1
+        prompt: |
+          (rider, day, slot) is a key of the shifts table. What is (rider, day, slot, store)?
+        options:
+          - "A superkey that is not a candidate key."
+          - "A candidate key."
+          - "Not a key."
+          - "The primary key."
+        answer: 0
+        explanation: Adding a column to a key still singles out every row, but store can be dropped, so the set is not minimal.
+    - question:
+        id: drill-rows-per-key
+        type: numeric
+        system: s1
+        prompt: |
+          At most how many rows can share one value of a table's primary key?
+        answer: "1"
+        explanation: That is what being a key means.
+    - question:
+        id: drill-order
+        type: choice
+        system: s1
+        prompt: |
+          A query without an ordering returns rows in some order. What does that order mean?
+        options:
+          - "Nothing; the query must ask for an order if it needs one."
+          - "The order the rows were inserted."
+          - "The order of the primary key."
+          - "Alphabetical order of the first column."
+        answer: 0
+        explanation: A relation is a set. A database may return rows in whatever order is cheapest, and that can change from one run to the next.
+    - question:
+        id: drill-surrogate
+        type: choice
+        system: s1
+        prompt: |
+          Which is a surrogate key?
+        options:
+          - "An order number the database assigns, 1, 2, 3, …"
+          - "A customer's email address."
+          - "A car's registration number."
+          - "A train number with a travel date."
+        answer: 0
+        explanation: A surrogate key is made up by the database and means nothing outside it; the others are facts about the world.
+    - question:
+        id: drill-domain
+        type: numeric
+        system: s1
+        prompt: |
+          A table's columns are slot, with 2 possible values, and day, with 7. How many different rows are possible?
+        answer: "14"
+        explanation: $2 \times 7 = 14$, the size of the Cartesian product of the two domains.
+    - question:
+        id: predict-count
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.execute("create table t (k integer primary key, v text)")
+          db.executemany("insert into t values (?, ?)", [(1, "a"), (2, "b")])
+          print(db.execute("select count(*) from t").fetchone())
+        output: "(2,)"
+        explanation: "`executemany` runs the insert once for each tuple, and `fetchone` returns the single row of the count as a tuple of one value."
+    - question:
+        id: predict-reject
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.execute("create table t (k integer primary key, v text)")
+          db.execute("insert into t values (1, 'a')")
+          try:
+              db.execute("insert into t values (1, 'b')")
+              print("kept")
+          except sqlite3.IntegrityError:
+              print("rejected")
+        output: "rejected"
+        explanation: A second row with key 1 breaks the primary key, so SQLite raises `IntegrityError` and keeps only the first row.
+  work:
+    - text: Slower now. Find the rule each table must keep, and make the database keep it.
+    - question:
+        id: fix-shift-key
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The shifts table should accept any shift a rider may work, one row for each rider, day and slot, and reject only a second row for the same rider, day and slot. The program should print `5 0`, five shifts stored and none rejected. It prints `2 3`. Find the fault and fix it.
+        starter: |
+          import sqlite3
+
+          db = sqlite3.connect(":memory:")
+          db.execute("""
+              create table shifts (
+                  rider text,
+                  day text,
+                  slot text,
+                  store text,
+                  primary key (rider)
+              )
+          """)
+          shifts = [
+              ("Asha", "Mon", "morning", "Koramangala"),
+              ("Asha", "Mon", "evening", "Koramangala"),
+              ("Bilal", "Mon", "morning", "Indiranagar"),
+              ("Asha", "Tue", "morning", "Indiranagar"),
+              ("Bilal", "Tue", "evening", "Indiranagar"),
+          ]
+          rejected = 0
+          for shift in shifts:
+              try:
+                  db.execute("insert into shifts values (?, ?, ?, ?)", shift)
+              except sqlite3.IntegrityError:
+                  rejected += 1
+          print(db.execute("select count(*) from shifts").fetchone()[0], rejected)
+        solution: |
+          import sqlite3
+
+          db = sqlite3.connect(":memory:")
+          db.execute("""
+              create table shifts (
+                  rider text,
+                  day text,
+                  slot text,
+                  store text,
+                  primary key (rider, day, slot)
+              )
+          """)
+          shifts = [
+              ("Asha", "Mon", "morning", "Koramangala"),
+              ("Asha", "Mon", "evening", "Koramangala"),
+              ("Bilal", "Mon", "morning", "Indiranagar"),
+              ("Asha", "Tue", "morning", "Indiranagar"),
+              ("Bilal", "Tue", "evening", "Indiranagar"),
+          ]
+          rejected = 0
+          for shift in shifts:
+              try:
+                  db.execute("insert into shifts values (?, ?, ?, ?)", shift)
+              except sqlite3.IntegrityError:
+                  rejected += 1
+          print(db.execute("select count(*) from shifts").fetchone()[0], rejected)
+        tests: |
+          def _tries(rows):
+              _out = []
+              for _row in rows:
+                  try:
+                      db.execute("insert into shifts (rider, day, slot, store) values (?, ?, ?, ?)", _row)
+                      _out.append("kept")
+                  except sqlite3.IntegrityError:
+                      _out.append("rejected")
+              return _out
+
+
+          _got = _tries([
+              ("Asha", "Mon", "morning", "Indiranagar"),
+              ("Asha", "Wed", "morning", "Koramangala"),
+              ("Chitra", "Mon", "morning", "Koramangala"),
+              ("Chitra", "Mon", "morning", "Indiranagar"),
+              ("Bilal", "Wed", "morning", "Indiranagar"),
+              ("Bilal", "Wed", "evening", "Indiranagar"),
+          ])
+          _want = ["rejected", "kept", "kept", "rejected", "kept", "kept"]
+          assert _got == _want, "Adding Asha's Monday morning again, Asha on Wednesday morning, Chitra's Monday morning twice and Bilal's two Wednesday shifts should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "5 0", "The program should print 5 0"
+        wrong:
+          - |
+            import sqlite3
+
+            db = sqlite3.connect(":memory:")
+            db.execute("""
+                create table shifts (
+                    rider text,
+                    day text,
+                    slot text,
+                    store text,
+                    primary key (rider, day)
+                )
+            """)
+            shifts = [
+                ("Asha", "Mon", "morning", "Koramangala"),
+                ("Asha", "Mon", "evening", "Koramangala"),
+                ("Bilal", "Mon", "morning", "Indiranagar"),
+                ("Asha", "Tue", "morning", "Indiranagar"),
+                ("Bilal", "Tue", "evening", "Indiranagar"),
+            ]
+            rejected = 0
+            for shift in shifts:
+                try:
+                    db.execute("insert into shifts values (?, ?, ?, ?)", shift)
+                except sqlite3.IntegrityError:
+                    rejected += 1
+            print(db.execute("select count(*) from shifts").fetchone()[0], rejected)
+          - |
+            import sqlite3
+
+            db = sqlite3.connect(":memory:")
+            db.execute("""
+                create table shifts (
+                    rider text,
+                    day text,
+                    slot text,
+                    store text,
+                    primary key (rider, store, slot)
+                )
+            """)
+            shifts = [
+                ("Asha", "Mon", "morning", "Koramangala"),
+                ("Asha", "Mon", "evening", "Koramangala"),
+                ("Bilal", "Mon", "morning", "Indiranagar"),
+                ("Asha", "Tue", "morning", "Indiranagar"),
+                ("Bilal", "Tue", "evening", "Indiranagar"),
+            ]
+            rejected = 0
+            for shift in shifts:
+                try:
+                    db.execute("insert into shifts values (?, ?, ?, ?)", shift)
+                except sqlite3.IntegrityError:
+                    rejected += 1
+            print(db.execute("select count(*) from shifts").fetchone()[0], rejected)
+          - |
+            import sqlite3
+
+            db = sqlite3.connect(":memory:")
+            db.execute("""
+                create table shifts (
+                    rider text,
+                    day text,
+                    slot text,
+                    store text
+                )
+            """)
+            shifts = [
+                ("Asha", "Mon", "morning", "Koramangala"),
+                ("Asha", "Mon", "evening", "Koramangala"),
+                ("Bilal", "Mon", "morning", "Indiranagar"),
+                ("Asha", "Tue", "morning", "Indiranagar"),
+                ("Bilal", "Tue", "evening", "Indiranagar"),
+            ]
+            rejected = 0
+            for shift in shifts:
+                try:
+                    db.execute("insert into shifts values (?, ?, ?, ?)", shift)
+                except sqlite3.IntegrityError:
+                    rejected += 1
+            print(db.execute("select count(*) from shifts").fetchone()[0], rejected)
+        explanation: |
+          A primary key on the rider alone allows one shift per rider ever, so every later shift of Asha's or Bilal's is rejected. The rule is one row per rider, day and slot, so that is the key. Rider and day still reject a second slot on the same day; rider, store and slot happen to fit these five rows but would reject Asha's Koramangala morning on a second day; and no key at all accepts a true duplicate.
+    - question:
+        id: write-is-key
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `is_key(header, rows, columns)`. `header` lists the column names, each row is a tuple in that order, and `columns` names some of them. Return `True` exactly when no two rows agree on every column in `columns`.
+        starter: |
+          def is_key(header, rows, columns):
+              # True when no two rows agree on every column named in columns.
+              return True
+
+          header = ["rider", "day", "store", "slot"]
+          rows = [
+              ("Asha", "Mon", "Koramangala", "morning"),
+              ("Asha", "Mon", "Koramangala", "evening"),
+              ("Asha", "Tue", "Indiranagar", "morning"),
+              ("Bilal", "Mon", "Indiranagar", "morning"),
+              ("Bilal", "Tue", "Indiranagar", "evening"),
+              ("Chitra", "Mon", "Koramangala", "morning"),
+              ("Chitra", "Tue", "Koramangala", "evening"),
+              ("Dev", "Tue", "Indiranagar", "morning"),
+          ]
+          print(is_key(header, rows, ["rider", "day"]), is_key(header, rows, ["rider", "day", "slot"]), is_key(header, rows, []))
+        solution: |
+          def is_key(header, rows, columns):
+              # True when no two rows agree on every column named in columns.
+              places = [p for p in range(len(header)) if header[p] in columns]
+              seen = set()
+              for row in rows:
+                  value = tuple(row[p] for p in places)
+                  if value in seen:
+                      return False
+                  seen.add(value)
+              return True
+
+
+          header = ["rider", "day", "store", "slot"]
+          rows = [
+              ("Asha", "Mon", "Koramangala", "morning"),
+              ("Asha", "Mon", "Koramangala", "evening"),
+              ("Asha", "Tue", "Indiranagar", "morning"),
+              ("Bilal", "Mon", "Indiranagar", "morning"),
+              ("Bilal", "Tue", "Indiranagar", "evening"),
+              ("Chitra", "Mon", "Koramangala", "morning"),
+              ("Chitra", "Tue", "Koramangala", "evening"),
+              ("Dev", "Tue", "Indiranagar", "morning"),
+          ]
+          print(is_key(header, rows, ["rider", "day"]), is_key(header, rows, ["rider", "day", "slot"]), is_key(header, rows, []))
+        tests: |
+          import itertools as _it
+          import random as _random
+
+          _rng = _random.Random(61)
+          _h = ["a", "b", "c"]
+          for _ in range(60):
+              _rows = [tuple(_rng.randint(0, 2) for _ in range(3)) for _ in range(_rng.randint(0, 6))]
+              for _k in range(4):
+                  for _cols in _it.combinations(_h, _k):
+                      _idx = [_h.index(_c) for _c in _cols]
+                      _want = len(set(tuple(_r[_i] for _i in _idx) for _r in _rows)) == len(_rows)
+                      _got = is_key(_h, list(_rows), list(_cols))
+                      assert _got == _want, "is_key(" + str(_h) + ", " + str(_rows) + ", " + str(list(_cols)) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "False True False", "The program should print False True False"
+        wrong:
+          - |
+            def is_key(header, rows, columns):
+                # True when no two rows agree on every column named in columns.
+                places = [p for p in range(len(header)) if header[p] in columns]
+                for k in range(1, len(rows)):
+                    if tuple(rows[k][p] for p in places) == tuple(rows[k - 1][p] for p in places):
+                        return False
+                return True
+
+            header = ["rider", "day", "store", "slot"]
+            rows = [
+                ("Asha", "Mon", "Koramangala", "morning"),
+                ("Asha", "Mon", "Koramangala", "evening"),
+                ("Asha", "Tue", "Indiranagar", "morning"),
+                ("Bilal", "Mon", "Indiranagar", "morning"),
+                ("Bilal", "Tue", "Indiranagar", "evening"),
+                ("Chitra", "Mon", "Koramangala", "morning"),
+                ("Chitra", "Tue", "Koramangala", "evening"),
+                ("Dev", "Tue", "Indiranagar", "morning"),
+            ]
+            print(is_key(header, rows, ["rider", "day"]), is_key(header, rows, ["rider", "day", "slot"]), is_key(header, rows, []))
+          - |
+            def is_key(header, rows, columns):
+                # True when no two rows agree on every column named in columns.
+                for p in range(len(header)):
+                    if header[p] in columns and len(set(row[p] for row in rows)) == len(rows):
+                        return True
+                return False
+
+            header = ["rider", "day", "store", "slot"]
+            rows = [
+                ("Asha", "Mon", "Koramangala", "morning"),
+                ("Asha", "Mon", "Koramangala", "evening"),
+                ("Asha", "Tue", "Indiranagar", "morning"),
+                ("Bilal", "Mon", "Indiranagar", "morning"),
+                ("Bilal", "Tue", "Indiranagar", "evening"),
+                ("Chitra", "Mon", "Koramangala", "morning"),
+                ("Chitra", "Tue", "Koramangala", "evening"),
+                ("Dev", "Tue", "Indiranagar", "morning"),
+            ]
+            print(is_key(header, rows, ["rider", "day"]), is_key(header, rows, ["rider", "day", "slot"]), is_key(header, rows, []))
+          - |
+            def is_key(header, rows, columns):
+                # True when no two rows agree on every column named in columns.
+                if not columns:
+                    return True
+                places = [p for p in range(len(header)) if header[p] in columns]
+                seen = set()
+                for row in rows:
+                    value = tuple(row[p] for p in places)
+                    if value in seen:
+                        return False
+                    seen.add(value)
+                return True
+
+
+            header = ["rider", "day", "store", "slot"]
+            rows = [
+                ("Asha", "Mon", "Koramangala", "morning"),
+                ("Asha", "Mon", "Koramangala", "evening"),
+                ("Asha", "Tue", "Indiranagar", "morning"),
+                ("Bilal", "Mon", "Indiranagar", "morning"),
+                ("Bilal", "Tue", "Indiranagar", "evening"),
+                ("Chitra", "Mon", "Koramangala", "morning"),
+                ("Chitra", "Tue", "Koramangala", "evening"),
+                ("Dev", "Tue", "Indiranagar", "morning"),
+            ]
+            print(is_key(header, rows, ["rider", "day"]), is_key(header, rows, ["rider", "day", "slot"]), is_key(header, rows, []))
+        explanation: |
+          Each row's values in the chosen columns form a tuple, and the columns are a key exactly when no tuple repeats, which a set detects in one pass. Comparing only neighbouring rows misses repeats that are far apart; testing each column on its own asks a different question; and with no columns chosen every row gives the empty tuple, so more than one row means not a key.
+    - question:
+        id: write-bookings-schema
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `schema` so that the database itself rejects a second booking of the same seat on the same train on the same day, while still letting one passenger book several seats, and the same seat be booked on another train or another day. The program should print `4 of 5 kept`.
+        starter: |
+          import sqlite3
+
+          schema = """
+              create table bookings (
+                  train integer,
+                  day text,
+                  seat text,
+                  passenger text
+              )
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.execute(schema)
+          tries = [
+              (12627, "2026-12-01", "B2-14", "Meera"),
+              (12627, "2026-12-01", "B2-15", "Meera"),
+              (12627, "2026-12-01", "B2-14", "Kabir"),
+              (12628, "2026-12-01", "B2-14", "Kabir"),
+              (12627, "2026-12-02", "B2-14", "Kabir"),
+          ]
+          rejected = 0
+          for row in tries:
+              try:
+                  db.execute("insert into bookings values (?, ?, ?, ?)", row)
+              except sqlite3.IntegrityError:
+                  rejected += 1
+          print(len(tries) - rejected, "of", len(tries), "kept")
+        solution: |
+          import sqlite3
+
+          schema = """
+              create table bookings (
+                  train integer,
+                  day text,
+                  seat text,
+                  passenger text,
+                  primary key (train, day, seat)
+              )
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.execute(schema)
+          tries = [
+              (12627, "2026-12-01", "B2-14", "Meera"),
+              (12627, "2026-12-01", "B2-15", "Meera"),
+              (12627, "2026-12-01", "B2-14", "Kabir"),
+              (12628, "2026-12-01", "B2-14", "Kabir"),
+              (12627, "2026-12-02", "B2-14", "Kabir"),
+          ]
+          rejected = 0
+          for row in tries:
+              try:
+                  db.execute("insert into bookings values (?, ?, ?, ?)", row)
+              except sqlite3.IntegrityError:
+                  rejected += 1
+          print(len(tries) - rejected, "of", len(tries), "kept")
+        tests: |
+          _db = sqlite3.connect(":memory:")
+          _db.execute(schema)
+          _rows = [
+              (22691, "2026-12-05", "A1-01", "Ravi"),
+              (22691, "2026-12-05", "A1-02", "Ravi"),
+              (22691, "2026-12-05", "A1-03", "Ravi"),
+              (22691, "2026-12-05", "A1-01", "Sunita"),
+              (22692, "2026-12-05", "A1-01", "Sunita"),
+              (22691, "2026-12-06", "A1-01", "Ravi"),
+              (22692, "2026-12-05", "A1-01", "Ravi"),
+              (22693, "2026-12-05", "A1-01", "Ravi"),
+          ]
+          _got = []
+          for _row in _rows:
+              try:
+                  _db.execute("insert into bookings (train, day, seat, passenger) values (?, ?, ?, ?)", _row)
+                  _got.append("kept")
+              except sqlite3.IntegrityError:
+                  _got.append("rejected")
+          _want = ["kept", "kept", "kept", "rejected", "kept", "kept", "rejected", "kept"]
+          assert _got == _want, "Trying the bookings " + str(_rows) + " in turn should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "4 of 5 kept", "The program should print 4 of 5 kept"
+        wrong:
+          - |
+            import sqlite3
+
+            schema = """
+                create table bookings (
+                    train integer,
+                    day text,
+                    seat text,
+                    passenger text,
+                    primary key (train, seat)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute(schema)
+            tries = [
+                (12627, "2026-12-01", "B2-14", "Meera"),
+                (12627, "2026-12-01", "B2-15", "Meera"),
+                (12627, "2026-12-01", "B2-14", "Kabir"),
+                (12628, "2026-12-01", "B2-14", "Kabir"),
+                (12627, "2026-12-02", "B2-14", "Kabir"),
+            ]
+            rejected = 0
+            for row in tries:
+                try:
+                    db.execute("insert into bookings values (?, ?, ?, ?)", row)
+                except sqlite3.IntegrityError:
+                    rejected += 1
+            print(len(tries) - rejected, "of", len(tries), "kept")
+          - |
+            import sqlite3
+
+            schema = """
+                create table bookings (
+                    train integer,
+                    day text,
+                    seat text,
+                    passenger text,
+                    primary key (passenger)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute(schema)
+            tries = [
+                (12627, "2026-12-01", "B2-14", "Meera"),
+                (12627, "2026-12-01", "B2-15", "Meera"),
+                (12627, "2026-12-01", "B2-14", "Kabir"),
+                (12628, "2026-12-01", "B2-14", "Kabir"),
+                (12627, "2026-12-02", "B2-14", "Kabir"),
+            ]
+            rejected = 0
+            for row in tries:
+                try:
+                    db.execute("insert into bookings values (?, ?, ?, ?)", row)
+                except sqlite3.IntegrityError:
+                    rejected += 1
+            print(len(tries) - rejected, "of", len(tries), "kept")
+          - |
+            import sqlite3
+
+            schema = """
+                create table bookings (
+                    train integer,
+                    day text,
+                    seat text,
+                    passenger text,
+                    unique (seat, day)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute(schema)
+            tries = [
+                (12627, "2026-12-01", "B2-14", "Meera"),
+                (12627, "2026-12-01", "B2-15", "Meera"),
+                (12627, "2026-12-01", "B2-14", "Kabir"),
+                (12628, "2026-12-01", "B2-14", "Kabir"),
+                (12627, "2026-12-02", "B2-14", "Kabir"),
+            ]
+            rejected = 0
+            for row in tries:
+                try:
+                    db.execute("insert into bookings values (?, ?, ?, ?)", row)
+                except sqlite3.IntegrityError:
+                    rejected += 1
+            print(len(tries) - rejected, "of", len(tries), "kept")
+        explanation: |
+          One booking holds one seat on one train on one day, so (train, day, seat) is the key, and the passenger is just a fact about the booking. Train and seat alone reject the same seat on the next day; the passenger as key allows one booking per person ever; and seat and day together reject the same seat number on two different trains.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle's shifts table, with columns rider, day, store and slot, how many of the 15 non-empty sets of columns single out every row?
+        answer: "3"
+        explanation: |
+          (rider, day, slot), (rider, store, slot), and all four columns. Every single column and every pair repeats, (rider, day, store) repeats Asha's two Monday shifts, and (day, store, slot) repeats Monday mornings in Koramangala.
+    - question:
+        id: work-aadhaar
+        type: choice
+        system: s2
+        prompt: |
+          A clinic's patients table uses the Aadhaar number as its primary key, and appointments, bills and test results refer to patients by it. What is the strongest reason to change this?
+        options:
+          - "The identity number is copied into every table that refers to a patient, spreading private data, and any correction must be made everywhere; a surrogate id avoids both."
+          - "Aadhaar numbers are too long to be stored as integers."
+          - "Two patients may share an Aadhaar number."
+          - "Primary keys must be made of letters."
+        answer: 0
+        explanation: |
+          Every reference copies the key, so a private identifier as key ends up in every table and every log that mentions a patient, and a mistyped number becomes a correction in many places. A surrogate id keeps references meaningless outside the database, and the identity number can live in one unique column, with access controlled.
+  connections:
+    - text: |
+        Three sets: rider, day and slot; rider, store and slot; and all four columns. Only the first is a key by the rules of the business; the second is an accident of this week's rows, as Wednesday's shift showed. That difference, between what the data happens to show and what the rules guarantee, is the heart of designing tables, and [[q1.keys-and-functional-dependencies]] will make it precise.
+
+        Keys are the first of the constraints a database enforces for its users; [[q0.writes-constraints-and-transactions]] adds the rest. First, though, tables need a language for asking questions. [[q0.relational-algebra]] builds one from a handful of operations, each taking tables and giving back a table, so that any question can be built by composing them.

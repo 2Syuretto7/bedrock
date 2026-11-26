@@ -1,0 +1,551 @@
+concept: q0.relational-algebra
+minutes: 80
+claim: You can use the operations of relational algebra, selection, projection, product, join, union, difference and rename, each taking tables and giving back a table, count the rows each can produce, compose them into a query, rewrite a query into an equivalent cheaper one by moving a selection below a join, and translate each operation into SQL, implementing projection and natural join yourself.
+recalls: [q0.tables-rows-and-keys]
+uses: [f2.sets-and-set-operations, f1.composition-and-inverses, f3.counting-with-products-and-sums, s3.measuring-and-predicting-running-time]
+leads: [q0.selecting-and-filtering, q0.joins, q3.from-sql-to-a-plan]
+starter: |
+  # Scratch space. Relational algebra in SQLite.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.executescript("""
+      create table riders (rider text primary key, store text);
+      create table stores (store text primary key, manager text);
+      insert into riders values ('Asha', 'KOR'), ('Bilal', 'IND'), ('Chitra', 'KOR');
+      insert into stores values ('KOR', 'Meena'), ('IND', 'Ravi'), ('HSR', 'Tara');
+  """)
+  print(db.execute("select * from riders natural join stores").fetchall())
+parts:
+  recall:
+    - text: |
+        [[q0.tables-rows-and-keys]] described data as tables, sets of rows over named columns. Storing facts is half the job; the other half is asking questions of them. This lesson builds a small language for questions from a few operations, each taking tables and returning a table, so that the answer to one question can be the input to the next. Three quick pulls first.
+  puzzle:
+    - text: |
+        A delivery company's database holds 1,00,000 orders, each with the code of the store that packed it, and a table of 500 stores. A manager wants the orders packed by the store in HSR Layout, 200 of them, each shown with that store's details.
+
+        One way to answer is to pair every order with every store, keep the pairs where the order's store code matches the store's, and then keep the pairs for HSR Layout.
+
+        **How many pairs does that first step form?**
+  intuition:
+    - text: |
+        Arithmetic has a few operations, add, subtract, multiply, that take numbers and give numbers, and any calculation is built by combining them. In 1970 Edgar Codd gave tables the same treatment. **Relational algebra** has a handful of operations, each taking one or two tables and giving back a table. Because the answer is always a table, it can be fed to another operation, exactly as functions compose in [[f1.composition-and-inverses]], and any question a business asks of its tables can be written as such a chain.
+
+        The figure applies each operation to small tables: riders and the store each works at, stores and their managers, and the lists of riders on duty on Monday and Tuesday. Try each operation in turn and compare its result with its inputs.
+    - figure: algebra-ops
+      props: { op: select }
+    - text: |
+        Selection keeps rows; projection keeps columns, and loses KOR's second copy because a relation holds each row once. The product pairs everything with everything, 9 rows of which only the 3 marked ones make sense, and the join is exactly those 3. Union and difference work on two tables with the same columns, like the two rota lists. Each result is a table, ready for the next operation.
+  derivation:
+    - text: |
+        **Selection** $\sigma_c(R)$ keeps the rows of $R$ for which the condition $c$ is true; the columns are unchanged, and the result has at most as many rows as $R$. **Projection** $\pi_{A, B}(R)$ keeps only the columns $A$ and $B$, and, since the result is a set, any rows that have become identical collapse into one. So projection can shrink a table in two ways, narrower and shorter. **Rename** $\rho$ gives a table or its columns new names, which matters when a table must be combined with itself.
+    - question:
+        id: derivation-project
+        type: numeric
+        system: s2
+        prompt: |
+          A riders table has 30 rows, one per rider, and a store column. The company has 6 stores, but riders work at only 4 of them. How many rows does $\pi_{\text{store}}(\text{riders})$ have?
+        answer: "4"
+        explanation: |
+          Projection keeps the store values that occur, each once. The 30 riders name only 4 different stores, and the 2 stores without riders do not appear in the riders table at all.
+    - text: |
+        **Product and join.** The product $R \times S$ pairs every row of $R$ with every row of $S$, so it has $|R| \cdot |S|$ rows, by [[f3.counting-with-products-and-sums]], and all the columns of both. On its own it is rarely what anyone wants, but a **join** is a product followed by a selection: $R \bowtie_c S = \sigma_c(R \times S)$. The most common condition says that a column of $R$ equals a column of $S$, such as the rider's store equalling the store's code. The **natural join** $R \bowtie S$ joins on every column name the two tables share and keeps each shared column once.
+
+        A join can have anywhere from 0 to $|R| \cdot |S|$ rows. When the shared column is a key of $S$, each row of $R$ matches at most one row of $S$, so the join has at most $|R|$ rows; every rider works at one store, and the join of riders and stores has one row per rider whose store exists.
+
+        **Union, difference, intersection.** For two tables with the same columns, $R \cup S$ holds the rows in either, and $R - S$ the rows of $R$ not in $S$, exactly as for the sets of [[f2.sets-and-set-operations]]. Intersection needs no new operation: $R \cap S = R - (R - S)$.
+    - question:
+        id: derivation-rewrite
+        type: choice
+        system: s2
+        prompt: |
+          Orders have columns (order_id, store, amount) and stores have (store, area). Which pair of expressions always gives the same result?
+        options:
+          - "$\\sigma_{\\text{area} = \\text{'south'}}(\\text{orders} \\bowtie \\text{stores})$ and $\\text{orders} \\bowtie \\sigma_{\\text{area} = \\text{'south'}}(\\text{stores})$"
+          - "$\\text{orders} - \\text{stores}$ and $\\text{stores} - \\text{orders}$"
+          - "$\\pi_{\\text{store}}(\\sigma_{\\text{amount} > 500}(\\text{orders}))$ and $\\sigma_{\\text{amount} > 500}(\\pi_{\\text{store}}(\\text{orders}))$"
+          - "$\\pi_{\\text{area}}(\\text{stores})$ and $\\text{stores}$"
+        answer: 0
+        explanation: |
+          The condition mentions only a column of stores, so it can be applied to stores before the join: a pair survives either way exactly when its store is in the south. Difference is not symmetric, and here the schemas do not even match. Projecting to store first throws away the amount, so the selection after it has nothing to test. Projection changes the columns, so the last pair differs.
+    - text: |
+        **Equivalent expressions.** Many expressions give the same answer, and the differences in cost can be enormous. A selection that mentions only one table's columns can move below a join, onto that table. Projections can move down too, as long as they keep the columns later steps need. Joins can be done in any order, since $R \bowtie S$ and $S \bowtie R$ hold the same facts and $(R \bowtie S) \bowtie T = R \bowtie (S \bowtie T)$. A database's **query optimiser** uses these rules to rewrite a question into a cheap plan before running it, which is why the order in which a query is written rarely decides how it runs.
+    - question:
+        id: order-manager
+        type: order
+        system: s2
+        prompt: |
+          Riders have columns (rider, store) and stores have (store, manager). Put the operations that find the manager of Asha's store in the order they are applied.
+        steps:
+          - "Select the rows of riders where rider is Asha."
+          - "Join the result with stores on store."
+          - "Project the result onto manager."
+        explanation: |
+          Each operation takes the previous result as its input: Asha's row has her store, the join brings in that store's manager, and the projection keeps only the manager.
+    - text: |
+        **Algebra in SQL.** SQL, the language every relational database speaks, was designed around this algebra, and each operation has a direct translation:
+
+        | Algebra | SQL |
+        | --- | --- |
+        | $\sigma_c(R)$ | `select * from R where c` |
+        | $\pi_{A, B}(R)$ | `select distinct A, B from R` |
+        | $R \times S$ | `select * from R cross join S` |
+        | $R \bowtie S$ | `select * from R natural join S`, or `join … on` with a condition |
+        | $R \cup S$, $R - S$, $R \cap S$ | `union`, `except`, `intersect` between two selects |
+        | $\rho$ | `as`, to give a table or column another name |
+
+        One difference matters. SQL keeps duplicate rows unless asked not to: `select store from riders` gives one row per rider, and only `select distinct` behaves like projection. `union` removes duplicates, while `union all` keeps them. In SQLite, `union`, `except` and `intersect` between several selects are applied from left to right, and a final `order by` sorts the whole result.
+  formal:
+    - text: |
+        **Selection.** $\sigma_c(R) = \{ t \in R : c(t) \}$. **Projection.** $\pi_{A_1, \ldots, A_k}(R)$ = the set of rows of $R$ restricted to $A_1, \ldots, A_k$. **Rename.** $\rho$ gives new names to a table or its columns.
+
+        **Product.** $R \times S$, all pairs, $|R| \cdot |S|$ rows. **Join.** $R \bowtie_c S = \sigma_c(R \times S)$; the natural join equates all shared column names and keeps each once.
+
+        **Set operations.** $R \cup S$, $R - S$ and $R \cap S = R - (R - S)$, for tables with the same columns.
+
+        **Equivalences.** $\sigma_c(R \bowtie S) = \sigma_c(R) \bowtie S$ when $c$ uses only columns of $R$; joins are commutative and associative; $\sigma_{c_1 \wedge c_2}(R) = \sigma_{c_1}(\sigma_{c_2}(R))$.
+
+        **SQL.** `where`, `select distinct`, `cross join`, `natural join` and `join … on`, `union`, `except`, `intersect`, `as`. Without `distinct`, SQL keeps duplicate rows.
+  drill:
+    - text: Seconds each. Count rows before computing them.
+    - question:
+        id: drill-product
+        type: numeric
+        system: s1
+        prompt: |
+          A table of 4 riders is crossed with a table of 5 slots. How many rows does the product have?
+        answer: "20"
+        explanation: $4 \times 5 = 20$, every rider with every slot.
+    - question:
+        id: drill-select
+        type: numeric
+        system: s1
+        prompt: |
+          At most how many rows can a selection from a 12-row table return?
+        answer: "12"
+        explanation: Selection only removes rows; if every row passes, all 12 remain.
+    - question:
+        id: drill-union
+        type: numeric
+        system: s1
+        prompt: |
+          Monday's riders are Asha, Bilal and Chitra; Tuesday's are Bilal, Chitra and Dev. How many rows does their union have?
+        answer: "4"
+        explanation: Asha, Bilal, Chitra and Dev, each once.
+    - question:
+        id: drill-difference
+        type: numeric
+        system: s1
+        prompt: |
+          With the same lists, how many rows does Monday minus Tuesday have?
+        answer: "1"
+        explanation: Only Asha is on Monday's list and not Tuesday's.
+    - question:
+        id: drill-grow
+        type: choice
+        system: s1
+        prompt: |
+          Which operation can return more rows than either of its inputs has?
+        options:
+          - "Product"
+          - "Selection"
+          - "Projection"
+          - "Difference"
+        answer: 0
+        explanation: A product has $|R| \cdot |S|$ rows. The others never return more rows than their first input.
+    - question:
+        id: predict-union
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("create table a (x); create table b (x); insert into a values (1), (2), (2); insert into b values (2), (3);")
+          print(db.execute("select x from a union select x from b order by x").fetchall())
+        output: "[(1,), (2,), (3,)]"
+        explanation: "`union` removes duplicates, so 2 appears once although it is in a twice and in b once."
+    - question:
+        id: predict-cross
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("create table a (x); create table b (y); insert into a values (1), (2), (2); insert into b values (2), (3);")
+          print(db.execute("select count(*) from a cross join b").fetchone())
+        output: "(6,)"
+        explanation: SQL keeps a's duplicate row, so the product has $3 \times 2 = 6$ rows.
+  work:
+    - text: Slower now. Build the operations from sets of tuples, then ask SQL for them.
+    - question:
+        id: fix-project
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A relation is a pair: a tuple of column names and a set of row tuples. `project` should keep only the named columns, in the order given, with each resulting row once. The program should print `[('IND',), ('KOR',)] 2`. It prints `[('IND',), ('KOR',), ('KOR',)] 3`. Find the fault and fix it.
+        starter: |
+          def project(relation, names):
+              # Keep only the named columns, in the order given; a relation holds each row once.
+              columns, rows = relation
+              places = [columns.index(n) for n in names]
+              kept = []
+              for row in rows:
+                  kept.append(tuple(row[p] for p in places))
+              return (tuple(names), kept)
+
+
+          riders = (("rider", "store", "vehicle"), {("Asha", "KOR", "scooter"), ("Bilal", "IND", "cycle"), ("Chitra", "KOR", "scooter")})
+          print(sorted(project(riders, ["store"])[1]), len(project(riders, ["vehicle", "store"])[1]))
+        solution: |
+          def project(relation, names):
+              # Keep only the named columns, in the order given; a relation holds each row once.
+              columns, rows = relation
+              places = [columns.index(n) for n in names]
+              kept = set()
+              for row in rows:
+                  kept.add(tuple(row[p] for p in places))
+              return (tuple(names), kept)
+
+
+          riders = (("rider", "store", "vehicle"), {("Asha", "KOR", "scooter"), ("Bilal", "IND", "cycle"), ("Chitra", "KOR", "scooter")})
+          print(sorted(project(riders, ["store"])[1]), len(project(riders, ["vehicle", "store"])[1]))
+        tests: |
+          import itertools as _it
+          import random as _random
+
+          _rng = _random.Random(67)
+          _cols = ("a", "b", "c")
+          for _ in range(50):
+              _rows = set(tuple(_rng.randint(0, 2) for _ in range(3)) for _ in range(_rng.randint(0, 8)))
+              for _k in range(1, 4):
+                  for _names in _it.permutations(_cols, _k):
+                      _idx = [_cols.index(_n) for _n in _names]
+                      _want = (tuple(_names), set(tuple(_r[_i] for _i in _idx) for _r in _rows))
+                      _got = project((_cols, set(_rows)), list(_names))
+                      assert isinstance(_got[1], set), "project should return its rows as a set, so each row appears once"
+                      assert (tuple(_got[0]), _got[1]) == _want, "project(" + str((_cols, _rows)) + ", " + str(list(_names)) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('IND',), ('KOR',)] 2", "The program should print [('IND',), ('KOR',)] 2"
+        wrong:
+          - |
+            def project(relation, names):
+                # Keep only the named columns, in the order given; a relation holds each row once.
+                columns, rows = relation
+                places = [p for p in range(len(columns)) if columns[p] in names]
+                kept = set()
+                for row in rows:
+                    kept.add(tuple(row[p] for p in places))
+                return (tuple(names), kept)
+
+
+            riders = (("rider", "store", "vehicle"), {("Asha", "KOR", "scooter"), ("Bilal", "IND", "cycle"), ("Chitra", "KOR", "scooter")})
+            print(sorted(project(riders, ["store"])[1]), len(project(riders, ["vehicle", "store"])[1]))
+          - |
+            def project(relation, names):
+                # Keep only the named columns, in the order given; a relation holds each row once.
+                columns, rows = relation
+                places = [columns.index(n) for n in names]
+                kept = set()
+                for row in rows:
+                    kept.add(tuple(row[p] for p in places))
+                return (columns, kept)
+
+
+            riders = (("rider", "store", "vehicle"), {("Asha", "KOR", "scooter"), ("Bilal", "IND", "cycle"), ("Chitra", "KOR", "scooter")})
+            print(sorted(project(riders, ["store"])[1]), len(project(riders, ["vehicle", "store"])[1]))
+          - |
+            def project(relation, names):
+                # Keep only the named columns, in the order given; a relation holds each row once.
+                columns, rows = relation
+                places = [columns.index(n) for n in names]
+                first = {}
+                for row in rows:
+                    first[row[places[0]]] = tuple(row[p] for p in places)
+                return (tuple(names), set(first.values()))
+
+
+            riders = (("rider", "store", "vehicle"), {("Asha", "KOR", "scooter"), ("Bilal", "IND", "cycle"), ("Chitra", "KOR", "scooter")})
+            print(sorted(project(riders, ["store"])[1]), len(project(riders, ["vehicle", "store"])[1]))
+        explanation: |
+          Collecting the shortened rows in a list keeps every copy, so the two KOR riders give KOR twice. A set keeps each row once, which is what makes the result a relation. Taking the columns in the table's order instead of the order asked for swaps them; returning the old column names mislabels the result; and keeping one row per value of the first column loses rows that differ in the others.
+    - question:
+        id: write-natural-join
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `natural_join(r, s)` for relations given as (column names, set of rows). Pair each row of `r` with each row of `s` that agrees with it on every column name the two share. The result's columns are those of `r`, then those of `s` that `r` lacks; with no shared columns, it is the product.
+        starter: |
+          def natural_join(r, s):
+              # Pair every row of r with every row of s that agrees on all the columns they share.
+              return ((), set())
+
+          riders = (("rider", "store"), {("Asha", "KOR"), ("Bilal", "IND"), ("Chitra", "KOR")})
+          stores = (("store", "manager"), {("KOR", "Meena"), ("IND", "Ravi"), ("HSR", "Tara")})
+          columns, rows = natural_join(riders, stores)
+          print(columns, sorted(rows))
+        solution: |
+          def natural_join(r, s):
+              # Pair every row of r with every row of s that agrees on all the columns they share.
+              rcols, rrows = r
+              scols, srows = s
+              shared = [c for c in rcols if c in scols]
+              extra = [c for c in scols if c not in rcols]
+              rows = set()
+              for a in rrows:
+                  for b in srows:
+                      if all(a[rcols.index(c)] == b[scols.index(c)] for c in shared):
+                          rows.add(a + tuple(b[scols.index(c)] for c in extra))
+              return (rcols + tuple(extra), rows)
+
+
+          riders = (("rider", "store"), {("Asha", "KOR"), ("Bilal", "IND"), ("Chitra", "KOR")})
+          stores = (("store", "manager"), {("KOR", "Meena"), ("IND", "Ravi"), ("HSR", "Tara")})
+          columns, rows = natural_join(riders, stores)
+          print(columns, sorted(rows))
+        tests: |
+          import random as _random
+
+
+          def _ref(r, s):
+              _rc, _rr = r
+              _sc, _sr = s
+              _sh = [_c for _c in _rc if _c in _sc]
+              _ex = [_c for _c in _sc if _c not in _rc]
+              _out = set()
+              for _a in _rr:
+                  for _b in _sr:
+                      if all(_a[_rc.index(_c)] == _b[_sc.index(_c)] for _c in _sh):
+                          _out.add(_a + tuple(_b[_sc.index(_c)] for _c in _ex))
+              return (_rc + tuple(_ex), _out)
+
+
+          _rng = _random.Random(71)
+          _shapes = [(("a", "b"), ("b", "c")), (("a", "b", "c"), ("b", "c", "d")), (("a",), ("b",)), (("a", "b"), ("a", "b")), (("x", "k"), ("k", "y", "z"))]
+          for _ in range(12):
+              for _rc, _sc in _shapes:
+                  _r = (_rc, set(tuple(_rng.randint(0, 2) for _ in _rc) for _ in range(_rng.randint(0, 6))))
+                  _s = (_sc, set(tuple(_rng.randint(0, 2) for _ in _sc) for _ in range(_rng.randint(0, 6))))
+                  _want = _ref(_r, _s)
+                  _got = natural_join(_r, _s)
+                  assert (tuple(_got[0]), set(_got[1])) == _want, "natural_join(" + str(_r) + ", " + str(_s) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "('rider', 'store', 'manager') [('Asha', 'KOR', 'Meena'), ('Bilal', 'IND', 'Ravi'), ('Chitra', 'KOR', 'Meena')]", "The program should print ('rider', 'store', 'manager') [('Asha', 'KOR', 'Meena'), ('Bilal', 'IND', 'Ravi'), ('Chitra', 'KOR', 'Meena')]"
+        wrong:
+          - |
+            def natural_join(r, s):
+                # Pair every row of r with every row of s that agrees on all the columns they share.
+                rcols, rrows = r
+                scols, srows = s
+                shared = [c for c in rcols if c in scols]
+                extra = [c for c in scols if c not in rcols]
+                rows = set()
+                for a in rrows:
+                    for b in srows:
+                        if True:
+                            rows.add(a + tuple(b[scols.index(c)] for c in extra))
+                return (rcols + tuple(extra), rows)
+
+
+            riders = (("rider", "store"), {("Asha", "KOR"), ("Bilal", "IND"), ("Chitra", "KOR")})
+            stores = (("store", "manager"), {("KOR", "Meena"), ("IND", "Ravi"), ("HSR", "Tara")})
+            columns, rows = natural_join(riders, stores)
+            print(columns, sorted(rows))
+          - |
+            def natural_join(r, s):
+                # Pair every row of r with every row of s that agrees on all the columns they share.
+                rcols, rrows = r
+                scols, srows = s
+                shared = [c for c in rcols if c in scols]
+                extra = [c for c in scols if c not in rcols]
+                rows = set()
+                for a in rrows:
+                    for b in srows:
+                        if all(a[rcols.index(c)] == b[scols.index(c)] for c in shared):
+                            rows.add(a + b)
+                return (rcols + scols, rows)
+
+
+            riders = (("rider", "store"), {("Asha", "KOR"), ("Bilal", "IND"), ("Chitra", "KOR")})
+            stores = (("store", "manager"), {("KOR", "Meena"), ("IND", "Ravi"), ("HSR", "Tara")})
+            columns, rows = natural_join(riders, stores)
+            print(columns, sorted(rows))
+          - |
+            def natural_join(r, s):
+                # Pair every row of r with every row of s that agrees on all the columns they share.
+                rcols, rrows = r
+                scols, srows = s
+                shared = [c for c in rcols if c in scols]
+                extra = [c for c in scols if c not in rcols]
+                rows = set()
+                for a in rrows:
+                    for b in srows:
+                        if not shared or a[rcols.index(shared[0])] == b[scols.index(shared[0])]:
+                            rows.add(a + tuple(b[scols.index(c)] for c in extra))
+                return (rcols + tuple(extra), rows)
+
+
+            riders = (("rider", "store"), {("Asha", "KOR"), ("Bilal", "IND"), ("Chitra", "KOR")})
+            stores = (("store", "manager"), {("KOR", "Meena"), ("IND", "Ravi"), ("HSR", "Tara")})
+            columns, rows = natural_join(riders, stores)
+            print(columns, sorted(rows))
+        explanation: |
+          The join is the product filtered by agreement on every shared column, with each shared column kept once. Keeping every pair is the product; joining the two rows whole repeats the shared columns; and checking only the first shared column accepts pairs that disagree on another.
+    - question:
+        id: write-rota-query
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          The tables `mon`, `tue` and `on_leave` each have one column, `rider`. Change `query` so that it returns, in order of name, every rider on Monday's or Tuesday's list who is not on leave, each once.
+        starter: |
+          import sqlite3
+
+          query = """
+              select rider from mon
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table mon (rider text primary key);
+              create table tue (rider text primary key);
+              create table on_leave (rider text primary key);
+              insert into mon values ('Asha'), ('Bilal'), ('Chitra');
+              insert into tue values ('Bilal'), ('Dev'), ('Esha');
+              insert into on_leave values ('Chitra'), ('Esha'), ('Farhan');
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select rider from mon
+              union
+              select rider from tue
+              except
+              select rider from on_leave
+              order by rider
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table mon (rider text primary key);
+              create table tue (rider text primary key);
+              create table on_leave (rider text primary key);
+              insert into mon values ('Asha'), ('Bilal'), ('Chitra');
+              insert into tue values ('Bilal'), ('Dev'), ('Esha');
+              insert into on_leave values ('Chitra'), ('Esha'), ('Farhan');
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(73)
+          _people = ["Asha", "Bilal", "Chitra", "Dev", "Esha", "Farhan", "Gita", "Harish"]
+          for _ in range(30):
+              _db = sqlite3.connect(":memory:")
+              _db.executescript("create table mon (rider text primary key); create table tue (rider text primary key); create table on_leave (rider text primary key);")
+              _sets = {}
+              for _t in ["mon", "tue", "on_leave"]:
+                  _sets[_t] = set(_rng.sample(_people, _rng.randint(0, 5)))
+                  _db.executemany("insert into " + _t + " values (?)", [(_p,) for _p in _sets[_t]])
+              _want = sorted((_sets["mon"] | _sets["tue"]) - _sets["on_leave"])
+              _got = sorted(_r[0] for _r in _db.execute(query).fetchall())
+              assert _got == _want, "With Monday " + str(sorted(_sets["mon"])) + ", Tuesday " + str(sorted(_sets["tue"])) + " and on leave " + str(sorted(_sets["on_leave"])) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('Asha',), ('Bilal',), ('Dev',)]", "The program should print [('Asha',), ('Bilal',), ('Dev',)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select rider from mon
+                intersect
+                select rider from tue
+                except
+                select rider from on_leave
+                order by rider
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table mon (rider text primary key);
+                create table tue (rider text primary key);
+                create table on_leave (rider text primary key);
+                insert into mon values ('Asha'), ('Bilal'), ('Chitra');
+                insert into tue values ('Bilal'), ('Dev'), ('Esha');
+                insert into on_leave values ('Chitra'), ('Esha'), ('Farhan');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select rider from mon
+                except
+                select rider from on_leave
+                union
+                select rider from tue
+                order by rider
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table mon (rider text primary key);
+                create table tue (rider text primary key);
+                create table on_leave (rider text primary key);
+                insert into mon values ('Asha'), ('Bilal'), ('Chitra');
+                insert into tue values ('Bilal'), ('Dev'), ('Esha');
+                insert into on_leave values ('Chitra'), ('Esha'), ('Farhan');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select rider from mon
+                union
+                select rider from tue
+                order by rider
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table mon (rider text primary key);
+                create table tue (rider text primary key);
+                create table on_leave (rider text primary key);
+                insert into mon values ('Asha'), ('Bilal'), ('Chitra');
+                insert into tue values ('Bilal'), ('Dev'), ('Esha');
+                insert into on_leave values ('Chitra'), ('Esha'), ('Farhan');
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          In algebra this is $(\text{mon} \cup \text{tue}) - \text{on\_leave}$, and SQLite applies `union` and then `except` from left to right, so writing them in that order gives exactly it. `intersect` keeps only riders on both lists; taking the leave away from Monday before adding Tuesday lets a Tuesday rider on leave back in; and forgetting the leave list keeps everyone.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          A database pairs each of 1,00,000 orders with each of 500 stores before filtering. How many pairs does it form?
+        answer: "50000000"
+        explanation: |
+          $1{,}00{,}000 \times 500 = 5{,}00{,}00{,}000$, five crore pairs, to keep 200 orders in the end.
+    - question:
+        id: work-self-join
+        type: choice
+        system: s2
+        prompt: |
+          To list every pair of riders who work at the same store from riders(rider, store), what does relational algebra need that a join of two different tables does not?
+        options:
+          - "Rename one copy of riders, so the two copies' columns can be told apart, then join them on store and keep the pairs whose first name comes before the second."
+          - "A union of riders with itself."
+          - "A difference of riders and itself."
+          - "Nothing: the natural join of riders with itself gives the pairs."
+        answer: 0
+        explanation: |
+          The natural join of a table with itself shares every column, so each row matches only itself. Renaming one copy's columns, say to rider2 and store2, lets the join compare store with store2 while keeping both names; requiring rider < rider2 drops a rider paired with themselves and each pair's mirror image.
+  connections:
+    - text: |
+        Five crore pairs, to keep 200. Moving the selection below the join, onto the stores table, leaves one store; pairing it with the orders whose store code matches touches each order once, and an index on the store code would reach the 200 orders directly. The two plans are equivalent expressions of the same question, and the rewriting rules of this lesson are what let a database's optimiser choose the cheap one, as [[q3.from-sql-to-a-plan]] will show from the inside.
+
+        From here the course writes questions in SQL itself. [[q0.selecting-and-filtering]] starts with the commonest pair, selection and projection, written as `select … from … where`, and [[q0.joins]] follows with the many kinds of join.

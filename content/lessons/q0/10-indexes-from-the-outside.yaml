@@ -1,0 +1,545 @@
+concept: q0.indexes-from-the-outside
+minutes: 80
+claim: You can explain what an index is from the outside, a sorted copy of some columns that points to the rows, estimate the work of a lookup with and without one, create single-column, multi-column and expression indexes, read SQLite's query plan to see whether a query scans or searches, write conditions an index can use, order the columns of a composite index, and weigh the cost every index adds to writes.
+recalls: [q0.writes-constraints-and-transactions]
+uses: [q0.selecting-and-filtering, q0.joins, q0.tables-rows-and-keys, s2.balanced-search-trees, s3.binary-search, f1.logarithms, s3.measuring-and-predicting-running-time]
+leads: [q1.entities-and-relationships, q2.b-trees, q3.from-sql-to-a-plan, r2.validating-input]
+starter: |
+  # Scratch space. The same query, before and after an index.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.execute("create table orders (id integer primary key, customer text, amount integer)")
+  db.executemany("insert into orders (customer, amount) values (?, ?)", [("Meera", 250), ("Rohan", 900), ("Meera", 480)])
+  query = "select id from orders where customer = 'Meera'"
+  print(db.execute("explain query plan " + query).fetchall())
+  db.execute("create index orders_by_customer on orders (customer)")
+  print(db.execute("explain query plan " + query).fetchall())
+  print(db.execute(query).fetchall())
+parts:
+  recall:
+    - text: |
+        [[q0.writes-constraints-and-transactions]] promised that a `unique` column never holds a duplicate and that every order points at a real customer. Keeping those promises means checking a value against all the rows already stored, at every write, and answering a query means finding the rows it asks for. With millions of rows, reading them all each time is too slow. This lesson shows the structure every database uses to avoid that, seen from the outside: what it does, how to ask for one and how to tell whether a query uses it. Three quick pulls first.
+  puzzle:
+    - text: |
+        A food delivery app stores 1 crore orders. A support agent types a customer's phone number dozens of times an hour, and each time the database reads every one of the 1,00,00,000 rows to find that customer's orders.
+
+        Suppose the app also kept a list of every (phone number, order id) pair, sorted by phone number, and searched it by halving the range at each step, as [[s3.binary-search]] does.
+
+        **About how many halving steps does it take to narrow 1 crore entries down to one?**
+  intuition:
+    - text: |
+        A thick textbook has an index at the back: a few pages listing topics in alphabetical order, each with the pages where it appears. To find every mention of "osmosis", nobody reads the book from the first page; they open the index near the O's, find the entry and turn to the pages it names. The index is a second, sorted copy of a little of the book's information, and it is useful precisely because the book itself is not in that order. A railway timetable sorted by train number and another sorted by station work the same way, two orders over the same trains.
+
+        A database **index** is that, for a table: a copy of one or more columns, kept sorted, with each entry pointing to its row. A search in it takes about $\log_2 n$ steps, by the reasoning of [[f1.logarithms]], instead of the $n$ steps of reading every row, a **full scan**. The figure looks for Meera's orders both ways.
+    - figure: index-lookup
+      props: { method: scan, step: 0 }
+    - text: |
+        The scan reads all 16 rows, and cannot stop after finding Meera's second order, because the table is in no particular order and a third could be anywhere. The search in the index compares Meera with four entries, $\log_2 16 = 4$, reaches the first Meera, reads the matching entries in sequence, and follows each to its row. With 16 rows the difference is small. With 1 crore it is the difference between 1 crore rows and a couple of dozen entries.
+  derivation:
+    - text: |
+        **Creating an index.** `create index orders_by_customer on orders (customer)` builds the index; from then on the database keeps it up to date at every insert, update and delete, and uses it whenever it judges that it helps. Nothing in the queries changes: an index affects how fast a query runs, never what it returns. `primary key` and `unique` constraints create an index automatically, which is how the database checks them quickly, and `create unique index` builds an index and makes the promise in one statement. A foreign key does **not** index the referring column, and since "the orders of this customer" is among the commonest queries in any application, `orders (customer)` is usually worth creating by hand.
+
+        Real databases keep the sorted entries in a balanced tree, like those of [[s2.balanced-search-trees]], so that inserts stay cheap while the order is kept; the next part of the course opens it up. From the outside, it is enough to know that an index supports two things quickly: finding entries equal to a value, and walking entries in order from any starting point, which handles ranges such as `amount between 500 and 1000` and orderings such as `order by amount`.
+    - question:
+        id: derivation-scale
+        type: numeric
+        system: s2
+        prompt: |
+          A table has 10 lakh rows. A lookup by an indexed column takes about $\log_2$ of the row count in steps. About how many steps is that?
+        answer: "20"
+        tolerance: "1"
+        explanation: |
+          $2^{20} = 10{,}48{,}576$, a little over 10 lakh, so about 20 steps, against 10 lakh rows for a full scan.
+    - text: |
+        **Reading the plan.** SQLite explains how it will run a query when the query is prefixed with `explain query plan`. In Python, `db.execute("explain query plan " + query).fetchall()` returns rows whose last field says what will happen: `SCAN orders` means reading every row, and `SEARCH orders USING INDEX orders_by_customer (customer=?)` means searching the index for the value. `USING COVERING INDEX` means every column the query needs is in the index itself, so the table is not touched at all, and `USE TEMP B-TREE FOR ORDER BY` means the result has to be sorted separately because no index provides that order. Reading the plan, rather than guessing, is how one checks that an index is used; [[q3.from-sql-to-a-plan]] explains how the plan is chosen.
+
+        **Conditions an index can use.** An index on `placed` is sorted by the stored values of `placed`, so it can answer conditions about those stored values: `placed = ?`, `placed >= ? and placed < ?`. It cannot answer `date(placed) = ?` or `substr(placed, 1, 10) = ?`, because the index is not sorted by the result of a function, and the database must compute it for every row. The cure is to rewrite the condition on the column itself, so "orders on 2 November" becomes `placed >= '2026-11-02' and placed < '2026-11-03'`, a half-open range as in [[q0.selecting-and-filtering]]. When a function really is needed, index the function: `create index customers_by_email on customers (lower(email))` serves `where lower(email) = ?`. In SQLite, `like 'abc%'` does not use an ordinary index either, because `like` ignores case.
+    - question:
+        id: derivation-usable
+        type: choice
+        system: s2
+        prompt: |
+          `orders` has an index on `amount`. Which condition can search it?
+        options:
+          - "amount between 500 and 1000"
+          - "amount * 1.18 > 1000"
+          - "round(amount, -2) = 500"
+          - "cast(amount as text) like '5%'"
+        answer: 0
+        explanation: |
+          `between` is a range on the stored values. The others compute something from each amount first, so the database must scan; `amount * 1.18 > 1000` should be rewritten as `amount > 1000 / 1.18`.
+    - text: |
+        **Several columns.** An index on `(store, day)` is sorted by store, and within each store by day, like a phone directory sorted by surname and then first name. It answers `store = ?`, `store = ? and day = ?`, and `store = ? and day >= ?`, all of which begin at the left of the index. It does not answer `day = ?` alone, just as a directory cannot list everyone named Priya without reading every page. So the order of the columns matters: put first the column every query constrains with `=`, then the column used for ranges or ordering. The same index serves `where store = ? order by day` without a separate sort.
+
+        **What an index costs.** Every index is another sorted structure that each write must update, and that takes space on disk. A table with eight indexes does nine writes for every inserted row. An index on a column with few distinct values, such as a status that is "paid" for 95 per cent of rows, rarely helps, because a search that returns most of the table is slower than a scan; an index pays off when a query keeps a small fraction of the rows. Index for the queries the application actually runs, check the plans, and drop indexes that no query uses. The cost model is the one of [[s3.measuring-and-predicting-running-time]]: count the work per query, multiply by how often it runs, and compare with the work added to every write.
+    - question:
+        id: order-lookup
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of answering `select amount from orders where customer = 'Meera'` with an index on `customer` in order.
+        steps:
+          - "Search the sorted index entries for the first entry equal to 'Meera'."
+          - "Read the following entries while they still equal 'Meera'."
+          - "Follow each entry's pointer to its row in the table."
+          - "Read amount from each of those rows and return it."
+        explanation: |
+          The search finds where Meera's entries begin, the entries lie together because they are sorted, and only then does the database visit the rows, one per match. If `amount` were also in the index, the last two steps would disappear: a covering index.
+  formal:
+    - text: |
+        **Index.** A sorted copy of one or more columns, or expressions, of a table, each entry pointing to its row. It changes how fast queries run, never what they return.
+
+        **Creating.** `create index name on t (c1, c2, …)`, `create unique index …`, `create index name on t (expr)`; `drop index name`. `primary key` and `unique` constraints create one automatically; foreign keys do not.
+
+        **Cost.** A search takes about $\log_2 n$ steps plus one read per matching row; a full scan reads all $n$ rows. Every index adds work to each insert, update and delete, and takes space.
+
+        **Usable conditions.** Equality and ranges on the indexed columns, as stored; for a composite index, on a leftmost run of its columns, with at most the last one a range. A function of a column needs an index on that expression.
+
+        **Plans in SQLite.** `explain query plan query`: `SCAN t` reads every row; `SEARCH t USING INDEX i (…)` searches the index; `COVERING INDEX` avoids the table; `USE TEMP B-TREE FOR ORDER BY` sorts separately.
+  drill:
+    - text: Seconds each. Ask whether the index's order matches what the query asks for.
+    - question:
+        id: drill-leftmost
+        type: choice
+        system: s1
+        prompt: |
+          A table has an index on `(surname, first_name)`. Which condition can search it?
+        options:
+          - "surname = 'Sharma'"
+          - "first_name = 'Priya'"
+          - "first_name like 'P%'"
+          - "lower(surname) = 'sharma'"
+        answer: 0
+        explanation: The index is sorted by surname first, so only conditions that start from the left can search it.
+    - question:
+        id: drill-function
+        type: choice
+        system: s1
+        prompt: |
+          `email` has an index. What does SQLite do for `where lower(email) = 'asha@example.in'`?
+        options:
+          - "Scans the table, because the index is not sorted by lower(email)."
+          - "Searches the index."
+          - "Refuses the query."
+          - "Builds a new index automatically."
+        answer: 0
+        explanation: The index orders the stored emails, not their lower-case forms. An index on `lower(email)` would serve this query.
+    - question:
+        id: drill-auto
+        type: choice
+        system: s1
+        prompt: |
+          Which of these gets an index automatically?
+        options:
+          - "A column declared unique"
+          - "A column with a foreign key"
+          - "A column with a check constraint"
+          - "Any column used in where"
+        answer: 0
+        explanation: The database needs an index to check uniqueness quickly, so it makes one; the others get none unless created.
+    - question:
+        id: drill-writes
+        type: numeric
+        system: s1
+        prompt: |
+          A table has 4 indexes. How many sorted structures, counting the table itself, must change when a row is inserted?
+        answer: "5"
+        explanation: The table and each of its 4 indexes get the new row or entry.
+    - question:
+        id: drill-steps
+        type: numeric
+        system: s1
+        prompt: |
+          About how many halving steps find a value among 1,024 sorted entries?
+        answer: "10"
+        explanation: "$2^{10} = 1{,}024$."
+    - question:
+        id: predict-scan
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.execute("create table t (x integer, y integer)")
+          print(db.execute("explain query plan select y from t where x = 5").fetchall()[0][3].split()[0])
+        output: "SCAN"
+        explanation: Without an index on `x`, the only way is to read every row.
+    - question:
+        id: predict-search
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.execute("create table t (x integer, y integer)")
+          db.execute("create index t_by_x on t (x)")
+          print(db.execute("explain query plan select y from t where x = 5").fetchall()[0][3].split()[0])
+        output: "SEARCH"
+        explanation: With an index on `x`, an equality on `x` is a search.
+  work:
+    - text: Slower now. Check every answer against the plan, not against a guess.
+    - question:
+        id: fix-composite
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          Two reports run all day: a store's orders, and a store's orders on one day. Both should search an index that covers their conditions. The program should print `['SEARCH', 'SEARCH']`. It prints `['SCAN', 'SEARCH']`. Find the fault and fix it.
+        starter: |
+          import sqlite3
+
+          index = "create index orders_by_day_store on orders (day, store)"
+
+          db = sqlite3.connect(":memory:")
+          db.execute("create table orders (id integer primary key, store text, day text, amount integer)")
+          db.execute(index)
+          db.executemany("insert into orders (store, day, amount) values (?, ?, ?)", [
+              ("KOR", "2026-11-01", 250), ("IND", "2026-11-01", 900), ("KOR", "2026-11-02", 480),
+              ("HSR", "2026-11-02", 150), ("KOR", "2026-11-02", 1200), ("IND", "2026-11-03", 300),
+          ])
+          reports = [
+              ("select id from orders where store = ?", ("KOR",)),
+              ("select id from orders where store = ? and day = ?", ("KOR", "2026-11-02")),
+          ]
+          print([db.execute("explain query plan " + sql, params).fetchall()[0][3].split()[0] for sql, params in reports])
+        solution: |
+          import sqlite3
+
+          index = "create index orders_by_store_day on orders (store, day)"
+
+          db = sqlite3.connect(":memory:")
+          db.execute("create table orders (id integer primary key, store text, day text, amount integer)")
+          db.execute(index)
+          db.executemany("insert into orders (store, day, amount) values (?, ?, ?)", [
+              ("KOR", "2026-11-01", 250), ("IND", "2026-11-01", 900), ("KOR", "2026-11-02", 480),
+              ("HSR", "2026-11-02", 150), ("KOR", "2026-11-02", 1200), ("IND", "2026-11-03", 300),
+          ])
+          reports = [
+              ("select id from orders where store = ?", ("KOR",)),
+              ("select id from orders where store = ? and day = ?", ("KOR", "2026-11-02")),
+          ]
+          print([db.execute("explain query plan " + sql, params).fetchall()[0][3].split()[0] for sql, params in reports])
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(13)
+          for _ in range(10):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table orders (id integer primary key, store text, day text, amount integer)")
+              _db.execute(index)
+              _rows = [(_rng.choice(["KOR", "IND", "HSR"]), "2026-11-0" + str(_rng.randint(1, 5)), _rng.randint(1, 30) * 50) for _k in range(_rng.randint(1, 30))]
+              _db.executemany("insert into orders (store, day, amount) values (?, ?, ?)", _rows)
+              _s = _rng.choice(["KOR", "IND", "HSR"])
+              _d = "2026-11-0" + str(_rng.randint(1, 5))
+              _p1 = " ".join(_r[3] for _r in _db.execute("explain query plan select id from orders where store = ?", (_s,)).fetchall())
+              _p2 = " ".join(_r[3] for _r in _db.execute("explain query plan select id from orders where store = ? and day = ?", (_s, _d)).fetchall())
+              assert _p1.startswith("SEARCH"), "The orders of one store should be found by searching an index, but the plan is: " + _p1
+              assert _p2.startswith("SEARCH") and "store=?" in _p2 and "day=?" in _p2, "The orders of one store on one day should be found by searching an index on both columns, but the plan is: " + _p2
+              _want = sorted(_i + 1 for _i in range(len(_rows)) if _rows[_i][0] == _s and _rows[_i][1] == _d)
+              _got = sorted(_r[0] for _r in _db.execute("select id from orders where store = ? and day = ?", (_s, _d)).fetchall())
+              assert _got == _want, "The index must not change the answer: expected " + str(_want) + ", got " + str(_got)
+          assert output.strip() == "['SEARCH', 'SEARCH']", "The program should print ['SEARCH', 'SEARCH']"
+        wrong:
+          - |
+            import sqlite3
+
+            index = "create index orders_by_day on orders (day)"
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table orders (id integer primary key, store text, day text, amount integer)")
+            db.execute(index)
+            db.executemany("insert into orders (store, day, amount) values (?, ?, ?)", [
+                ("KOR", "2026-11-01", 250), ("IND", "2026-11-01", 900), ("KOR", "2026-11-02", 480),
+                ("HSR", "2026-11-02", 150), ("KOR", "2026-11-02", 1200), ("IND", "2026-11-03", 300),
+            ])
+            reports = [
+                ("select id from orders where store = ?", ("KOR",)),
+                ("select id from orders where store = ? and day = ?", ("KOR", "2026-11-02")),
+            ]
+            print([db.execute("explain query plan " + sql, params).fetchall()[0][3].split()[0] for sql, params in reports])
+          - |
+            import sqlite3
+
+            index = "create index orders_by_store on orders (store)"
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table orders (id integer primary key, store text, day text, amount integer)")
+            db.execute(index)
+            db.executemany("insert into orders (store, day, amount) values (?, ?, ?)", [
+                ("KOR", "2026-11-01", 250), ("IND", "2026-11-01", 900), ("KOR", "2026-11-02", 480),
+                ("HSR", "2026-11-02", 150), ("KOR", "2026-11-02", 1200), ("IND", "2026-11-03", 300),
+            ])
+            reports = [
+                ("select id from orders where store = ?", ("KOR",)),
+                ("select id from orders where store = ? and day = ?", ("KOR", "2026-11-02")),
+            ]
+            print([db.execute("explain query plan " + sql, params).fetchall()[0][3].split()[0] for sql, params in reports])
+          - |
+            import sqlite3
+
+            index = "create index orders_by_store_amount on orders (store, amount)"
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table orders (id integer primary key, store text, day text, amount integer)")
+            db.execute(index)
+            db.executemany("insert into orders (store, day, amount) values (?, ?, ?)", [
+                ("KOR", "2026-11-01", 250), ("IND", "2026-11-01", 900), ("KOR", "2026-11-02", 480),
+                ("HSR", "2026-11-02", 150), ("KOR", "2026-11-02", 1200), ("IND", "2026-11-03", 300),
+            ])
+            reports = [
+                ("select id from orders where store = ?", ("KOR",)),
+                ("select id from orders where store = ? and day = ?", ("KOR", "2026-11-02")),
+            ]
+            print([db.execute("explain query plan " + sql, params).fetchall()[0][3].split()[0] for sql, params in reports])
+        explanation: |
+          An index on `(day, store)` is sorted by day first, so "a store's orders" has no leftmost column to search on. Putting `store` first serves both reports. An index on `day` alone does not help the first report; one on `store` alone, or on `(store, amount)`, searches by store but then checks the day row by row.
+    - question:
+        id: write-email-index
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Emails are stored as customers typed them, in any mix of capitals, and the same email can appear on more than one customer. Change `index` so that `query`, which compares emails ignoring case, searches an index instead of scanning.
+        starter: |
+          import sqlite3
+
+          index = "create index customers_by_email on customers (email)"
+
+          query = "select id from customers where lower(email) = lower(?)"
+
+          db = sqlite3.connect(":memory:")
+          db.execute("create table customers (id integer primary key, name text, email text)")
+          db.execute(index)
+          db.executemany("insert into customers (name, email) values (?, ?)", [
+              ("Asha", "Asha.Rao@example.in"), ("Bilal", "bilal@example.in"),
+              ("Chitra", "CHITRA@example.in"), ("Dev", "dev.k@example.in"),
+          ])
+          plan = db.execute("explain query plan " + query, ("chitra@EXAMPLE.in",)).fetchall()
+          print(plan[0][3].split()[0], db.execute(query, ("chitra@EXAMPLE.in",)).fetchall())
+        solution: |
+          import sqlite3
+
+          index = "create index customers_by_email on customers (lower(email))"
+
+          query = "select id from customers where lower(email) = lower(?)"
+
+          db = sqlite3.connect(":memory:")
+          db.execute("create table customers (id integer primary key, name text, email text)")
+          db.execute(index)
+          db.executemany("insert into customers (name, email) values (?, ?)", [
+              ("Asha", "Asha.Rao@example.in"), ("Bilal", "bilal@example.in"),
+              ("Chitra", "CHITRA@example.in"), ("Dev", "dev.k@example.in"),
+          ])
+          plan = db.execute("explain query plan " + query, ("chitra@EXAMPLE.in",)).fetchall()
+          print(plan[0][3].split()[0], db.execute(query, ("chitra@EXAMPLE.in",)).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(41)
+          _users = ["asha", "bilal", "chitra", "dev", "esha", "farhan"]
+          for _ in range(10):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table customers (id integer primary key, name text, email text)")
+              _db.execute(index)
+              _emails = []
+              for _k in range(_rng.randint(1, 12)):
+                  _e = _rng.choice(_users) + "@example.in"
+                  _emails.append("".join(_c.upper() if _rng.random() < 0.3 else _c for _c in _e))
+              _db.executemany("insert into customers (name, email) values (?, ?)", [("x", _e) for _e in _emails])
+              _ask = "".join(_c.upper() if _rng.random() < 0.5 else _c for _c in _rng.choice(_users) + "@example.in")
+              _plan = " ".join(_r[3] for _r in _db.execute("explain query plan " + query, (_ask,)).fetchall())
+              assert _plan.startswith("SEARCH"), "Looking up an email should search an index, but the plan is: " + _plan
+              _want = sorted(_i + 1 for _i in range(len(_emails)) if _emails[_i].lower() == _ask.lower())
+              _got = sorted(_r[0] for _r in _db.execute(query, (_ask,)).fetchall())
+              assert _got == _want, "Looking up " + _ask + " among " + str(_emails) + " should find ids " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "SEARCH [(3,)]", "The program should print SEARCH [(3,)]"
+        wrong:
+          - |
+            import sqlite3
+
+            index = "create index customers_by_email on customers (upper(email))"
+
+            query = "select id from customers where lower(email) = lower(?)"
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table customers (id integer primary key, name text, email text)")
+            db.execute(index)
+            db.executemany("insert into customers (name, email) values (?, ?)", [
+                ("Asha", "Asha.Rao@example.in"), ("Bilal", "bilal@example.in"),
+                ("Chitra", "CHITRA@example.in"), ("Dev", "dev.k@example.in"),
+            ])
+            plan = db.execute("explain query plan " + query, ("chitra@EXAMPLE.in",)).fetchall()
+            print(plan[0][3].split()[0], db.execute(query, ("chitra@EXAMPLE.in",)).fetchall())
+          - |
+            import sqlite3
+
+            index = "create unique index customers_by_email on customers (lower(email))"
+
+            query = "select id from customers where lower(email) = lower(?)"
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table customers (id integer primary key, name text, email text)")
+            db.execute(index)
+            db.executemany("insert into customers (name, email) values (?, ?)", [
+                ("Asha", "Asha.Rao@example.in"), ("Bilal", "bilal@example.in"),
+                ("Chitra", "CHITRA@example.in"), ("Dev", "dev.k@example.in"),
+            ])
+            plan = db.execute("explain query plan " + query, ("chitra@EXAMPLE.in",)).fetchall()
+            print(plan[0][3].split()[0], db.execute(query, ("chitra@EXAMPLE.in",)).fetchall())
+          - |
+            import sqlite3
+
+            index = "create index customers_by_email on customers (email collate nocase)"
+
+            query = "select id from customers where lower(email) = lower(?)"
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table customers (id integer primary key, name text, email text)")
+            db.execute(index)
+            db.executemany("insert into customers (name, email) values (?, ?)", [
+                ("Asha", "Asha.Rao@example.in"), ("Bilal", "bilal@example.in"),
+                ("Chitra", "CHITRA@example.in"), ("Dev", "dev.k@example.in"),
+            ])
+            plan = db.execute("explain query plan " + query, ("chitra@EXAMPLE.in",)).fetchall()
+            print(plan[0][3].split()[0], db.execute(query, ("chitra@EXAMPLE.in",)).fetchall())
+        explanation: |
+          The query asks about `lower(email)`, so the index must be on exactly that expression. An index on `upper(email)` sorts by a different expression; a unique index refuses the customers who share an email; and `collate nocase` changes how the index compares, but the query compares `lower(email)`, which it still cannot match.
+    - question:
+        id: write-day-query
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          `placed` is text such as '2026-11-02 13:30' and has an index. Change `query` so that it returns the ids of the orders placed on the day `:day`, in order of id, by searching the index. `:next` is the following day.
+        starter: |
+          import sqlite3
+
+          query = "select id from orders where date(placed) = :day order by id"
+
+          db = sqlite3.connect(":memory:")
+          db.execute("create table orders (id integer primary key, placed text, amount integer)")
+          db.execute("create index orders_by_placed on orders (placed)")
+          db.executemany("insert into orders (placed, amount) values (?, ?)", [
+              ("2026-11-01 21:40", 250), ("2026-11-02 00:05", 900), ("2026-11-02 13:30", 480),
+              ("2026-11-02 23:59", 150), ("2026-11-03 00:00", 1200), ("2026-11-03 09:15", 300),
+          ])
+          day = {"day": "2026-11-02", "next": "2026-11-03"}
+          plan = db.execute("explain query plan " + query, day).fetchall()
+          print(plan[0][3].split()[0], db.execute(query, day).fetchall())
+        solution: |
+          import sqlite3
+
+          query = "select id from orders where placed >= :day and placed < :next order by id"
+
+          db = sqlite3.connect(":memory:")
+          db.execute("create table orders (id integer primary key, placed text, amount integer)")
+          db.execute("create index orders_by_placed on orders (placed)")
+          db.executemany("insert into orders (placed, amount) values (?, ?)", [
+              ("2026-11-01 21:40", 250), ("2026-11-02 00:05", 900), ("2026-11-02 13:30", 480),
+              ("2026-11-02 23:59", 150), ("2026-11-03 00:00", 1200), ("2026-11-03 09:15", 300),
+          ])
+          day = {"day": "2026-11-02", "next": "2026-11-03"}
+          plan = db.execute("explain query plan " + query, day).fetchall()
+          print(plan[0][3].split()[0], db.execute(query, day).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(31)
+          for _ in range(10):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table orders (id integer primary key, placed text, amount integer)")
+              _db.execute("create index orders_by_placed on orders (placed)")
+              _rows = []
+              for _k in range(_rng.randint(1, 25)):
+                  _d = _rng.randint(1, 4)
+                  _m = _rng.choice([0, 1, _rng.randint(0, 1439), 1439])
+                  _rows.append(("2026-11-0%d %02d:%02d" % (_d, _m // 60, _m % 60), 100))
+              _db.executemany("insert into orders (placed, amount) values (?, ?)", _rows)
+              _n = _rng.randint(1, 3)
+              _ask = {"day": "2026-11-0" + str(_n), "next": "2026-11-0" + str(_n + 1)}
+              _plan = " ".join(_r[3] for _r in _db.execute("explain query plan " + query, _ask).fetchall())
+              assert _plan.startswith("SEARCH"), "The query should search the index on placed, but the plan is: " + _plan
+              _want = [(_i + 1,) for _i in range(len(_rows)) if _rows[_i][0][:10] == _ask["day"]]
+              _got = _db.execute(query, _ask).fetchall()
+              assert _got == _want, "For orders placed at " + str([_r[0] for _r in _rows]) + ", the orders of " + _ask["day"] + " are " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "SEARCH [(2,), (3,), (4,)]", "The program should print SEARCH [(2,), (3,), (4,)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = "select id from orders where placed like :day || '%' order by id"
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table orders (id integer primary key, placed text, amount integer)")
+            db.execute("create index orders_by_placed on orders (placed)")
+            db.executemany("insert into orders (placed, amount) values (?, ?)", [
+                ("2026-11-01 21:40", 250), ("2026-11-02 00:05", 900), ("2026-11-02 13:30", 480),
+                ("2026-11-02 23:59", 150), ("2026-11-03 00:00", 1200), ("2026-11-03 09:15", 300),
+            ])
+            day = {"day": "2026-11-02", "next": "2026-11-03"}
+            plan = db.execute("explain query plan " + query, day).fetchall()
+            print(plan[0][3].split()[0], db.execute(query, day).fetchall())
+          - |
+            import sqlite3
+
+            query = "select id from orders where placed >= :day order by id"
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table orders (id integer primary key, placed text, amount integer)")
+            db.execute("create index orders_by_placed on orders (placed)")
+            db.executemany("insert into orders (placed, amount) values (?, ?)", [
+                ("2026-11-01 21:40", 250), ("2026-11-02 00:05", 900), ("2026-11-02 13:30", 480),
+                ("2026-11-02 23:59", 150), ("2026-11-03 00:00", 1200), ("2026-11-03 09:15", 300),
+            ])
+            day = {"day": "2026-11-02", "next": "2026-11-03"}
+            plan = db.execute("explain query plan " + query, day).fetchall()
+            print(plan[0][3].split()[0], db.execute(query, day).fetchall())
+          - |
+            import sqlite3
+
+            query = "select id from orders where substr(placed, 1, 10) = :day order by id"
+
+            db = sqlite3.connect(":memory:")
+            db.execute("create table orders (id integer primary key, placed text, amount integer)")
+            db.execute("create index orders_by_placed on orders (placed)")
+            db.executemany("insert into orders (placed, amount) values (?, ?)", [
+                ("2026-11-01 21:40", 250), ("2026-11-02 00:05", 900), ("2026-11-02 13:30", 480),
+                ("2026-11-02 23:59", 150), ("2026-11-03 00:00", 1200), ("2026-11-03 09:15", 300),
+            ])
+            day = {"day": "2026-11-02", "next": "2026-11-03"}
+            plan = db.execute("explain query plan " + query, day).fetchall()
+            print(plan[0][3].split()[0], db.execute(query, day).fetchall())
+        explanation: |
+          `placed >= :day and placed < :next` is a range on the stored values, which the index can search, and it keeps 23:59 on the day and midnight of the next day out. `like` ignores case in SQLite and so cannot use the index; `placed >= :day` alone also takes every later day; and `substr` computes a value for every row, like `date`.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          About how many halving steps narrow the puzzle's 1 crore sorted entries down to one?
+        answer: "24"
+        tolerance: "1"
+        explanation: |
+          $2^{23} = 83{,}88{,}608$ is less than 1 crore and $2^{24} = 1{,}67{,}77{,}216$ is more, so 24 halvings suffice: $\log_2 10^7 \approx 23.3$.
+    - question:
+        id: work-indexes
+        type: choice
+        system: s2
+        prompt: |
+          A table receives 5,000 inserts a second and is queried a few times a day, always by `device` and `time`. A colleague proposes an index on each of its 8 columns. What is the better plan?
+        options:
+          - "One index on (device, time), because every index slows each of the 5,000 inserts a second."
+          - "All 8 indexes, because indexes only make queries faster."
+          - "No index, because queries are rare."
+          - "An index on time only, because time always increases."
+        answer: 0
+        explanation: |
+          Each index adds work to every insert, so 8 indexes multiply the write cost for queries that need only one. A single composite index serves the actual query; no index at all would make each of those few queries scan the whole, fast-growing table.
+  connections:
+    - text: |
+        About 24. Since $2^{24}$ is about 1.7 crore, two dozen halvings narrow 1 crore sorted entries to one, against 1 crore rows for a scan. That ratio is why every serious database is built around indexes, and why a missing index is the commonest reason a query that was fast on test data becomes slow in production.
+
+        This cluster has treated the database as a black box that keeps tables, answers queries and keeps promises. The next question is what the tables should be in the first place: which things an application talks about, how they relate, and how to turn that into tables whose keys and constraints say the right things, which is where [[q1.entities-and-relationships]] begins. The index itself, a B-tree kept balanced on disk, is opened up in [[q2.b-trees]], and the planner that chooses between scanning and searching in [[q3.from-sql-to-a-plan]]. Input checked at the edge of an application, before it reaches any of this, is [[r2.validating-input]].

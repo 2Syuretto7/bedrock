@@ -551,3 +551,98 @@ test("2-opt shortens the nearest-neighbour tour one reversal at a time", async (
   await expect(figure).toContainText("After 3 improvements: A, I, D, H, E, F, C, B, G, and back to A, 213.9 km.");
   await expect(figure).toContainText("No single reversal shortens it further. Checking all 20,160 possible tours confirms that, here, it is also the shortest of them all.");
 });
+
+test("a set of columns is a key only when no two rows agree on all of them", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="table-keys"]').first().getByRole("figure");
+  await expect(figure).toContainText("Columns chosen: rider, day. Rows 1 and 2 agree on all of them (Asha, Mon), so these columns do not single out every row: not a key.");
+  await figure.getByRole("button", { name: "slot", exact: true }).click();
+  await expect(figure).toContainText("Columns chosen: rider, day, slot. No two of the 8 rows agree on all of them, so they single out every row: a superkey. Dropping any one column breaks this, so no smaller set works: a candidate key.");
+});
+
+test("each operation of the relational algebra builds a new table", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="algebra-ops"]').first().getByRole("figure");
+  await expect(figure).toContainText("σ store = 'KOR' (Riders): keep the rows of Riders whose store is KOR. 2 of the 3 rows pass: Asha KOR, Chitra KOR.");
+  await figure.getByRole("button", { name: "⋈ join", exact: true }).click();
+  await expect(figure).toContainText("3 rows: Asha KOR Meena, Bilal IND Ravi, Chitra KOR Meena. HSR has no rider, so it does not appear.");
+  await figure.getByRole("button", { name: "− difference", exact: true }).click();
+  await expect(figure).toContainText("Mon − Tue: the riders on Monday's list but not on Tuesday's: Asha.");
+});
+
+test("a query is evaluated from its table to its limit", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="query-order"]').first().getByRole("figure");
+  await expect(figure).toContainText("Step 1 of 5. FROM orders: start with every row of the table, 7 rows.");
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Step 5 of 5. LIMIT 2: keep the first 2 rows of the sorted result. The table now holds 2 rows: Asha 1,200; Chitra 650.");
+});
+
+test("an outer join keeps unmatched rows and pads them with NULL", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="join-match"]').first().getByRole("figure");
+  await expect(figure).toContainText("3 rows, 3 of them matched pairs: Asha 101 250; Asha 102 480; Chitra 103 900.");
+  await figure.getByRole("button", { name: "full join", exact: true }).click();
+  await expect(figure).toContainText("6 rows, 3 of them matched pairs: Asha 101 250; Asha 102 480; Chitra 103 900; Bilal NULL NULL; Dev NULL NULL; NULL 104 120.");
+});
+
+test("grouping folds each store's rows into one, and having filters the groups", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="group-buckets"]').first().getByRole("figure");
+  await expect(figure).toContainText("Each group becomes one row: HSR 560, IND 1,920, KOR 2,580. Every group has at least 1 row, so having keeps them all.");
+  await figure.getByRole("button", { name: "avg(amount)", exact: true }).click();
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase having count(*) at least" }).click();
+  await expect(figure).toContainText("Each group becomes one row: HSR 280, IND 640, KOR 645. Having drops HSR, with fewer than 3 rows. Result: IND 640; KOR 645.");
+});
+
+test("a correlated subquery is evaluated again for every outer row", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="subquery-steps"]').first().getByRole("figure");
+  await expect(figure).toContainText("The subquery mentions o.store, a column of the outer row, so it is re-evaluated for each of the 9 orders.");
+  for (let i = 0; i < 8; i++) await figure.getByRole("button", { name: "Increase outer row" }).click();
+  await expect(figure).toContainText("Outer row 8 of 9: order 8, ₹410 at HSR. The subquery runs again with o.store = 'HSR' and returns that store's average, ₹280. ₹410 is above it, so the order is kept. Kept so far: 2, 5, 7, 8.");
+});
+
+test("a window gives every row a value computed from the rows around it", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="window-frame"]').first().getByRole("figure");
+  await expect(figure).toContainText("Current row 3: KOR, day 3, ₹1,500. Its frame is KOR days 1 to 3: 1,200 + 900 + 1,500 = 3,600.");
+  await figure.getByRole("button", { name: "3-day average", exact: true }).click();
+  await figure.getByRole("button", { name: "Increase current row" }).click();
+  await expect(figure).toContainText("Current row 4: KOR, day 4, ₹800. Its frame is KOR days 2 to 4: (900 + 1,500 + 800) ÷ 3 = 1,066.67.");
+  await figure.getByRole("button", { name: "rank", exact: true }).click();
+  await expect(figure).toContainText("KOR amounts above ₹800: 1,200, 900, 1,500, 2,100, so its rank is 1 + 4 = 5.");
+});
+
+test("unknown is filled in both ways, and the result is known only when both agree", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="three-valued"]').first().getByRole("figure");
+  await expect(figure).toContainText("Selected: unknown and false. Filling in the unknown: true and false = false; false and false = false. Every filling gives false, so the result is false.");
+  await figure.getByRole("button", { name: "or", exact: true }).click();
+  await expect(figure).toContainText("Selected: unknown or false. Filling in the unknown: true or false = true; false or false = false. The fillings disagree, so the result is unknown.");
+  await figure.getByRole("button", { name: "not", exact: true }).click();
+  await expect(figure).toContainText("Selected: not false. Nothing is unknown: ordinary logic gives true.");
+});
+
+test("a power cut loses money without a transaction and nothing inside one", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="transfer-crash"]').first().getByRole("figure");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("on disk, Asha ₹500 and Bilal ₹200, ₹700 in all. The debit was saved and the credit never ran: ₹500 lost.");
+  await figure.getByRole("button", { name: "inside a transaction", exact: true }).click();
+  await expect(figure).toContainText("Step 2 of 3, after: update wallets set balance = balance - 500 where name = 'Asha'. This connection sees Asha ₹500 and Bilal ₹200; on disk, Asha ₹1,000 and Bilal ₹200, ₹1,200 in all.");
+  await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("on disk, Asha ₹1,000 and Bilal ₹200, ₹1,200 in all. The unfinished transaction is undone: nothing lost.");
+});
+
+test("an index search takes a few comparisons where a scan reads every row", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="index-lookup"]').first().getByRole("figure");
+  for (let i = 0; i < 16; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Rows read: 16 of 16. Found so far: order 2, order 11. A scan reads all 16 rows: another Meera could be anywhere.");
+  await figure.getByRole("button", { name: "index search", exact: true }).click();
+  await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Comparison 1: entry 9 is Nisha, not before Meera, so look here or earlier.");
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("After 4 comparisons, entries 7 and 8 hold Meera: orders 2 and 11. About log₂ 16 = 4 comparisons, then one read per match.");
+});

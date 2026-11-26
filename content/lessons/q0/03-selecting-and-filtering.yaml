@@ -1,0 +1,581 @@
+concept: q0.selecting-and-filtering
+minutes: 80
+claim: You can write SQL queries that select columns and computed values, filter rows with comparisons, AND, OR, NOT, IN, BETWEEN and LIKE without falling into precedence traps, sort with ORDER BY and take the top rows with LIMIT, filter dates stored as text correctly, pass values through placeholders, and explain the order in which a database evaluates a query's clauses.
+recalls: [q0.relational-algebra]
+uses: [q0.tables-rows-and-keys, f2.propositions-and-connectives, s3.sorting, s0.strings]
+leads: [q0.joins, q0.null-and-three-valued-logic, r2.injection]
+starter: |
+  # Scratch space. Filter, sort and limit.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.executescript("""
+      create table orders (id integer primary key, store text, amount integer, status text);
+      insert into orders values (1, 'KOR', 650, 'delivered'), (2, 'KOR', 300, 'cancelled'), (3, 'IND', 720, 'cancelled');
+  """)
+  print(db.execute("select id, amount from orders where amount > ? order by amount desc", (400,)).fetchall())
+parts:
+  recall:
+    - text: |
+        [[q0.relational-algebra]] built questions from selection, projection and the rest. SQL writes the two commonest, choosing rows and choosing columns, as `select … from … where`, and adds sorting and taking the first few rows, which the algebra lacks. This lesson is about writing those queries so they mean what you intend, which turns out to need some care. Three quick pulls first.
+  puzzle:
+    - text: |
+        A store's orders table holds these rows:
+
+        | id | store | amount | status |
+        | --- | --- | --- | --- |
+        | 1 | KOR | 650 | delivered |
+        | 2 | KOR | 300 | cancelled |
+        | 3 | IND | 720 | cancelled |
+        | 4 | HSR | 150 | delivered |
+        | 5 | KOR | 520 | cancelled |
+        | 6 | IND | 480 | delivered |
+        | 7 | HSR | 900 | cancelled |
+        | 8 | KOR | 200 | delivered |
+
+        An analyst wants the cancelled orders from KOR or HSR, and writes:
+
+        ```sql
+        select id from orders
+        where store = 'KOR' or store = 'HSR' and status = 'cancelled'
+        ```
+
+        **How many rows does the query return?**
+  intuition:
+    - text: |
+        Asking a librarian for "books on cricket published after 2000, newest first, just the first five" is a complete request, and its parts have a natural order: go to the shelves, pick out the cricket books after 2000, note their titles and years, sort them, and hand over five. An SQL query says the same things, but not in that order. It is written `select` first, then `from`, `where`, `order by` and `limit`, while the database works through them roughly as the librarian would, starting with the table.
+
+        The figure evaluates one query clause by clause, in the order a database applies them. Step through it and watch the table change.
+    - figure: query-order
+      props: { step: 1 }
+    - text: |
+        `from` supplies the rows, `where` removes some, `select` shapes what remains, `order by` sorts it, and `limit` cuts it short. Reading a query in this order explains most of its rules. A name invented in `select` cannot be relied on in `where`, which runs before it, and `limit` without `order by` keeps an arbitrary handful, since there was no order to keep the first of.
+  derivation:
+    - text: |
+        **The select list.** After `select` come the columns to keep, or expressions computed from them: `select id, amount * 1.05 as with_tax from orders`. The keyword `as` names a computed column. `select *` keeps every column, convenient while exploring but fragile in programs, since it changes whenever the table does. `select distinct` removes duplicate rows, which is projection proper.
+
+        **Values and types.** Text is written in single quotes, `'KOR'`; double quotes are for names of tables and columns. Arithmetic works as in Python, with one trap: in SQLite, dividing two integers gives an integer, so `7 / 2` is 3, while `7 / 2.0` is 3.5.
+
+        **The where clause.** A condition is built from comparisons, `=`, `<>` (not equal), `<`, `<=`, `>`, `>=`, joined by `and`, `or` and `not`, exactly the connectives of [[f2.propositions-and-connectives]]. Some shorthands help: `amount between 300 and 650` means `amount >= 300 and amount <= 650`, both ends included; `store in ('KOR', 'HSR')` means `store = 'KOR' or store = 'HSR'`.
+    - question:
+        id: derivation-between
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle's table, how many orders satisfy `amount between 300 and 650`?
+        answer: "4"
+        explanation: |
+          Orders 1 (650), 2 (300), 5 (520) and 6 (480). Both ends are included, so 300 and 650 count.
+    - text: |
+        **Precedence.** As in logic, `and` binds more tightly than `or`, so `a or b and c` means `a or (b and c)`. The puzzle's query therefore returns every KOR order, whatever its status, plus the cancelled HSR orders. Brackets make the intended meaning explicit: `(store = 'KOR' or store = 'HSR') and status = 'cancelled'`, or, more simply, `store in ('KOR', 'HSR') and status = 'cancelled'`. A good habit is to bracket any condition that mixes `and` with `or`, even when the default happens to be right.
+
+        **Patterns.** `name like 'Ku%'` matches names starting with Ku: `%` stands for any run of characters, including none, and `_` for exactly one. In SQLite, `like` ignores the difference between capital and small letters, for the English alphabet. Two pieces of text are joined with `||`, so `phone like ? || '%'` matches phones starting with whatever value is passed for the placeholder.
+
+        **Dates as text.** SQLite has no separate date type; dates are usually stored as text in the form `'2026-11-30 21:15'`. That form sorts correctly as text, because the most significant part comes first, just as the numbers did in [[s3.sorting]]. But comparisons are between strings, and `placed between '2026-11-01' and '2026-11-30'` misses an order placed at 9:15 pm on 30 November, since `'2026-11-30 21:15'` sorts after `'2026-11-30'`. The safe form is half-open: `placed >= '2026-11-01' and placed < '2026-12-01'`.
+    - question:
+        id: derivation-dates
+        type: choice
+        system: s2
+        prompt: |
+          Order times are stored as text such as '2026-11-30 21:15'. Which condition selects exactly the orders placed in November 2026?
+        options:
+          - "placed >= '2026-11-01' and placed < '2026-12-01'"
+          - "placed between '2026-11-01' and '2026-11-30'"
+          - "placed like '2026-11'"
+          - "placed > '2026-10-31' and placed < '2026-11-30'"
+        answer: 0
+        explanation: |
+          The half-open range includes every time on 30 November and nothing in December. `between` stops at the string '2026-11-30', before any time later that day; `like` without `%` matches only the exact text '2026-11'; and the last condition misses all of 30 November while letting in a time like '2026-10-31 23:00'.
+    - text: |
+        **Sorting and limiting.** `order by amount desc, id` sorts by amount, largest first, and breaks ties by id, smallest first; `asc` is the default. Without `order by`, rows come back in whatever order the database finds cheapest, which may change when the table grows or an index is added. `limit 3` keeps the first three rows of the result, and `limit 3 offset 6` skips six first, which is how a page of results is fetched. The top three orders are `order by amount desc limit 3`; leaving out the tie-break makes the third place a matter of luck when two amounts are equal.
+
+        Text is sorted by the codes of its characters unless told otherwise, so every capital letter comes before every small one, and 'Zoya' sorts before 'arjun'. Writing `order by name collate nocase` compares names as if all letters were small, which is usually what a list of people needs.
+
+        **Placeholders, again.** Values that come from outside the program, such as a search box, must always be passed as placeholder values, never pasted into the SQL text. A name like `O'Brien` would break a pasted query, and a crafted one could change what it does.
+    - question:
+        id: order-clauses
+        type: order
+        system: s2
+        prompt: |
+          Put the clauses of `select rider, amount from orders where store = 'KOR' order by amount desc limit 2` in the order the database evaluates them.
+        steps:
+          - "from orders"
+          - "where store = 'KOR'"
+          - "select rider, amount"
+          - "order by amount desc"
+          - "limit 2"
+        explanation: |
+          The rows come from the table, are filtered, are reduced to the chosen columns, are sorted, and only then can the first two be taken.
+  formal:
+    - text: |
+        **Query.** `select [distinct] expressions from table where condition order by expressions [asc | desc] limit n offset m`. Evaluated as from, where, select, order by, limit.
+
+        **Conditions.** Comparisons `= <> < <= > >=`; connectives `not`, `and`, `or`, in decreasing order of precedence; `x between a and b` is $a \le x \le b$; `x in (…)` is a disjunction of equalities; `like` with `%` for any run of characters and `_` for one, ignoring case for English letters in SQLite; `||` joins text.
+
+        **Dates.** Stored as ISO text, they sort correctly; select a period with a half-open range, `>=` its start and `<` the next period's start.
+
+        **SQLite arithmetic.** Integer divided by integer gives an integer.
+  drill:
+    - text: Seconds each. Read conditions the way the database does.
+    - question:
+        id: drill-precedence
+        type: choice
+        system: s1
+        prompt: |
+          How does SQL read `a or b and c`?
+        options:
+          - "a or (b and c)"
+          - "(a or b) and c"
+          - "It is an error without brackets."
+          - "(a and c) or (b and c)"
+        answer: 0
+        explanation: "`and` binds more tightly than `or`, as in logic."
+    - question:
+        id: drill-offset
+        type: numeric
+        system: s1
+        prompt: |
+          A query sorts 10 rows and ends with `limit 3 offset 9`. How many rows does it return?
+        answer: "1"
+        explanation: Skipping 9 rows leaves only the 10th.
+    - question:
+        id: drill-between
+        type: choice
+        system: s1
+        prompt: |
+          Does `amount between 100 and 200` include an amount of 200?
+        options:
+          - "Yes, both ends are included."
+          - "No, the upper end is excluded."
+          - "Only if the amount is an integer."
+          - "No, neither end is included."
+        answer: 0
+        explanation: "`between a and b` means `>= a and <= b`."
+    - question:
+        id: drill-quotes
+        type: choice
+        system: s1
+        prompt: |
+          Which is a piece of text in SQL?
+        options:
+          - "'KOR'"
+          - "\"KOR\""
+          - "KOR"
+          - "`KOR`"
+        answer: 0
+        explanation: Single quotes mark text; double quotes and backticks mark the names of tables and columns, and a bare word is a name too.
+    - question:
+        id: drill-pattern
+        type: choice
+        system: s1
+        prompt: |
+          Which names does `name like '_a%'` match?
+        options:
+          - "Names whose second letter is a."
+          - "Names starting with a."
+          - "Names containing a."
+          - "Names of exactly two letters ending in a."
+        answer: 0
+        explanation: "`_` is exactly one character, then `a`, then `%`, anything."
+    - question:
+        id: predict-divide
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          print(db.execute("select 7 / 2, 7 / 2.0").fetchone())
+        output: "(3, 3.5)"
+        explanation: In SQLite, an integer divided by an integer is an integer; one decimal makes the result a decimal.
+    - question:
+        id: predict-like
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          print(db.execute("select 'Kumar' like 'kumar', 'Kumar' = 'kumar'").fetchone())
+        output: "(1, 0)"
+        explanation: "`like` ignores case for English letters, while `=` compares text exactly. SQLite writes true as 1 and false as 0."
+  work:
+    - text: Slower now. Make each query say exactly what is asked, for any rows the table might hold.
+    - question:
+        id: fix-precedence
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The query should list, in order of id, the cancelled orders from KOR or HSR. The program should print `[2, 5, 7]`. It prints `[1, 2, 5, 7, 8]`. Find the fault and fix it.
+        starter: |
+          import sqlite3
+
+          query = """
+              select id from orders
+              where store = 'KOR' or store = 'HSR' and status = 'cancelled'
+              order by id
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text, amount integer, status text);
+              insert into orders values
+                  (1, 'KOR', 650, 'delivered'), (2, 'KOR', 300, 'cancelled'), (3, 'IND', 720, 'cancelled'),
+                  (4, 'HSR', 150, 'delivered'), (5, 'KOR', 520, 'cancelled'), (6, 'IND', 480, 'delivered'),
+                  (7, 'HSR', 900, 'cancelled'), (8, 'KOR', 200, 'delivered');
+          """)
+          print([row[0] for row in db.execute(query)])
+        solution: |
+          import sqlite3
+
+          query = """
+              select id from orders
+              where (store = 'KOR' or store = 'HSR') and status = 'cancelled'
+              order by id
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, store text, amount integer, status text);
+              insert into orders values
+                  (1, 'KOR', 650, 'delivered'), (2, 'KOR', 300, 'cancelled'), (3, 'IND', 720, 'cancelled'),
+                  (4, 'HSR', 150, 'delivered'), (5, 'KOR', 520, 'cancelled'), (6, 'IND', 480, 'delivered'),
+                  (7, 'HSR', 900, 'cancelled'), (8, 'KOR', 200, 'delivered');
+          """)
+          print([row[0] for row in db.execute(query)])
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(79)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table orders (id integer primary key, store text, amount integer, status text)")
+              _rows = [(_i, _rng.choice(["KOR", "IND", "HSR"]), _rng.randint(1, 20) * 50, _rng.choice(["delivered", "cancelled"])) for _i in range(1, _rng.randint(2, 14))]
+              _db.executemany("insert into orders values (?, ?, ?, ?)", _rows)
+              _want = [_r[0] for _r in _rows if _r[1] in ("KOR", "HSR") and _r[3] == "cancelled"]
+              _got = [_r[0] for _r in _db.execute(query)]
+              assert _got == _want, "For the orders " + str(_rows) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[2, 5, 7]", "The program should print [2, 5, 7]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select id from orders
+                where store = 'KOR' or (store = 'HSR' and status = 'cancelled')
+                order by id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer, status text);
+                insert into orders values
+                    (1, 'KOR', 650, 'delivered'), (2, 'KOR', 300, 'cancelled'), (3, 'IND', 720, 'cancelled'),
+                    (4, 'HSR', 150, 'delivered'), (5, 'KOR', 520, 'cancelled'), (6, 'IND', 480, 'delivered'),
+                    (7, 'HSR', 900, 'cancelled'), (8, 'KOR', 200, 'delivered');
+            """)
+            print([row[0] for row in db.execute(query)])
+          - |
+            import sqlite3
+
+            query = """
+                select id from orders
+                where store = 'KOR' and store = 'HSR' and status = 'cancelled'
+                order by id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer, status text);
+                insert into orders values
+                    (1, 'KOR', 650, 'delivered'), (2, 'KOR', 300, 'cancelled'), (3, 'IND', 720, 'cancelled'),
+                    (4, 'HSR', 150, 'delivered'), (5, 'KOR', 520, 'cancelled'), (6, 'IND', 480, 'delivered'),
+                    (7, 'HSR', 900, 'cancelled'), (8, 'KOR', 200, 'delivered');
+            """)
+            print([row[0] for row in db.execute(query)])
+          - |
+            import sqlite3
+
+            query = """
+                select id from orders
+                where (store = 'KOR' or store = 'HSR') or status = 'cancelled'
+                order by id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, store text, amount integer, status text);
+                insert into orders values
+                    (1, 'KOR', 650, 'delivered'), (2, 'KOR', 300, 'cancelled'), (3, 'IND', 720, 'cancelled'),
+                    (4, 'HSR', 150, 'delivered'), (5, 'KOR', 520, 'cancelled'), (6, 'IND', 480, 'delivered'),
+                    (7, 'HSR', 900, 'cancelled'), (8, 'KOR', 200, 'delivered');
+            """)
+            print([row[0] for row in db.execute(query)])
+        explanation: |
+          `and` binds before `or`, so the query kept every KOR order and only the cancelled HSR ones. Brackets around the two stores, or `store in ('KOR', 'HSR')`, apply the status test to both. Bracketing the HSR part only spells out the same mistake; `store = 'KOR' and store = 'HSR'` can never be true; and joining the status with `or` keeps every cancelled order from anywhere.
+    - question:
+        id: write-top-orders
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `query` so that it returns `(id, amount)` for the three largest delivered orders placed in November 2026, largest first, breaking ties by smaller id. Times are stored as text such as '2026-11-30 21:15'.
+        starter: |
+          import sqlite3
+
+          query = """
+              select id, amount from orders
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, amount integer, status text, placed text);
+              insert into orders values
+                  (1, 1200, 'delivered', '2026-10-31 22:10'), (2, 450, 'delivered', '2026-11-01 08:05'),
+                  (3, 980, 'cancelled', '2026-11-12 13:30'), (4, 760, 'delivered', '2026-11-18 19:45'),
+                  (5, 760, 'delivered', '2026-11-20 12:00'), (6, 890, 'delivered', '2026-11-30 21:15'),
+                  (7, 300, 'delivered', '2026-12-01 00:05');
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select id, amount from orders
+              where status = 'delivered' and placed >= '2026-11-01' and placed < '2026-12-01'
+              order by amount desc, id
+              limit 3
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table orders (id integer primary key, amount integer, status text, placed text);
+              insert into orders values
+                  (1, 1200, 'delivered', '2026-10-31 22:10'), (2, 450, 'delivered', '2026-11-01 08:05'),
+                  (3, 980, 'cancelled', '2026-11-12 13:30'), (4, 760, 'delivered', '2026-11-18 19:45'),
+                  (5, 760, 'delivered', '2026-11-20 12:00'), (6, 890, 'delivered', '2026-11-30 21:15'),
+                  (7, 300, 'delivered', '2026-12-01 00:05');
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(83)
+          for _ in range(30):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table orders (id integer primary key, amount integer, status text, placed text)")
+              _rows = []
+              for _i in range(1, _rng.randint(2, 15)):
+                  _month = _rng.choice(["2026-10", "2026-11", "2026-11", "2026-12"])
+                  _day = "30" if _rng.random() < 0.3 else str(_rng.randint(1, 28)).rjust(2, "0")
+                  _when = _month + "-" + _day + " " + str(_rng.randint(0, 23)).rjust(2, "0") + ":" + str(_rng.randint(0, 59)).rjust(2, "0")
+                  _rows.append((_i, _rng.randint(1, 12) * 100, _rng.choice(["delivered", "delivered", "cancelled"]), _when))
+              _db.executemany("insert into orders values (?, ?, ?, ?)", _rows)
+              _keep = [(_r[0], _r[1]) for _r in _rows if _r[2] == "delivered" and _r[3].startswith("2026-11")]
+              _want = sorted(_keep, key=lambda _p: (-_p[1], _p[0]))[:3]
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For the orders " + str(_rows) + ", the query should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[(6, 890), (4, 760), (5, 760)]", "The program should print [(6, 890), (4, 760), (5, 760)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select id, amount from orders
+                where status = 'delivered' and placed >= '2026-11-01' and placed < '2026-12-01'
+                order by amount, id
+                limit 3
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, amount integer, status text, placed text);
+                insert into orders values
+                    (1, 1200, 'delivered', '2026-10-31 22:10'), (2, 450, 'delivered', '2026-11-01 08:05'),
+                    (3, 980, 'cancelled', '2026-11-12 13:30'), (4, 760, 'delivered', '2026-11-18 19:45'),
+                    (5, 760, 'delivered', '2026-11-20 12:00'), (6, 890, 'delivered', '2026-11-30 21:15'),
+                    (7, 300, 'delivered', '2026-12-01 00:05');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select id, amount from orders
+                where status = 'delivered' and placed between '2026-11-01' and '2026-11-30'
+                order by amount desc, id
+                limit 3
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, amount integer, status text, placed text);
+                insert into orders values
+                    (1, 1200, 'delivered', '2026-10-31 22:10'), (2, 450, 'delivered', '2026-11-01 08:05'),
+                    (3, 980, 'cancelled', '2026-11-12 13:30'), (4, 760, 'delivered', '2026-11-18 19:45'),
+                    (5, 760, 'delivered', '2026-11-20 12:00'), (6, 890, 'delivered', '2026-11-30 21:15'),
+                    (7, 300, 'delivered', '2026-12-01 00:05');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select id, amount from orders
+                where status = 'delivered' and placed >= '2026-11-01' and placed < '2026-12-01'
+                order by amount desc, id
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table orders (id integer primary key, amount integer, status text, placed text);
+                insert into orders values
+                    (1, 1200, 'delivered', '2026-10-31 22:10'), (2, 450, 'delivered', '2026-11-01 08:05'),
+                    (3, 980, 'cancelled', '2026-11-12 13:30'), (4, 760, 'delivered', '2026-11-18 19:45'),
+                    (5, 760, 'delivered', '2026-11-20 12:00'), (6, 890, 'delivered', '2026-11-30 21:15'),
+                    (7, 300, 'delivered', '2026-12-01 00:05');
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          Filter by status and by the half-open range for November, sort by amount descending then id, and keep three. Sorting ascending gives the smallest three; `between '2026-11-01' and '2026-11-30'` drops orders placed during 30 November, such as order 6; and without `limit` every November order comes back.
+    - question:
+        id: write-search
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A support screen searches customers by the start of a phone number and any part of a name, ignoring capitals. Change `query`, which receives the phone prefix and the name part as two placeholder values in that order, so it returns the matching names in order of name.
+        starter: |
+          import sqlite3
+
+          query = """
+              select name from customers
+              where phone = ? and name = ?
+              order by name
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table customers (id integer primary key, name text, phone text);
+              insert into customers (name, phone) values
+                  ('Anil Kumar', '9845012345'), ('Kumari Devi', '9880011223'), ('Ravi Kumar', '7022098765'),
+                  ('Suresh Kumar', '9898989898'), ('Meena Rao', '9845098450'), ('Kumar Swamy', '6398123456');
+          """)
+          print([row[0] for row in db.execute(query, ("98", "kumar"))])
+        solution: |
+          import sqlite3
+
+          query = """
+              select name from customers
+              where phone like ? || '%' and name like '%' || ? || '%'
+              order by name
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table customers (id integer primary key, name text, phone text);
+              insert into customers (name, phone) values
+                  ('Anil Kumar', '9845012345'), ('Kumari Devi', '9880011223'), ('Ravi Kumar', '7022098765'),
+                  ('Suresh Kumar', '9898989898'), ('Meena Rao', '9845098450'), ('Kumar Swamy', '6398123456');
+          """)
+          print([row[0] for row in db.execute(query, ("98", "kumar"))])
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(89)
+          _first = ["Anil", "Kumari", "Ravi", "Suresh", "Meena", "Kumar", "Divya", "Arjun"]
+          _last = ["Kumar", "Rao", "Shetty", "Iyer", "kumar", "Devi", "Swamy"]
+          for _ in range(30):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table customers (id integer primary key, name text, phone text)")
+              _rows = [(_rng.choice(_first) + " " + _rng.choice(_last), _rng.choice(["98", "99", "70", "63"]) + str(_rng.randint(10000000, 99999999))) for _ in range(_rng.randint(1, 10))]
+              _db.executemany("insert into customers (name, phone) values (?, ?)", _rows)
+              _prefix = _rng.choice(["98", "9", "70", "989", "63"])
+              _part = _rng.choice(["kumar", "KUMAR", "ra", "ee", "ry"])
+              _want = sorted(_n for _n, _p in _rows if _p.startswith(_prefix) and _part.lower() in _n.lower())
+              _got = [_r[0] for _r in _db.execute(query, (_prefix, _part))]
+              assert _got == _want, "For the customers " + str(_rows) + ", searching for phones starting " + _prefix + " and names containing " + _part + " should give " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "['Anil Kumar', 'Kumari Devi', 'Suresh Kumar']", "The program should print ['Anil Kumar', 'Kumari Devi', 'Suresh Kumar']"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select name from customers
+                where phone like '%' || ? || '%' and name like '%' || ? || '%'
+                order by name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table customers (id integer primary key, name text, phone text);
+                insert into customers (name, phone) values
+                    ('Anil Kumar', '9845012345'), ('Kumari Devi', '9880011223'), ('Ravi Kumar', '7022098765'),
+                    ('Suresh Kumar', '9898989898'), ('Meena Rao', '9845098450'), ('Kumar Swamy', '6398123456');
+            """)
+            print([row[0] for row in db.execute(query, ("98", "kumar"))])
+          - |
+            import sqlite3
+
+            query = """
+                select name from customers
+                where phone like ? || '%' and name like ? || '%'
+                order by name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table customers (id integer primary key, name text, phone text);
+                insert into customers (name, phone) values
+                    ('Anil Kumar', '9845012345'), ('Kumari Devi', '9880011223'), ('Ravi Kumar', '7022098765'),
+                    ('Suresh Kumar', '9898989898'), ('Meena Rao', '9845098450'), ('Kumar Swamy', '6398123456');
+            """)
+            print([row[0] for row in db.execute(query, ("98", "kumar"))])
+          - |
+            import sqlite3
+
+            query = """
+                select name from customers
+                where phone like ? || '_' and name like '%' || ? || '%'
+                order by name
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table customers (id integer primary key, name text, phone text);
+                insert into customers (name, phone) values
+                    ('Anil Kumar', '9845012345'), ('Kumari Devi', '9880011223'), ('Ravi Kumar', '7022098765'),
+                    ('Suresh Kumar', '9898989898'), ('Meena Rao', '9845098450'), ('Kumar Swamy', '6398123456');
+            """)
+            print([row[0] for row in db.execute(query, ("98", "kumar"))])
+        explanation: |
+          `? || '%'` builds the pattern "the prefix, then anything", and `'%' || ? || '%'` builds "anything, the part, anything"; `like` ignores capitals. Putting `%` before the prefix matches 98 anywhere in the number, such as in 7022098765; a name pattern without the leading `%` matches only names starting with the part; and `_` allows exactly one more digit instead of any number.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle's table, how many rows does `where store = 'KOR' or store = 'HSR' and status = 'cancelled'` return?
+        answer: "5"
+        explanation: |
+          It means `store = 'KOR' or (store = 'HSR' and status = 'cancelled')`: all four KOR orders, 1, 2, 5 and 8, and the cancelled HSR order 7.
+    - question:
+        id: work-paging
+        type: choice
+        system: s2
+        prompt: |
+          An app shows orders 20 at a time with `select * from orders limit 20 offset ?`, passing 0, 20, 40 and so on. Users report seeing some orders twice and others never. What is the fix?
+        options:
+          - "Add an order by on a column, or columns, that never ties, such as order by placed desc, id."
+          - "Use limit 21 so that pages overlap safely."
+          - "Fetch every order once and page through them in the app."
+          - "Use offset ? + 1."
+        answer: 0
+        explanation: |
+          Without `order by`, each page's query may return rows in a different order, so the pages need not fit together. A total order, with a unique column as the final tie-break, makes page $k$ exactly rows $20k + 1$ to $20k + 20$ of one fixed sequence.
+  connections:
+    - text: |
+        Five rows, not three: all four KOR orders and the cancelled HSR one. The database did exactly what the query said, because `and` binds before `or`. Most wrong answers from SQL are like this one, a precise answer to a slightly different question, and the defence is to bracket mixed conditions and test a query on rows chosen to catch the mistake.
+
+        Placeholders kept the search query safe; [[r2.injection]] shows what happens to programs that paste values into SQL instead. And every query in this lesson read one table. [[q0.joins]] combines tables, so that an order can be shown with its customer's name and its store's address in one result.

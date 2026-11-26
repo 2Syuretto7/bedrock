@@ -5701,6 +5701,895 @@ function TourHeuristic(props: Props) {
   );
 }
 
+type SqlCell = string | number | null;
+type SqlMark = "accent" | "fill" | "ghost" | undefined;
+
+/** A small table drawn in SVG: a header row, then rows whose cells can be marked. NULL is written out. */
+function SqlTable({ x, y, widths, head, rows, mark, title, height = 20 }: { x: number; y: number; widths: number[]; head: string[]; rows: SqlCell[][]; mark?: (row: number, col: number) => SqlMark; title?: string; height?: number }) {
+  const lefts = widths.map((_, i) => x + widths.slice(0, i).reduce((s, w) => s + w, 0));
+  const style = (m: SqlMark) => (m === "accent" ? "fig-accent" : m === "fill" ? "fig-fill" : m === "ghost" ? "fig-ghost" : "fig-cell");
+  return (
+    <g>
+      {title ? (
+        <text x={x} y={y - 6} className="fig-small">
+          {title}
+        </text>
+      ) : null}
+      {head.map((h, c) => (
+        <text key={"h" + c} x={lefts[c] + 4} y={y + height - 7} className="fig-small" style={{ fontWeight: 600 }}>
+          {h}
+        </text>
+      ))}
+      <line x1={x} x2={x + widths.reduce((s, w) => s + w, 0) - 2} y1={y + height - 1} y2={y + height - 1} className="fig-axis" />
+      {rows.map((row, r) =>
+        row.map((cell, c) => {
+          const m = mark?.(r, c);
+          return (
+            <g key={r + "-" + c}>
+              <rect x={lefts[c]} y={y + (r + 1) * height + 1} width={widths[c] - 2} height={height - 2} className={style(m)} />
+              <text x={lefts[c] + 4} y={y + (r + 2) * height - 6} className="fig-small" style={m === "accent" ? { fill: "var(--bg)" } : cell === null ? { fontStyle: "italic" } : undefined}>
+                {cell === null ? "NULL" : String(cell)}
+              </text>
+            </g>
+          );
+        }),
+      )}
+    </g>
+  );
+}
+
+const SHIFT_COLUMNS = ["rider", "day", "store", "slot"] as const;
+const SHIFT_ROWS: string[][] = [
+  ["Asha", "Mon", "Koramangala", "morning"],
+  ["Asha", "Mon", "Koramangala", "evening"],
+  ["Asha", "Tue", "Indiranagar", "morning"],
+  ["Bilal", "Mon", "Indiranagar", "morning"],
+  ["Bilal", "Tue", "Indiranagar", "evening"],
+  ["Chitra", "Mon", "Koramangala", "morning"],
+  ["Chitra", "Tue", "Koramangala", "evening"],
+  ["Dev", "Tue", "Indiranagar", "morning"],
+];
+const WEDNESDAY_ROW = ["Asha", "Wed", "Koramangala", "morning"];
+
+/** The first pair of rows that agree on every chosen column, or null when the columns tell every row apart. */
+function clash(rows: string[][], cols: number[]): [number, number] | null {
+  const seen = new Map<string, number>();
+  for (let r = 0; r < rows.length; r++) {
+    const key = cols.map((c) => rows[r][c]).join("\u0000");
+    const before = seen.get(key);
+    if (before !== undefined) return [before, r];
+    seen.set(key, r);
+  }
+  return null;
+}
+
+/** Riders' shifts, where the learner chooses columns and sees whether they single out every row. */
+function TableKeys(props: Props) {
+  const given = Array.isArray(props.columns) ? (props.columns as string[]) : ["rider"];
+  const [chosen, setChosen] = useState(SHIFT_COLUMNS.map((c) => given.includes(c)));
+  const [wednesday, setWednesday] = useState(props.wednesday === true);
+  const rows = wednesday ? [...SHIFT_ROWS, WEDNESDAY_ROW] : SHIFT_ROWS;
+  const cols = SHIFT_COLUMNS.map((_, i) => i).filter((i) => chosen[i]);
+  const names = (list: number[]) => list.map((c) => SHIFT_COLUMNS[c]).join(", ");
+  const pair = clash(rows, cols);
+  let summary: string;
+  if (cols.length === 0) {
+    summary = `No columns chosen, so all ${rows.length} rows look the same.`;
+  } else if (pair) {
+    summary = `Columns chosen: ${names(cols)}. Rows ${pair[0] + 1} and ${pair[1] + 1} agree on ${cols.length === 1 ? "it" : "all of them"} (${cols.map((c) => rows[pair[0]][c]).join(", ")}), so ${cols.length === 1 ? "this column does" : "these columns do"} not single out every row: not a key.`;
+  } else {
+    const spare = cols.filter((c) => !clash(rows, cols.filter((d) => d !== c)));
+    summary = `Columns chosen: ${names(cols)}. No two of the ${rows.length} rows agree on ${cols.length === 1 ? "it" : "all of them"}, so ${cols.length === 1 ? "it singles" : "they single"} out every row: a superkey. ${
+      spare.length === 0
+        ? "Dropping any one column breaks this, so no smaller set works: a candidate key."
+        : `It is not minimal: ${names(spare)} can be dropped and the rest still single out every row.`
+    }`;
+  }
+  const mark = (r: number, c: number): SqlMark => (pair && (r === pair[0] || r === pair[1]) && chosen[c] ? "accent" : chosen[c] ? "fill" : undefined);
+  return (
+    <Frame
+      title="Which columns single out a row"
+      summary={summary}
+      controls={
+        <>
+          {SHIFT_COLUMNS.map((c, i) => (
+            <button
+              key={c}
+              type="button"
+              className="btn btn-secondary btn-small"
+              aria-pressed={chosen[i]}
+              onClick={() => setChosen(chosen.map((on, j) => (j === i ? !on : on)))}
+            >
+              {c}
+            </button>
+          ))}
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={wednesday} onClick={() => setWednesday(!wednesday)}>
+            Add Wednesday&apos;s shift
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 226" role="img" aria-label={`A table of ${rows.length} shifts with the columns rider, day, store and slot`}>
+        <SqlTable x={60} y={4} widths={[70, 52, 114, 84]} head={[...SHIFT_COLUMNS]} rows={rows} mark={mark} />
+        {rows.map((_, r) => (
+          <text key={r} x="44" y={4 + (r + 2) * 20 - 6} textAnchor="end" className="fig-small">
+            {r + 1}
+          </text>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+const ALG_RIDERS: string[][] = [
+  ["Asha", "KOR"],
+  ["Bilal", "IND"],
+  ["Chitra", "KOR"],
+];
+const ALG_STORES: string[][] = [
+  ["KOR", "Meena"],
+  ["IND", "Ravi"],
+  ["HSR", "Tara"],
+];
+const ALG_MON = [["Asha"], ["Bilal"]];
+const ALG_TUE = [["Bilal"], ["Chitra"]];
+type AlgOp = "select" | "project" | "product" | "join" | "union" | "difference";
+const ALG_OPS: AlgOp[] = ["select", "project", "product", "join", "union", "difference"];
+const ALG_LABELS: Record<AlgOp, string> = { select: "σ select", project: "π project", product: "× product", join: "⋈ join", union: "∪ union", difference: "− difference" };
+
+/** The six operations of relational algebra applied to small tables of riders, stores and rota lists. */
+function AlgebraOps(props: Props) {
+  const [op, setOp] = useState<AlgOp>(ALG_OPS.includes(props.op as AlgOp) ? (props.op as AlgOp) : "select");
+  const product = ALG_RIDERS.flatMap((r) => ALG_STORES.map((s) => [...r, ...s]));
+  const lists = op === "union" || op === "difference";
+  let head: string[];
+  let out: string[][];
+  let summary: string;
+  const names = (rows: string[][]) => rows.map((r) => r.join(" ")).join(", ");
+  if (op === "select") {
+    head = ["rider", "store"];
+    out = ALG_RIDERS.filter((r) => r[1] === "KOR");
+    summary = `σ store = 'KOR' (Riders): keep the rows of Riders whose store is KOR. ${out.length} of the ${ALG_RIDERS.length} rows pass: ${names(out)}. In SQL: select * from riders where store = 'KOR'.`;
+  } else if (op === "project") {
+    head = ["store"];
+    out = [...new Set(ALG_RIDERS.map((r) => r[1]))].map((s) => [s]);
+    summary = `π store (Riders): keep only the store column. The ${ALG_RIDERS.length} rows give ${ALG_RIDERS.map((r) => r[1]).join(", ")}, and a relation holds each row once, so the result has ${out.length} rows: ${names(out)}. In SQL: select distinct store from riders.`;
+  } else if (op === "product") {
+    head = ["rider", "R.store", "S.store", "manager"];
+    out = product;
+    summary = `Riders × Stores: every row of Riders paired with every row of Stores, ${ALG_RIDERS.length} × ${ALG_STORES.length} = ${out.length} rows. Only the ${product.filter((r) => r[1] === r[2]).length} marked pairs match a rider with the store they work at. In SQL: select * from riders cross join stores.`;
+  } else if (op === "join") {
+    head = ["rider", "store", "manager"];
+    out = product.filter((r) => r[1] === r[2]).map((r) => [r[0], r[1], r[3]]);
+    summary = `Riders ⋈ Stores: the pairs of the product that agree on store, with the store column kept once. ${out.length} rows: ${names(out)}. HSR has no rider, so it does not appear. In SQL: select * from riders natural join stores.`;
+  } else if (op === "union") {
+    head = ["rider"];
+    out = [...new Set([...ALG_MON, ...ALG_TUE].map((r) => r[0]))].map((s) => [s]);
+    summary = `Mon ∪ Tue: the riders on either day's list, each once: ${names(out)}. In SQL: select rider from mon union select rider from tue.`;
+  } else {
+    head = ["rider"];
+    out = ALG_MON.filter((r) => !ALG_TUE.some((t) => t[0] === r[0]));
+    summary = `Mon − Tue: the riders on Monday's list but not on Tuesday's: ${names(out)}. In SQL: select rider from mon except select rider from tue.`;
+  }
+  const passes = (r: number) => op === "select" && ALG_RIDERS[r][1] === "KOR";
+  const widths = head.length === 4 ? [52, 58, 58, 58] : head.length === 3 ? [56, 48, 64] : head.length === 2 ? [56, 48] : [64];
+  return (
+    <Frame
+      title="Operations on tables"
+      summary={summary}
+      controls={
+        <>
+          {ALG_OPS.map((o) => (
+            <button key={o} type="button" className="btn btn-secondary btn-small" aria-pressed={op === o} onClick={() => setOp(o)}>
+              {ALG_LABELS[o]}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 230" role="img" aria-label={`Relational algebra: ${ALG_LABELS[op]}, with its input tables and a result of ${out.length} rows`}>
+        {lists ? (
+          <>
+            <SqlTable x={8} y={22} widths={[64]} head={["rider"]} rows={ALG_MON} title="Mon" height={18} />
+            <SqlTable x={8} y={118} widths={[64]} head={["rider"]} rows={ALG_TUE} title="Tue" height={18} />
+          </>
+        ) : (
+          <>
+            <SqlTable x={8} y={22} widths={[56, 48]} head={["rider", "store"]} rows={ALG_RIDERS} title="Riders" height={18} mark={(r) => (passes(r) ? "accent" : undefined)} />
+            {op === "product" || op === "join" ? <SqlTable x={8} y={118} widths={[48, 64]} head={["store", "manager"]} rows={ALG_STORES} title="Stores" height={18} /> : null}
+          </>
+        )}
+        <SqlTable
+          x={200}
+          y={22}
+          widths={widths}
+          head={head}
+          rows={out}
+          title="Result"
+          height={18}
+          mark={(r) => (op === "product" && out[r][1] === out[r][2] ? "accent" : "fill")}
+        />
+      </svg>
+    </Frame>
+  );
+}
+
+const QO_ORDERS: (string | number)[][] = [
+  [1, "Asha", "KOR", 250],
+  [2, "Bilal", "IND", 900],
+  [3, "Chitra", "KOR", 480],
+  [4, "Asha", "KOR", 1200],
+  [5, "Dev", "IND", 300],
+  [6, "Chitra", "KOR", 650],
+  [7, "Esha", "HSR", 410],
+];
+/** The clauses as written, each with its place in the order of evaluation. */
+const QO_LINES: [string, number][] = [
+  ["SELECT rider, amount", 3],
+  ["FROM orders", 1],
+  ["WHERE store = 'KOR'", 2],
+  ["ORDER BY amount DESC", 4],
+  ["LIMIT 2", 5],
+];
+
+/** One query evaluated clause by clause, in the order a database applies them rather than the order they are written. */
+function QueryOrder(props: Props) {
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 1)), 1, 5));
+  let head = ["id", "rider", "store", "amount"];
+  let rows = QO_ORDERS;
+  if (step >= 2) rows = rows.filter((r) => r[2] === "KOR");
+  if (step >= 3) {
+    head = ["rider", "amount"];
+    rows = rows.map((r) => [r[1], r[3]]);
+  }
+  if (step >= 4) rows = [...rows].sort((a, b) => Number(b[1]) - Number(a[1]));
+  if (step >= 5) rows = rows.slice(0, 2);
+  const show = (r: (string | number)[]) => r.map((v) => (typeof v === "number" ? group(v) : v)).join(" ");
+  const notes = [
+    "",
+    `FROM orders: start with every row of the table, ${QO_ORDERS.length} rows.`,
+    `WHERE store = 'KOR': keep the rows whose store is KOR, ${rows.length} of the ${QO_ORDERS.length}.`,
+    "SELECT rider, amount: keep two columns of each remaining row. Only now do the result's columns exist, which is why standard SQL does not let WHERE use a name defined in SELECT.",
+    "ORDER BY amount DESC: sort the rows, largest amount first. Without this the rows come in no promised order.",
+    "LIMIT 2: keep the first 2 rows of the sorted result.",
+  ];
+  const summary = `Step ${step} of 5. ${notes[step]} The table now holds ${rows.length === 0 ? "no rows" : plural(rows.length, "row")}: ${rows.map(show).join("; ")}.`;
+  return (
+    <Frame title="The order a query is evaluated in" summary={summary} controls={<Stepper label="step" value={step} onChange={setStep} min={1} max={5} />}>
+      <svg viewBox="0 0 440 236" role="img" aria-label={`A query of five clauses, evaluated up to step ${step}, and the table it has produced`}>
+        <text x="10" y="18" className="fig-small">
+          as written, with the order of evaluation
+        </text>
+        {QO_LINES.map(([line, order], i) => (
+          <g key={line}>
+            <rect x="8" y={30 + i * 26} width="200" height="22" className={order === step ? "fig-accent" : order < step ? "fig-fill" : "fig-ghost"} />
+            <text x="16" y={45 + i * 26} className="fig-small" style={order === step ? { fill: "var(--bg)" } : undefined}>
+              {`${order}  ${line}`}
+            </text>
+          </g>
+        ))}
+        <SqlTable x={step >= 3 ? 250 : 224} y={30} widths={step >= 3 ? [70, 70] : [30, 60, 48, 60]} head={head} rows={rows.map((r) => r.map((v) => (typeof v === "number" && v >= 1000 ? group(v) : v)))} height={22} />
+      </svg>
+    </Frame>
+  );
+}
+
+const JM_CUSTOMERS: [number, string][] = [
+  [1, "Asha"],
+  [2, "Bilal"],
+  [3, "Chitra"],
+  [4, "Dev"],
+];
+const JM_ORDERS: [number, number, number][] = [
+  [101, 1, 250],
+  [102, 1, 480],
+  [103, 3, 900],
+  [104, 5, 120],
+];
+type JoinKind = "inner" | "left" | "right" | "full";
+const JOIN_KINDS: JoinKind[] = ["inner", "left", "right", "full"];
+
+/** Customers joined to orders by customer id, by each kind of join, with unmatched rows padded with NULL. */
+function JoinMatch(props: Props) {
+  const [kind, setKind] = useState<JoinKind>(JOIN_KINDS.includes(props.kind as JoinKind) ? (props.kind as JoinKind) : "inner");
+  const rows: SqlCell[][] = [];
+  for (const [id, name] of JM_CUSTOMERS) for (const [oid, cust, amount] of JM_ORDERS) if (cust === id) rows.push([name, oid, amount]);
+  const lonelyCustomers = JM_CUSTOMERS.filter(([id]) => !JM_ORDERS.some((o) => o[1] === id));
+  const lonelyOrders = JM_ORDERS.filter((o) => !JM_CUSTOMERS.some(([id]) => id === o[1]));
+  const matched = rows.length;
+  if (kind === "left" || kind === "full") for (const [, name] of lonelyCustomers) rows.push([name, null, null]);
+  if (kind === "right" || kind === "full") for (const [oid, , amount] of lonelyOrders) rows.push([null, oid, amount]);
+  const keepsCustomers = kind === "left" || kind === "full";
+  const keepsOrders = kind === "right" || kind === "full";
+  const what = {
+    inner: "only the pairs of a customer and an order placed by that customer",
+    left: "every customer, with each of their orders; a customer with no order appears once, with NULL for the order's columns",
+    right: "every order, with its customer; an order whose customer is missing appears with NULL for the customer's name",
+    full: "every matching pair, then every customer without an order and every order without a customer, each padded with NULL",
+  }[kind];
+  const show = (r: SqlCell[]) => r.map((v) => (v === null ? "NULL" : String(v))).join(" ");
+  const summary = `Customers ${kind} join orders on the customer's id: ${what}. ${plural(rows.length, "row")}, ${matched} of them matched pairs: ${rows.map(show).join("; ")}. Bilal and Dev have no orders, and order 104 names customer 5, who does not exist. In SQL: select c.name, o.id, o.amount from customers c ${kind === "full" ? "full outer" : kind} join orders o on o.customer = c.id.`;
+  return (
+    <Frame
+      title="Kinds of join"
+      summary={summary}
+      controls={
+        <>
+          {JOIN_KINDS.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={kind === k} onClick={() => setKind(k)}>
+              {`${k} join`}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 196" role="img" aria-label={`Customers ${kind} join orders, giving ${rows.length} rows`}>
+        <SqlTable
+          x={8}
+          y={22}
+          widths={[26, 56]}
+          head={["id", "name"]}
+          rows={JM_CUSTOMERS}
+          title="customers"
+          mark={(r) => (lonelyCustomers.some((c) => c[0] === JM_CUSTOMERS[r][0]) ? (keepsCustomers ? "fill" : "ghost") : undefined)}
+        />
+        <SqlTable
+          x={100}
+          y={22}
+          widths={[36, 40, 52]}
+          head={["id", "cust", "amount"]}
+          rows={JM_ORDERS}
+          title="orders"
+          mark={(r) => (lonelyOrders.some((o) => o[0] === JM_ORDERS[r][0]) ? (keepsOrders ? "fill" : "ghost") : undefined)}
+        />
+        <SqlTable x={250} y={22} widths={[60, 52, 60]} head={["name", "order", "amount"]} rows={rows} title="result" mark={(r) => (r >= matched ? "fill" : undefined)} />
+      </svg>
+    </Frame>
+  );
+}
+
+const GB_ORDERS: [number, string, number][] = [
+  [1, "KOR", 250],
+  [2, "IND", 900],
+  [3, "KOR", 480],
+  [4, "HSR", 150],
+  [5, "KOR", 1200],
+  [6, "IND", 300],
+  [7, "KOR", 650],
+  [8, "HSR", 410],
+  [9, "IND", 720],
+];
+type GbAggregate = "count" | "sum" | "avg" | "max";
+const GB_AGGREGATES: GbAggregate[] = ["count", "sum", "avg", "max"];
+
+/** Orders split into groups by store, each group folded into one row by an aggregate, then filtered by having. */
+function GroupBuckets(props: Props) {
+  const [agg, setAgg] = useState<GbAggregate>(GB_AGGREGATES.includes(props.aggregate as GbAggregate) ? (props.aggregate as GbAggregate) : "count");
+  const [least, setLeast] = useState(clamp(Math.round(num(props.least, 1)), 1, 5));
+  const stores = [...new Set(GB_ORDERS.map((o) => o[1]))].sort();
+  const sorted = [...GB_ORDERS].sort((a, b) => a[1].localeCompare(b[1]) || a[0] - b[0]);
+  const fold = (amounts: number[]) =>
+    agg === "count" ? amounts.length : agg === "sum" ? amounts.reduce((s, a) => s + a, 0) : agg === "avg" ? amounts.reduce((s, a) => s + a, 0) / amounts.length : Math.max(...amounts);
+  const groups = stores.map((s) => {
+    const amounts = GB_ORDERS.filter((o) => o[1] === s).map((o) => o[2]);
+    return { store: s, size: amounts.length, value: fold(amounts) };
+  });
+  const kept = groups.filter((g) => g.size >= least);
+  const value = (v: number) => (agg === "avg" ? dp(v, 2) : group(v));
+  const expr = agg === "count" ? "count(*)" : `${agg}(amount)`;
+  const summary = `select store, ${expr} from orders group by store having count(*) >= ${least}. The ${GB_ORDERS.length} rows fall into ${groups.length} groups, one per store: ${groups.map((g) => `${g.store} with ${plural(g.size, "row")}`).join(", ")}. Each group becomes one row: ${groups.map((g) => `${g.store} ${value(g.value)}`).join(", ")}. ${
+    kept.length === groups.length ? `Every group has at least ${plural(least, "row")}, so having keeps them all.` : `Having drops ${groups.filter((g) => g.size < least).map((g) => g.store).join(" and ") || "none"}, with fewer than ${least} rows.`
+  } Result: ${kept.length === 0 ? "no rows" : kept.map((g) => `${g.store} ${value(g.value)}`).join("; ")}.`;
+  const isKept = (s: string) => kept.some((g) => g.store === s);
+  return (
+    <Frame
+      title="Grouping rows and folding each group"
+      summary={summary}
+      controls={
+        <>
+          {GB_AGGREGATES.map((a) => (
+            <button key={a} type="button" className="btn btn-secondary btn-small" aria-pressed={agg === a} onClick={() => setAgg(a)}>
+              {a === "count" ? "count(*)" : `${a}(amount)`}
+            </button>
+          ))}
+          <Stepper label="having count(*) at least" value={least} onChange={setLeast} min={1} max={5} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 232" role="img" aria-label={`Nine orders grouped by store into ${groups.length} groups, ${kept.length} kept by having`}>
+        <SqlTable
+          x={8}
+          y={22}
+          widths={[30, 46, 60]}
+          head={["id", "store", "amount"]}
+          rows={sorted.map((o) => [o[0], o[1], group(o[2])])}
+          title="orders, grouped by store"
+          mark={(r) => (isKept(sorted[r][1]) ? (stores.indexOf(sorted[r][1]) % 2 === 0 ? "fill" : undefined) : "ghost")}
+        />
+        <SqlTable
+          x={250}
+          y={22}
+          widths={[50, 100]}
+          head={["store", expr]}
+          rows={groups.map((g) => [g.store, value(g.value)])}
+          title="one row per group"
+          mark={(r) => (isKept(groups[r].store) ? "accent" : "ghost")}
+        />
+      </svg>
+    </Frame>
+  );
+}
+
+/** A correlated subquery run for each row of the outer query: is this order above its own store's average? */
+function SubquerySteps(props: Props) {
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, GB_ORDERS.length));
+  const average = (store: string) => {
+    const amounts = GB_ORDERS.filter((o) => o[1] === store).map((o) => o[2]);
+    return amounts.reduce((s, a) => s + a, 0) / amounts.length;
+  };
+  const done = GB_ORDERS.slice(0, step);
+  const kept = done.filter((o) => o[2] > average(o[1]));
+  const now = step > 0 ? GB_ORDERS[step - 1] : null;
+  const money = (x: number) => `₹${group(Math.round(x * 100) / 100)}`;
+  const summary = now
+    ? `Outer row ${step} of ${GB_ORDERS.length}: order ${now[0]}, ${money(now[2])} at ${now[1]}. The subquery runs again with o.store = '${now[1]}' and returns that store's average, ${money(average(now[1]))}. ${money(now[2])} is ${now[2] > average(now[1]) ? "above it, so the order is kept" : "not above it, so the order is dropped"}. Kept so far: ${kept.length === 0 ? "none" : kept.map((o) => o[0]).join(", ")}.`
+    : `select id, amount from orders o where amount > (select avg(amount) from orders where store = o.store). The subquery mentions o.store, a column of the outer row, so it is re-evaluated for each of the ${GB_ORDERS.length} orders. Step through the outer rows.`;
+  return (
+    <Frame title="A subquery that depends on the outer row" summary={summary} controls={<Stepper label="outer row" value={step} onChange={setStep} min={0} max={GB_ORDERS.length} />}>
+      <svg viewBox="0 0 440 232" role="img" aria-label={`Nine orders checked one by one against their store's average, ${step} checked so far`}>
+        <SqlTable
+          x={8}
+          y={22}
+          widths={[30, 46, 60]}
+          head={["id", "store", "amount"]}
+          rows={GB_ORDERS.map((o) => [o[0], o[1], group(o[2])])}
+          title="orders o (outer)"
+          mark={(r) => (r === step - 1 ? "accent" : r < step ? (GB_ORDERS[r][2] > average(GB_ORDERS[r][1]) ? "fill" : "ghost") : undefined)}
+        />
+        <text x="168" y="36" className="fig-small">
+          subquery for this row
+        </text>
+        <rect x="166" y="44" width="266" height="46" className={now ? "fig-fill" : "fig-ghost"} />
+        <text x="174" y="62" className="fig-small">
+          {now ? `select avg(amount) from orders` : "select avg(amount) from orders"}
+        </text>
+        <text x="174" y="80" className="fig-small">
+          {now ? `where store = '${now[1]}'  →  ${money(average(now[1]))}` : "where store = o.store"}
+        </text>
+        <text x="168" y="118" className="fig-small">
+          {now ? `${money(now[2])} > ${money(average(now[1]))}?  ${now[2] > average(now[1]) ? "yes, keep" : "no, drop"}` : ""}
+        </text>
+        <text x="168" y="150" className="fig-small">
+          {`kept so far: ${kept.length === 0 ? "none" : kept.map((o) => o[0]).join(", ")}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const WF_ROWS: [string, number, number][] = [
+  ["KOR", 1, 1200],
+  ["KOR", 2, 900],
+  ["KOR", 3, 1500],
+  ["KOR", 4, 800],
+  ["KOR", 5, 2100],
+  ["IND", 1, 700],
+  ["IND", 2, 1100],
+  ["IND", 3, 600],
+  ["IND", 4, 1300],
+  ["IND", 5, 1000],
+];
+type WfKind = "whole" | "running" | "moving" | "rank";
+const WF_KINDS: WfKind[] = ["whole", "running", "moving", "rank"];
+const WF_LABELS: Record<WfKind, string> = { whole: "store total", running: "running total", moving: "3-day average", rank: "rank" };
+const WF_SQL: Record<WfKind, string[]> = {
+  whole: ["sum(amount) over (", "  partition by store)"],
+  running: ["sum(amount) over (", "  partition by store", "  order by day)"],
+  moving: ["avg(amount) over (", "  partition by store", "  order by day", "  rows between 2 preceding", "  and current row)"],
+  rank: ["rank() over (", "  partition by store", "  order by amount desc)"],
+};
+
+/** A window function: for each row, the rows of its partition that its frame covers, and the value computed from them. */
+function WindowFrame(props: Props) {
+  const [kind, setKind] = useState<WfKind>(WF_KINDS.includes(props.frame as WfKind) ? (props.frame as WfKind) : "running");
+  const [row, setRow] = useState(clamp(Math.round(num(props.row, 3)), 1, WF_ROWS.length));
+  const inFrame = (i: number, j: number) => {
+    const [a, b] = [WF_ROWS[i], WF_ROWS[j]];
+    if (a[0] !== b[0]) return false;
+    if (kind === "whole") return true;
+    if (kind === "running") return b[1] <= a[1];
+    if (kind === "moving") return b[1] <= a[1] && b[1] >= a[1] - 2;
+    return b[2] > a[2];
+  };
+  const value = (i: number) => {
+    const frame = WF_ROWS.filter((_, j) => inFrame(i, j)).map((r) => r[2]);
+    if (kind === "rank") return 1 + frame.length;
+    const total = frame.reduce((s, a) => s + a, 0);
+    return kind === "moving" ? total / frame.length : total;
+  };
+  const show = (v: number) => (kind === "rank" ? String(v) : group(Math.round(v * 100) / 100));
+  const cur = row - 1;
+  const [store, day, amount] = WF_ROWS[cur];
+  const frameRows = WF_ROWS.filter((_, j) => inFrame(cur, j));
+  const working =
+    kind === "rank"
+      ? frameRows.length === 0
+        ? [`no ${store} amount is above ₹${group(amount)}`, `rank = 1`]
+        : [`${store} amounts above ₹${group(amount)}:`, frameRows.map((r) => group(r[2])).join(", "), `rank = 1 + ${frameRows.length} = ${1 + frameRows.length}`]
+      : [
+          kind === "whole" ? `frame: all of ${store}` : `frame: ${store} days ${frameRows[0][1]} to ${day}`,
+          frameRows.map((r) => group(r[2])).join(" + "),
+          kind === "moving" ? `÷ ${frameRows.length} = ${show(value(cur))}` : `= ${show(value(cur))}`,
+        ];
+  const amounts = frameRows.map((r) => group(r[2]));
+  const explain =
+    kind === "rank"
+      ? frameRows.length === 0
+        ? `No ${store} amount is above ₹${group(amount)}, so its rank is 1.`
+        : `${store} amounts above ₹${group(amount)}: ${amounts.join(", ")}, so its rank is 1 + ${frameRows.length} = ${1 + frameRows.length}.`
+      : kind === "whole"
+        ? `Its window is all of ${store}: ${amounts.join(" + ")} = ${show(value(cur))}.`
+        : kind === "moving"
+          ? `Its frame is ${store} days ${frameRows[0][1]} to ${day}: (${amounts.join(" + ")}) ÷ ${frameRows.length} = ${show(value(cur))}.`
+          : `Its frame is ${store} days ${frameRows[0][1]} to ${day}: ${amounts.join(" + ")} = ${show(value(cur))}.`;
+  const summary = `${WF_SQL[kind].join(" ").replace(/\s+/g, " ").replace("( ", "(")}. Each of the ${WF_ROWS.length} rows stays in the result and gains one value, computed from the rows of its own store that its window covers. Current row ${row}: ${store}, day ${day}, ₹${group(amount)}. ${explain} The other store's rows are outside this row's partition. Results for every row: ${WF_ROWS.map((r, i) => `${r[0]} day ${r[1]} ${show(value(i))}`).join(", ")}.`;
+  return (
+    <Frame
+      title="A window over each row"
+      summary={summary}
+      controls={
+        <>
+          {WF_KINDS.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={kind === k} onClick={() => setKind(k)}>
+              {WF_LABELS[k]}
+            </button>
+          ))}
+          <Stepper label="current row" value={row} onChange={setRow} min={1} max={WF_ROWS.length} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`Ten rows of daily takings for two stores, with the ${WF_LABELS[kind]} of each; row ${row} is current`}>
+        <SqlTable
+          x={8}
+          y={22}
+          widths={[44, 34, 58, 70]}
+          head={["store", "day", "amount", kind === "rank" ? "rank" : kind === "moving" ? "avg" : "sum"]}
+          rows={WF_ROWS.map((r, i) => [r[0], r[1], group(r[2]), show(value(i))])}
+          title="takings, one row per store and day"
+          mark={(r, c) => (r === cur ? (c === 3 || c === 2 ? "accent" : "fill") : WF_ROWS[r][0] !== store ? "ghost" : inFrame(cur, r) && c === 2 ? "fill" : undefined)}
+        />
+        {WF_SQL[kind].map((line, i) => (
+          <text key={"s" + i} x="230" y={44 + i * 16} className="fig-small">
+            {line}
+          </text>
+        ))}
+        <text x="230" y="146" className="fig-small" style={{ fontWeight: 600 }}>
+          {`row ${row}: ${store}, day ${day}`}
+        </text>
+        {working.map((line, i) => (
+          <text key={"w" + i} x="230" y={166 + i * 16} className="fig-small">
+            {line}
+          </text>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+type TvValue = "true" | "unknown" | "false";
+type TvOp = "and" | "or" | "not";
+const TV_VALUES: TvValue[] = ["true", "unknown", "false"];
+const TV_OPS: TvOp[] = ["and", "or", "not"];
+const tvKnown = (v: TvValue): boolean[] => (v === "true" ? [true] : v === "false" ? [false] : [true, false]);
+const tvName = (b: boolean): TvValue => (b ? "true" : "false");
+
+/** Three-valued logic: unknown stands for "true or false, not yet known", and a result is known only when every way of filling it in agrees. */
+function ThreeValued(props: Props) {
+  const [op, setOp] = useState<TvOp>(TV_OPS.includes(props.op as TvOp) ? (props.op as TvOp) : "and");
+  const [cellRaw, setCell] = useState(clamp(Math.round(num(props.cell, 2)), 1, 9));
+  const cells = op === "not" ? 3 : 9;
+  const cell = Math.min(cellRaw, cells);
+  const apply = (a: boolean, b: boolean) => (op === "and" ? a && b : op === "or" ? a || b : !a);
+  const outcomes = (a: TvValue, b: TvValue) => {
+    const seen: { a: boolean; b: boolean; r: boolean }[] = [];
+    for (const x of tvKnown(a)) for (const y of op === "not" ? [true] : tvKnown(b)) seen.push({ a: x, b: y, r: apply(x, y) });
+    return seen;
+  };
+  const result = (a: TvValue, b: TvValue): TvValue => {
+    const rs = outcomes(a, b).map((o) => o.r);
+    return rs.every((r) => r) ? "true" : rs.every((r) => !r) ? "false" : "unknown";
+  };
+  const a = TV_VALUES[op === "not" ? cell - 1 : Math.floor((cell - 1) / 3)];
+  const b = TV_VALUES[op === "not" ? 0 : (cell - 1) % 3];
+  const r = result(a, b);
+  const expr = (x: string, y: string) => (op === "not" ? `not ${x}` : `${x} ${op} ${y}`);
+  const tries = outcomes(a, b).map((o) => `${expr(tvName(o.a), tvName(o.b))} = ${tvName(o.r)}`);
+  const verdict = tries.length === 1 ? `Nothing is unknown: ordinary logic gives ${r}.` : r === "unknown" ? `The fillings disagree, so the result is unknown.` : `Every filling gives ${r}, so the result is ${r}.`;
+  const table = op === "not" ? TV_VALUES.map((v) => `not ${v} is ${result(v, "true")}`).join("; ") : TV_VALUES.flatMap((x) => TV_VALUES.map((y) => `${x} ${op} ${y} is ${result(x, y)}`)).join("; ");
+  const summary = `The truth table of ${op} with three values. Unknown means true or false, not yet known. Selected: ${expr(a, b)}. ${tries.length > 1 ? `Filling in the unknown: ${tries.join("; ")}. ` : ""}${verdict} The whole table: ${table}. A where clause keeps a row only when its condition is true, so unknown rows are dropped along with false ones.`;
+  const x0 = 120;
+  const w = op === "not" ? 120 : 96;
+  const h = 32;
+  const cls = (v: TvValue, selected: boolean) => (selected ? "fig-accent" : v === "unknown" ? "fig-fill" : "fig-cell");
+  return (
+    <Frame
+      title="Logic with a third value"
+      summary={summary}
+      controls={
+        <>
+          {TV_OPS.map((o) => (
+            <button key={o} type="button" className="btn btn-secondary btn-small" aria-pressed={op === o} onClick={() => setOp(o)}>
+              {o}
+            </button>
+          ))}
+          <Stepper label="cell" value={cell} onChange={setCell} min={1} max={cells} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 248" role="img" aria-label={`Truth table of ${op} with true, unknown and false; selected cell ${expr(a, b)} is ${r}`}>
+        <text x={8} y={22} className="fig-small" style={{ fontWeight: 600 }}>
+          {op === "not" ? "A ↓" : "A ↓  B →"}
+        </text>
+        {op === "not" ? (
+          <text x={x0 + 4} y={22} className="fig-small" style={{ fontWeight: 600 }}>
+            not A
+          </text>
+        ) : (
+          TV_VALUES.map((v, c) => (
+            <text key={"h" + v} x={x0 + c * w + 4} y={22} className="fig-small" style={{ fontWeight: 600 }}>
+              {v}
+            </text>
+          ))
+        )}
+        {TV_VALUES.map((ra, i) => (
+          <g key={"r" + ra}>
+            <text x={8} y={30 + i * h + 21} className="fig-small" style={{ fontWeight: 600 }}>
+              {ra}
+            </text>
+            {(op === "not" ? ["true" as TvValue] : TV_VALUES).map((cb, j) => {
+              const v = result(ra, cb);
+              const selected = (op === "not" ? i + 1 : i * 3 + j + 1) === cell;
+              return (
+                <g key={"c" + cb}>
+                  <rect x={x0 + j * w} y={30 + i * h} width={w - 4} height={h - 4} className={cls(v, selected)} />
+                  <text x={x0 + j * w + 8} y={30 + i * h + 19} className="fig-small" style={selected ? { fill: "var(--bg)" } : undefined}>
+                    {v}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        ))}
+        <text x={8} y={148} className="fig-small" style={{ fontWeight: 600 }}>
+          {`${expr(a, b)} = ${r}`}
+        </text>
+        {tries.length > 1
+          ? tries.map((t, i) => (
+              <text key={"t" + i} x={8} y={168 + i * 16} className="fig-small">
+                {`fill in: ${t}`}
+              </text>
+            ))
+          : null}
+        <text x={8} y={tries.length > 1 ? 168 + tries.length * 16 + 4 : 168} className="fig-small">
+          {verdict}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** A ₹500 transfer between two wallets, with or without a transaction, and with or without a power cut between its two updates. */
+function TransferCrash(props: Props) {
+  const [inTx, setInTx] = useState(props.transaction !== false);
+  const [crash, setCrash] = useState(props.crash === true);
+  const statements = [
+    ...(inTx ? ["begin"] : []),
+    "update wallets set balance = balance - 500 where name = 'Asha'",
+    ...(crash ? ["power cut, then restart"] : ["update wallets set balance = balance + 500 where name = 'Bilal'", ...(inTx ? ["commit"] : [])]),
+  ];
+  const last = statements.length;
+  const [stepRaw, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, 4));
+  const step = Math.min(stepRaw, last);
+  // Replay the statements up to this step, keeping what this connection sees apart from what is safely on disk.
+  let seen = { Asha: 1000, Bilal: 200 };
+  let disk = { ...seen };
+  for (const s of statements.slice(0, step)) {
+    if (s.includes("- 500")) seen = { ...seen, Asha: seen.Asha - 500 };
+    else if (s.includes("+ 500")) seen = { ...seen, Bilal: seen.Bilal + 500 };
+    else if (s === "commit") disk = { ...seen };
+    else if (s.startsWith("power")) seen = { ...disk };
+    if (!inTx && s.startsWith("update")) disk = { ...seen };
+  }
+  const total = disk.Asha + disk.Bilal;
+  const money = (n: number) => `₹${group(n)}`;
+  const pending = inTx && step >= 1 && !statements.slice(0, step).some((s) => s === "commit" || s.startsWith("power"));
+  const verdict =
+    step < last
+      ? pending
+        ? "Inside the transaction: visible here, not yet committed."
+        : "Each statement is committed as soon as it runs."
+      : crash
+        ? inTx
+          ? "The unfinished transaction is undone: nothing lost."
+          : `The debit was saved and the credit never ran: ${money(1200 - total)} lost.`
+        : "Both updates are saved: the money has moved.";
+  const summary = `${inTx ? "A transaction wraps the two updates." : "No transaction: each update is committed by itself."} ${crash ? "The power fails between the debit and the credit." : "Nothing fails."} Step ${step} of ${last}${step > 0 ? `, after: ${statements[step - 1]}` : ", before anything runs"}. This connection sees Asha ${money(seen.Asha)} and Bilal ${money(seen.Bilal)}; on disk, Asha ${money(disk.Asha)} and Bilal ${money(disk.Bilal)}, ${money(total)} in all. ${verdict}`;
+  return (
+    <Frame
+      title="A transfer and a power cut"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={inTx} onClick={() => setInTx(!inTx)}>
+            inside a transaction
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={crash} onClick={() => setCrash(!crash)}>
+            power cut after the debit
+          </button>
+          <Stepper label="step" value={step} onChange={setStep} min={0} max={last} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 470 236" role="img" aria-label={`Wallet transfer, step ${step} of ${last}; on disk Asha ${money(disk.Asha)}, Bilal ${money(disk.Bilal)}`}>
+        {statements.map((s, i) => (
+          <g key={s}>
+            <rect x={8} y={8 + i * 24} width={454} height={20} className={i === step - 1 ? "fig-accent" : i < step ? "fig-fill" : "fig-ghost"} />
+            <text x={14} y={22 + i * 24} className="fig-small" style={i === step - 1 ? { fill: "var(--bg)" } : undefined}>
+              {s}
+            </text>
+          </g>
+        ))}
+        <SqlTable x={8} y={132} widths={[60, 70]} head={["name", "balance"]} rows={[["Asha", money(seen.Asha)], ["Bilal", money(seen.Bilal)]]} title="what this connection sees" mark={() => (pending ? "fill" : undefined)} />
+        <SqlTable x={230} y={132} widths={[60, 70]} head={["name", "balance"]} rows={[["Asha", money(disk.Asha)], ["Bilal", money(disk.Bilal)]]} title="committed, safe on disk" />
+        <text x={230} y={210} className="fig-small">
+          {`total on disk ${money(total)}`}
+        </text>
+        <text x={8} y={230} className="fig-small">
+          {verdict}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const IX_ORDERS: [number, string][] = [
+  [1, "Rohan"],
+  [2, "Meera"],
+  [3, "Arjun"],
+  [4, "Zoya"],
+  [5, "Kabir"],
+  [6, "Priya"],
+  [7, "Dev"],
+  [8, "Nisha"],
+  [9, "Arjun"],
+  [10, "Tara"],
+  [11, "Meera"],
+  [12, "Ishaan"],
+  [13, "Rohan"],
+  [14, "Kabir"],
+  [15, "Zoya"],
+  [16, "Priya"],
+];
+const IX_ENTRIES = [...IX_ORDERS].sort((a, b) => a[1].localeCompare(b[1]) || a[0] - b[0]);
+const IX_TARGET = "Meera";
+/** The ranges a lower-bound binary search for IX_TARGET passes through, one per comparison. */
+const IX_SEARCH: { lo: number; hi: number; mid: number }[] = (() => {
+  const out: { lo: number; hi: number; mid: number }[] = [];
+  let lo = 0;
+  let hi = IX_ENTRIES.length;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    out.push({ lo, hi, mid });
+    if (IX_ENTRIES[mid][1] < IX_TARGET) lo = mid + 1;
+    else hi = mid;
+  }
+  out.push({ lo, hi: lo, mid: -1 });
+  return out;
+})();
+type IxMethod = "scan" | "index";
+
+/** Finding one customer's orders by reading every row, or by binary search in a sorted index that points to the rows. */
+function IndexLookup(props: Props) {
+  const [method, setMethod] = useState<IxMethod>(props.method === "index" ? "index" : "scan");
+  const last = method === "scan" ? IX_ORDERS.length : IX_SEARCH.length;
+  const [stepRaw, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, IX_ORDERS.length));
+  const step = Math.min(stepRaw, last);
+  const choose = (m: IxMethod) => {
+    setMethod(m);
+    setStep(0);
+  };
+  const first = IX_SEARCH[IX_SEARCH.length - 1].lo;
+  const matches = IX_ENTRIES.map((e, i) => i).filter((i) => IX_ENTRIES[i][1] === IX_TARGET);
+  const done = step === last;
+  const found = method === "scan" ? IX_ORDERS.slice(0, step).filter((o) => o[1] === IX_TARGET) : done ? matches.map((i) => IX_ENTRIES[i]) : [];
+  const now = method === "index" && step > 0 && step < last ? IX_SEARCH[step - 1] : null;
+  const range = method === "index" && step > 0 ? IX_SEARCH[Math.min(step, IX_SEARCH.length) - 1] : null;
+  const rowMark = (r: number): SqlMark => {
+    if (method === "scan") return r === step - 1 ? "accent" : r < step ? (IX_ORDERS[r][1] === IX_TARGET ? "fill" : "ghost") : undefined;
+    return done && IX_ORDERS[r][1] === IX_TARGET ? "accent" : undefined;
+  };
+  const entryMark = (i: number): SqlMark => {
+    if (method === "scan" || !range) return method === "scan" ? "ghost" : undefined;
+    if (done) return matches.includes(i) ? "accent" : i === matches[matches.length - 1] + 1 ? "fill" : "ghost";
+    if (now && i === now.mid) return "accent";
+    return i >= range.lo && i < range.hi ? "fill" : "ghost";
+  };
+  const h = 16;
+  const rowY = (r: number) => 22 + (r + 1) * h + h / 2;
+  const line =
+    method === "scan"
+      ? step === 0
+        ? `No index: read the rows in the order they are stored.`
+        : `Rows read: ${step} of ${IX_ORDERS.length}. Found so far: ${found.map((o) => `order ${o[0]}`).join(", ") || "none"}.`
+      : step === 0
+        ? `The index keeps every (customer, id) pair sorted by customer.`
+        : now
+          ? `Comparison ${step}: entry ${now.mid + 1} is ${IX_ENTRIES[now.mid][1]}, ${IX_ENTRIES[now.mid][1] < IX_TARGET ? `before ${IX_TARGET}, so look later` : `not before ${IX_TARGET}, so look here or earlier`}.`
+          : `After ${IX_SEARCH.length - 1} comparisons, entries ${first + 1} and ${first + matches.length} hold ${IX_TARGET}: orders ${matches.map((i) => IX_ENTRIES[i][0]).join(" and ")}.`;
+  const tail =
+    method === "scan"
+      ? done
+        ? `A scan reads all ${IX_ORDERS.length} rows: another ${IX_TARGET} could be anywhere.`
+        : ""
+      : done
+        ? `About log₂ ${IX_ORDERS.length} = ${Math.log2(IX_ORDERS.length)} comparisons, then one read per match.`
+        : "";
+  const ids = found.map((o) => o[0]).join(", ");
+  const notes =
+    method === "scan"
+      ? step === 0
+        ? ["full scan: read every", "row in stored order"]
+        : [`rows read: ${step} of ${IX_ORDERS.length}`, `found: ${ids || "none"}`, ...(done ? [`another ${IX_TARGET} could`, "be anywhere"] : [])]
+      : step === 0
+        ? ["index search: entries", "sorted by customer"]
+        : now
+          ? [`comparison ${step}:`, `entry ${now.mid + 1} is ${IX_ENTRIES[now.mid][1]}`, IX_ENTRIES[now.mid][1] < IX_TARGET ? `before ${IX_TARGET}:` : `not before ${IX_TARGET}:`, IX_ENTRIES[now.mid][1] < IX_TARGET ? "look later" : "look here or earlier"]
+          : [`${IX_SEARCH.length - 1} comparisons, then`, `entries ${first + 1} and ${first + matches.length} give`, `orders ${matches.map((i) => IX_ENTRIES[i][0]).join(" and ")}`];
+  const summary = `select id from orders where customer = '${IX_TARGET}'. ${method === "scan" ? "Full scan of the table." : "Search in an index on customer."} Step ${step} of ${last}. ${[line, tail].filter((t) => t).join(" ")} The table holds ${IX_ORDERS.length} orders; ${IX_TARGET} placed orders ${matches.map((i) => IX_ENTRIES[i][0]).join(" and ")}.`;
+  return (
+    <Frame
+      title="Finding rows with and without an index"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={method === "scan"} onClick={() => choose("scan")}>
+            full scan
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={method === "index"} onClick={() => choose("index")}>
+            index search
+          </button>
+          <Stepper label="step" value={step} onChange={setStep} min={0} max={last} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 412 300" role="img" aria-label={`Looking for ${IX_TARGET}'s orders by ${method === "scan" ? "full scan" : "index search"}, step ${step} of ${last}`}>
+        <SqlTable x={8} y={22} widths={[32, 72]} head={["id", "customer"]} rows={IX_ORDERS.map((o) => [o[0], o[1]])} title="orders, as stored" height={h} mark={(r) => rowMark(r)} />
+        <SqlTable
+          x={300}
+          y={22}
+          widths={[72, 32]}
+          head={["customer", "id"]}
+          rows={IX_ENTRIES.map((e) => [e[1], e[0]])}
+          title="index on customer"
+          height={h}
+          mark={(i) => entryMark(i)}
+        />
+        {method === "index" && done
+          ? matches.map((i) => {
+              const r = IX_ORDERS.findIndex((o) => o[0] === IX_ENTRIES[i][0]);
+              return <line key={i} x1={300} y1={rowY(i)} x2={112} y2={rowY(r)} className="fig-axis" />;
+            })
+          : null}
+        {notes.map((note, i) => (
+          <text key={i} x={124} y={236 + i * 16} className="fig-small">
+            {note}
+          </text>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -7015,6 +7904,16 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "interval-schedule": IntervalSchedule,
   "quick-pivot": QuickPivot,
   "tour-heuristic": TourHeuristic,
+  "table-keys": TableKeys,
+  "algebra-ops": AlgebraOps,
+  "query-order": QueryOrder,
+  "join-match": JoinMatch,
+  "group-buckets": GroupBuckets,
+  "subquery-steps": SubquerySteps,
+  "window-frame": WindowFrame,
+  "three-valued": ThreeValued,
+  "transfer-crash": TransferCrash,
+  "index-lookup": IndexLookup,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
