@@ -5821,6 +5821,99 @@ function TableKeys(props: Props) {
   );
 }
 
+const ALG_RIDERS: string[][] = [
+  ["Asha", "KOR"],
+  ["Bilal", "IND"],
+  ["Chitra", "KOR"],
+];
+const ALG_STORES: string[][] = [
+  ["KOR", "Meena"],
+  ["IND", "Ravi"],
+  ["HSR", "Tara"],
+];
+const ALG_MON = [["Asha"], ["Bilal"]];
+const ALG_TUE = [["Bilal"], ["Chitra"]];
+type AlgOp = "select" | "project" | "product" | "join" | "union" | "difference";
+const ALG_OPS: AlgOp[] = ["select", "project", "product", "join", "union", "difference"];
+const ALG_LABELS: Record<AlgOp, string> = { select: "σ select", project: "π project", product: "× product", join: "⋈ join", union: "∪ union", difference: "− difference" };
+
+/** The six operations of relational algebra applied to small tables of riders, stores and rota lists. */
+function AlgebraOps(props: Props) {
+  const [op, setOp] = useState<AlgOp>(ALG_OPS.includes(props.op as AlgOp) ? (props.op as AlgOp) : "select");
+  const product = ALG_RIDERS.flatMap((r) => ALG_STORES.map((s) => [...r, ...s]));
+  const lists = op === "union" || op === "difference";
+  let head: string[];
+  let out: string[][];
+  let summary: string;
+  const names = (rows: string[][]) => rows.map((r) => r.join(" ")).join(", ");
+  if (op === "select") {
+    head = ["rider", "store"];
+    out = ALG_RIDERS.filter((r) => r[1] === "KOR");
+    summary = `σ store = 'KOR' (Riders): keep the rows of Riders whose store is KOR. ${out.length} of the ${ALG_RIDERS.length} rows pass: ${names(out)}. In SQL: select * from riders where store = 'KOR'.`;
+  } else if (op === "project") {
+    head = ["store"];
+    out = [...new Set(ALG_RIDERS.map((r) => r[1]))].map((s) => [s]);
+    summary = `π store (Riders): keep only the store column. The ${ALG_RIDERS.length} rows give ${ALG_RIDERS.map((r) => r[1]).join(", ")}, and a relation holds each row once, so the result has ${out.length} rows: ${names(out)}. In SQL: select distinct store from riders.`;
+  } else if (op === "product") {
+    head = ["rider", "R.store", "S.store", "manager"];
+    out = product;
+    summary = `Riders × Stores: every row of Riders paired with every row of Stores, ${ALG_RIDERS.length} × ${ALG_STORES.length} = ${out.length} rows. Only the ${product.filter((r) => r[1] === r[2]).length} marked pairs match a rider with the store they work at. In SQL: select * from riders cross join stores.`;
+  } else if (op === "join") {
+    head = ["rider", "store", "manager"];
+    out = product.filter((r) => r[1] === r[2]).map((r) => [r[0], r[1], r[3]]);
+    summary = `Riders ⋈ Stores: the pairs of the product that agree on store, with the store column kept once. ${out.length} rows: ${names(out)}. HSR has no rider, so it does not appear. In SQL: select * from riders natural join stores.`;
+  } else if (op === "union") {
+    head = ["rider"];
+    out = [...new Set([...ALG_MON, ...ALG_TUE].map((r) => r[0]))].map((s) => [s]);
+    summary = `Mon ∪ Tue: the riders on either day's list, each once: ${names(out)}. In SQL: select rider from mon union select rider from tue.`;
+  } else {
+    head = ["rider"];
+    out = ALG_MON.filter((r) => !ALG_TUE.some((t) => t[0] === r[0]));
+    summary = `Mon − Tue: the riders on Monday's list but not on Tuesday's: ${names(out)}. In SQL: select rider from mon except select rider from tue.`;
+  }
+  const passes = (r: number) => op === "select" && ALG_RIDERS[r][1] === "KOR";
+  const widths = head.length === 4 ? [52, 58, 58, 58] : head.length === 3 ? [56, 48, 64] : head.length === 2 ? [56, 48] : [64];
+  return (
+    <Frame
+      title="Operations on tables"
+      summary={summary}
+      controls={
+        <>
+          {ALG_OPS.map((o) => (
+            <button key={o} type="button" className="btn btn-secondary btn-small" aria-pressed={op === o} onClick={() => setOp(o)}>
+              {ALG_LABELS[o]}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 230" role="img" aria-label={`Relational algebra: ${ALG_LABELS[op]}, with its input tables and a result of ${out.length} rows`}>
+        {lists ? (
+          <>
+            <SqlTable x={8} y={22} widths={[64]} head={["rider"]} rows={ALG_MON} title="Mon" height={18} />
+            <SqlTable x={8} y={118} widths={[64]} head={["rider"]} rows={ALG_TUE} title="Tue" height={18} />
+          </>
+        ) : (
+          <>
+            <SqlTable x={8} y={22} widths={[56, 48]} head={["rider", "store"]} rows={ALG_RIDERS} title="Riders" height={18} mark={(r) => (passes(r) ? "accent" : undefined)} />
+            {op === "product" || op === "join" ? <SqlTable x={8} y={118} widths={[48, 64]} head={["store", "manager"]} rows={ALG_STORES} title="Stores" height={18} /> : null}
+          </>
+        )}
+        <SqlTable
+          x={200}
+          y={22}
+          widths={widths}
+          head={head}
+          rows={out}
+          title="Result"
+          height={18}
+          mark={(r) => (op === "product" && out[r][1] === out[r][2] ? "accent" : "fill")}
+        />
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -7136,6 +7229,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "quick-pivot": QuickPivot,
   "tour-heuristic": TourHeuristic,
   "table-keys": TableKeys,
+  "algebra-ops": AlgebraOps,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
