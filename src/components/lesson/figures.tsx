@@ -4798,6 +4798,87 @@ function HistogramBins(props: Props) {
   );
 }
 
+const EST_POPULATION = draws(7, 2000, true).map((z) => 20 * Math.exp(0.75 * z));
+const EST_SIZES = [5, 10, 20, 50, 100, 200, 500];
+type EstKind = "mean" | "median" | "p90" | "varn" | "var1";
+const EST_KINDS: EstKind[] = ["mean", "median", "p90", "varn", "var1"];
+const EST_NAMES: Record<EstKind, string> = { mean: "mean", median: "median", p90: "90th percentile", varn: "variance, dividing by n", var1: "variance, dividing by n − 1" };
+const estimateOf = (kind: EstKind, xs: number[]) => {
+  const n = xs.length;
+  const mean = xs.reduce((a, b) => a + b, 0) / n;
+  if (kind === "mean") return mean;
+  if (kind === "varn" || kind === "var1") return xs.reduce((a, b) => a + (b - mean) ** 2, 0) / (kind === "varn" ? n : n - 1);
+  const sorted = [...xs].sort((a, b) => a - b);
+  if (kind === "median") return n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+  return sorted[Math.ceil((90 * n) / 100) - 1];
+};
+const EST_TRUE: Record<EstKind, number> = {
+  mean: estimateOf("mean", EST_POPULATION),
+  median: estimateOf("median", EST_POPULATION),
+  p90: estimateOf("p90", EST_POPULATION),
+  varn: estimateOf("varn", EST_POPULATION),
+  var1: estimateOf("varn", EST_POPULATION),
+};
+
+/** Five hundred samples from one population: each gives an estimate, and their spread is the estimator's standard error. */
+function EstimatorSpread(props: Props) {
+  const [kind, setKind] = useState<EstKind>(typeof props.estimator === "string" && (EST_KINDS as string[]).includes(props.estimator) ? (props.estimator as EstKind) : "mean");
+  const [sizeAt, setSizeAt] = useState(Math.max(0, EST_SIZES.indexOf(num(props.n, 10))));
+  const n = EST_SIZES[sizeAt];
+  const repeats = 500;
+  const picks = draws(11, repeats * n, false);
+  const estimates = Array.from({ length: repeats }, (_, r) => estimateOf(kind, Array.from({ length: n }, (_, i) => EST_POPULATION[Math.floor(picks[r * n + i] * EST_POPULATION.length)])));
+  const truth = EST_TRUE[kind];
+  const centre = estimates.reduce((a, b) => a + b, 0) / repeats;
+  const spread = Math.sqrt(estimates.reduce((a, b) => a + (b - centre) ** 2, 0) / repeats);
+  const top = 2.5 * truth;
+  const bins = 40;
+  const counts = Array.from({ length: bins }, () => 0);
+  for (const e of estimates) counts[clamp(Math.floor((e / top) * bins), 0, bins - 1)]++;
+  const tallest = Math.max(...counts);
+  const sx = (v: number) => 40 + (Math.min(v, top) / top) * 380;
+  const sy = (c: number) => 200 - (c / tallest) * 160;
+  const variance = kind === "varn" || kind === "var1";
+  const unit = variance ? " ms²" : " ms";
+  const show = (v: number) => `${dp(v, 1)}${unit}`;
+  const bias = centre - truth;
+  const nextKind = EST_KINDS[(EST_KINDS.indexOf(kind) + 1) % EST_KINDS.length];
+  return (
+    <Frame
+      title="The spread of an estimate"
+      summary={`${group(repeats)} samples, each of ${n} response times drawn at random from a population of 2,000 whose ${variance ? "variance" : EST_NAMES[kind]} is ${show(truth)}. Each sample gives one estimate, the ${EST_NAMES[kind]}. The estimates average ${show(centre)}, ${Math.abs(bias) < 0.02 * truth ? "close to the truth" : `${bias < 0 ? "below" : "above"} the truth by ${show(Math.abs(bias))}`}, and spread with a standard deviation of ${show(spread)}: that spread is the standard error of this estimator for samples of ${n}.`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setKind(nextKind)}>
+            {`Estimate the ${EST_NAMES[nextKind]}`}
+          </button>
+          <Slider label="sample size" value={sizeAt} onChange={setSizeAt} min={0} max={EST_SIZES.length - 1} text={`${n}`} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 240" role="img" aria-label={`A histogram of ${repeats} estimates of the ${EST_NAMES[kind]} from samples of ${n}, with the true value marked`}>
+        {counts.map((c, j) => (
+          <rect key={j} x={40 + (j * 380) / bins + 0.5} y={sy(c)} width={380 / bins - 1} height={200 - sy(c)} className="fig-accent" opacity={0.75} />
+        ))}
+        <line x1="40" y1="200" x2="420" y2="200" className="fig-axis" />
+        <line x1={sx(truth)} y1="30" x2={sx(truth)} y2="200" className="fig-line" />
+        <text x={sx(truth)} y="24" textAnchor="middle" className="fig-small">
+          {`true ${dp(truth, 1)}`}
+        </text>
+        <text x="40" y="218" textAnchor="middle" className="fig-small">
+          0
+        </text>
+        <text x="420" y="218" textAnchor="middle" className="fig-small">
+          {dp(top, 0)}
+        </text>
+        <text x="230" y="234" textAnchor="middle" className="fig-small">
+          {`estimates of the ${EST_NAMES[kind]}${unit === " ms²" ? ", ms²" : ", ms"}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -6101,6 +6182,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "summary-marks": SummaryMarks,
   "tail-plot": TailPlot,
   "histogram-bins": HistogramBins,
+  "estimator-spread": EstimatorSpread,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

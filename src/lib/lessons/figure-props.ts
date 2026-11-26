@@ -88,6 +88,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "summary-marks": z.strictObject({ slowest: z.number().min(100).max(5000).optional(), percentile: z.number().int().min(1).max(100).optional() }),
   "tail-plot": z.strictObject({ alpha: z.number().min(1).max(3).optional() }),
   "histogram-bins": z.strictObject({ buckets: z.number().int().min(2).max(60).optional(), log: z.boolean().optional() }),
+  "estimator-spread": z.strictObject({ estimator: z.enum(["mean", "median", "p90", "varn", "var1"]).optional(), n: z.number().int().min(5).max(500).optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
