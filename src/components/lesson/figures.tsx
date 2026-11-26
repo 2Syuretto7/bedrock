@@ -3471,6 +3471,80 @@ function EuclidSquares(props: Props) {
   );
 }
 
+const PEG_NAMES = ["left", "middle", "right"];
+
+/** The moves that carry n discs from one peg to another: n - 1 out of the way, the largest across, n - 1 back on top. */
+const towerMoves = (n: number, from: number, to: number, spare: number, out: [number, number, number][]) => {
+  if (n === 0) return;
+  towerMoves(n - 1, from, spare, to, out);
+  out.push([n, from, to]);
+  towerMoves(n - 1, spare, to, from, out);
+};
+
+/** The tower of discs: moving n discs takes twice the moves for n - 1, plus one for the largest disc. */
+function Tower(props: Props) {
+  const [discs, setDiscs] = useState(clamp(Math.round(num(props.discs, 3)), 1, 6));
+  const [move, setMove] = useState(clamp(Math.round(num(props.move, 0)), 0, 63));
+  const moves: [number, number, number][] = [];
+  towerMoves(discs, 0, 2, 1, moves);
+  const total = moves.length;
+  const shown = Math.min(move, total);
+  const pegs: number[][] = [Array.from({ length: discs }, (_, i) => discs - i), [], []];
+  for (const [disc, from, to] of moves.slice(0, shown)) {
+    pegs[from] = pegs[from].slice(0, -1);
+    pegs[to] = [...pegs[to], disc];
+  }
+  const last = shown > 0 ? moves[shown - 1] : null;
+  const middle = 2 ** (discs - 1);
+  const said = last ? `Move ${shown}: disc ${last[0]} goes from the ${PEG_NAMES[last[1]]} needle to the ${PEG_NAMES[last[2]]} needle.` : "No moves yet: every disc is on the left needle, largest at the bottom.";
+  const largest =
+    discs === 1
+      ? ""
+      : ` The largest disc moves once, at move ${middle}, and just before that the other ${discs - 1} discs sit on the middle needle, which took ${middle - 1} moves; moving them back on top takes ${middle - 1} more.`;
+  return (
+    <Frame
+      title="Moving a tower of discs"
+      summary={`${plural(discs, "disc")}, moved one at a time and never onto a smaller disc. The fewest moves is 2 to the power ${discs}, minus 1, which is ${total}. ${said}${shown === total ? " The whole tower is now on the right needle." : ""}${largest}`}
+      controls={
+        <>
+          <Stepper label="discs" value={discs} onChange={setDiscs} min={1} max={6} />
+          <Stepper label="move" value={shown} onChange={setMove} min={0} max={total} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 270" role="img" aria-label={`${plural(discs, "disc")} on three needles after ${shown} of ${total} moves`}>
+        <line x1="10" y1="236" x2="430" y2="236" className="fig-axis" />
+        {[0, 1, 2].map((peg) => {
+          const x = 76 + peg * 144;
+          return (
+            <g key={peg}>
+              <line x1={x} y1="236" x2={x} y2="96" className="fig-axis" />
+              {pegs[peg].map((disc, level) => {
+                const width = 26 + disc * 19;
+                const moved = last !== null && last[0] === disc;
+                return (
+                  <g key={disc}>
+                    <rect x={x - width / 2} y={216 - level * 20} width={width} height="18" rx="4" className={moved ? "fig-accent" : "fig-fill"} />
+                    <text x={x} y={229 - level * 20} textAnchor="middle" className="fig-small" style={{ fill: moved ? "var(--bg)" : "var(--text)" }}>
+                      {disc}
+                    </text>
+                  </g>
+                );
+              })}
+              <text x={x} y="258" textAnchor="middle" className="fig-small">
+                {PEG_NAMES[peg]}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="24" className="fig-small">
+          {`move ${shown} of ${total}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -4758,6 +4832,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "inclusion-exclusion": InclusionExclusion,
   "mod-clock": ModClock,
   "euclid-squares": EuclidSquares,
+  tower: Tower,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

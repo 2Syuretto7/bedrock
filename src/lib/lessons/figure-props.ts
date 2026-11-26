@@ -71,6 +71,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "inclusion-exclusion": z.strictObject({ n: z.number().optional(), stage: z.number().optional() }),
   "mod-clock": z.strictObject({ m: z.number().optional(), step: z.number().optional(), jumps: z.number().optional() }),
   "euclid-squares": z.strictObject({ a: z.number().optional(), b: z.number().optional(), step: z.number().optional() }),
+  tower: z.strictObject({ discs: z.number().optional(), move: z.number().optional() }),
   "union-find": z.strictObject({ bySize: z.boolean().optional(), find: z.number().optional(), joins: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
