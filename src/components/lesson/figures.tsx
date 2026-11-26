@@ -3394,6 +3394,83 @@ function ModClock(props: Props) {
   );
 }
 
+type Tile = { x: number; y: number; side: number; step: number };
+
+/** Euclid's algorithm as cutting the largest squares off a rectangle: each division cuts squares, and the last squares to be cut tile the whole rectangle. */
+function EuclidSquares(props: Props) {
+  const [a, setA] = useState(clamp(Math.round(num(props.a, 21)), 1, 1200));
+  const [b, setB] = useState(clamp(Math.round(num(props.b, 15)), 1, 1200));
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 1)), 0, 30));
+  const tiles: Tile[] = [];
+  const divisions: { big: number; small: number; q: number; r: number }[] = [];
+  let x = 0;
+  let y = 0;
+  let w = a;
+  let h = b;
+  while (w > 0 && h > 0) {
+    const small = Math.min(w, h);
+    const big = Math.max(w, h);
+    const q = Math.floor(big / small);
+    for (let i = 0; i < q; i++) tiles.push(w >= h ? { x: x + i * small, y, side: small, step: divisions.length } : { x, y: y + i * small, side: small, step: divisions.length });
+    if (w >= h) {
+      x += q * small;
+      w -= q * small;
+    } else {
+      y += q * small;
+      h -= q * small;
+    }
+    divisions.push({ big, small, q, r: big % small });
+  }
+  const shown = Math.min(step, divisions.length);
+  const g = divisions[divisions.length - 1].small;
+  const scale = Math.min(410 / a, 220 / b);
+  const left = (440 - a * scale) / 2;
+  const top = 34 + (220 - b * scale) / 2;
+  const current = shown > 0 ? divisions[shown - 1] : null;
+  const done = shown === divisions.length;
+  const said = current
+    ? `Step ${shown}: ${current.big} = ${current.q} × ${current.small} + ${current.r}, so ${plural(current.q, "square")} of side ${current.small} ${current.q === 1 ? "is" : "are"} cut off${current.r === 0 ? " and nothing is left over" : `, leaving a ${current.r} by ${current.small} rectangle`}.`
+    : "No squares have been cut yet.";
+  const ending = done
+    ? ` The last squares have side ${g}, and squares of side ${g} tile the whole rectangle, so ${g} is the greatest common divisor of ${a} and ${b}.`
+    : " Every common divisor of the two sides also divides the sides of what is left, so the greatest common divisor has not changed.";
+  return (
+    <Frame
+      title="Euclid's algorithm as cutting squares"
+      summary={`A rectangle ${a} wide and ${b} high. ${said}${ending}`}
+      controls={
+        <>
+          <Stepper label="width" value={a} onChange={setA} min={1} max={1200} />
+          <Stepper label="height" value={b} onChange={setB} min={1} max={1200} />
+          <Stepper label="step" value={shown} onChange={setStep} min={0} max={divisions.length} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`A ${a} by ${b} rectangle after ${plural(shown, "step")} of Euclid's algorithm`}>
+        <rect x={left} y={top} width={a * scale} height={b * scale} className="fig-ghost" fill="none" />
+        {tiles
+          .filter((tile) => tile.step < shown)
+          .map((tile, k) => (
+            <g key={k}>
+              <rect x={left + tile.x * scale} y={top + tile.y * scale} width={tile.side * scale} height={tile.side * scale} className={tile.step === shown - 1 ? "fig-accent" : "fig-fill"} stroke="var(--bg)" strokeWidth="1" />
+              {tile.side * scale >= 28 ? (
+                <text x={left + (tile.x + tile.side / 2) * scale} y={top + (tile.y + tile.side / 2) * scale + 5} textAnchor="middle" className="fig-small" style={{ fill: tile.step === shown - 1 ? "var(--bg)" : "var(--text)" }}>
+                  {tile.side}
+                </text>
+              ) : null}
+            </g>
+          ))}
+        <text x="12" y="22" className="fig-small">
+          {current ? `${current.big} = ${current.q} × ${current.small} + ${current.r}` : `${a} by ${b}`}
+        </text>
+        <text x="12" y="282" className="fig-small">
+          {done ? `gcd(${a}, ${b}) = ${g}` : `step ${shown} of ${divisions.length}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -4680,6 +4757,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   pigeonholes: Pigeonholes,
   "inclusion-exclusion": InclusionExclusion,
   "mod-clock": ModClock,
+  "euclid-squares": EuclidSquares,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
