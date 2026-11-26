@@ -5007,6 +5007,81 @@ function NullTest(props: Props) {
   );
 }
 
+const BOOT_SIZES = [10, 20, 50, 100, 200];
+const BOOT_KINDS: EstKind[] = ["mean", "median", "p90"];
+
+/** One sample, resampled with replacement a thousand times: the spread of the resampled estimates stands in for the spread over real samples. */
+function Bootstrap(props: Props) {
+  const [kind, setKind] = useState<EstKind>(typeof props.estimator === "string" && (BOOT_KINDS as string[]).includes(props.estimator) ? (props.estimator as EstKind) : "median");
+  const [sizeAt, setSizeAt] = useState(Math.max(0, BOOT_SIZES.indexOf(num(props.n, 50))));
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const n = BOOT_SIZES[sizeAt];
+  const sample = draws(80 + seed, n, false).map((u) => EST_POPULATION[Math.floor(u * EST_POPULATION.length)]);
+  const resamples = 1000;
+  const picks = draws(90 + seed, resamples * n, false);
+  const stats = Array.from({ length: resamples }, (_, r) => estimateOf(kind, Array.from({ length: n }, (_, i) => sample[Math.floor(picks[r * n + i] * n)]))).sort((a, b) => a - b);
+  const low = stats[25];
+  const high = stats[resamples - 26];
+  const centre = stats.reduce((a, b) => a + b, 0) / resamples;
+  const se = Math.sqrt(stats.reduce((a, b) => a + (b - centre) ** 2, 0) / resamples);
+  const estimate = estimateOf(kind, sample);
+  const truth = EST_TRUE[kind];
+  const caught = low <= truth && truth <= high;
+  const top = 2.5 * truth;
+  const bins = 40;
+  const counts = Array.from({ length: bins }, () => 0);
+  for (const s of stats) counts[clamp(Math.floor((s / top) * bins), 0, bins - 1)]++;
+  const tallest = Math.max(...counts);
+  const sx = (v: number) => 40 + (clamp(v, 0, top) / top) * 380;
+  const sy = (c: number) => 220 - (c / tallest) * 120;
+  const dotTop = 150;
+  const dx = (v: number) => 40 + (clamp(v, 0, dotTop) / dotTop) * 380;
+  const nextKind = BOOT_KINDS[(BOOT_KINDS.indexOf(kind) + 1) % BOOT_KINDS.length];
+  return (
+    <Frame
+      title="Resampling one sample"
+      summary={`One sample of ${n} response times, whose ${EST_NAMES[kind]} is ${dp(estimate, 1)} ms. Drawing ${n} values from it with replacement, ${group(resamples)} times, gives ${group(resamples)} resampled ${EST_NAMES[kind]}s with a standard deviation of ${dp(se, 1)} ms: the bootstrap standard error. Dropping the lowest and highest 25 leaves the 95% interval ${dp(low, 1)} to ${dp(high, 1)} ms. The population's true ${EST_NAMES[kind]}, ${dp(truth, 1)} ms, which a real analyst never sees, is ${caught ? "inside" : "outside"} it.`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setKind(nextKind)}>
+            {`Resample the ${EST_NAMES[nextKind]}`}
+          </button>
+          <Slider label="sample size" value={sizeAt} onChange={setSizeAt} min={0} max={BOOT_SIZES.length - 1} text={`${n}`} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`Above, the ${n} sampled times as dots; below, a histogram of ${group(resamples)} resampled ${EST_NAMES[kind]}s with the 95% interval marked`}>
+        <text x="40" y="14" className="fig-small">
+          {`the sample, ${n} times (0 to ${dotTop} ms)`}
+        </text>
+        <line x1="40" y1="40" x2="420" y2="40" className="fig-axis" />
+        {sample.map((v, i) => (
+          <circle key={i} cx={dx(v)} cy={34 - (i % 3) * 5} r="2.5" className="fig-accent" opacity={0.7} />
+        ))}
+        <text x="40" y="78" className="fig-small">
+          {`resampled ${EST_NAMES[kind]}s (0 to ${dp(top, 0)} ms)`}
+        </text>
+        <rect x={sx(low)} y="90" width={Math.max(sx(high) - sx(low), 1)} height="130" className="fig-fill" opacity={0.5} />
+        {counts.map((c, j) => (
+          <rect key={j} x={40 + (j * 380) / bins + 0.5} y={sy(c)} width={380 / bins - 1} height={220 - sy(c)} className="fig-accent" opacity={0.75} />
+        ))}
+        <line x1="40" y1="220" x2="420" y2="220" className="fig-axis" />
+        <line x1={sx(truth)} y1="90" x2={sx(truth)} y2="220" className="fig-guide" />
+        <text x={sx(truth)} y="238" textAnchor="middle" className="fig-small">
+          {`true ${dp(truth, 1)}`}
+        </text>
+        <text x={sx(low)} y="254" textAnchor="end" className="fig-small">
+          {dp(low, 1)}
+        </text>
+        <text x={sx(high)} y="254" textAnchor="start" className="fig-small">
+          {dp(high, 1)}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -6313,6 +6388,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "estimator-spread": EstimatorSpread,
   "interval-catch": IntervalCatch,
   "null-test": NullTest,
+  "bootstrap": Bootstrap,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

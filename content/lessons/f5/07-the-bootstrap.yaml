@@ -1,0 +1,523 @@
+concept: f5.the-bootstrap
+minutes: 90
+claim: You can estimate the standard error of any statistic, a median or a p99 as easily as a mean, by resampling one sample with replacement, build a bootstrap percentile interval, compare two groups by resampling each, explain why the resample must be drawn with replacement and how much of the sample each resample leaves out, and say when the bootstrap fails, as for extreme percentiles of small samples and for measurements that depend on each other.
+recalls: [f5.hypothesis-tests]
+uses: [f5.sampling-and-estimators, f5.confidence-intervals, f5.histograms, f5.summaries-mean-median-and-percentiles, f5.distributions-of-latency-and-heavy-tails, f4.simulation-and-pseudo-random-numbers, f4.independence, f1.exponents-and-exponential-growth, s1.modules-and-imports, s1.comprehensions-and-iterators, s0.functions, s0.loops, s0.lists-and-tuples]
+leads: [f5.comparing-two-systems-a-b-tests, f5.noise-in-measurements-and-benchmarks]
+starter: |
+  # Scratch space. Bootstrap the median of twenty response times.
+  import random
+  import statistics
+
+  times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 120]
+  random.seed(0)
+  medians = sorted(statistics.median([random.choice(times) for _ in times]) for _ in range(1000))
+  print(statistics.pstdev(medians), medians[25], medians[974])
+parts:
+  recall:
+    - text: |
+        [[f5.hypothesis-tests]] and [[f5.confidence-intervals]] both rested on a standard error, and for a mean there is a formula, $s/\sqrt{n}$. For a median there is only an awkward approximation, and for a p99, the number an engineer usually cares about, nothing simple at all. The bootstrap gets a standard error for any statistic from the sample alone, by simulation. Three quick pulls first.
+  puzzle:
+    - text: |
+        You have 20 response times. To see how much their slowest value could vary, you make a new list of 20 by picking from the original 20 at random, *with replacement*: each pick is any of the 20, equally likely, and a value can be picked more than once.
+
+        **What is the chance that the slowest of the original 20 is not picked even once?** Give three decimal places.
+  intuition:
+    - text: |
+        A tea taster at an auction in Kolkata cannot drink the whole consignment, so samples a few cups and must say how sure the verdict is. With no second consignment to compare against, the taster can still ask: if I had drawn a slightly different handful of leaves from this same lot, how different would the cup have been? The sample is the best picture there is of the lot, so draw new handfuls from the sample itself.
+
+        That is the **bootstrap**. [[f5.sampling-and-estimators]] imagined drawing many samples from the population and watching the estimate scatter. We cannot do that, because we have one sample. But the sample is a miniature of the population: about 10% of its values are above its p90, about half above its median. So treat the sample *as if* it were the population. Draw a **resample** of the same size from it, with replacement, compute the statistic, and repeat a thousand times. The scatter of those thousand values estimates the scatter the statistic would show over real samples.
+
+        The figure takes one sample of response times, resamples it a thousand times and draws the histogram of the resampled medians, with the middle 95% shaded. Grow the sample and the histogram narrows. Switch to the mean and the 90th percentile, and step through seeds to see that a different sample gives a different interval, which usually, but not always, contains the true value.
+    - figure: bootstrap
+      props: { estimator: median, n: 50, seed: 0 }
+    - text: |
+        For samples of 50 the resampled medians spread over a few milliseconds and the 95% interval comfortably contains the true median. The histogram is lumpy, because a median can only take values that are in the sample, or halfway between two of them. With samples of 10, the interval for the 90th percentile is very wide and sometimes still misses: a resample cannot contain a value the sample never had.
+  derivation:
+    - text: |
+        **The plug-in idea.** Let $\hat{F}$ be the sample's empirical distribution, which puts chance $1/n$ on each of the $n$ measured values, the staircase of [[f5.histograms]]. Drawing $n$ values from $\hat{F}$ means drawing from the sample with replacement. The bootstrap estimate of a statistic's standard error is its standard error when the population is replaced by $\hat{F}$:
+
+        $$\widehat{\mathrm{SE}} = \text{the standard deviation of } \hat{\theta}(X^*_1, \ldots, X^*_n), \quad X^*_i \text{ drawn from the sample with replacement.}$$
+
+        That standard deviation can rarely be worked out by hand, so it is estimated by simulation, as in [[f4.simulation-and-pseudo-random-numbers]]: draw $B$ resamples, compute $\hat{\theta}^*_1, \ldots, \hat{\theta}^*_B$, and take their standard deviation. With $B$ around 1,000 to 10,000 the simulation adds little error of its own; the remaining error comes from the sample.
+
+        **Why with replacement.** Drawing $n$ values from $n$ *without* replacement just reorders the sample, and every statistic that ignores order comes out the same every time, a standard error of zero. With replacement, a resample repeats some values and leaves out others, which is exactly how a new sample from the population would differ from this one.
+
+        **What a resample leaves out.** A particular value is missed by one pick with chance $1 - 1/n$, and by all $n$ independent picks with chance
+
+        $$\left(1 - \frac{1}{n}\right)^n \to e^{-1} \approx 0.368$$
+
+        as $n$ grows, the limit from [[f1.exponents-and-exponential-growth]]. So a resample contains about 63% of the distinct original values, some of them two or three times.
+    - question:
+        id: derivation-left-out
+        type: numeric
+        system: s2
+        tolerance: "0.001"
+        prompt: |
+          A sample has 10 values. What is the chance that a resample of 10, drawn with replacement, leaves out one particular value entirely? Give three decimal places.
+        answer: "0.349"
+        explanation: |
+          Each pick misses it with chance $9/10$, and the 10 picks are independent, so $0.9^{10} \approx 0.349$. For large samples this approaches $e^{-1} \approx 0.368$.
+    - text: |
+        **A check against the formula.** For the mean, the bootstrap standard error comes out close to $\hat{\sigma}/\sqrt{n}$, where $\hat{\sigma}$ is the sample's standard deviation dividing by $n$: drawing from $\hat{F}$ is drawing from a population whose variance is exactly that. So where a formula exists, the bootstrap reproduces it, and where none exists, it carries on regardless. For twenty response times the formula gives 4.11 ms and two thousand resamples give 4.15 ms.
+
+        **Percentile intervals.** Sort the $B$ bootstrap values and drop the lowest and highest $B(1 - c)/2$ of them. What remains spans the **bootstrap percentile interval** at level $c$. For $B = 1{,}000$ and 95%, drop 25 from each end. When the statistic's sampling distribution is skewed, as it is for a p99, this interval is lopsided too, which a symmetric "estimate $\pm$ 1.96 standard errors" cannot be.
+    - question:
+        id: derivation-ranks
+        type: numeric
+        system: s2
+        prompt: |
+          2,000 bootstrap values are sorted from smallest to largest. For a 95% percentile interval, which position, counting from 1, holds the lower end?
+        answer: "51"
+        explanation: |
+          $2{,}000 \times 0.05/2 = 50$ values are dropped from each end, so the lower end is the 51st smallest and the upper end the 1,950th.
+    - text: |
+        **Two groups.** To compare an old and a new build by the difference of their p99s, resample *each* group from itself, with its own size, and record the difference of the two resampled p99s. A thousand such differences give a standard error and a percentile interval for the difference. If the 95% interval excludes zero, the difference is significant at the 5% level, as in [[f5.hypothesis-tests]]. Pooling the two groups before resampling would answer a different question: what differences arise when there is no real difference, which is the permutation test's null distribution.
+
+        **When it fails.** The bootstrap treats the sample as the population, so it cannot know what the sample did not show. Three failures matter in practice.
+
+        - **Extremes.** A resample's maximum is never above the sample's maximum, so the bootstrap cannot reveal how much bigger the true maximum, or a p99.9 from a few hundred requests, might be. With few values beyond a percentile, the bootstrap interval for it is too narrow. [[f5.distributions-of-latency-and-heavy-tails]] showed that heavy tails make this worse.
+        - **Dependence.** Resampling single values assumes they were independent, as in [[f4.independence]]. Response times measured one after another during a slow minute are not: they come in runs. Resampling whole blocks of consecutive measurements keeps the runs together.
+        - **Tiny samples.** With five values, $\hat{F}$ is a poor picture of anything, and no amount of resampling improves it.
+    - question:
+        id: order-bootstrap
+        type: order
+        system: s2
+        prompt: |
+          Put the steps for a bootstrap 95% interval for a sample's p99 in order.
+        steps:
+          - "Draw a resample of the same size from the sample, with replacement."
+          - "Compute the p99 of the resample and keep it."
+          - "Repeat the first two steps 1,000 times."
+          - "Sort the 1,000 values and drop the lowest and highest 25; the rest span the interval."
+        explanation: |
+          Each resample gives one bootstrap p99; the interval comes from the collection. Sorting must wait until all of them exist.
+  formal:
+    - text: |
+        **Empirical distribution.** For a sample $x_1, \ldots, x_n$, $\hat{F}$ puts mass $1/n$ on each $x_i$. A resample is $n$ independent draws from $\hat{F}$, that is, from the sample with replacement.
+
+        **Bootstrap standard error.** With resamples $b = 1, \ldots, B$ and statistics $\hat{\theta}^*_b$, $\widehat{\mathrm{SE}} = \sqrt{\frac{1}{B}\sum_b (\hat{\theta}^*_b - \bar{\theta}^*)^2}$.
+
+        **Percentile interval.** With the $\hat{\theta}^*_b$ sorted, drop $\mathrm{round}(B(1 - c)/2)$ from each end; the smallest and largest remaining span the level-$c$ interval.
+
+        **Coverage of a resample.** A given value is absent from a resample with chance $(1 - 1/n)^n \to e^{-1}$.
+
+        **Two samples.** Resample each group from itself with its own size; the statistic is computed on the pair of resamples.
+  drill:
+    - text: Seconds each. Same size, with replacement, many times.
+    - question:
+        id: drill-replacement
+        type: choice
+        system: s1
+        prompt: |
+          How is a bootstrap resample drawn from a sample of $n$ values?
+        options:
+          - "$n$ values, with replacement"
+          - "$n$ values, without replacement"
+          - "$n/2$ values, without replacement"
+          - "One value, $n$ times without replacement"
+        answer: 0
+        explanation: Without replacement, $n$ values from $n$ is just the same sample reordered.
+    - question:
+        id: drill-left-out-limit
+        type: numeric
+        system: s1
+        tolerance: "0.002"
+        prompt: |
+          For a large sample, about what fraction of the original values does a resample leave out?
+        answer: "0.368"
+        explanation: $(1 - 1/n)^n \to e^{-1} \approx 0.368$.
+    - question:
+        id: drill-drop
+        type: numeric
+        system: s1
+        prompt: |
+          With 1,000 bootstrap values, how many are dropped from each end for a 95% percentile interval?
+        answer: "25"
+        explanation: $1{,}000 \times 0.05/2 = 25$.
+    - question:
+        id: drill-max
+        type: choice
+        system: s1
+        prompt: |
+          A sample's slowest response is 900 ms. What is the largest value any bootstrap resample of it can contain?
+        options:
+          - "900 ms"
+          - "Anything, since resampling is random"
+          - "Twice 900 ms"
+          - "The population's maximum"
+        answer: 0
+        explanation: A resample only repeats values from the sample, so nothing above 900 ms can appear. This is why the bootstrap understates uncertainty about extremes.
+    - question:
+        id: drill-two-groups
+        type: choice
+        system: s1
+        prompt: |
+          To bootstrap the difference between an old and a new build's medians, how should resamples be drawn?
+        options:
+          - "Resample each group from itself, keeping each group's size"
+          - "Pool both groups and resample the pool"
+          - "Resample only the new build"
+        answer: 0
+        explanation: Each group stands for its own population. Pooling would simulate a world with no difference, which is the permutation test's job.
+    - question:
+        id: drill-se-mean
+        type: numeric
+        system: s1
+        prompt: |
+          A sample of 100 has standard deviation 30 ms, dividing by $n$. About what bootstrap standard error should its mean have, in milliseconds?
+        answer: "3"
+        explanation: For the mean, the bootstrap reproduces $\hat{\sigma}/\sqrt{n} = 30/10 = 3$.
+    - question:
+        id: predict-left-out
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(round((1 - 1 / 1000) ** 1000, 3))
+        output: "0.368"
+        explanation: The chance that one value is missed by all 1,000 picks of a resample of 1,000, already very close to $e^{-1}$.
+    - question:
+        id: predict-interval
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          stats = sorted([4, 9, 1, 7, 3, 8, 2, 6, 5, 10])
+          drop = round(len(stats) * 0.2 / 2)
+          print(stats[drop], stats[-1 - drop])
+        output: "2 9"
+        explanation: An 80% interval drops $10 \times 0.2/2 = 1$ value from each end of the sorted list 1 to 10, leaving 2 to 9.
+  work:
+    - text: Slower now. For each resample, ask what it could contain and what it could not, and keep the seed in one place so that results repeat.
+    - question:
+        id: fix-resample
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `bootstrap_means(xs, resamples, seed)` should seed once and return `resamples` bootstrap means, each from a resample of `len(xs)` values drawn with replacement, one at a time, with `random.choice(xs)`. The program should print `4.15`, close to the formula's 4.11. It prints `0.0`. Find the fault and fix it.
+        starter: |
+          import random
+          import statistics
+
+
+          def bootstrap_means(xs, resamples, seed):
+              # Seed once, then return `resamples` bootstrap means, each the mean of a resample
+              # of len(xs) values drawn with replacement, one at a time, with random.choice(xs).
+              random.seed(seed)
+              means = []
+              for _ in range(resamples):
+                  sample = list(xs)
+                  random.shuffle(sample)
+                  means.append(sum(sample) / len(sample))
+              return means
+
+
+          times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 120]
+          print(round(statistics.pstdev(bootstrap_means(times, 2000, 1)), 2))
+        solution: |
+          import random
+          import statistics
+
+
+          def bootstrap_means(xs, resamples, seed):
+              # Seed once, then return `resamples` bootstrap means, each the mean of a resample
+              # of len(xs) values drawn with replacement, one at a time, with random.choice(xs).
+              random.seed(seed)
+              means = []
+              for _ in range(resamples):
+                  sample = [random.choice(xs) for _ in range(len(xs))]
+                  means.append(sum(sample) / len(sample))
+              return means
+
+
+          times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 120]
+          print(round(statistics.pstdev(bootstrap_means(times, 2000, 1)), 2))
+        tests: |
+          def _reference(_xs, _resamples, _seed):
+              random.seed(_seed)
+              _means = []
+              for _r in range(_resamples):
+                  _sample = [random.choice(_xs) for _i in range(len(_xs))]
+                  _means.append(sum(_sample) / len(_sample))
+              return _means
+
+
+          for _xs, _resamples, _seed in [([1, 2, 3], 10, 0), ([7], 3, 5), ([10, 20, 30, 40, 1000], 50, 2), ([42, 45, 47, 48, 50, 51, 52, 53, 55, 56], 30, 9)]:
+              _want = _reference(_xs, _resamples, _seed)
+              _got = bootstrap_means(_xs, _resamples, _seed)
+              _call = "bootstrap_means(" + str(_xs) + ", " + str(_resamples) + ", " + str(_seed) + ")"
+              assert len(_got) == len(_want), _call + " should return " + str(len(_want)) + " means, not " + str(len(_got))
+              for _a, _b in zip(_got, _want):
+                  assert abs(_a - _b) < 1e-9, _call + " should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "4.15", "The program should print 4.15"
+        wrong:
+          - |
+            import random
+            import statistics
+
+
+            def bootstrap_means(xs, resamples, seed):
+                # Seed once, then return `resamples` bootstrap means, each the mean of a resample
+                # of len(xs) values drawn with replacement, one at a time, with random.choice(xs).
+                random.seed(seed)
+                means = []
+                for _ in range(resamples):
+                    sample = [random.choice(xs) for _ in range(len(xs) - 1)]
+                    means.append(sum(sample) / len(sample))
+                return means
+
+
+            times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 120]
+            print(round(statistics.pstdev(bootstrap_means(times, 2000, 1)), 2))
+          - |
+            import random
+            import statistics
+
+
+            def bootstrap_means(xs, resamples, seed):
+                # Seed once, then return `resamples` bootstrap means, each the mean of a resample
+                # of len(xs) values drawn with replacement, one at a time, with random.choice(xs).
+                random.seed(seed)
+                means = []
+                for _ in range(resamples):
+                    sample = [random.choice(xs)] * len(xs)
+                    means.append(sum(sample) / len(sample))
+                return means
+
+
+            times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 120]
+            print(round(statistics.pstdev(bootstrap_means(times, 2000, 1)), 2))
+          - |
+            import random
+            import statistics
+
+
+            def bootstrap_means(xs, resamples, seed):
+                # Seed once, then return `resamples` bootstrap means, each the mean of a resample
+                # of len(xs) values drawn with replacement, one at a time, with random.choice(xs).
+                random.seed(seed)
+                means = []
+                for _ in range(resamples):
+                    random.seed(seed)
+                    sample = [random.choice(xs) for _ in range(len(xs))]
+                    means.append(sum(sample) / len(sample))
+                return means
+
+
+            times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 120]
+            print(round(statistics.pstdev(bootstrap_means(times, 2000, 1)), 2))
+        explanation: |
+          Shuffling a copy draws without replacement, so every resample is the original sample in a new order and every mean is identical. Each resample must be `len(xs)` independent picks. One pick fewer gives resamples of the wrong size; repeating a single pick gives means that are single values; and seeding inside the loop makes every resample the same.
+    - question:
+        id: write-percentile-interval
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `percentile_interval(stats, level)`. Sort the statistics, drop `round(len(stats) * (1 - level) / 2)` of them from each end, and return the smallest and largest that remain, as a pair. Do not change the list you are given.
+        starter: |
+          def percentile_interval(stats, level):
+              # Sort the statistics, drop round(len(stats) * (1 - level) / 2) of them from each end,
+              # and return the smallest and largest that remain, as a pair.
+              return (0, 0)
+
+
+          print(percentile_interval(list(range(1000, 0, -1)), 0.95), percentile_interval([4, 9, 1, 7, 3, 8, 2, 6, 5, 10], 0.8))
+        solution: |
+          def percentile_interval(stats, level):
+              # Sort the statistics, drop round(len(stats) * (1 - level) / 2) of them from each end,
+              # and return the smallest and largest that remain, as a pair.
+              ordered = sorted(stats)
+              drop = round(len(ordered) * (1 - level) / 2)
+              return (ordered[drop], ordered[len(ordered) - 1 - drop])
+
+
+          print(percentile_interval(list(range(1000, 0, -1)), 0.95), percentile_interval([4, 9, 1, 7, 3, 8, 2, 6, 5, 10], 0.8))
+        tests: |
+          for _stats, _level in [([3, 1, 2], 0.5), ([5], 0.9), (list(range(1, 41)), 0.9), (list(range(2000, 0, -1)), 0.95), ([2.5, 1.5, 9.0, 4.0, 3.0, 6.5, 0.5, 7.0], 0.5), ([4, 4, 1, 9, 9, 2, 7, 3, 3, 8], 0.8)]:
+              _ordered = sorted(_stats)
+              _drop = round(len(_ordered) * (1 - _level) / 2)
+              _want = (_ordered[_drop], _ordered[len(_ordered) - 1 - _drop])
+              _copy = list(_stats)
+              _got = percentile_interval(_stats, _level)
+              assert _stats == _copy, "percentile_interval should not change the list it is given"
+              assert tuple(_got) == _want, "percentile_interval(" + str(_stats) + ", " + str(_level) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "(26, 975) (2, 9)", "The program should print (26, 975) (2, 9)"
+        wrong:
+          - |
+            def percentile_interval(stats, level):
+                # Sort the statistics, drop round(len(stats) * (1 - level) / 2) of them from each end,
+                # and return the smallest and largest that remain, as a pair.
+                drop = round(len(stats) * (1 - level) / 2)
+                return (stats[drop], stats[len(stats) - 1 - drop])
+
+
+            print(percentile_interval(list(range(1000, 0, -1)), 0.95), percentile_interval([4, 9, 1, 7, 3, 8, 2, 6, 5, 10], 0.8))
+          - |
+            def percentile_interval(stats, level):
+                # Sort the statistics, drop round(len(stats) * (1 - level) / 2) of them from each end,
+                # and return the smallest and largest that remain, as a pair.
+                ordered = sorted(stats)
+                drop = round(len(ordered) * (1 - level))
+                return (ordered[drop], ordered[len(ordered) - 1 - drop])
+
+
+            print(percentile_interval(list(range(1000, 0, -1)), 0.95), percentile_interval([4, 9, 1, 7, 3, 8, 2, 6, 5, 10], 0.8))
+          - |
+            def percentile_interval(stats, level):
+                # Sort the statistics, drop round(len(stats) * (1 - level) / 2) of them from each end,
+                # and return the smallest and largest that remain, as a pair.
+                ordered = sorted(stats)
+                drop = round(len(ordered) * (1 - level) / 2)
+                return (ordered[drop], ordered[len(ordered) - drop])
+
+
+            print(percentile_interval(list(range(1000, 0, -1)), 0.95), percentile_interval([4, 9, 1, 7, 3, 8, 2, 6, 5, 10], 0.8))
+        explanation: |
+          Positions in the sorted list run from 0 to `len - 1`, so after dropping `drop` from each end the smallest left is at `drop` and the largest at `len - 1 - drop`. Skipping the sort picks values by where they happened to fall; dropping `len * (1 - level)` from each end removes twice too many; and `len - drop` is one past the largest that remains.
+    - question:
+        id: write-bootstrap-se
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `bootstrap_se(xs, stat, resamples, seed)`. Call `random.seed(seed)` once. For each of `resamples` resamples of `len(xs)` values, drawn with replacement one at a time with `random.choice(xs)`, compute `stat(resample)`. Return the standard deviation of those values with `statistics.pstdev`. `stat` is any function of a list, such as `statistics.median` or `max`.
+        starter: |
+          import random
+          import statistics
+
+
+          def bootstrap_se(xs, stat, resamples, seed):
+              # Seed once. For each of `resamples` resamples of len(xs) values, drawn with
+              # replacement one at a time with random.choice(xs), compute stat(resample).
+              # Return the standard deviation of those values, using statistics.pstdev.
+              return 0
+
+
+          times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 120]
+          print(round(bootstrap_se(times, statistics.mean, 2000, 1), 2), round(bootstrap_se(times, statistics.median, 2000, 1), 2), bootstrap_se([5, 5, 5], max, 100, 0))
+        solution: |
+          import random
+          import statistics
+
+
+          def bootstrap_se(xs, stat, resamples, seed):
+              # Seed once. For each of `resamples` resamples of len(xs) values, drawn with
+              # replacement one at a time with random.choice(xs), compute stat(resample).
+              # Return the standard deviation of those values, using statistics.pstdev.
+              random.seed(seed)
+              values = []
+              for _ in range(resamples):
+                  sample = [random.choice(xs) for _ in range(len(xs))]
+                  values.append(stat(sample))
+              return statistics.pstdev(values)
+
+
+          times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 120]
+          print(round(bootstrap_se(times, statistics.mean, 2000, 1), 2), round(bootstrap_se(times, statistics.median, 2000, 1), 2), bootstrap_se([5, 5, 5], max, 100, 0))
+        tests: |
+          def _reference(_xs, _stat, _resamples, _seed):
+              random.seed(_seed)
+              _values = []
+              for _r in range(_resamples):
+                  _sample = [random.choice(_xs) for _i in range(len(_xs))]
+                  _values.append(_stat(_sample))
+              return statistics.pstdev(_values)
+
+
+          for _xs, _stat, _resamples, _seed in [([1, 2, 3], statistics.mean, 20, 0), ([1, 2, 3, 4], statistics.median, 30, 4), ([3, 1, 4, 1, 5, 9, 2, 6], max, 50, 7), ([10, 10], min, 5, 1)]:
+              _want = _reference(_xs, _stat, _resamples, _seed)
+              _got = bootstrap_se(_xs, _stat, _resamples, _seed)
+              assert abs(_got - _want) < 1e-9, "bootstrap_se(" + str(_xs) + ", " + _stat.__name__ + ", " + str(_resamples) + ", " + str(_seed) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "4.15 3.6 0.0", "The program should print 4.15 3.6 0.0"
+        wrong:
+          - |
+            import random
+            import statistics
+
+
+            def bootstrap_se(xs, stat, resamples, seed):
+                # Seed once. For each of `resamples` resamples of len(xs) values, drawn with
+                # replacement one at a time with random.choice(xs), compute stat(resample).
+                # Return the standard deviation of those values, using statistics.pstdev.
+                random.seed(seed)
+                values = []
+                for _ in range(resamples):
+                    sample = [random.choice(xs) for _ in range(len(xs))]
+                    values.append(stat(xs))
+                return statistics.pstdev(values)
+
+
+            times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 120]
+            print(round(bootstrap_se(times, statistics.mean, 2000, 1), 2), round(bootstrap_se(times, statistics.median, 2000, 1), 2), bootstrap_se([5, 5, 5], max, 100, 0))
+          - |
+            import random
+            import statistics
+
+
+            def bootstrap_se(xs, stat, resamples, seed):
+                # Seed once. For each of `resamples` resamples of len(xs) values, drawn with
+                # replacement one at a time with random.choice(xs), compute stat(resample).
+                # Return the standard deviation of those values, using statistics.pstdev.
+                random.seed(seed)
+                values = []
+                for _ in range(resamples):
+                    sample = [random.choice(xs) for _ in range(len(xs))]
+                    values.append(stat(sample))
+                return statistics.mean(values)
+
+
+            times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 120]
+            print(round(bootstrap_se(times, statistics.mean, 2000, 1), 2), round(bootstrap_se(times, statistics.median, 2000, 1), 2), bootstrap_se([5, 5, 5], max, 100, 0))
+          - |
+            import random
+            import statistics
+
+
+            def bootstrap_se(xs, stat, resamples, seed):
+                # Seed once. For each of `resamples` resamples of len(xs) values, drawn with
+                # replacement one at a time with random.choice(xs), compute stat(resample).
+                # Return the standard deviation of those values, using statistics.pstdev.
+                random.seed(seed)
+                values = []
+                for _ in range(resamples):
+                    sample = [random.choice(xs) for _ in range(len(xs))]
+                    values.append(stat(sample))
+                return statistics.pstdev(values) / len(xs) ** 0.5
+
+
+            times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 120]
+            print(round(bootstrap_se(times, statistics.mean, 2000, 1), 2), round(bootstrap_se(times, statistics.median, 2000, 1), 2), bootstrap_se([5, 5, 5], max, 100, 0))
+        explanation: |
+          The function never needs to know which statistic it bootstraps; it applies `stat` to each resample. Applying it to the original `xs` every time gives the same value repeatedly and a standard error of 0. The mean of the bootstrap values estimates the statistic, not its spread, and dividing the spread by $\sqrt{n}$ again counts the sample size twice: the resamples already have size $n$. The median's standard error comes out smaller than the mean's here, because the slowest few times pull the mean about but not the median.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        tolerance: "0.001"
+        prompt: |
+          A resample of 20 is drawn with replacement from 20 response times. What is the chance that the slowest original value is not picked at all? Give three decimal places.
+        answer: "0.358"
+        explanation: |
+          Each pick misses it with chance $19/20$, so all 20 miss with chance $0.95^{20} \approx 0.358$. In about a third of resamples the maximum drops to the second-slowest value.
+    - question:
+        id: work-p999
+        type: choice
+        system: s2
+        prompt: |
+          A load test sent 400 requests. A colleague bootstraps the p99.9 and reports a tight 95% interval. Why should it not be trusted?
+        options:
+          - "The p99.9 of 400 values is essentially the maximum, and resamples cannot go above the sample's maximum, so the interval cannot show how much slower the true p99.9 might be."
+          - "The bootstrap only works for means."
+          - "1,000 resamples is too few for any interval."
+          - "Bootstrap intervals are always too wide for percentiles."
+        answer: 0
+        explanation: |
+          The nearest rank is $\lceil 0.999 \times 400 \rceil = 400$, the slowest request. Every resample's p99.9 is one of the sample's few largest values, so the interval spans only those, though the true p99.9 could be far beyond them. Estimating it needs many more requests, as [[f5.sampling-and-estimators]] warned.
+  connections:
+    - text: |
+        The chance is $0.95^{20} \approx 0.358$. More than a third of resamples leave the slowest value out, and in those the resample's maximum is the second-slowest time. That is how the bootstrap varies the maximum: only downward, among values already seen. For the median of the same 20 times this is harmless, since the median does not depend on the slowest value; for the maximum or a far-tail percentile it is the bootstrap's blind spot.
+
+        With the bootstrap, every summary from the start of this cluster can carry an honest interval. [[f5.comparing-two-systems-a-b-tests]] uses it to compare the tails of two versions of a system on live traffic, where the means are not what users feel. [[f5.noise-in-measurements-and-benchmarks]] uses it on repeated timings of a program, where the danger is the dependence between runs that the plain bootstrap ignores.
