@@ -7737,6 +7737,103 @@ function FeeStrategy(props: Props) {
   );
 }
 
+/** A refactoring made of many small changes, tested after each change or only once at the end. */
+function RefactorSteps(props: Props) {
+  const [small, setSmall] = useState(props.mode !== "big");
+  const [n, setN] = useState(clamp(Math.round(num(props.changes, 12)), 2, 20));
+  const [slipRaw, setSlip] = useState(clamp(Math.round(num(props.slip, 5)), 0, 20));
+  const slip = Math.min(slipRaw, n);
+  const allRight = Math.round(Math.pow(0.95, n) * 100);
+  const suspects = slip === 0 ? 0 : small ? 1 : n;
+  const runs = small ? (slip === 0 ? n : slip) : 1;
+  const slot = 440 / n;
+  const w = Math.max(6, Math.min(34, slot - 4));
+  const cx = (i: number) => 10 + slot * i + slot / 2;
+  const isSuspect = (i: number) => slip !== 0 && (small ? i + 1 === slip : true);
+  const runState = (i: number): "pass" | "fail" | "skip" | "none" => {
+    if (small) {
+      if (slip === 0 || i + 1 < slip) return "pass";
+      if (i + 1 === slip) return "fail";
+      return "skip";
+    }
+    if (i < n - 1) return "none";
+    return slip === 0 ? "pass" : "fail";
+  };
+  const summary = small
+    ? slip === 0
+      ? `Tests run after each of the ${n} changes, ${n} runs in all, and every run passes: the code was restructured without changing what it does.`
+      : `Tests run after every change. The slip in change ${slip} makes the run straight after it fail, so change ${slip} is the only suspect: undo it and make it again. The work stopped after ${slip} ${slip === 1 ? "run" : "runs"} of a few seconds each.`
+    : slip === 0
+      ? `All ${n} changes are made before the tests run once, and this time they pass. At a 5% chance of a slip per change, that happens only ${allRight}% of the time.`
+      : `All ${n} changes are made before the tests run once. The slip in change ${slip} makes that run fail, and any of the ${n} changes could be the cause. At a 5% chance of a slip per change, all ${n} are right only ${allRight}% of the time.`;
+  return (
+    <Frame
+      title="Small steps or one big change"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={small} onClick={() => setSmall(true)}>
+            test after each change
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!small} onClick={() => setSmall(false)}>
+            test once at the end
+          </button>
+          <Stepper label="changes" value={n} min={2} max={20} onChange={setN} />
+          <Stepper label="slip in change (0 for none)" value={slip} min={0} max={n} onChange={setSlip} />
+        </>
+      }
+    >
+      <svg
+        viewBox="0 0 460 190"
+        role="img"
+        aria-label={`${n} changes, ${small ? "tested after each" : "tested once at the end"}; ${slip === 0 ? "no slip" : `slip in change ${slip}, ${suspects === 1 ? "1 suspect" : `${suspects} suspects`}`}`}
+      >
+        <text x={10} y={16} className="fig-small">
+          changes, in the order they are made (filled = contains the slip)
+        </text>
+        {Array.from({ length: n }, (_, i) => (
+          <rect
+            key={`c${i}`}
+            x={cx(i) - w / 2}
+            y={26}
+            width={w}
+            height={30}
+            rx={3}
+            className={i + 1 === slip ? "fig-accent" : "fig-ghost"}
+            style={isSuspect(i) ? { stroke: "var(--text)", strokeWidth: 3 } : undefined}
+          />
+        ))}
+        {Array.from({ length: n }, (_, i) =>
+          n <= 12 || i === 0 || (i + 1) % 5 === 0 || i + 1 === slip ? (
+            <text key={`l${i}`} x={cx(i)} y={72} textAnchor="middle" className="fig-small">
+              {i + 1}
+            </text>
+          ) : null,
+        )}
+        <text x={10} y={98} className="fig-small">
+          test runs (filled = passes, ring = fails, dash = not run)
+        </text>
+        {Array.from({ length: n }, (_, i) => {
+          const s = runState(i);
+          if (s === "none") return null;
+          if (s === "skip") return <line key={`r${i}`} x1={cx(i) - 5} x2={cx(i) + 5} y1={116} y2={116} className="fig-guide" />;
+          return s === "pass" ? (
+            <circle key={`r${i}`} cx={cx(i)} cy={116} r={6} className="fig-accent" />
+          ) : (
+            <circle key={`r${i}`} cx={cx(i)} cy={116} r={7} className="fig-ghost" style={{ stroke: "var(--text)", strokeWidth: 3 }} />
+          );
+        })}
+        <text x={10} y={152} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`test runs: ${runs}; changes to inspect: ${suspects}`}
+        </text>
+        <text x={10} y={176} className="fig-small">
+          {`chance all ${n} changes are right at 5% per change: ${allRight}%`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -9074,6 +9171,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "error-unwind": ErrorUnwind,
   "di-clock": DiClock,
   "fee-strategy": FeeStrategy,
+  "refactor-steps": RefactorSteps,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

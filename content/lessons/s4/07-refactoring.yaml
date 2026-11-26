@@ -1,0 +1,696 @@
+concept: s4.refactoring
+minutes: 80
+claim: You can change the structure of code without changing what it does, by pinning its current behaviour with characterisation tests, making one small named change at a time with the tests run after each, using the common moves such as rename, extract function, split phase, guard clauses and a table in place of a conditional, comparing old and new versions on many inputs including the ones that raise, and keeping refactoring separate from changes in behaviour.
+recalls: [s4.design-patterns-that-earn-their-place]
+uses: [s4.dependency-injection-and-testable-code, s4.modules-coupling-and-cohesion, s1.testing-with-pytest, s1.exceptions]
+leads: [s4.designing-apis, s5.code-review, s6.coverage-and-mutation-testing]
+starter: |
+  # Scratch space. An old version and a refactored one, compared on many inputs.
+  def old_ticket(age):
+      if age < 5:
+          return 0
+      else:
+          if age >= 60:
+              return 20
+          else:
+              return 40
+
+
+  def new_ticket(age):
+      if age < 5:
+          return 0
+      if age >= 60:
+          return 20
+      return 40
+
+
+  print([a for a in range(100) if old_ticket(a) != new_ticket(a)])
+parts:
+  recall:
+    - text: |
+        [[s4.design-patterns-that-earn-their-place]] ended with the rule of three: write the plain code first, and introduce a strategy table or an adapter only when the third real case shows what actually varies. That advice is safe only if code can be reshaped later without breaking it. This lesson is about doing exactly that, in steps small enough that nothing breaks without you noticing at once. Three quick pulls first.
+  puzzle:
+    - text: |
+        A developer is tidying a 300-line billing module before adding a new feature. The plan has 20 separate changes: renaming variables, pulling repeated lines into functions, and replacing a long if-elif chain with a table. Each change, made carefully, still has a 5% chance of a slip that quietly changes what the code does, and the slips are independent of each other.
+
+        The developer makes all 20 changes and only then runs the tests for the first time.
+
+        **What is the chance, in per cent, that the tests pass first time?**
+  intuition:
+    - text: |
+        When Indian Railways rebuilds a busy station, it does not close the station. Platform 1 is fenced off and rebuilt while trains stop at platforms 2 to 6; then platform 2, and so on. Passengers notice scaffolding and new signboards, but at every moment trains arrive, people board and the station does its job. Closing the whole station for a year and reopening it all at once would be quicker on paper, and the opening day would be chaos: nobody would know which of a thousand changes broke the announcements.
+
+        **Refactoring** is rebuilding code the same way. You change its structure, how it is arranged inside, while what it does, as seen from outside, stays exactly the same at every step. The figure shows the difference between doing that in small checked steps and doing it all at once.
+    - figure: refactor-steps
+      props: { mode: small, changes: 12, slip: 5 }
+    - text: |
+        With tests after every change, a slip is caught by the very next run, and there is only one suspect: the change you made a minute ago, still fresh in your mind. You undo it and make it again more carefully. Switch to testing once at the end and the same slip leaves you with a failing run and twelve suspects, tangled together. Raise the number of changes and watch the chance that a big change works first time fall away. The small steps cost many more test runs, which is why the tests must be fast, and why the code must be shaped so that fast tests are possible, as [[s4.dependency-injection-and-testable-code]] arranged.
+  derivation:
+    - text: |
+        **What counts as a refactoring.** A refactoring is a change to the internal structure of code that does not change its observable behaviour, made to make the code easier to understand and cheaper to change. Observable behaviour means everything a caller can see: the values returned, the exceptions raised, the output printed, the files written, the messages sent. Renaming a variable, moving a function to the module where it belongs, or replacing an if-elif chain with a table are refactorings, as long as every caller gets exactly what it got before. Fixing a bug is not a refactoring, even a one-character fix, because a caller can see the difference; neither is adding a feature or making a slow function fast, since timing can matter to a caller too.
+
+        Kent Beck describes programming as wearing one of two hats: adding behaviour, or refactoring. You may switch hats often, even every few minutes, but you wear only one at a time. A commit that both renames thirty variables and changes a discount rule hides the one change that matters among thirty that do not, and if something breaks, you cannot tell which kind of change did it.
+    - question:
+        id: derivation-which
+        type: choice
+        system: s2
+        prompt: |
+          Which of these changes to a fare calculator is a refactoring?
+        options:
+          - "Splitting a 60-line function into three smaller functions that together return exactly the same fares."
+          - "Changing the senior citizen age from 60 to 58."
+          - "Making the function return 0 instead of raising ValueError for a negative distance."
+          - "Rounding fares to the nearest rupee, where before they kept paise."
+        answer: 0
+        explanation: |
+          Only the split leaves every result, and every error, exactly as it was. The other three each change something a caller can see: who gets the concession, what happens on bad input, and the amounts themselves.
+    - text: |
+        **The safety net.** You can only know that behaviour has not changed if you have pinned down what it is. If the code already has good tests, they are your net. If it does not, which is common for exactly the code that most needs refactoring, the first step is to write **characterisation tests**: tests that record what the code does now, not what it ought to do. Call the function on a spread of inputs, write down what comes back, including any odd results and any exceptions, and assert those. If you find a bug while doing this, note it and pin the buggy behaviour anyway; fixing it is a separate change, made with the other hat on.
+
+        When the old version is still at hand, a stronger check is to keep it alongside the new one and compare them on many inputs at once: every combination of a few values for each argument, with special care at the boundaries. Boundaries are where restructured conditions slip: `total >= 500` rewritten as `total > 500` agrees with the original on every total except exactly ₹500. Exceptions count as behaviour too. If the old code raised `IndexError` for some input and the new code raises `ValueError`, a caller that catches one will now crash on the other, as [[s1.exceptions]] showed, so a comparison must record which exception each version raised, not merely that something went wrong.
+    - question:
+        id: derivation-paths
+        type: numeric
+        system: s2
+        prompt: |
+          A function's result depends on three independent yes-or-no conditions: whether the customer is a member, whether the order is over ₹500, and whether the distance is over 3 km. How many combinations must a characterisation test cover to try every one?
+        answer: "8"
+        explanation: |
+          Each condition doubles the count: $2 \times 2 \times 2 = 8$. Add the values exactly at each boundary, ₹500 and 3 km, and the grid of inputs grows a little more, which is why comparisons are written as loops rather than one test at a time.
+    - text: |
+        **The rhythm.** With a net in place, a refactoring proceeds in a loop. Make one small change that has a name. Run the tests. If they pass, commit, so that you have a safe point to return to. If they fail, undo the change rather than debugging forward: the change was small, so making it again costs a minute, while hunting for the fault in a half-finished restructure can cost an afternoon.
+    - question:
+        id: order-rhythm
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of refactoring untested code in order.
+        steps:
+          - "Write characterisation tests that record what the code does now."
+          - "Run them and see that they all pass on the unchanged code."
+          - "Make one small, named change to the structure."
+          - "Run the tests again."
+          - "Commit if they pass, or undo the change if they fail, then repeat."
+        explanation: |
+          The tests must pass before any change, or a later failure tells you nothing. Each change is then checked on its own and either kept or undone, so the code is never far from a working state.
+    - text: |
+        **The common moves.** Most refactoring is a handful of moves, each small enough to check:
+
+        - **Rename** a variable, function or module so that its name says what it is. The cheapest refactoring and often the most valuable.
+        - **Extract function**: give a block of lines a name and call it, which also removes duplicates when the same block appears twice. Its opposite, **inline function**, removes a layer that hides more than it explains.
+        - **Split phase**: separate calculating from presenting, so a function that totals the orders and prints a report becomes one that returns the totals and one that prints them. The calculation can then be tested without capturing printed text, the pure core and effects at the edge of [[s4.dependency-injection-and-testable-code]].
+        - **Guard clauses**: replace nested if-else blocks with early returns for the special cases, leaving the main case unindented at the end.
+        - **Replace a conditional with a table**: the strategy of [[s4.design-patterns-that-earn-their-place]], introduced at the moment the third case arrives.
+        - **Move function**: put a function in the module whose data it uses most, raising cohesion and lowering coupling in the sense of [[s4.modules-coupling-and-cohesion]].
+
+        **When to refactor.** The best moment is just before adding a feature that the current structure makes awkward. Kent Beck's advice is to "make the change easy, then make the easy change": first refactor until the feature would be a small, obvious addition, with the tests green throughout, and then add it with the other hat on. Refactoring also earns its place when you have to read a piece of code to fix it and it took you an hour to understand: leave it clearer for the next reader. It does not earn its place in code that is about to be deleted, or as a rewrite for its own sake that nobody will read again.
+
+        **Large changes in small steps.** Some restructurings are too large to finish in an afternoon, such as moving from one database layer to another. They still go in small steps: build the new path beside the old one, send one caller at a time through it while comparing results, and remove the old path only when nothing uses it. That is the railway station again, one platform at a time.
+  formal:
+    - text: |
+        **Refactoring.** A change to the internal structure of code that leaves its observable behaviour unchanged: return values, exceptions raised, printed output and other effects.
+
+        **Two hats.** At any moment you are either adding or changing behaviour, or refactoring, never both in the same change.
+
+        **Characterisation test.** A test that records what code does now, oddities and exceptions included, as a net for changing it.
+
+        **Comparing versions.** Run old and new on a grid of inputs, boundaries included, and compare outcomes: the value returned, or the type of exception raised.
+
+        **The loop.** Small named change, run the tests, commit if they pass, undo if they fail.
+
+        **Common moves.** Rename, extract function and its inverse inline, split phase, guard clauses, replace a conditional with a table, move function.
+  drill:
+    - text: Seconds each. Ask whether a caller could see the difference.
+    - question:
+        id: drill-rename
+        type: choice
+        system: s1
+        prompt: |
+          Inside one function, the local variable `t` is renamed to `total_with_tax` everywhere it appears. Is this a refactoring?
+        options:
+          - "Yes; no caller can see a local variable's name"
+          - "No; the code text changed"
+          - "Only if the function is short"
+          - "No; renames always need new tests"
+        answer: 0
+        explanation: The function returns and raises exactly what it did before, so the behaviour is unchanged.
+    - question:
+        id: drill-boundary
+        type: choice
+        system: s1
+        prompt: |
+          A rewrite turns `if total >= 500` into `if total > 500` to fix a reported bug. Is this a refactoring?
+        options:
+          - "No; an order of exactly ₹500 now gets a different result"
+          - "Yes; it is a one-character change"
+          - "Yes; the structure is the same"
+          - "Only if the tests still pass"
+        answer: 0
+        explanation: It may well be the right fix, but it changes behaviour, so it belongs in its own change with the other hat on.
+    - question:
+        id: drill-chance
+        type: numeric
+        system: s1
+        prompt: |
+          Ten changes are made before testing, each with an independent 5% chance of a slip. What is the chance, in per cent, that all ten are right?
+        answer: "60"
+        tolerance: "1"
+        explanation: $0.95^{10} \approx 0.60$, so about 60%.
+    - question:
+        id: drill-red
+        type: choice
+        system: s1
+        prompt: |
+          You make one small extract-function change and a test fails. What is usually the best next step?
+        options:
+          - "Undo the change and make it again more carefully"
+          - "Keep refactoring; the failure may go away"
+          - "Change the test to match the new result"
+          - "Delete the failing test"
+        answer: 0
+        explanation: The change was small, so redoing it is cheap. Editing the test throws away the very net that caught the slip.
+    - question:
+        id: predict-guards
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def ticket(age):
+              if age < 5:
+                  return 0
+              if age >= 60:
+                  return 20
+              return 40
+
+
+          print([ticket(a) for a in [3, 5, 60, 30]])
+        output: "[0, 40, 20, 40]"
+        explanation: Each guard returns early for its special case; 5 and 30 fall through to the main case.
+    - question:
+        id: predict-outcome
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def outcome(fn, x):
+              try:
+                  return ("ok", fn(x))
+              except Exception as error:
+                  return ("raises", type(error).__name__)
+
+
+          print(outcome(int, "42"), outcome(int, "4.2"))
+        output: "('ok', 42) ('raises', 'ValueError')"
+        explanation: "`int` accepts the text of a whole number but raises `ValueError` for \"4.2\", and the outcome records the exception's type by name."
+  work:
+    - text: Slower now. In each problem, behaviour before and after must match exactly.
+    - question:
+        id: fix-guards
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `new_fee` is a refactoring of `old_fee` with guard clauses in place of the nested blocks, and the loop compares the two on a grid of inputs. The program should print `[]`. It prints `[(4, 500, False), (7, 500, False)]`. Find the fault in the refactoring and fix it.
+        starter: |
+          def old_fee(km, total, member):
+              if member:
+                  if total >= 500:
+                      return 0
+                  else:
+                      return 20
+              else:
+                  if km <= 3:
+                      return 30
+                  else:
+                      if total >= 500:
+                          return 30
+                      else:
+                          return 30 + 10 * (km - 3)
+
+
+          def new_fee(km, total, member):
+              if member:
+                  return 0 if total >= 500 else 20
+              if km <= 3 or total > 500:
+                  return 30
+              return 30 + 10 * (km - 3)
+
+
+          diffs = []
+          for km in [1, 3, 4, 7]:
+              for total in [200, 500, 800]:
+                  for member in [False, True]:
+                      if old_fee(km, total, member) != new_fee(km, total, member):
+                          diffs.append((km, total, member))
+          print(diffs)
+        solution: |
+          def old_fee(km, total, member):
+              if member:
+                  if total >= 500:
+                      return 0
+                  else:
+                      return 20
+              else:
+                  if km <= 3:
+                      return 30
+                  else:
+                      if total >= 500:
+                          return 30
+                      else:
+                          return 30 + 10 * (km - 3)
+
+
+          def new_fee(km, total, member):
+              if member:
+                  return 0 if total >= 500 else 20
+              if km <= 3 or total >= 500:
+                  return 30
+              return 30 + 10 * (km - 3)
+
+
+          diffs = []
+          for km in [1, 3, 4, 7]:
+              for total in [200, 500, 800]:
+                  for member in [False, True]:
+                      if old_fee(km, total, member) != new_fee(km, total, member):
+                          diffs.append((km, total, member))
+          print(diffs)
+        tests: |
+          def _ref(km, total, member):
+              if member:
+                  return 0 if total >= 500 else 20
+              if km <= 3:
+                  return 30
+              if total >= 500:
+                  return 30
+              return 30 + 10 * (km - 3)
+
+
+          for _km in range(0, 12):
+              for _total in [0, 120, 499, 500, 501, 900]:
+                  for _member in [False, True]:
+                      _want = _ref(_km, _total, _member)
+                      _got = new_fee(_km, _total, _member)
+                      assert _got == _want, "new_fee(" + str(_km) + ", " + str(_total) + ", " + str(_member) + ") should be " + str(_want) + " as before the refactor, not " + str(_got)
+          assert output.strip() == "[]", "The program should print []: no differences between the old and new versions"
+        wrong:
+          - |
+            def old_fee(km, total, member):
+                if member:
+                    if total >= 500:
+                        return 0
+                    else:
+                        return 20
+                else:
+                    if km <= 3:
+                        return 30
+                    else:
+                        if total >= 500:
+                            return 30
+                        else:
+                            return 30 + 10 * (km - 3)
+
+
+            def new_fee(km, total, member):
+                if member:
+                    return 0 if total > 500 else 20
+                if km <= 3 or total >= 500:
+                    return 30
+                return 30 + 10 * (km - 3)
+
+
+            diffs = []
+            for km in [1, 3, 4, 7]:
+                for total in [200, 500, 800]:
+                    for member in [False, True]:
+                        if old_fee(km, total, member) != new_fee(km, total, member):
+                            diffs.append((km, total, member))
+            print(diffs)
+          - |
+            def old_fee(km, total, member):
+                if member:
+                    if total >= 500:
+                        return 0
+                    else:
+                        return 20
+                else:
+                    if km <= 3:
+                        return 30
+                    else:
+                        if total >= 500:
+                            return 30
+                        else:
+                            return 30 + 10 * (km - 3)
+
+
+            def new_fee(km, total, member):
+                if member:
+                    return 0 if total >= 500 else 20
+                if km <= 3:
+                    return 30
+                return 30 + 10 * (km - 3)
+
+
+            diffs = []
+            for km in [1, 3, 4, 7]:
+                for total in [200, 500, 800]:
+                    for member in [False, True]:
+                        if old_fee(km, total, member) != new_fee(km, total, member):
+                            diffs.append((km, total, member))
+            print(diffs)
+          - |
+            def old_fee(km, total, member):
+                if member:
+                    if total >= 500:
+                        return 0
+                    else:
+                        return 20
+                else:
+                    if km <= 3:
+                        return 30
+                    else:
+                        if total > 500:
+                            return 30
+                        else:
+                            return 30 + 10 * (km - 3)
+
+
+            def new_fee(km, total, member):
+                if member:
+                    return 0 if total >= 500 else 20
+                if km <= 3 or total > 500:
+                    return 30
+                return 30 + 10 * (km - 3)
+
+
+            diffs = []
+            for km in [1, 3, 4, 7]:
+                for total in [200, 500, 800]:
+                    for member in [False, True]:
+                        if old_fee(km, total, member) != new_fee(km, total, member):
+                            diffs.append((km, total, member))
+            print(diffs)
+        explanation: |
+          Folding the nested conditions together turned `total >= 500` into `total > 500`, so an order of exactly ₹500 from further than 3 km now pays the distance fee. Moving the same slip into the members' branch, or dropping the big-order rule, changes other results. Changing `old_fee` until the comparison prints `[]` is the most tempting wrong answer: the check goes quiet, but the behaviour customers relied on has changed.
+    - question:
+        id: write-split
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Split `report` into two phases: write `summarise(orders)`, which returns a tuple of the number of customers, the top customer's name and their total without printing anything, and make `report` print its line from that tuple. Keep the behaviour on ties: the customer who reached the top total first stays on top. The program should print `customers: 3 top: Meera 400`.
+        starter: |
+          orders = [("Asha", 240), ("Ravi", 180), ("Asha", 90), ("Meera", 400), ("Ravi", 60)]
+
+
+          def report(orders):
+              totals = {}
+              for name, amount in orders:
+                  totals[name] = totals.get(name, 0) + amount
+              best = ""
+              for name in totals:
+                  if best == "" or totals[name] > totals[best]:
+                      best = name
+              print("customers:", len(totals), "top:", best, totals[best])
+
+
+          report(orders)
+        solution: |
+          orders = [("Asha", 240), ("Ravi", 180), ("Asha", 90), ("Meera", 400), ("Ravi", 60)]
+
+
+          def summarise(orders):
+              totals = {}
+              for name, amount in orders:
+                  totals[name] = totals.get(name, 0) + amount
+              best = ""
+              for name in totals:
+                  if best == "" or totals[name] > totals[best]:
+                      best = name
+              return len(totals), best, totals[best]
+
+
+          def report(orders):
+              customers, best, top = summarise(orders)
+              print("customers:", customers, "top:", best, top)
+
+
+          report(orders)
+        tests: |
+          assert "summarise" in globals() and callable(summarise), "Write a function named summarise"
+          _cases = [
+              ([("Asha", 240), ("Ravi", 180), ("Asha", 90), ("Meera", 400), ("Ravi", 60)], (3, "Meera", 400), ""),
+              ([("Kabir", 100)], (1, "Kabir", 100), ""),
+              ([("Ira", 50), ("Om", 70), ("Ira", 30), ("Om", 5)], (2, "Ira", 80), ""),
+              ([("Zoya", 300), ("Dev", 200), ("Dev", 100)], (2, "Zoya", 300), "; when two customers tie, the one who ordered first stays on top, as before"),
+              ([("Dev", 150), ("Zoya", 300), ("Dev", 150)], (2, "Dev", 300), "; when two customers tie, the one who ordered first stays on top, as before"),
+          ]
+          for _orders, _want, _note in _cases:
+              _got = summarise(list(_orders))
+              assert _got is not None, "summarise should return its results rather than print them"
+              assert tuple(_got) == _want, "summarise(" + str(_orders) + ") should return " + str(_want) + ", not " + str(_got) + _note
+          assert output.strip() == "customers: 3 top: Meera 400", "The program should still print customers: 3 top: Meera 400"
+        wrong:
+          - |
+            orders = [("Asha", 240), ("Ravi", 180), ("Asha", 90), ("Meera", 400), ("Ravi", 60)]
+
+
+            def summarise(orders):
+                totals = {}
+                for name, amount in orders:
+                    totals[name] = totals.get(name, 0) + amount
+                best = ""
+                for name in totals:
+                    if best == "" or totals[name] >= totals[best]:
+                        best = name
+                return len(totals), best, totals[best]
+
+
+            def report(orders):
+                customers, best, top = summarise(orders)
+                print("customers:", customers, "top:", best, top)
+
+
+            report(orders)
+          - |
+            orders = [("Asha", 240), ("Ravi", 180), ("Asha", 90), ("Meera", 400), ("Ravi", 60)]
+
+
+            def summarise(orders):
+                totals = {}
+                for name, amount in orders:
+                    totals[name] = totals.get(name, 0) + amount
+                best = ""
+                for name in totals:
+                    if best == "" or totals[name] > totals[best]:
+                        best = name
+                print("customers:", len(totals), "top:", best, totals[best])
+
+
+            def report(orders):
+                summarise(orders)
+
+
+            report(orders)
+          - |
+            orders = [("Asha", 240), ("Ravi", 180), ("Asha", 90), ("Meera", 400), ("Ravi", 60)]
+
+
+            def summarise(orders):
+                totals = {}
+                for name, amount in orders:
+                    totals[name] = totals.get(name, 0) + amount
+                best = max(totals)
+                return len(totals), best, totals[best]
+
+
+            def report(orders):
+                customers, best, top = summarise(orders)
+                print("customers:", customers, "top:", best, top)
+
+
+            report(orders)
+        explanation: |
+          The calculation moves into `summarise` unchanged and ends in a `return`, and `report` keeps only the printing. Writing `>=` hands ties to the later customer, a change in behaviour that the sample orders do not reveal; leaving the `print` inside `summarise` gives nothing back to test; and `max(totals)` picks the name that comes last alphabetically, not the customer who spent most.
+    - question:
+        id: write-differences
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `outcome(fn, x)`, which returns `("ok", result)` if `fn(x)` returns and `("raises", name)` with the name of the exception's type if it raises, and `differences(old, new, cases)`, which returns the cases, in their original order, where the two versions have different outcomes. The program should print `['7', '10:15:00']`.
+        starter: |
+          def outcome(fn, x):
+              # Return ("ok", result) if fn(x) returns,
+              # or ("raises", name of the exception's type) if it raises.
+              return None
+
+
+          def differences(old, new, cases):
+              # Return the cases, in order, where old and new have different outcomes.
+              return []
+
+
+          def old_parse(text):
+              parts = text.split(":")
+              return int(parts[0]) * 60 + int(parts[1])
+
+
+          def new_parse(text):
+              hours, minutes = text.split(":")
+              return int(hours) * 60 + int(minutes)
+
+
+          print(differences(old_parse, new_parse, ["9:30", "18:05", "7", "10:15:00", "x:10"]))
+        solution: |
+          def outcome(fn, x):
+              try:
+                  return ("ok", fn(x))
+              except Exception as error:
+                  return ("raises", type(error).__name__)
+
+
+          def differences(old, new, cases):
+              return [x for x in cases if outcome(old, x) != outcome(new, x)]
+
+
+          def old_parse(text):
+              parts = text.split(":")
+              return int(parts[0]) * 60 + int(parts[1])
+
+
+          def new_parse(text):
+              hours, minutes = text.split(":")
+              return int(hours) * 60 + int(minutes)
+
+
+          print(differences(old_parse, new_parse, ["9:30", "18:05", "7", "10:15:00", "x:10"]))
+        tests: |
+          assert outcome(lambda _x: _x * 2, 3) == ("ok", 6), "outcome(fn, 3) should be ('ok', 6) when fn doubles its argument, not " + str(outcome(lambda _x: _x * 2, 3))
+          assert outcome(int, "q") == ("raises", "ValueError"), "outcome(int, 'q') should be ('raises', 'ValueError'), not " + str(outcome(int, "q"))
+          assert outcome(lambda _x: {}[_x], "k") == ("raises", "KeyError"), "A function that raises KeyError should give ('raises', 'KeyError'), not " + str(outcome(lambda _x: {}[_x], "k"))
+          assert outcome(lambda _x: None, 1) == ("ok", None), "A function that returns None should give ('ok', None), not " + str(outcome(lambda _x: None, 1))
+
+
+          def _a(x):
+              if x < 0:
+                  raise ValueError("negative")
+              return x // 10
+
+
+          def _b(x):
+              if x < 0:
+                  raise KeyError("negative")
+              if x == 25:
+                  return 3
+              return x // 10
+
+
+          _got = differences(_a, _b, [5, 25, -1, 40, 25])
+          assert _got == [25, -1, 25], "differences should return [25, -1, 25]: 25 gives a different value and -1 a different exception, in the order the cases came; got " + str(_got)
+          _got = differences(_a, _a, [5, -3, 12])
+          assert _got == [], "A function compared with itself has no differences, even on cases that raise; got " + str(_got)
+          assert output.strip() == "['7', '10:15:00']", "The program should print ['7', '10:15:00']"
+        wrong:
+          - |
+            def outcome(fn, x):
+                try:
+                    return ("ok", fn(x))
+                except Exception as error:
+                    return ("raises", type(error).__name__)
+
+
+            def differences(old, new, cases):
+                return [x for x in cases if old(x) != new(x)]
+
+
+            def old_parse(text):
+                parts = text.split(":")
+                return int(parts[0]) * 60 + int(parts[1])
+
+
+            def new_parse(text):
+                hours, minutes = text.split(":")
+                return int(hours) * 60 + int(minutes)
+
+
+            print(differences(old_parse, new_parse, ["9:30", "18:05", "7", "10:15:00", "x:10"]))
+          - |
+            def outcome(fn, x):
+                try:
+                    return ("ok", fn(x))
+                except Exception as error:
+                    return ("raises", "error")
+
+
+            def differences(old, new, cases):
+                return [x for x in cases if outcome(old, x) != outcome(new, x)]
+
+
+            def old_parse(text):
+                parts = text.split(":")
+                return int(parts[0]) * 60 + int(parts[1])
+
+
+            def new_parse(text):
+                hours, minutes = text.split(":")
+                return int(hours) * 60 + int(minutes)
+
+
+            print(differences(old_parse, new_parse, ["9:30", "18:05", "7", "10:15:00", "x:10"]))
+          - |
+            def outcome(fn, x):
+                try:
+                    return ("ok", fn(x))
+                except Exception as error:
+                    return ("raises", type(error).__name__)
+
+
+            def differences(old, new, cases):
+                return [x for x in cases if outcome(old, x)[0] != outcome(new, x)[0]]
+
+
+            def old_parse(text):
+                parts = text.split(":")
+                return int(parts[0]) * 60 + int(parts[1])
+
+
+            def new_parse(text):
+                hours, minutes = text.split(":")
+                return int(hours) * 60 + int(minutes)
+
+
+            print(differences(old_parse, new_parse, ["9:30", "18:05", "7", "10:15:00", "x:10"]))
+        explanation: |
+          For "7", the old parser raises `IndexError` and the new one `ValueError`; for "10:15:00", the old one quietly ignored the seconds and the new one refuses. Calling the versions directly lets the first exception stop the whole comparison; recording every exception as the same "error" misses the change from `IndexError` to `ValueError`; and comparing only whether each version raised misses changes in the values returned.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, what is the chance, in per cent, that all 20 changes are right and the tests pass first time?
+        answer: "36"
+        tolerance: "1"
+        explanation: |
+          Each change is right with probability $0.95$, independently, so all 20 are right with probability $0.95^{20} \approx 0.358$, about 36%.
+    - question:
+        id: work-when
+        type: choice
+        system: s2
+        prompt: |
+          A team must add UPI refunds to a payment module where refund logic is copied into four places with small differences. What order of work is safest?
+        options:
+          - "Pin the current refund behaviour with tests, extract the four copies into one function in small steps, then add UPI refunds as a separate change."
+          - "Add UPI refunds to all four copies, then tidy up later."
+          - "Rewrite the whole module with UPI refunds built in, then test it."
+          - "Extract the copies and add UPI refunds in the same commit, to save time."
+        answer: 0
+        explanation: |
+          Make the change easy, then make the easy change. Adding the feature to four copies multiplies the work and the differences; a rewrite tested at the end is the big-bang case of the puzzle; and mixing refactoring with new behaviour hides which change broke what.
+  connections:
+    - text: |
+        About 36%: $0.95^{20} \approx 0.36$. Nearly two times in three, the developer's first test run fails, and any of the 20 changes could be the cause, some of them hours old and half forgotten. Run the tests after each change instead and the same slips still happen, but each is caught by the next run with one suspect, undone, and made again in a minute.
+
+        Refactoring is safe when the only people affected by a change in structure are the people editing the code. Once other programs call your code across a network, its shape is part of what they see: the names of fields, the order of results, even the wording of an error message may be relied on, and changing them is no longer a private matter. Designing that outside shape so that it can grow without breaking its callers is [[s4.designing-apis]].
+
+        Small refactoring commits, each kept apart from changes in behaviour, are also far easier for a colleague to check than one large mixed change, which is the subject of [[s5.code-review]]. And whether your characterisation tests are strong enough to catch a slip at all can itself be measured, by deliberately introducing slips and counting how many the tests notice: [[s6.coverage-and-mutation-testing]].
