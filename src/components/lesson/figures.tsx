@@ -7321,6 +7321,105 @@ function InterfaceSwap(props: Props) {
   );
 }
 
+const CR_MODULES: [string, number, number][] = [
+  ["app", 230, 20],
+  ["delivery", 120, 66],
+  ["orders", 300, 112],
+  ["payments", 380, 158],
+  ["notify", 150, 204],
+  ["menu", 270, 204],
+  ["dates", 110, 252],
+  ["money", 290, 252],
+  ["db", 410, 252],
+];
+const CR_IMPORTS: Record<string, string[]> = {
+  app: ["orders", "delivery"],
+  orders: ["payments", "menu", "money", "db"],
+  payments: ["money", "notify", "db"],
+  delivery: ["orders", "notify", "dates"],
+  menu: ["money", "db"],
+  notify: ["dates"],
+  money: [],
+  dates: [],
+  db: [],
+};
+
+/** Every module that imports a changed module, directly or through others, and so must be checked again. */
+function ChangeRipple(props: Props) {
+  const names = CR_MODULES.map(([n]) => n);
+  const [changed, setChanged] = useState(typeof props.changed === "string" && names.includes(props.changed) ? props.changed : "money");
+  const hit = new Set<string>();
+  const todo = [changed];
+  while (todo.length > 0) {
+    const m = todo.pop()!;
+    for (const [importer, used] of Object.entries(CR_IMPORTS)) {
+      if (used.includes(m) && !hit.has(importer) && importer !== changed) {
+        hit.add(importer);
+        todo.push(importer);
+      }
+    }
+  }
+  const direct = names.filter((n) => CR_IMPORTS[n].includes(changed));
+  const indirect = names.filter((n) => hit.has(n) && !direct.includes(n));
+  const at = (n: string) => CR_MODULES.find(([m]) => m === n)!;
+  const summary =
+    hit.size === 0
+      ? `Changing ${changed}: no module imports it, so nothing else needs checking. Modules at the top of the graph are the cheapest to change.`
+      : `Changing ${changed}: ${direct.join(", ")} ${direct.length === 1 ? "imports" : "import"} it directly${indirect.length > 0 ? `, and ${indirect.join(", ")} ${indirect.length === 1 ? "imports" : "import"} it through them` : ""}. ${plural(hit.size, "module", "modules")} of ${names.length - 1} must be checked again.`;
+  return (
+    <Frame
+      title="How far a change ripples"
+      summary={summary}
+      controls={
+        <>
+          <span className="fig-stepper">
+            <span className="label">change</span>
+          </span>
+          {names.map((n) => (
+            <button key={n} type="button" className="btn btn-secondary btn-small" aria-pressed={changed === n} onClick={() => setChanged(n)}>
+              {n}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 470 276" role="img" aria-label={`Changing ${changed} affects ${plural(hit.size, "module", "modules")}`}>
+        {Object.entries(CR_IMPORTS).flatMap(([from, used]) =>
+          used.map((to) => {
+            const [, x1, y1] = at(from);
+            const [, x2, y2] = at(to);
+            const lit = hit.has(from) && (to === changed || hit.has(to));
+            return <line key={`${from}-${to}`} x1={x1} y1={y1} x2={x2} y2={y2} className={lit ? "fig-accent-line" : "fig-axis"} />;
+          }),
+        )}
+        {CR_MODULES.map(([n, x, y]) => {
+          const isChanged = n === changed;
+          const isHit = hit.has(n);
+          return (
+            <g key={n}>
+              <rect
+                x={x - 36}
+                y={y - 11}
+                width={72}
+                height={22}
+                rx={4}
+                className={isChanged ? "fig-accent" : "fig-fill"}
+                style={isHit ? { stroke: "var(--focus)", strokeWidth: 3 } : undefined}
+              />
+              <text x={x} y={y + 4} textAnchor="middle" className="fig-small" style={{ fill: isChanged ? "var(--bg)" : "var(--text)", fontWeight: isHit || isChanged ? 600 : 400 }}>
+                {n}
+              </text>
+            </g>
+          );
+        })}
+        <text x={8} y={20} className="fig-small">
+          imports point down
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -8653,6 +8752,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "graph-hops": GraphHops,
   "schema-versions": SchemaVersions,
   "interface-swap": InterfaceSwap,
+  "change-ripple": ChangeRipple,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

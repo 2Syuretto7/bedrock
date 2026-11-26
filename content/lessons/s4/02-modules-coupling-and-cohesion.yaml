@@ -1,0 +1,682 @@
+concept: s4.modules-coupling-and-cohesion
+minutes: 80
+claim: You can say how strongly two modules are coupled and what kind of coupling joins them, judge whether a module is cohesive, work out every module a change can ripple to, find and break import cycles, spot hidden shared state such as a mutable default argument, and arrange modules in layers so that dependencies point towards what changes least.
+recalls: [s4.abstraction-and-interfaces]
+uses: [s1.modules-and-imports, s3.breadth-first-and-depth-first-search, s3.topological-sort, s1.classes-and-objects]
+leads: [s4.designing-with-types-and-invariants, s4.dependency-injection-and-testable-code, s4.refactoring, s5.build-systems-and-dependency-graphs]
+starter: |
+  # Scratch space. Which modules does a change to "money" reach?
+  imports = {
+      "app": ["orders", "delivery"],
+      "orders": ["payments", "money"],
+      "payments": ["money"],
+      "delivery": ["orders"],
+      "money": [],
+  }
+
+  changed = "money"
+  reached = {changed}
+  grew = True
+  while grew:
+      grew = False
+      for module, used in imports.items():
+          if module not in reached and any(u in reached for u in used):
+              reached.add(module)
+              grew = True
+  print(sorted(reached - {changed}))
+parts:
+  recall:
+    - text: |
+        [[s4.abstraction-and-interfaces]] drew one boundary: an interface that lets callers and implementations change independently. A real program has dozens of such boundaries between its modules, and the way they are drawn decides how far each change travels. Draw them well and a change stays inside one module; draw them badly and every change touches half the code. Three quick pulls first.
+  puzzle:
+    - text: |
+        A team's code has a file `helpers.py` holding forty small functions for dates, money, text and logging. 30 of the team's modules import it, each for one or two functions.
+
+        Their test system reruns the tests of every module that imports a file that changed. Last month `helpers.py` changed 12 times, and each change touched one function used by about 3 modules.
+
+        **How many module test runs did those 12 changes trigger?**
+  intuition:
+    - text: |
+        A busy restaurant kitchen is divided into stations: the tandoor, the curry station, the dosa griddle, desserts. Each station keeps its own tools, spices and prepared ingredients within arm's reach, and passes finished plates to the others through a counter. When the dessert chef reorganises her shelves, nobody else notices. Now imagine instead one giant shared drawer that every cook takes from and puts back into. Any rearrangement of the drawer disrupts every station, and one cook leaving a wet ladle in it ruins someone else's dish.
+
+        The stations are **cohesive**: everything a station needs for its one job is in one place. They are **loosely coupled**: they meet only at the counter. The shared drawer is the opposite of both. The figure shows a delivery app's modules, with imports pointing down. Choose a module to change and see which others must be checked again.
+    - figure: change-ripple
+      props: { changed: money }
+    - text: |
+        A change to `money` reaches five of the eight other modules: three import it directly and two more import those. A change to `app` reaches nothing, because nothing imports it. Modules low in the graph, imported by many, are expensive to change; modules high up are cheap. That is why a widely imported module should be small, stable and about one thing, and why a grab-bag like `helpers.py` sits in the most expensive place there is.
+  derivation:
+    - text: |
+        **A module and its dependencies.** In Python, every file is a module, from [[s1.modules-and-imports]], and `import` creates a dependency: if the imported module changes, the importer may have to change, and must at least be tested again. A change therefore ripples backwards along imports. The modules it can reach are found by a search, as in [[s3.breadth-first-and-depth-first-search]], over the reversed graph: start from the changed module, step to everything that imports it, then to everything that imports those, and so on.
+
+        **Kinds of coupling.** Coupling is how much one module must know about another. From mildest to worst:
+
+        - **Data coupling**: passing plain values, such as `price(item, quantity)`. The callee knows nothing else.
+        - **Stamp coupling**: passing a whole record when one field is needed, so the callee now depends on the record's shape.
+        - **Control coupling**: passing a flag that tells the callee which of several jobs to do, such as `send(message, urgent=True, by_sms=False)`. The caller must know the callee's insides to choose.
+        - **Common coupling**: sharing global mutable state, a module-level list or dictionary that several functions read and change. Any of them can break the others, and none of them shows it in its signature.
+        - **Content coupling**: reaching into another module's private details, its underscore names, as in [[s4.abstraction-and-interfaces]].
+    - question:
+        id: derivation-coupling
+        type: choice
+        system: s2
+        prompt: |
+          `notify(order, channel)` sends an SMS when `channel` is `"sms"`, an email when it is `"email"`, and writes to a log file when it is `"log"`, with three unrelated blocks of code. What kind of coupling does `channel` create?
+        options:
+          - "Control coupling"
+          - "Data coupling"
+          - "Content coupling"
+          - "No coupling"
+        answer: 0
+        explanation: |
+          The flag selects which of three jobs the function does, so every caller must know about all three. Three functions, or one interface with three implementations, would remove it.
+    - text: |
+        **Hidden shared state.** Python has a famous trap that creates common coupling by accident. A default value such as `items=[]` is created once, when the function is defined, not each time it is called. Every call that relies on the default receives the same list, so one customer's order quietly fills another's. The fix is to default to `None` and create a fresh list inside the function, and to copy a list a caller passes in rather than keep the caller's own object, so that the two never share.
+
+        **Cohesion.** Cohesion is how well the parts of one module belong together. A module is **functionally cohesive** when everything in it serves one purpose, such as `money.py` with its rupee arithmetic and formatting. It is **coincidentally cohesive** when its parts merely ended up in the same file, the fate of every `utils.py` and `helpers.py`. A useful test is whether things change together: if a change to tax rules touches one module, that module is cohesive; if it touches five, the tax rules are scattered. Put things that change together in the same module, and things that change for different reasons in different modules.
+    - question:
+        id: derivation-split
+        type: numeric
+        system: s2
+        prompt: |
+          `helpers.py` is imported by 30 modules. It is split into `dates.py`, imported by 8 of them, and `money.py`, imported by 5 others. The remaining 17 modules imported it only for logging, now in `log.py`. A change to a money function now triggers how many module test runs?
+        answer: "5"
+        explanation: |
+          Only the 5 modules that import `money.py` depend on it. Before the split, all 30 importers of `helpers.py` were rerun for every change.
+    - text: |
+        **Which way dependencies point.** A module imported by many others is expensive to change, so it should be one that rarely needs to. Arrange modules in **layers**: an app's screens at the top, its business rules in the middle, storage and plain utilities at the bottom, with imports pointing only downwards. The rules then never depend on how they are shown, and storage can be replaced without touching the screens. When a stable module must call something volatile, the cure is to have the stable module define the interface and the volatile one implement it, so the import points the right way; that is the subject of [[s4.dependency-injection-and-testable-code]].
+
+        **Cycles.** If `orders` imports `payments`, `payments` imports `notify` and `notify` imports `orders`, none of the three can be understood, tested or reused without the other two; they are one module in three files. Python may even fail to import them, because one is half-initialised when another asks for it. A topological order of modules, from [[s3.topological-sort]], exists exactly when there is no cycle. A cycle is found by a depth-first search that remembers the path it is on: reaching a module already on the path closes a cycle. It is broken by moving the shared part into a new lower module, or by turning one import around with an interface.
+    - question:
+        id: order-cycle
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of breaking the cycle `orders → payments → notify → orders`, where `notify` imports `orders` only to read an order's customer phone number, in order.
+        steps:
+          - "Find what notify actually uses from orders: the customer's phone number."
+          - "Change notify to take the phone number as a parameter."
+          - "Change payments to pass the phone number when it calls notify."
+          - "Remove the import of orders from notify."
+          - "Run the tests of all three modules."
+        explanation: |
+          Passing the value notify needs replaces a dependency on a whole module with data coupling. The import can go only once nothing in notify uses it.
+  formal:
+    - text: |
+        **Coupling.** How much one module depends on another's details. From mildest to worst: data, stamp, control, common (shared mutable state), content (private details).
+
+        **Cohesion.** How well a module's parts belong together. Functional cohesion, one purpose, is best; coincidental cohesion, as in a `utils` module, is worst. Things that change together belong together.
+
+        **Ripple.** The modules a change can affect are those that import it directly or through others: a search over the reversed import graph.
+
+        **Layers.** Modules arranged so that imports point one way, towards modules that change least.
+
+        **Cycle.** Modules that import each other in a loop; found by depth-first search with the current path, broken by extracting the shared part or inverting a dependency.
+
+        **Mutable default.** A default argument is evaluated once; a mutable default is shared by every call that uses it.
+  drill:
+    - text: Seconds each. For every dependency, ask what one side must know about the other.
+    - question:
+        id: drill-stamp
+        type: choice
+        system: s1
+        prompt: |
+          `delivery_fee(order)` reads only `order["distance_km"]`. What kind of coupling is passing the whole order?
+        options:
+          - "Stamp coupling"
+          - "Data coupling"
+          - "Control coupling"
+          - "Content coupling"
+        answer: 0
+        explanation: The function now depends on the shape of an order; `delivery_fee(distance_km)` would be data coupling.
+    - question:
+        id: drill-ripple
+        type: numeric
+        system: s1
+        prompt: |
+          `a` imports `b`, `b` imports `c`, and `d` imports `c`. How many other modules can a change to `c` affect?
+        answer: "3"
+        explanation: b and d import it directly, and a imports it through b.
+    - question:
+        id: drill-top
+        type: numeric
+        system: s1
+        prompt: |
+          In the same modules, how many others can a change to `a` affect?
+        answer: "0"
+        explanation: Nothing imports a.
+    - question:
+        id: drill-utils
+        type: choice
+        system: s1
+        prompt: |
+          `utils.py` holds a date parser, a rupee formatter and an SMS sender. What kind of cohesion is that?
+        options:
+          - "Coincidental: the parts share a file but not a purpose."
+          - "Functional: everything serves one purpose."
+          - "None: a module cannot have cohesion."
+          - "Perfect, because the functions are short."
+        answer: 0
+        explanation: The three change for unrelated reasons, so they belong in three modules.
+    - question:
+        id: predict-default
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def add(item, cart=[]):
+              cart.append(item)
+              return cart
+
+
+          a = add("dosa")
+          b = add("idli")
+          print(a, b, a is b)
+        output: "['dosa', 'idli'] ['dosa', 'idli'] True"
+        explanation: The default list is created once, so both calls append to the same list and return it.
+    - question:
+        id: predict-path
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          imports = {"orders": ["payments"], "payments": ["notify"], "notify": ["orders"]}
+          path = ["orders"]
+          while imports[path[-1]][0] not in path:
+              path.append(imports[path[-1]][0])
+          print(path + [imports[path[-1]][0]])
+        output: "['orders', 'payments', 'notify', 'orders']"
+        explanation: Following the imports until one returns to a module already on the path traces the cycle.
+  work:
+    - text: Slower now. Each problem is about what a change can reach.
+    - question:
+        id: fix-shared-cart
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          Each order should hold only its own items, and `new_order` must not change a list of items passed to it. The program should print `['dosa'] ['idli', 'vada']`. It prints `['dosa', 'idli', 'vada'] ['dosa', 'idli', 'vada']`. Find the fault and fix it.
+        starter: |
+          def new_order(customer, items=[]):
+              return {"customer": customer, "items": items}
+
+
+          def add_item(order, item):
+              order["items"].append(item)
+
+
+          asha = new_order("asha")
+          add_item(asha, "dosa")
+          bilal = new_order("bilal")
+          add_item(bilal, "idli")
+          add_item(bilal, "vada")
+          print(asha["items"], bilal["items"])
+        solution: |
+          def new_order(customer, items=None):
+              if items is None:
+                  items = []
+              return {"customer": customer, "items": list(items)}
+
+
+          def add_item(order, item):
+              order["items"].append(item)
+
+
+          asha = new_order("asha")
+          add_item(asha, "dosa")
+          bilal = new_order("bilal")
+          add_item(bilal, "idli")
+          add_item(bilal, "vada")
+          print(asha["items"], bilal["items"])
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(102)
+          for _ in range(20):
+              _orders, _want = [], []
+              for _k in range(_rng.randint(2, 5)):
+                  _start = [_rng.choice(["chai", "poha"]) for _j in range(_rng.randint(0, 2))] if _rng.random() < 0.5 else None
+                  _given = list(_start) if _start is not None else None
+                  _o = new_order("c" + str(_k)) if _start is None else new_order("c" + str(_k), _start)
+                  _orders.append(_o)
+                  _want.append([] if _start is None else list(_start))
+                  for _j in range(_rng.randint(0, 3)):
+                      _item = _rng.choice(["dosa", "idli", "vada"])
+                      add_item(_o, _item)
+                      _want[-1].append(_item)
+                  if _given is not None:
+                      assert _start == _given, "new_order should not change the list of items it was given, " + str(_given)
+              _got = [_o["items"] for _o in _orders]
+              assert _got == _want, "Each order should hold only its own items, " + str(_want) + ", not " + str(_got)
+          _menu = ["chai"]
+          _a, _b = new_order("x", _menu), new_order("y", _menu)
+          add_item(_a, "poha")
+          assert _b["items"] == ["chai"] and _menu == ["chai"], "Two orders started from the same list should not share their items"
+          assert output.strip() == "['dosa'] ['idli', 'vada']", "The program should print ['dosa'] ['idli', 'vada']"
+        wrong:
+          - |
+            def new_order(customer, items=None):
+                if items is None:
+                    items = []
+                return {"customer": customer, "items": items}
+
+
+            def add_item(order, item):
+                order["items"].append(item)
+
+
+            asha = new_order("asha")
+            add_item(asha, "dosa")
+            bilal = new_order("bilal")
+            add_item(bilal, "idli")
+            add_item(bilal, "vada")
+            print(asha["items"], bilal["items"])
+          - |
+            def new_order(customer, items=()):
+                return {"customer": customer, "items": items}
+
+
+            def add_item(order, item):
+                order["items"].append(item)
+
+
+            asha = new_order("asha")
+            add_item(asha, "dosa")
+            bilal = new_order("bilal")
+            add_item(bilal, "idli")
+            add_item(bilal, "vada")
+            print(asha["items"], bilal["items"])
+          - |
+            NO_ITEMS = []
+
+
+            def new_order(customer, items=NO_ITEMS):
+                return {"customer": customer, "items": items}
+
+
+            def add_item(order, item):
+                order["items"].append(item)
+
+
+            asha = new_order("asha")
+            add_item(asha, "dosa")
+            bilal = new_order("bilal")
+            add_item(bilal, "idli")
+            add_item(bilal, "vada")
+            print(asha["items"], bilal["items"])
+        explanation: |
+          The default `[]` is created once, so every order started without items shares one list. Defaulting to `None` and building the order from a fresh copy gives each order its own list. Without the copy, an order shares the list its caller passed in; an empty tuple cannot be appended to; and naming the shared list does not stop it being shared.
+    - question:
+        id: write-affected
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `affected` so that it returns, in alphabetical order, every module other than `changed` itself that imports `changed` directly or through other modules. The program should print `['app', 'delivery', 'orders', 'payments'] []`.
+        starter: |
+          imports = {
+              "app": ["orders", "menu", "delivery"],
+              "orders": ["payments", "menu", "money", "db"],
+              "payments": ["money", "notify", "db"],
+              "delivery": ["orders", "notify", "dates"],
+              "menu": ["money", "db"],
+              "notify": ["dates"],
+              "money": [],
+              "dates": [],
+              "db": [],
+          }
+
+
+          def affected(imports, changed):
+              return sorted(m for m, used in imports.items() if changed in used)
+
+
+          print(affected(imports, "notify"), affected(imports, "app"))
+        solution: |
+          imports = {
+              "app": ["orders", "menu", "delivery"],
+              "orders": ["payments", "menu", "money", "db"],
+              "payments": ["money", "notify", "db"],
+              "delivery": ["orders", "notify", "dates"],
+              "menu": ["money", "db"],
+              "notify": ["dates"],
+              "money": [],
+              "dates": [],
+              "db": [],
+          }
+
+
+          def affected(imports, changed):
+              found = set()
+              todo = [changed]
+              while todo:
+                  module = todo.pop()
+                  for importer, used in imports.items():
+                      if module in used and importer not in found:
+                          found.add(importer)
+                          todo.append(importer)
+              return sorted(m for m in found if m != changed)
+
+
+          print(affected(imports, "notify"), affected(imports, "app"))
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(101)
+          _names = ["a", "b", "c", "d", "e", "f", "g", "h"]
+          for _ in range(40):
+              _graph = {_n: sorted({_m for _m in _names if _m != _n and _rng.random() < 0.22}) for _n in _names}
+              _start = _rng.choice(_names)
+              _want, _todo = set(), [_start]
+              while _todo:
+                  _x = _todo.pop()
+                  for _k, _v in _graph.items():
+                      if _x in _v and _k not in _want:
+                          _want.add(_k)
+                          _todo.append(_k)
+              _want.discard(_start)
+              _want = sorted(_want)
+              _got = affected(_graph, _start)
+              assert _got == _want, "With the imports " + str(_graph) + ", a change to " + _start + " affects " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "['app', 'delivery', 'orders', 'payments'] []", "The program should print ['app', 'delivery', 'orders', 'payments'] []"
+        wrong:
+          - |
+            imports = {
+                "app": ["orders", "menu", "delivery"],
+                "orders": ["payments", "menu", "money", "db"],
+                "payments": ["money", "notify", "db"],
+                "delivery": ["orders", "notify", "dates"],
+                "menu": ["money", "db"],
+                "notify": ["dates"],
+                "money": [],
+                "dates": [],
+                "db": [],
+            }
+
+
+            def affected(imports, changed):
+                found = set()
+                todo = [changed]
+                while todo:
+                    module = todo.pop()
+                    for used in imports[module]:
+                        if used not in found:
+                            found.add(used)
+                            todo.append(used)
+                return sorted(found)
+
+
+            print(affected(imports, "notify"), affected(imports, "app"))
+          - |
+            imports = {
+                "app": ["orders", "menu", "delivery"],
+                "orders": ["payments", "menu", "money", "db"],
+                "payments": ["money", "notify", "db"],
+                "delivery": ["orders", "notify", "dates"],
+                "menu": ["money", "db"],
+                "notify": ["dates"],
+                "money": [],
+                "dates": [],
+                "db": [],
+            }
+
+
+            def affected(imports, changed):
+                found = set()
+                todo = [changed]
+                while todo:
+                    module = todo.pop()
+                    for importer, used in imports.items():
+                        if module in used and importer not in found:
+                            found.add(importer)
+                            todo.append(importer)
+                return sorted(found)
+
+
+            print(affected(imports, "notify"), affected(imports, "app"))
+          - |
+            imports = {
+                "app": ["orders", "menu", "delivery"],
+                "orders": ["payments", "menu", "money", "db"],
+                "payments": ["money", "notify", "db"],
+                "delivery": ["orders", "notify", "dates"],
+                "menu": ["money", "db"],
+                "notify": ["dates"],
+                "money": [],
+                "dates": [],
+                "db": [],
+            }
+
+
+            def affected(imports, changed):
+                found = set()
+                for importer, used in imports.items():
+                    if changed in used:
+                        found.add(importer)
+                        for other, also in imports.items():
+                            if importer in also:
+                                found.add(other)
+                return sorted(found)
+
+
+            print(affected(imports, "notify"), affected(imports, "app"))
+        explanation: |
+          The search walks the imports backwards, from a module to its importers, until nothing new turns up. Following imports forwards finds what the module uses, not what uses it; keeping the changed module lets a cycle report it as affected by itself; and looking only two steps back misses longer chains.
+    - question:
+        id: write-find-cycle
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `find_cycle` so that it returns one import cycle as a list of modules that starts and ends with the same module, each importing the next, with no other module repeated, or `None` when there is no cycle. The program should print `['orders', 'payments', 'notify', 'orders'] None`.
+        starter: |
+          imports = {
+              "app": ["orders", "delivery"],
+              "orders": ["payments", "menu"],
+              "payments": ["notify"],
+              "notify": ["orders"],
+              "delivery": ["notify"],
+              "menu": [],
+          }
+
+
+          def find_cycle(imports):
+              for module, used in imports.items():
+                  if module in used:
+                      return [module, module]
+              return None
+
+
+          print(find_cycle(imports), find_cycle({"a": ["b"], "b": []}))
+        solution: |
+          imports = {
+              "app": ["orders", "delivery"],
+              "orders": ["payments", "menu"],
+              "payments": ["notify"],
+              "notify": ["orders"],
+              "delivery": ["notify"],
+              "menu": [],
+          }
+
+
+          def find_cycle(imports):
+              done = set()
+
+              def visit(module, path):
+                  if module in path:
+                      return path[path.index(module):] + [module]
+                  if module in done:
+                      return None
+                  for used in imports[module]:
+                      found = visit(used, path + [module])
+                      if found is not None:
+                          return found
+                  done.add(module)
+                  return None
+
+              for module in imports:
+                  found = visit(module, [])
+                  if found is not None:
+                      return found
+              return None
+
+
+          print(find_cycle(imports), find_cycle({"a": ["b"], "b": []}))
+        tests: |
+          import random as _random
+
+
+          def _has_cycle(_g):
+              _state = {}
+
+              def _go(_n):
+                  _state[_n] = 1
+                  for _m in _g[_n]:
+                      if _state.get(_m) == 1 or (_m not in _state and _go(_m)):
+                          return True
+                  _state[_n] = 2
+                  return False
+
+              return any(_n not in _state and _go(_n) for _n in _g)
+
+
+          _rng = _random.Random(103)
+          _names = ["a", "b", "c", "d", "e", "f", "g"]
+          for _ in range(60):
+              _order = list(_names)
+              _rng.shuffle(_order)
+              _g = {_n: sorted({_m for _m in _order[_order.index(_n) + 1:] if _rng.random() < 0.35}) for _n in _names}
+              if _rng.random() < 0.6:
+                  _x, _y = _rng.sample(_names, 2)
+                  if _y not in _g[_x]:
+                      _g[_x] = sorted(_g[_x] + [_y])
+              _want = _has_cycle(_g)
+              _got = find_cycle(_g)
+              if not _want:
+                  assert _got is None, "The imports " + str(_g) + " have no cycle, but find_cycle returned " + str(_got)
+              else:
+                  assert _got is not None, "The imports " + str(_g) + " have a cycle, but find_cycle returned None"
+                  assert len(_got) >= 2 and _got[0] == _got[-1], "find_cycle should return a cycle that starts and ends with the same module, not " + str(_got)
+                  assert len(set(_got[:-1])) == len(_got) - 1, "find_cycle should return each module of the cycle once before closing it, not " + str(_got)
+                  for _i in range(len(_got) - 1):
+                      assert _got[_i + 1] in _g[_got[_i]], "In " + str(_got) + ", " + _got[_i] + " does not import " + _got[_i + 1] + " (imports " + str(_g) + ")"
+          assert output.strip() == "['orders', 'payments', 'notify', 'orders'] None", "The program should print ['orders', 'payments', 'notify', 'orders'] None"
+        wrong:
+          - |
+            imports = {
+                "app": ["orders", "delivery"],
+                "orders": ["payments", "menu"],
+                "payments": ["notify"],
+                "notify": ["orders"],
+                "delivery": ["notify"],
+                "menu": [],
+            }
+
+
+            def find_cycle(imports):
+                def visit(module, path):
+                    if module in path:
+                        return path + [module]
+                    for used in imports[module]:
+                        found = visit(used, path + [module])
+                        if found is not None:
+                            return found
+                    return None
+
+                for module in imports:
+                    found = visit(module, [])
+                    if found is not None:
+                        return found
+                return None
+
+
+            print(find_cycle(imports), find_cycle({"a": ["b"], "b": []}))
+          - |
+            imports = {
+                "app": ["orders", "delivery"],
+                "orders": ["payments", "menu"],
+                "payments": ["notify"],
+                "notify": ["orders"],
+                "delivery": ["notify"],
+                "menu": [],
+            }
+
+
+            def find_cycle(imports):
+                seen = set()
+
+                def visit(module, path):
+                    if module in seen:
+                        return path + [module]
+                    seen.add(module)
+                    for used in imports[module]:
+                        found = visit(used, path + [module])
+                        if found is not None:
+                            return found
+                    return None
+
+                for module in imports:
+                    if module not in seen:
+                        found = visit(module, [])
+                        if found is not None:
+                            return found
+                return None
+
+
+            print(find_cycle(imports), find_cycle({"a": ["b"], "b": []}))
+          - |
+            imports = {
+                "app": ["orders", "delivery"],
+                "orders": ["payments", "menu"],
+                "payments": ["notify"],
+                "notify": ["orders"],
+                "delivery": ["notify"],
+                "menu": [],
+            }
+
+
+            def find_cycle(imports):
+                first = list(imports)[0]
+
+                def visit(module, path):
+                    if module in path:
+                        return path[path.index(module):] + [module]
+                    for used in imports[module]:
+                        found = visit(used, path + [module])
+                        if found is not None:
+                            return found
+                    return None
+
+                return visit(first, [])
+
+
+            print(find_cycle(imports), find_cycle({"a": ["b"], "b": []}))
+        explanation: |
+          A depth-first search keeps the path it is on; reaching a module already on the path closes a cycle, which is the path from that module onwards. Returning the whole path includes modules that only lead into the cycle; treating any module seen before as a cycle reports two routes to the same module as one; and starting only from the first module misses cycles it cannot reach.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          How many module test runs did the puzzle's 12 changes to `helpers.py` trigger?
+        answer: "360"
+        explanation: |
+          Every change reran all 30 importers: $12 \times 30 = 360$ runs, of which only about $12 \times 3 = 36$ tested code that could have been affected.
+    - question:
+        id: work-layers
+        type: choice
+        system: s2
+        prompt: |
+          A clinic's app has screens, appointment rules and a database module. The appointment rules need to save appointments. Which arrangement keeps the rules easiest to change and test?
+        options:
+          - "Screens import the rules; the rules define a small storage interface; the database module implements it."
+          - "The rules import the screens to show errors directly."
+          - "Every module imports every other, so any function can be called from anywhere."
+          - "The database module imports the rules and calls them after each save."
+        answer: 0
+        explanation: |
+          Imports then point from what changes most, the screens, towards the rules, and the rules depend only on an interface they own, so storage can change or be faked in tests. Rules that import screens, or a web of imports in every direction, tie the most important code to the most volatile.
+  connections:
+    - text: |
+        360 test runs: each of the 12 changes reran all 30 importers, though each change could affect only about 3 of them. Split `helpers.py` into cohesive modules and each change reruns only the modules that use the part that changed, about 36 runs in all, and a reader can tell from a module's imports what it really depends on.
+
+        Boundaries between modules decide where a change can travel. What travels across them is data, and the next question is how to give that data a shape that cannot go wrong: values that are checked once, at the boundary, and then trusted everywhere, which is [[s4.designing-with-types-and-invariants]]. Turning imports around so that stable code owns its interfaces is [[s4.dependency-injection-and-testable-code]]; moving code between modules safely, one small step at a time, is [[s4.refactoring]]; and the tools that rebuild only what a change can reach, by walking exactly this graph, are [[s5.build-systems-and-dependency-graphs]].

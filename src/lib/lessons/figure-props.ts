@@ -117,6 +117,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "graph-hops": z.strictObject({ hops: z.number().optional() }),
   "schema-versions": z.strictObject({ change: z.enum(["add-optional", "add-required", "remove", "rename"]).optional() }),
   "interface-swap": z.strictObject({ callers: z.number().optional(), providers: z.number().optional(), mode: z.enum(["direct", "interface"]).optional() }),
+  "change-ripple": z.strictObject({ changed: z.string().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
