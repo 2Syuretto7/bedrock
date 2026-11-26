@@ -4347,6 +4347,128 @@ function BirthdayCurve(props: Props) {
   );
 }
 
+type TailCase = "heads" | "requests" | "response";
+const TAIL_ORDER: TailCase[] = ["heads", "requests", "response"];
+const lnFactorial = (k: number) => {
+  let total = 0;
+  for (let i = 2; i <= k; i++) total += Math.log(i);
+  return total;
+};
+const TAIL_CASES: Record<TailCase, { name: string; unit: string; mean: number; sd: number; low: number; high: number; step: number; exact: (t: number) => number; chernoff: ((t: number) => number) | null }> = {
+  heads: {
+    name: "heads in 100 tosses of a fair coin",
+    unit: "heads",
+    mean: 50,
+    sd: 5,
+    low: 51,
+    high: 100,
+    step: 1,
+    exact: (t) => {
+      let total = 0;
+      for (let k = Math.ceil(t); k <= 100; k++) total += Math.exp(lnFactorial(100) - lnFactorial(k) - lnFactorial(100 - k) - 100 * Math.LN2);
+      return total;
+    },
+    chernoff: (t) => Math.exp((-2 * (t - 50) ** 2) / 100),
+  },
+  requests: {
+    name: "requests in a second, Poisson with mean 4",
+    unit: "requests",
+    mean: 4,
+    sd: 2,
+    low: 5,
+    high: 30,
+    step: 1,
+    exact: (t) => {
+      let below = 0;
+      for (let k = 0; k < Math.ceil(t); k++) below += Math.exp(-4 + k * Math.log(4) - lnFactorial(k));
+      return Math.max(0, 1 - below);
+    },
+    chernoff: (t) => Math.exp(-4) * ((Math.E * 4) / t) ** t,
+  },
+  response: {
+    name: "a response time in milliseconds, exponential with mean 100",
+    unit: "ms",
+    mean: 100,
+    sd: 100,
+    low: 150,
+    high: 2000,
+    step: 50,
+    exact: (t) => Math.exp(-t / 100),
+    chernoff: null,
+  },
+};
+
+/** The true chance of a large value next to the guarantees that Markov's, Chebyshev's and Chernoff's inequalities give, on a logarithmic scale. */
+function TailBounds(props: Props) {
+  const [which, setWhich] = useState<TailCase>(typeof props.variable === "string" && props.variable in TAIL_CASES ? (props.variable as TailCase) : "heads");
+  const spec = TAIL_CASES[which];
+  const [t, setT] = useState(clamp(Math.round(num(props.threshold, 70) / spec.step) * spec.step, spec.low, spec.high));
+  const exact = spec.exact(t);
+  const markov = Math.min(1, spec.mean / t);
+  const chebyshev = Math.min(1, (spec.sd * spec.sd) / ((t - spec.mean) * (t - spec.mean)));
+  const chernoff = spec.chernoff ? Math.min(1, spec.chernoff(t)) : null;
+  const rows: [string, number | null][] = [
+    ["true chance", exact],
+    ["Markov", markov],
+    ["Chebyshev", chebyshev],
+    ["Chernoff", chernoff],
+  ];
+  const floor = -16;
+  const width = (p: number) => (p <= 0 ? 0 : ((Math.max(Math.log10(p), floor) - floor) / -floor) * 250);
+  const show = (p: number) => (p >= 0.001 ? dp(p, 4) : p.toExponential(1).replace("e-", " × 10^-").replace("-", "−"));
+  const nextCase = TAIL_ORDER[(TAIL_ORDER.indexOf(which) + 1) % TAIL_ORDER.length];
+  const choose = (next: TailCase) => {
+    setWhich(next);
+    setT(clamp(TAIL_CASES[next].mean + 4 * TAIL_CASES[next].sd, TAIL_CASES[next].low, TAIL_CASES[next].high));
+  };
+  return (
+    <Frame
+      title="How good is a guarantee?"
+      summary={`For ${spec.name}, with mean ${spec.mean} and standard deviation ${spec.sd}: the chance of ${group(t)} ${spec.unit} or more is ${show(exact)}. Markov's inequality, which knows only the mean, promises at most ${show(markov)}. Chebyshev's, which also knows the standard deviation, promises at most ${show(chebyshev)}. ${
+        chernoff === null ? "Chernoff's bound needs a sum of many independent bounded parts, which one response time is not." : `Chernoff's, which uses the independence of the many small parts, promises at most ${show(chernoff)}.`
+      } Every bound is at least the true chance, as a guarantee must be.`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => choose(nextCase)}>
+            {`Show ${TAIL_CASES[nextCase].name.split(",")[0]}`}
+          </button>
+          <Slider label="at least" value={t} onChange={setT} min={spec.low} max={spec.high} step={spec.step} text={`${group(t)} ${spec.unit}`} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 230" role="img" aria-label={`The true chance and three upper bounds for ${group(t)} ${spec.unit} or more, on a logarithmic scale`}>
+        {rows.map(([label, p], i) => (
+          <g key={label}>
+            <text x="12" y={46 + i * 44} className="fig-small">
+              {label}
+            </text>
+            {p === null ? (
+              <text x="110" y={46 + i * 44} className="fig-small">
+                does not apply
+              </text>
+            ) : (
+              <>
+                <rect x="110" y={32 + i * 44} width={width(p)} height="20" className="fig-accent" opacity={i === 0 ? 1 : 0.55} />
+                <text x={Math.min(116 + width(p), 360)} y={46 + i * 44} className="fig-small">
+                  {show(p)}
+                </text>
+              </>
+            )}
+          </g>
+        ))}
+        <line x1="110" y1="24" x2="110" y2="200" className="fig-axis" />
+        <line x1="360" y1="24" x2="360" y2="200" className="fig-guide" />
+        <text x="110" y="218" textAnchor="middle" className="fig-small">
+          10^-16
+        </text>
+        <text x="360" y="218" textAnchor="middle" className="fig-small">
+          1
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5644,6 +5766,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "distribution-bars": DistributionBars,
   "density-area": DensityArea,
   "birthday-curve": BirthdayCurve,
+  "tail-bounds": TailBounds,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

@@ -1,0 +1,393 @@
+concept: f4.tail-bounds
+minutes: 90
+claim: You can guarantee that a random quantity is rarely large using only a little information about it, with Markov's inequality from the mean of a non-negative variable, Chebyshev's inequality from the mean and the variance, and Chernoff or Hoeffding bounds for sums of many independent bounded parts, prove the first two, compare them with exact tails, combine them with the union bound, and turn a Hoeffding bound into the number of samples an estimate needs.
+recalls: [f4.the-birthday-problem-and-collisions]
+uses: [f4.the-birthday-problem-and-collisions, f4.continuous-distributions-and-densities, f4.common-discrete-distributions, f4.variance, f4.expectation-and-linearity, f4.sample-spaces-and-events, f1.exponents-and-exponential-growth, f1.logarithms, f1.inequalities, s1.modules-and-imports, s0.functions, s0.loops]
+leads: [f4.the-law-of-large-numbers-and-the-central-limit-theorem, f4.simulation-and-pseudo-random-numbers, f5.summaries-mean-median-and-percentiles, f5.distributions-of-latency-and-heavy-tails]
+starter: |
+  # Scratch space. Mean 30 minutes and standard deviation 10: how often 120 or more, at most?
+  mean, sd, threshold = 30, 10, 120
+  markov = mean / threshold
+  chebyshev = sd ** 2 / (threshold - mean) ** 2
+  print(markov, chebyshev)
+parts:
+  recall:
+    - text: |
+        [[f4.the-birthday-problem-and-collisions]] used the union bound to *guarantee* that collisions are rare, without computing their chance exactly. This lesson collects more guarantees of that kind. Three quick pulls first.
+  puzzle:
+    - text: |
+        A food delivery app advertises that its deliveries take 30 minutes on average. A sceptical friend says, "Averages hide a lot. For all you know, half the orders take two hours."
+
+        You know nothing about the app except that average, and that a delivery cannot take less than no time at all. **What is the largest possible fraction of deliveries that take 2 hours or more?** And if the app also published that the standard deviation of its delivery times is 10 minutes, **how much smaller could you make that promise?**
+  intuition:
+    - text: |
+        Suppose more than a quarter of the deliveries took 120 minutes or more. Those deliveries alone would contribute more than $\tfrac14 \times 120 = 30$ minutes to the average, and every other delivery contributes something that is at least zero. The average would be more than 30 minutes, which it is not. So **at most a quarter** of deliveries can take 2 hours or more. The friend's "half" is impossible.
+
+        Could a quarter really happen? Yes: if three quarters of deliveries took no time at all and a quarter took exactly 120 minutes, the average would be exactly 30. That world is absurd, but it is allowed by the one fact you know, so no better promise can be made from the average alone.
+
+        The standard deviation rules that absurd world out. A delivery of 120 minutes is 90 minutes from the mean, nine standard deviations away. Large distances from the mean make the variance large, since it averages squared distances, and a fraction $q$ of deliveries 90 minutes away would contribute $q \times 90^2$ to a variance that is only $10^2 = 100$. So $q \le 100/8100 = 1/81$, about $1.2\%$.
+
+        Each fact about a random quantity buys a better guarantee. The figure compares the guarantees with the true chance for three quantities, on a scale where each step to the left is ten times less likely. Slide the threshold out and watch the true chance fall away much faster than the guarantees do.
+    - figure: tail-bounds
+      props: { variable: heads, threshold: 70 }
+    - text: |
+        For 100 tosses of a coin, 70 heads or more has a true chance of about $4 \times 10^{-5}$. Markov's guarantee of $0.71$ is nearly useless, Chebyshev's $0.0625$ is better, and Chernoff's $0.0003$, which uses the fact that the 100 tosses are independent, is within a factor of ten of the truth.
+  derivation:
+    - text: |
+        **Markov's inequality.** If $X \ge 0$ and $a > 0$, then
+
+        $$P(X \ge a) \le \frac{E[X]}{a}.$$
+
+        *Proof.* Compare $X$ with $a$ times the indicator of $X \ge a$. When $X \ge a$ the indicator is 1 and $X \ge a$; otherwise the indicator is 0 and $X \ge 0$. Either way $X \ge a\,\mathbf{1}_{X \ge a}$, so taking expectations, $E[X] \ge a\,P(X \ge a)$. Divide by $a$. $\square$
+
+        The proof needs $X \ge 0$. Without it, the large values could be balanced by negative ones and no promise is possible. Read as percentiles: at most 1% of values exceed 100 times the mean, so the 99th percentile is at most $100\,E[X]$. That is a weak promise, but it needs nothing beyond the mean.
+
+        **Chebyshev's inequality.** If $X$ has mean $\mu$ and standard deviation $\sigma$, then for every $k > 0$,
+
+        $$P\bigl(\lvert X - \mu \rvert \ge k\sigma\bigr) \le \frac{1}{k^2}.$$
+
+        *Proof.* $\lvert X - \mu \rvert \ge k\sigma$ exactly when $(X - \mu)^2 \ge k^2\sigma^2$. The variable $(X - \mu)^2$ is never negative and has mean $\sigma^2$, so Markov gives $P\bigl((X - \mu)^2 \ge k^2\sigma^2\bigr) \le \sigma^2/(k^2 \sigma^2) = 1/k^2$. $\square$
+
+        So any random variable lies within 2 standard deviations of its mean with chance at least $3/4$, and within 10 with chance at least $99/100$. For a normal distribution the true figures are 95% and practically 100%; Chebyshev is the price of knowing nothing about the shape. Written with a distance $d$ instead of $k$ standard deviations, $P(\lvert X - \mu \rvert \ge d) \le \sigma^2/d^2$, and that is the $1/81$ of the puzzle.
+    - question:
+        id: derivation-markov
+        type: numeric
+        system: s2
+        prompt: |
+          A queue's length is never negative and averages 5. Using only that, what is the largest possible chance that it reaches 40 or more?
+        answer: "0.125"
+        explanation: |
+          Markov: $5/40 = 0.125$. If more than an eighth of the time the queue held 40 or more, those times alone would push the average above 5.
+    - text: |
+        **Averages and sums.** Chebyshev's inequality becomes powerful when applied to an average. For $n$ independent measurements with variance $\sigma^2$, the average $\bar{X}$ has variance $\sigma^2/n$, so
+
+        $$P\bigl(\lvert \bar{X} - \mu \rvert \ge \varepsilon\bigr) \le \frac{\sigma^2}{n\varepsilon^2},$$
+
+        which goes to 0 as $n$ grows, for any fixed $\varepsilon$. The average is guaranteed to settle near the mean. That is the first half of [[f4.the-law-of-large-numbers-and-the-central-limit-theorem]].
+
+        **Chernoff and Hoeffding bounds.** For sums of many independent pieces, much more is true. If $S = X_1 + \cdots + X_n$ is a sum of independent variables, each between 0 and 1, then for every $t > 0$
+
+        $$P\bigl(S - E[S] \ge t\bigr) \le e^{-2t^2/n},$$
+
+        and the same for $E[S] - S \ge t$. This is **Hoeffding's inequality**, one of a family called Chernoff bounds. The idea of the proof is to apply Markov's inequality not to $S$ but to $e^{\lambda S}$, whose expectation splits into a product of $n$ expectations by independence, and then to choose $\lambda$ well. The result falls off *exponentially* in $t^2/n$, where Chebyshev's falls off only like $n/t^2$.
+
+        For 100 fair tosses, $E[S] = 50$, and 70 or more heads has $t = 20$: Hoeffding gives $e^{-2 \times 400/100} = e^{-8} \approx 0.00034$, against Chebyshev's $25/400 = 0.0625$. For 1,000 tosses and 550 heads or more, Hoeffding gives $e^{-5} \approx 0.0067$ and Chebyshev $250/2500 = 0.1$.
+    - question:
+        id: order-chebyshev
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of the proof of Chebyshev's inequality in order.
+        steps:
+          - "$\\lvert X - \\mu \\rvert \\ge k\\sigma$ happens exactly when $(X - \\mu)^2 \\ge k^2\\sigma^2$."
+          - "$(X - \\mu)^2$ is never negative and its mean is $\\sigma^2$."
+          - "Markov's inequality gives $P\\bigl((X - \\mu)^2 \\ge k^2\\sigma^2\\bigr) \\le \\sigma^2/(k^2\\sigma^2)$."
+          - "So $P(\\lvert X - \\mu \\rvert \\ge k\\sigma) \\le 1/k^2$."
+        explanation: |
+          Chebyshev is Markov applied to the squared distance from the mean. Squaring turns a two-sided event into a one-sided one about a non-negative variable, which is exactly what Markov needs.
+    - text: |
+        **How many samples?** Hoeffding's bound answers a question every engineer meets: how much data is enough? To estimate a chance $p$, such as the fraction of requests that fail, by the fraction $\hat{p}$ in $n$ independent samples, apply the bound to the count of failures, with $t = n\varepsilon$, on both sides:
+
+        $$P\bigl(\lvert \hat{p} - p \rvert \ge \varepsilon\bigr) \le 2e^{-2n\varepsilon^2}.$$
+
+        To make this at most $\delta$, take $n \ge \ln(2/\delta) / (2\varepsilon^2)$, using [[f1.logarithms]]. To know a failure rate to within one percentage point, $\varepsilon = 0.01$, with 95% confidence, $\delta = 0.05$, about 18,445 samples suffice, whatever $p$ is. Halving $\varepsilon$ multiplies the samples by 4, the square-root law once more.
+
+        **Combining guarantees.** Bounds combine with the union bound. If each of 1,000 servers exceeds its memory with chance at most $10^{-6}$ in a day, then some server does with chance at most $10^{-3}$, whatever the dependence between them. Tail bounds give the pieces and the union bound adds them up.
+
+        **What a bound is for.** A bound is a guarantee, not an estimate. It can be far above the true chance, as the figure shows, and it is never below it. Engineers use bounds when the distribution is unknown or when a promise must hold for every possible input, as in the analysis of randomised algorithms, and they use exact or approximate distributions when they have them. Real response times often have heavy tails, with far more very slow requests than a normal or exponential would allow, and then only the weaker bounds remain honest, a theme of [[f5.distributions-of-latency-and-heavy-tails]].
+
+        **In Python.** Each bound is a line:
+
+        ```python
+        import math
+
+        n, heads = 100, 70
+        markov = (n / 2) / heads
+        chebyshev = (n / 4) / (heads - n / 2) ** 2
+        hoeffding = math.exp(-2 * (heads - n / 2) ** 2 / n)
+        print(round(markov, 3), chebyshev, round(hoeffding, 5))
+        ```
+
+        This prints `0.714 0.0625 0.00034`.
+  formal:
+    - text: |
+        **Markov.** If $X \ge 0$ and $a > 0$, $P(X \ge a) \le E[X]/a$.
+
+        **Chebyshev.** If $X$ has mean $\mu$ and variance $\sigma^2$, then $P(\lvert X - \mu \rvert \ge d) \le \sigma^2/d^2$ for $d > 0$; equivalently $P(\lvert X - \mu \rvert \ge k\sigma) \le 1/k^2$.
+
+        **Averages.** For independent $X_1, \dots, X_n$ with mean $\mu$ and variance $\sigma^2$, $P(\lvert \bar{X} - \mu \rvert \ge \varepsilon) \le \sigma^2/(n\varepsilon^2)$.
+
+        **Hoeffding.** For independent $X_i \in [0, 1]$ and $S = \sum_{i=1}^n X_i$, $P(S - E[S] \ge t) \le e^{-2t^2/n}$ and $P(E[S] - S \ge t) \le e^{-2t^2/n}$ for $t > 0$.
+
+        **Sample size.** With $n \ge \ln(2/\delta)/(2\varepsilon^2)$ independent samples, the observed fraction is within $\varepsilon$ of the true chance with probability at least $1 - \delta$.
+  drill:
+    - text: Seconds each. Name what you know, then pick the bound that uses it.
+    - question:
+        id: drill-markov
+        type: numeric
+        system: s1
+        prompt: |
+          $X \ge 0$ and $E[X] = 5$. What is the largest $P(X \ge 20)$ can be?
+        answer: "0.25"
+        explanation: $5/20$, by Markov.
+    - question:
+        id: drill-chebyshev
+        type: numeric
+        system: s1
+        prompt: |
+          By Chebyshev, what is the largest possible chance that a random variable is 3 or more standard deviations from its mean? Give a fraction.
+        answer: "1/9"
+        explanation: $1/k^2$ with $k = 3$.
+    - question:
+        id: drill-within
+        type: numeric
+        system: s1
+        prompt: |
+          By Chebyshev, at least what fraction of any distribution lies within 2 standard deviations of its mean?
+        answer: "0.75"
+        explanation: At most $1/4$ lies 2 or more standard deviations away.
+    - question:
+        id: drill-hoeffding
+        type: numeric
+        system: s1
+        tolerance: "0.001"
+        prompt: |
+          A fair coin is tossed 100 times. What does Hoeffding's bound $e^{-2t^2/n}$ give for the chance of at least 10 more heads than expected? Give a decimal to three places.
+        answer: "0.135"
+        explanation: $e^{-2 \times 100/100} = e^{-2} \approx 0.135$.
+    - question:
+        id: drill-negative
+        type: choice
+        system: s1
+        prompt: |
+          Why does Markov's inequality need $X \ge 0$?
+        options:
+          - "Otherwise very negative values could balance very large ones, and the mean would say nothing about the large values."
+          - "Because the mean of a negative variable is undefined."
+          - "Because probabilities cannot be negative."
+          - "It does not; it holds for every random variable."
+        answer: 0
+        explanation: $X = -1000$ or $1000$ with equal chances has mean 0, yet is 1,000 or more with chance $1/2$, and $0/1000 = 0$ would be a false promise.
+    - question:
+        id: drill-samples
+        type: choice
+        system: s1
+        prompt: |
+          To estimate a failure rate to within $\varepsilon$, Hoeffding's bound asks for about $\ln(2/\delta)/(2\varepsilon^2)$ samples. How does that change if $\varepsilon$ is halved?
+        options: ["It is multiplied by 4", "It doubles", "It halves", "It does not change"]
+        answer: 0
+        explanation: $\varepsilon$ appears squared in the bottom line.
+    - question:
+        id: predict-bounds
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          mean, sd = 30, 10
+          for threshold in [60, 120]:
+              markov = mean / threshold
+              chebyshev = sd ** 2 / (threshold - mean) ** 2
+              print(threshold, markov, round(chebyshev, 4))
+        output: |
+          60 0.5 0.1111
+          120 0.25 0.0123
+        explanation: Markov falls like $1/a$, Chebyshev like $1/d^2$, so the variance helps more and more as the threshold moves out.
+    - question:
+        id: predict-exact
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import math
+
+          n = 10
+          exact = sum(math.comb(n, k) for k in range(8, n + 1)) / 2 ** n
+          chebyshev = (n / 4) / (8 - n / 2) ** 2
+          print(round(exact, 4), round(chebyshev, 4))
+        output: "0.0547 0.2778"
+        explanation: Eight or more heads in 10 tosses has true chance $56/1024 \approx 0.0547$; Chebyshev only guarantees at most $2.5/9 \approx 0.278$. A bound is a ceiling, often a high one.
+  work:
+    - text: Slower now. For each guarantee, say which facts it uses, and check that they hold, especially non-negativity and independence.
+    - question:
+        id: fix-chebyshev
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `chebyshev_bound(sd, distance)` should return Chebyshev's guarantee on the chance of landing at least `distance` from the mean, never more than 1. The program should print `0.0123 0.25 1`. It prints `0.1111 0.5 1`. Find the fault and fix it.
+        starter: |
+          def chebyshev_bound(sd, distance):
+              return min(1, sd / distance)
+
+          print(round(chebyshev_bound(10, 90), 4), chebyshev_bound(5, 10), chebyshev_bound(10, 5))
+        solution: |
+          def chebyshev_bound(sd, distance):
+              return min(1, sd ** 2 / distance ** 2)
+
+          print(round(chebyshev_bound(10, 90), 4), chebyshev_bound(5, 10), chebyshev_bound(10, 5))
+        tests: |
+          for _sd in [0.5, 1, 2, 3, 10, 25]:
+              for _d in [0.5, 1, 2, 5, 10, 90, 1000]:
+                  _want = min(1, _sd * _sd / (_d * _d))
+                  _got = chebyshev_bound(_sd, _d)
+                  assert abs(_got - _want) < 1e-12, "chebyshev_bound(" + str(_sd) + ", " + str(_d) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "0.0123 0.25 1", "The program should print 0.0123 0.25 1"
+        wrong:
+          - |
+            def chebyshev_bound(sd, distance):
+                return sd ** 2 / distance ** 2
+
+            print("0.0123 0.25 1")
+          - |
+            def chebyshev_bound(sd, distance):
+                return min(1, sd / distance ** 2)
+
+            print("0.0123 0.25 1")
+        explanation: |
+          Chebyshev bounds the chance by variance over squared distance, $\sigma^2/d^2$, which is $1/k^2$ when $d = k\sigma$. Using $\sigma/d$ gives $1/k$, a weaker number that is not what the proof shows. Without the cap at 1 the bound can exceed 1, which says nothing, and $\sigma/d^2$ mixes units.
+    - question:
+        id: write-best
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A quantity $X$ is never negative and has mean `mean` and standard deviation `sd`. Write `best_bound(mean, sd, threshold)`, for `threshold` greater than `mean`, returning the smaller of two guarantees on $P(X \ge \text{threshold})$: Markov's, and Chebyshev's with distance `threshold - mean`. Neither may exceed 1.
+        starter: |
+          def best_bound(mean, sd, threshold):
+              return 1
+
+          print(round(best_bound(30, 10, 120), 4), round(best_bound(30, 40, 120), 4), best_bound(30, 100, 60))
+        solution: |
+          def best_bound(mean, sd, threshold):
+              markov = mean / threshold
+              chebyshev = sd ** 2 / (threshold - mean) ** 2
+              return min(1, markov, chebyshev)
+
+          print(round(best_bound(30, 10, 120), 4), round(best_bound(30, 40, 120), 4), best_bound(30, 100, 60))
+        tests: |
+          import random
+          random.seed(73)
+          for _trial in range(500):
+              _m = random.randint(1, 100)
+              _s = random.randint(0, 100)
+              _t = _m + random.randint(1, 300)
+              _want = min(1, _m / _t, _s * _s / (_t - _m) ** 2)
+              _got = best_bound(_m, _s, _t)
+              assert abs(_got - _want) < 1e-12, "best_bound(" + str(_m) + ", " + str(_s) + ", " + str(_t) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "0.0123 0.1975 0.5", "The program should print 0.0123 0.1975 0.5"
+        wrong:
+          - |
+            def best_bound(mean, sd, threshold):
+                markov = mean / threshold
+                chebyshev = sd ** 2 / (threshold - mean) ** 2
+                return max(markov, chebyshev)
+
+            print("0.0123 0.1975 0.5")
+          - |
+            def best_bound(mean, sd, threshold):
+                return min(1, sd ** 2 / (threshold - mean) ** 2)
+
+            print("0.0123 0.1975 0.5")
+          - |
+            def best_bound(mean, sd, threshold):
+                markov = mean / threshold
+                chebyshev = sd ** 2 / threshold ** 2
+                return min(1, markov, chebyshev)
+
+            print("0.0123 0.1975 0.5")
+        explanation: |
+          Both are true guarantees, so the smaller one is also true and is the better promise. Chebyshev measures distance from the mean, $t - \mu$, not from zero. Taking the larger of the two throws away information, and Chebyshev alone fails when the standard deviation is large: with mean 30 and standard deviation 100, Markov's $1/2$ is the only useful promise for 60.
+    - question:
+        id: write-samples
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `samples_needed(eps, delta)`, the smallest whole number $n \ge 1$ with $2e^{-2n\varepsilon^2} \le \delta$, the number of independent samples for which Hoeffding guarantees that an observed fraction is within `eps` of the true chance with probability at least $1 - \delta$.
+        starter: |
+          import math
+
+          def samples_needed(eps, delta):
+              return 100
+
+          print(samples_needed(0.01, 0.05), samples_needed(0.05, 0.01), samples_needed(0.1, 0.1))
+        solution: |
+          import math
+
+          def samples_needed(eps, delta):
+              return max(1, math.ceil(math.log(2 / delta) / (2 * eps * eps)))
+
+          print(samples_needed(0.01, 0.05), samples_needed(0.05, 0.01), samples_needed(0.1, 0.1))
+        tests: |
+          import math
+          for _e in [0.005, 0.01, 0.02, 0.05, 0.1, 0.25]:
+              for _d in [0.001, 0.01, 0.05, 0.1, 0.5]:
+                  _got = samples_needed(_e, _d)
+                  assert isinstance(_got, int), "samples_needed should return a whole number"
+                  assert 2 * math.exp(-2 * _got * _e * _e) <= _d * (1 + 1e-9), "samples_needed(" + str(_e) + ", " + str(_d) + ") = " + str(_got) + " is too few"
+                  assert _got == 1 or 2 * math.exp(-2 * (_got - 1) * _e * _e) > _d * (1 - 1e-9), "samples_needed(" + str(_e) + ", " + str(_d) + ") = " + str(_got) + " is more than needed"
+          assert output.strip() == "18445 1060 150", "The program should print 18445 1060 150"
+        wrong:
+          - |
+            import math
+
+            def samples_needed(eps, delta):
+                return math.ceil(math.log(1 / delta) / (2 * eps * eps))
+
+            print("18445 1060 150")
+          - |
+            import math
+
+            def samples_needed(eps, delta):
+                return math.ceil(math.log(2 / delta) / (2 * eps))
+
+            print("18445 1060 150")
+          - |
+            import math
+
+            def samples_needed(eps, delta):
+                return math.ceil(1 / (delta * eps * eps))
+
+            print("18445 1060 150")
+        explanation: |
+          Solve $2e^{-2n\varepsilon^2} \le \delta$: $e^{-2n\varepsilon^2} \le \delta/2$, so $2n\varepsilon^2 \ge \ln(2/\delta)$ and $n \ge \ln(2/\delta)/(2\varepsilon^2)$, rounded up. Dropping the 2 inside the logarithm covers only one side of the error. Dividing by $\varepsilon$ instead of $\varepsilon^2$ misses the square-root law. And $1/(\delta\varepsilon^2)$ is roughly what Chebyshev would ask for: also a valid size, but far larger, because it ignores the exponential tail.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        tolerance: "0.0005"
+        prompt: |
+          Deliveries average 30 minutes with standard deviation 10 minutes. What is Chebyshev's guarantee on the fraction that take 120 minutes or more? Give a decimal to four places.
+        answer: "0.0123"
+        explanation: |
+          120 is 90 minutes from the mean, so the guarantee is $10^2/90^2 = 1/81 \approx 0.0123$. Markov, from the mean alone, gave $30/120 = 0.25$.
+    - question:
+        id: work-tosses
+        type: numeric
+        system: s2
+        prompt: |
+          A fair coin is tossed 100 times. What does Chebyshev's inequality guarantee about the chance that the number of heads is 20 or more away from 50? Give the bound as a decimal.
+        answer: "0.0625"
+        explanation: |
+          The variance is $100 \times \tfrac14 = 25$, so the bound is $25/20^2 = 0.0625$. The true chance is about $0.00008$, and Hoeffding's $2e^{-8} \approx 0.0007$ is much closer.
+    - question:
+        id: work-normal
+        type: choice
+        system: s2
+        prompt: |
+          For a normal distribution, 95% lies within 2 standard deviations of the mean, but Chebyshev only promises 75%. Which is right?
+        options:
+          - "Both: Chebyshev's 75% holds for every distribution, and a normal happens to do much better."
+          - "Chebyshev is wrong for normal distributions."
+          - "The 95% figure is wrong; it should be 75%."
+          - "Neither, because standard deviations do not apply to normal distributions."
+        answer: 0
+        explanation: |
+          A guarantee must hold for every distribution with the given mean and variance, including lopsided ones that put a quarter of their chance at exactly 2 standard deviations. The normal is one particular shape, with thin tails, so it does better than the guarantee.
+  connections:
+    - text: |
+        From the average alone, at most a quarter of deliveries can take 2 hours or more, and an absurd but possible world reaches that quarter. With the standard deviation too, the promise drops to $1/81$, about $1.2\%$. Neither is the true fraction, which could be far smaller; both are guarantees that no distribution with those numbers can break.
+
+        Markov's inequality turns a mean into a promise about large values of a non-negative quantity. Chebyshev's applies Markov to the squared distance from the mean, and promises $1/k^2$ beyond $k$ standard deviations. For sums of many independent bounded pieces, Hoeffding's and Chernoff's bounds fall exponentially, and they tell you how many samples an estimate needs. The union bound adds such guarantees across many events.
+
+        Chebyshev already showed that an average of many independent measurements settles near its mean. The next lesson proves it properly and then asks a sharper question: not just *that* the average settles, but what shape its fluctuations take on the way. The answer is the bell curve, almost whatever the measurements were: [[f4.the-law-of-large-numbers-and-the-central-limit-theorem]].
