@@ -4266,6 +4266,87 @@ function DensityArea(props: Props) {
   );
 }
 
+type SpaceName = "days" | "pins" | "codes" | "hashes";
+const SPACE_ORDER: SpaceName[] = ["days", "pins", "codes", "hashes"];
+const SPACES: Record<SpaceName, { size: number; things: string; values: string; most: number; step: number }> = {
+  days: { size: 365, things: "people", values: "birthdays", most: 60, step: 1 },
+  pins: { size: 10000, things: "customers", values: "four-digit PINs", most: 300, step: 3 },
+  codes: { size: 1000000, things: "users", values: "six-digit codes", most: 3000, step: 30 },
+  hashes: { size: 2 ** 32, things: "files", values: "32-bit hashes", most: 200000, step: 2000 },
+};
+
+/** The chance that some two of n random picks from m values coincide, exactly and by the exponential approximation, as n grows. */
+function BirthdayCurve(props: Props) {
+  const [space, setSpace] = useState<SpaceName>(typeof props.space === "string" && props.space in SPACES ? (props.space as SpaceName) : "days");
+  const { size, things, values, most, step } = SPACES[space];
+  const [n, setN] = useState(clamp(Math.round(num(props.people, 23) / step) * step, step, most));
+  // One pass of the exact product, keeping the chance of no match at every value the curve needs.
+  const samples = 60;
+  const marks = Array.from({ length: samples + 1 }, (_, i) => Math.round((most * i) / samples));
+  const noMatch = new Map<number, number>();
+  let logProduct = 0;
+  let firstHalf = most;
+  const wanted = new Set([...marks, n]);
+  for (let k = 0; k <= most; k++) {
+    if (wanted.has(k)) noMatch.set(k, Math.exp(logProduct));
+    if (firstHalf === most && Math.exp(logProduct) <= 0.5) firstHalf = k;
+    logProduct += Math.log1p(-k / size);
+  }
+  const exact = 1 - (noMatch.get(n) ?? 0);
+  const approx = 1 - Math.exp(-(n * (n - 1)) / (2 * size));
+  const half = Math.sqrt(2 * Math.log(2) * size);
+  const sx = (k: number) => 40 + (k / most) * 360;
+  const sy = (p: number) => 200 - p * 160;
+  const curve = marks.map((k) => `${dp(sx(k), 2)},${dp(sy(1 - (noMatch.get(k) ?? 0)), 2)}`).join(" ");
+  const nextSpace = SPACE_ORDER[(SPACE_ORDER.indexOf(space) + 1) % SPACE_ORDER.length];
+  const chooseSpace = (next: SpaceName) => {
+    setSpace(next);
+    setN(clamp(Math.round(Math.sqrt(2 * Math.log(2) * SPACES[next].size) / SPACES[next].step) * SPACES[next].step, SPACES[next].step, SPACES[next].most));
+  };
+  const percent = (p: number) => (p < 0.001 ? "under 0.1%" : `${dp(p * 100, 1)}%`);
+  return (
+    <Frame
+      title="When do two picks first coincide?"
+      summary={`${group(n)} ${things}, each with one of ${group(size)} ${values} picked at random. The chance that at least two share one is ${percent(exact)}; the approximation 1 − e^(−n(n − 1)/2m) gives ${percent(approx)}. The chance first reaches one half at ${group(firstHalf)} ${things}, close to 1.18 × √${group(size)} ≈ ${group(Math.round(half))} and far fewer than ${group(size)}.`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => chooseSpace(nextSpace)}>
+            {`Use ${SPACES[nextSpace].values}`}
+          </button>
+          <Slider label={things} value={n} onChange={setN} min={step} max={most} step={step} text={group(n)} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`The chance of a shared value rising with the number of ${things}, ${percent(exact)} at ${group(n)}`}>
+        <line x1="40" y1="200" x2="400" y2="200" className="fig-axis" />
+        <line x1="40" y1="40" x2="40" y2="200" className="fig-axis" />
+        <line x1="40" y1={sy(0.5)} x2="400" y2={sy(0.5)} className="fig-guide" />
+        <text x="36" y={sy(0.5) + 4} textAnchor="end" className="fig-small">
+          ½
+        </text>
+        <text x="36" y={sy(1) + 4} textAnchor="end" className="fig-small">
+          1
+        </text>
+        <polyline points={curve} className="fig-line" />
+        <line x1={sx(half)} y1={sy(0.5)} x2={sx(half)} y2="200" className="fig-guide" />
+        <circle cx={sx(n)} cy={sy(exact)} r="6" className="fig-accent" />
+        <text x="40" y="218" className="fig-small">
+          0
+        </text>
+        <text x="400" y="218" textAnchor="end" className="fig-small">
+          {group(most)}
+        </text>
+        <text x="220" y="236" textAnchor="middle" className="fig-small">
+          {`number of ${things}`}
+        </text>
+        <text x="48" y="30" className="fig-small">
+          {`chance of a shared value: ${percent(exact)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5562,6 +5643,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "variable-bars": VariableBars,
   "distribution-bars": DistributionBars,
   "density-area": DensityArea,
+  "birthday-curve": BirthdayCurve,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
