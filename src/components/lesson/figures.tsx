@@ -4624,6 +4624,61 @@ function MonteCarlo(props: Props) {
   );
 }
 
+/** 1st, 2nd, 3rd, 4th, 11th, 12th, 13th, 21st and so on. */
+const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th")}`;
+
+const SUMMARY_TIMES = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95];
+
+/** Twenty response times on a line, with their mean, median and a chosen percentile marked. */
+function SummaryMarks(props: Props) {
+  const [slowest, setSlowest] = useState(clamp(Math.round(num(props.slowest, 120) / 20) * 20, 100, 5000));
+  const [p, setP] = useState(clamp(Math.round(num(props.percentile, 90)), 1, 100));
+  const values = [...SUMMARY_TIMES, slowest];
+  const n = values.length;
+  const mean = values.reduce((a, b) => a + b, 0) / n;
+  const median = (values[n / 2 - 1] + values[n / 2]) / 2;
+  const rank = Math.ceil((p * n) / 100);
+  const pick = values[rank - 1];
+  const top = Math.max(200, slowest);
+  const sx = (v: number) => 30 + (v / top) * 390;
+  const mark = (v: number, label: string, y: number, className: string) => (
+    <g key={label}>
+      <line x1={sx(v)} y1={y + 6} x2={sx(v)} y2="120" className={className} />
+      <text x={sx(v)} y={y} textAnchor="middle" className="fig-small">
+        {label}
+      </text>
+    </g>
+  );
+  return (
+    <Frame
+      title="Mean, median and percentile"
+      summary={`20 response times in milliseconds, the slowest ${group(slowest)} ms. The mean is ${dp(mean, 2)} ms: the total, ${group(Math.round(mean * n))} ms, shared equally. The median is ${dp(median, 1)} ms, halfway between the 10th and 11th of the sorted times. The ${ordinal(p)} percentile is ${group(pick)} ms, the ${rank === n ? "slowest" : `${ordinal(rank)} of the 20 sorted times`}, because at least ${p}% of the times must be at or below it. Moving the slowest request changes the mean but not the median${rank === n ? ", and this percentile is the slowest request itself" : ""}.`}
+      controls={
+        <>
+          <Slider label="slowest request" value={slowest} onChange={setSlowest} min={100} max={5000} step={20} text={`${group(slowest)} ms`} />
+          <Slider label="percentile" value={p} onChange={setP} min={1} max={100} text={ordinal(p)} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 160" role="img" aria-label={`20 response times on a line from 0 to ${group(top)} milliseconds, with the mean, the median and the ${ordinal(p)} percentile marked`}>
+        <line x1="30" y1="120" x2="420" y2="120" className="fig-axis" />
+        {values.map((v, i) => (
+          <circle key={i} cx={sx(v)} cy="120" r="4" className="fig-accent" />
+        ))}
+        {mark(median, "median", 30, "fig-line")}
+        {mark(mean, "mean", 52, "fig-accent-line")}
+        {mark(pick, `p${p}`, 74, "fig-guide")}
+        <text x="30" y="142" textAnchor="middle" className="fig-small">
+          0
+        </text>
+        <text x="420" y="142" textAnchor="middle" className="fig-small">
+          {`${group(top)} ms`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5924,6 +5979,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "tail-bounds": TailBounds,
   "sample-means": SampleMeans,
   "monte-carlo": MonteCarlo,
+  "summary-marks": SummaryMarks,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

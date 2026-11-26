@@ -85,6 +85,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "sample-means": z.strictObject({ source: z.enum(["die", "wait", "rare", "even"]).optional(), n: z.number().int().optional(), seed: z.number().int().optional() }),
   "monte-carlo": z.strictObject({ generator: z.enum(["good", "poor"]).optional(), points: z.number().int().optional(), seed: z.number().int().optional() }),
   "union-find": z.strictObject({ bySize: z.boolean().optional(), find: z.number().optional(), joins: z.number().optional() }),
+  "summary-marks": z.strictObject({ slowest: z.number().min(100).max(5000).optional(), percentile: z.number().int().min(1).max(100).optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
