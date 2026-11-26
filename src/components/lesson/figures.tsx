@@ -7118,6 +7118,131 @@ function GraphHops(props: Props) {
   );
 }
 
+type SvCell = { ok: boolean; note: string };
+const SV_CHANGES: { key: string; label: string; what: string; cells: [SvCell, SvCell, SvCell, SvCell] }[] = [
+  {
+    key: "add-optional",
+    label: "add optional",
+    what: "version 2 adds a nickname field, with a default of none when it is missing",
+    cells: [
+      { ok: true, note: "same version" },
+      { ok: true, note: "no nickname: default" },
+      { ok: true, note: "ignores nickname" },
+      { ok: true, note: "same version" },
+    ],
+  },
+  {
+    key: "add-required",
+    label: "add required",
+    what: "version 2 adds a nickname field that every reader expects to find",
+    cells: [
+      { ok: true, note: "same version" },
+      { ok: false, note: "nickname missing" },
+      { ok: true, note: "ignores nickname" },
+      { ok: true, note: "same version" },
+    ],
+  },
+  {
+    key: "remove",
+    label: "remove",
+    what: "version 2 stops writing the phone field, which version 1 requires",
+    cells: [
+      { ok: true, note: "same version" },
+      { ok: true, note: "ignores phone" },
+      { ok: false, note: "phone missing" },
+      { ok: true, note: "same version" },
+    ],
+  },
+  {
+    key: "rename",
+    label: "rename",
+    what: "version 2 renames the mobile field to phone",
+    cells: [
+      { ok: true, note: "same version" },
+      { ok: false, note: "phone missing" },
+      { ok: false, note: "mobile missing" },
+      { ok: true, note: "same version" },
+    ],
+  },
+];
+
+/** Which pairs of writer and reader versions still work after one change to a record's shape. */
+function SchemaVersions(props: Props) {
+  const start = SV_CHANGES.findIndex((c) => c.key === props.change);
+  const [index, setIndex] = useState(start >= 0 ? start : 0);
+  const change = SV_CHANGES[index];
+  const [, backward, forward] = change.cells;
+  const verdict = (ok: boolean) => (ok ? "works" : "fails");
+  const kind =
+    backward.ok && forward.ok
+      ? "The change is backward and forward compatible, so old and new versions can run side by side."
+      : backward.ok
+        ? "The change is backward compatible only: new code reads old data, but old code cannot read new data."
+        : forward.ok
+          ? "The change is forward compatible only: old code reads new data, but new code cannot read old data."
+          : "The change is neither backward nor forward compatible, so it cannot be made in one step while both versions run.";
+  const summary = `Change: ${change.what}. New code reading old data ${verdict(backward.ok)}: ${backward.note}. Old code reading new data ${verdict(forward.ok)}: ${forward.note}. ${kind}`;
+  const cx = [184, 330];
+  const cy = [80, 150];
+  return (
+    <Frame
+      title="Old and new versions reading each other's data"
+      summary={summary}
+      controls={
+        <>
+          {SV_CHANGES.map((c, i) => (
+            <button key={c.key} type="button" className="btn btn-secondary btn-small" aria-pressed={index === i} onClick={() => setIndex(i)}>
+              {c.label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 410 236" role="img" aria-label={`New code reading old data ${verdict(backward.ok)}; old code reading new data ${verdict(forward.ok)}`}>
+        <text x={257} y={16} textAnchor="middle" className="fig-small" style={{ fontWeight: 600 }}>
+          read by
+        </text>
+        <text x={cx[0]} y={36} textAnchor="middle" className="fig-small">
+          version 1 code
+        </text>
+        <text x={cx[1]} y={36} textAnchor="middle" className="fig-small">
+          version 2 code
+        </text>
+        <text x={8} y={cy[0] - 18} className="fig-small" style={{ fontWeight: 600 }}>
+          written by
+        </text>
+        {[0, 1].map((w) => (
+          <text key={w} x={8} y={cy[w] + 4} className="fig-small">
+            {`version ${w + 1} data`}
+          </text>
+        ))}
+        {[0, 1].map((w) =>
+          [0, 1].map((r) => {
+            const cell = change.cells[w * 2 + r];
+            return (
+              <g key={`${w}-${r}`}>
+                <rect x={cx[r] - 70} y={cy[w] - 28} width={140} height={56} rx={4} className={cell.ok ? "fig-fill" : "fig-accent"} />
+                <text x={cx[r]} y={cy[w] - 4} textAnchor="middle" className="fig-small" style={{ fontWeight: 600, fill: cell.ok ? "var(--text)" : "var(--bg)" }}>
+                  {cell.ok ? "works" : "fails"}
+                </text>
+                <text x={cx[r]} y={cy[w] + 14} textAnchor="middle" className="fig-small" style={{ fill: cell.ok ? "var(--text)" : "var(--bg)" }}>
+                  {cell.note}
+                </text>
+              </g>
+            );
+          }),
+        )}
+        <text x={8} y={206} className="fig-small">
+          {`backward (v2 code, v1 data): ${verdict(backward.ok)}`}
+        </text>
+        <text x={8} y={224} className="fig-small">
+          {`forward (v1 code, v2 data): ${verdict(forward.ok)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -8448,6 +8573,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "denorm-tradeoff": DenormTradeoff,
   "doc-embed": DocEmbed,
   "graph-hops": GraphHops,
+  "schema-versions": SchemaVersions,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

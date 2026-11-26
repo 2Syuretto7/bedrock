@@ -1,0 +1,624 @@
+concept: q1.schema-evolution-and-compatibility
+minutes: 80
+claim: You can say whether a change to a schema is backward compatible, forward compatible, both or neither, keep fields you do not understand when rewriting a record, carry out an incompatible change such as a rename in safe steps with expand and contract, upgrade old documents through a chain of versions, and explain why old data and old code outlive every deploy.
+recalls: [q1.graph-models, q1.document-models]
+uses: [q1.denormalisation-and-its-costs, q0.writes-constraints-and-transactions, s1.files-and-data-formats]
+leads: [s4.abstraction-and-interfaces, q2.pages-records-and-the-buffer-pool]
+starter: |
+  # Scratch space. Upgrading documents written by older versions of an app.
+  users = [
+      {"name": "Asha", "mobile": "98450 12345"},
+      {"v": 2, "name": "Bilal", "phone": "90080 55555"},
+  ]
+
+  def upgrade(doc):
+      doc = dict(doc)
+      if doc.get("v", 1) < 2:
+          doc["phone"] = doc.pop("mobile")
+      doc["v"] = 2
+      return doc
+
+  print([upgrade(doc) for doc in users])
+parts:
+  recall:
+    - text: |
+        [[q1.graph-models]] completed three shapes for the same facts: tables, documents and graphs. [[q1.document-models]] found that under schema on read, every shape of document an app has ever written is still in the database, and every reader must cope with all of them. Tables and graphs are no different in spirit: their shape must change as the app grows, while yesterday's records and yesterday's code are still in use. This lesson is about changing shapes without breaking anything that is running. Three quick pulls first.
+  puzzle:
+    - text: |
+        An app's servers are being upgraded a few at a time. Version 2 adds a `nickname` field to each user document. Version 1 code reads a user into an object holding only `name` and `phone`, and when a user changes their phone number, it writes that object back over the whole document.
+
+        During the upgrade, 1,000 users set a nickname on version 2 servers. Later, while 30% of the servers still run version 1, each of those users changes their phone number once, on a server picked at random.
+
+        **On average, how many of the 1,000 nicknames survive?**
+  intuition:
+    - text: |
+        Indian Railways changed ticket formats several times over the years. On the day a new format arrived, the old tickets in people's pockets did not vanish, and not every ticket checker had the new instructions yet. A ticket printed last week had to be honoured by checkers trained this week, and a new ticket had to make sense to a checker who had not yet seen the circular. Both had to work, on the same train, on the same day.
+
+        Software lives on that train permanently. Old data stays in the database, in backups and in queues; old code keeps running on servers that have not been upgraded yet and on phones whose owners never update their apps. **New code reading old data** must work, which is **backward compatibility**. **Old code reading new data** must also work, which is **forward compatibility**. The figure shows four changes to a user record and which pairs of writer and reader survive each.
+    - figure: schema-versions
+      props: { change: add-optional }
+    - text: |
+        Adding an optional field with a default works in every direction: new code fills in the default when reading old data, and old code ignores a field it has never heard of. Making the new field required breaks new code on old data. Removing a field breaks old code on new data. A rename does both at once, because to old code it looks like a removal and to new code like a required addition. During a rolling upgrade, all four cells happen at the same time.
+  derivation:
+    - text: |
+        **Which changes are safe.** Classify every change by the two questions in the figure.
+
+        - Adding an optional field, with a default for records that lack it: backward and forward compatible.
+        - Adding a field that readers require: forward compatible only, since old records lack it.
+        - Removing a field that old readers require: backward compatible only.
+        - Renaming a field, or changing its type: neither.
+        - Changing a field's meaning while keeping its name and type, say storing a price in paise instead of rupees: neither, and the worst of all, because nothing fails; old code simply shows prices a hundred times too large. A new meaning deserves a new name.
+
+        The safe moves are the first kind. Everything else must either wait until no old code or old data remains, or be broken into safe steps.
+    - question:
+        id: derivation-classify
+        type: choice
+        system: s2
+        prompt: |
+          Version 2 of an app stops writing the `fax` field, which version 1 code reads with `doc.get("fax", "")`. Which is true?
+        options:
+          - "Both directions work, because version 1 treats fax as optional."
+          - "Only new code reading old data works."
+          - "Only old code reading new data works."
+          - "Neither direction works."
+        answer: 0
+        explanation: |
+          A removal breaks only readers that require the field. Version 1 already supplies a default, so it reads version 2 documents happily, and version 2 simply ignores the old fax values.
+    - text: |
+        **Keep what you do not understand.** Forward compatibility has a trap. Old code that reads a record into a fixed set of fields and then writes the whole record back silently deletes every field it does not know about. The puzzle is exactly this: version 1 never fails, never complains, and quietly erases the nickname. The rule is to ignore unknown fields when reading but **preserve them when writing**: change only the fields you mean to change, and carry the rest through untouched. Protocol Buffers, the binary format widely used between services, keeps unknown fields for exactly this reason.
+
+        **Expand and contract.** An incompatible change can be split into compatible steps, each deployed on its own. To rename the `mobile` column to `phone`:
+
+        1. **Expand**: add `phone`, copy every `mobile` into it, and keep the two in step while old code still writes only `mobile`, with triggers or with code that writes both, the maintenance techniques of [[q1.denormalisation-and-its-costs]].
+        2. Deploy code that reads `phone`.
+        3. Deploy code that no longer writes `mobile`.
+        4. **Contract**: once nothing reads or writes `mobile`, drop it.
+
+        At every moment, every running version finds what it expects. It takes several deploys instead of one, which is the price of never being down. `alter table … add column` with a default is the expand step in SQL, and the same constraints of [[q0.writes-constraints-and-transactions]] can be added only once every row satisfies them.
+    - question:
+        id: order-expand-contract
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of renaming the column `mobile` to `phone` without downtime in order.
+        steps:
+          - "Add the column phone."
+          - "Copy every mobile into phone and keep them in step for old writers."
+          - "Deploy code that reads phone."
+          - "Deploy code that writes only phone."
+          - "Drop the column mobile."
+        explanation: |
+          Each step leaves every running version working. Reading phone is safe only once it is filled and kept current, and mobile can go only once no code reads or writes it.
+    - text: |
+        **Versions inside the data.** A document database will not rewrite old documents for you, so the documents should say which version they are, with a field such as `"v": 2`. A reader then upgrades whatever it finds through a **chain of steps**, version 1 to 2, then 2 to 3, each step written once, when that version was introduced. A version 1 document passes through every step; a version 3 document through none. The upgraded document can be written back the next time it is saved, which is called lazy migration, or a background job can upgrade every document in batches. Either way, the chain must remain until no old document is left anywhere, including backups.
+
+        Formats designed for exchange between programs build these rules in. Protocol Buffers names fields by number, so a field can be renamed freely in the code while its number never changes, and a removed number must never be reused for something else. Avro stores the writer's schema alongside the data and resolves it against the reader's, filling in defaults for missing fields. A **schema registry** holds every version of a message's schema and refuses a new version that would break existing readers, which turns compatibility from a hope into a check.
+
+        **Old code is a matter of time.** In a rolling deploy, servers are upgraded a batch at a time, and for the whole deploy both versions serve traffic. On phones it is worse: some users never update, so an app's API must keep answering version 1 requests for years.
+    - question:
+        id: derivation-deploy
+        type: numeric
+        system: s2
+        prompt: |
+          A deploy upgrades 40 servers, 4 at a time, and each batch takes 5 minutes. For how many minutes does the deploy run, during which old and new code serve traffic together?
+        answer: "50"
+        explanation: |
+          $40 \div 4 = 10$ batches of 5 minutes each. A rollback halfway through mixes the versions again, so every change must be safe in both directions.
+  formal:
+    - text: |
+        **Backward compatibility.** New code can read data written by old code.
+
+        **Forward compatibility.** Old code can read data written by new code.
+
+        **Compatibility of common changes.** Adding an optional field with a default: both. Adding a required field: forward only. Removing a field old readers require: backward only. Renaming, or changing type or meaning: neither.
+
+        **Preserving unknown fields.** Code that rewrites a record must keep fields it does not understand, or it silently erases data written by newer code.
+
+        **Expand and contract.** Make an incompatible change in compatible steps: add the new form and keep both in step, move readers, move writers, then remove the old form.
+
+        **Versioned documents.** Each document records its version; readers upgrade through a chain of steps, one per version, and may write the result back.
+  drill:
+    - text: Seconds each. For every change, ask what old code sees and what new code sees.
+    - question:
+        id: drill-optional
+        type: choice
+        system: s1
+        prompt: |
+          Version 2 adds a field `language` that readers treat as `"en"` when it is missing. Which directions are compatible?
+        options:
+          - "Both"
+          - "Backward only"
+          - "Forward only"
+          - "Neither"
+        answer: 0
+        explanation: New code supplies the default for old data, and old code ignores the new field.
+    - question:
+        id: drill-rename
+        type: choice
+        system: s1
+        prompt: |
+          Version 2 renames `pincode` to `postal_code` in one step. Which directions are compatible?
+        options:
+          - "Neither"
+          - "Both"
+          - "Backward only"
+          - "Forward only"
+        answer: 0
+        explanation: New code finds no postal_code in old data, and old code finds no pincode in new data.
+    - question:
+        id: drill-meaning
+        type: choice
+        system: s1
+        prompt: |
+          A team starts storing `price` in paise instead of rupees, keeping the same field name and type. What happens to old code?
+        options:
+          - "It runs without errors and shows prices a hundred times too large."
+          - "It crashes on the first new record."
+          - "It refuses to start."
+          - "Nothing changes, because the type is the same."
+        answer: 0
+        explanation: The shape is unchanged, so nothing fails; the meaning changed, so the numbers are wrong. A new meaning needs a new name.
+    - question:
+        id: drill-batches
+        type: numeric
+        system: s1
+        prompt: |
+          30 servers are upgraded 5 at a time, 4 minutes per batch. How many minutes do both versions run side by side?
+        answer: "24"
+        explanation: 6 batches of 4 minutes.
+    - question:
+        id: predict-unknown
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import json
+          doc = json.loads('{"name": "Asha", "phone": "98450", "nickname": "Ashu"}')
+          user = {key: doc[key] for key in ["name", "phone"]}
+          print(len(doc), len(user), json.dumps(user))
+        output: '3 2 {"name": "Asha", "phone": "98450"}'
+        explanation: Copying only the known fields drops the nickname; writing `user` back would erase it.
+    - question:
+        id: predict-default
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          users = [{"name": "Asha"}, {"name": "Bilal", "country": "AE"}, {"name": "Chitra", "country": "IN"}]
+          print([user.get("country", "IN") for user in users])
+        output: "['IN', 'AE', 'IN']"
+        explanation: The default fills in for the old record that lacks the field and leaves recorded values alone.
+  work:
+    - text: Slower now. Each problem has old and new code, or old and new data, in play at once.
+    - question:
+        id: fix-change-phone
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This is version 1 code, still running while newer versions store extra fields in user documents. Changing a user's phone number must not lose any other field. The program should print `{"name": "Asha", "phone": "90080 55555", "nickname": "Ashu"}`. It prints `{"name": "Asha", "phone": "90080 55555"}`. Find the fault and fix it.
+        starter: |
+          import json
+
+
+          def load_user(text):
+              doc = json.loads(text)
+              return {"name": doc["name"], "phone": doc["phone"]}
+
+
+          def change_phone(text, phone):
+              user = load_user(text)
+              user["phone"] = phone
+              return json.dumps(user)
+
+
+          stored = '{"name": "Asha", "phone": "98450 12345", "nickname": "Ashu"}'
+          print(change_phone(stored, "90080 55555"))
+        solution: |
+          import json
+
+
+          def load_user(text):
+              doc = json.loads(text)
+              return {"name": doc["name"], "phone": doc["phone"]}
+
+
+          def change_phone(text, phone):
+              doc = json.loads(text)
+              doc["phone"] = phone
+              return json.dumps(doc)
+
+
+          stored = '{"name": "Asha", "phone": "98450 12345", "nickname": "Ashu"}'
+          print(change_phone(stored, "90080 55555"))
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(71)
+          for _ in range(30):
+              _doc = {"name": _rng.choice(["Asha", "Bilal", "Chitra", "Dev"]), "phone": "9" + str(_rng.randint(1000, 9999))}
+              for _field, _value in [("nickname", "Ashu"), ("city", "Pune"), ("email", "dev@example.in"), ("joined", 2024)]:
+                  if _rng.random() < 0.5:
+                      _doc[_field] = _value
+              _phone = "7" + str(_rng.randint(1000, 9999))
+              _want = dict(_doc)
+              _want["phone"] = _phone
+              _got = json.loads(change_phone(json.dumps(_doc), _phone))
+              assert _got == _want, "Changing the phone of " + json.dumps(_doc) + " to " + _phone + " should give " + json.dumps(_want) + ", not " + json.dumps(_got)
+          assert json.loads(output) == {"name": "Asha", "phone": "90080 55555", "nickname": "Ashu"}, 'The program should print {"name": "Asha", "phone": "90080 55555", "nickname": "Ashu"}'
+        wrong:
+          - |
+            import json
+
+
+            def load_user(text):
+                doc = json.loads(text)
+                return {"name": doc["name"], "phone": doc["phone"]}
+
+
+            def change_phone(text, phone):
+                user = load_user(text)
+                user["phone"] = phone
+                user["nickname"] = json.loads(text).get("nickname")
+                return json.dumps(user)
+
+
+            stored = '{"name": "Asha", "phone": "98450 12345", "nickname": "Ashu"}'
+            print(change_phone(stored, "90080 55555"))
+          - |
+            import json
+
+
+            def load_user(text):
+                doc = json.loads(text)
+                return {"name": doc["name"], "phone": doc["phone"]}
+
+
+            def change_phone(text, phone):
+                doc = json.loads(text)
+                user = {"name": doc["name"], "phone": phone, "nickname": doc.get("nickname", "")}
+                return json.dumps(user)
+
+
+            stored = '{"name": "Asha", "phone": "98450 12345", "nickname": "Ashu"}'
+            print(change_phone(stored, "90080 55555"))
+          - |
+            import json
+
+
+            def load_user(text):
+                doc = json.loads(text)
+                return {"name": doc["name"], "phone": doc["phone"]}
+
+
+            def change_phone(text, phone):
+                doc = json.loads(text)
+                doc["phone"] = phone
+                return text
+
+
+            stored = '{"name": "Asha", "phone": "98450 12345", "nickname": "Ashu"}'
+            print(change_phone(stored, "90080 55555"))
+        explanation: |
+          `load_user` keeps only the fields version 1 knows, so writing its result back erases the rest. Changing the phone in the full parsed document preserves every field, including ones added by versions not yet written. Copying the nickname by name adds a null nickname to users without one and still loses other new fields; rebuilding with a default nickname does the same; and returning the original text throws the change away.
+    - question:
+        id: write-expand
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          `expand` is the first step of renaming `mobile` to `phone`. Change it so that after it runs, every existing user's `phone` equals their `mobile`, and it stays equal when old code inserts users or updates `mobile`, while users inserted by new code with both columns keep their phone. The program should print `[(1, 1), (2, 1), (3, 1)]`.
+        starter: |
+          import sqlite3
+
+          # Run once, before the new code is deployed. Old code keeps running for a while:
+          # it inserts with "insert into users (name, mobile) values (?, ?)"
+          # and edits with "update users set mobile = ? where id = ?".
+          expand = """
+              alter table users add column phone text;
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table users (id integer primary key, name text not null, mobile text);
+              insert into users (name, mobile) values ('asha', '98450 12345'), ('bilal', '90080 55555');
+          """)
+          db.executescript(expand)
+          db.execute("insert into users (name, mobile) values (?, ?)", ("chitra", "70123 45678"))
+          db.execute("update users set mobile = ? where id = ?", ("99000 11111", 1))
+          print(db.execute("select id, mobile = phone from users order by id").fetchall())
+        solution: |
+          import sqlite3
+
+          # Run once, before the new code is deployed. Old code keeps running for a while:
+          # it inserts with "insert into users (name, mobile) values (?, ?)"
+          # and edits with "update users set mobile = ? where id = ?".
+          expand = """
+              alter table users add column phone text;
+              update users set phone = mobile;
+              create trigger users_insert_phone after insert on users when new.phone is null
+              begin
+                  update users set phone = new.mobile where id = new.id;
+              end;
+              create trigger users_update_phone after update of mobile on users
+              begin
+                  update users set phone = new.mobile where id = new.id;
+              end;
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table users (id integer primary key, name text not null, mobile text);
+              insert into users (name, mobile) values ('asha', '98450 12345'), ('bilal', '90080 55555');
+          """)
+          db.executescript(expand)
+          db.execute("insert into users (name, mobile) values (?, ?)", ("chitra", "70123 45678"))
+          db.execute("update users set mobile = ? where id = ?", ("99000 11111", 1))
+          print(db.execute("select id, mobile = phone from users order by id").fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(72)
+          for _ in range(20):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table users (id integer primary key, name text not null, mobile text)")
+              _mobile = {}
+              for _k in range(_rng.randint(1, 5)):
+                  _m = "9" + str(_rng.randint(1000, 9999))
+                  _id = _db.execute("insert into users (name, mobile) values (?, ?)", ("u" + str(_k), _m)).lastrowid
+                  _mobile[_id] = _m
+              _db.executescript(expand)
+              for _k in range(8):
+                  _m = "8" + str(_rng.randint(1000, 9999))
+                  if _rng.random() < 0.5:
+                      _id = _db.execute("insert into users (name, mobile) values (?, ?)", ("v" + str(_k), _m)).lastrowid
+                  else:
+                      _id = _rng.choice(list(_mobile))
+                      _db.execute("update users set mobile = ? where id = ?", (_m, _id))
+                  _mobile[_id] = _m
+                  _phones = dict(_db.execute("select id, phone from users").fetchall())
+                  assert _phones == _mobile, "After old code's writes, phone should match mobile for every user, " + str(_mobile) + ", but phone is " + str(_phones)
+              _db.execute("insert into users (name, mobile, phone) values ('new', '70000 1', '70000 1')")
+              assert _db.execute("select phone from users where name = 'new'").fetchone()[0] == "70000 1", "A user inserted by new code, with both columns, should keep its phone"
+          assert output.strip() == "[(1, 1), (2, 1), (3, 1)]", "The program should print [(1, 1), (2, 1), (3, 1)]"
+        wrong:
+          - |
+            import sqlite3
+
+            # Run once, before the new code is deployed. Old code keeps running for a while:
+            # it inserts with "insert into users (name, mobile) values (?, ?)"
+            # and edits with "update users set mobile = ? where id = ?".
+            expand = """
+                alter table users add column phone text;
+                create trigger users_insert_phone after insert on users when new.phone is null
+                begin
+                    update users set phone = new.mobile where id = new.id;
+                end;
+                create trigger users_update_phone after update of mobile on users
+                begin
+                    update users set phone = new.mobile where id = new.id;
+                end;
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table users (id integer primary key, name text not null, mobile text);
+                insert into users (name, mobile) values ('asha', '98450 12345'), ('bilal', '90080 55555');
+            """)
+            db.executescript(expand)
+            db.execute("insert into users (name, mobile) values (?, ?)", ("chitra", "70123 45678"))
+            db.execute("update users set mobile = ? where id = ?", ("99000 11111", 1))
+            print(db.execute("select id, mobile = phone from users order by id").fetchall())
+          - |
+            import sqlite3
+
+            # Run once, before the new code is deployed. Old code keeps running for a while:
+            # it inserts with "insert into users (name, mobile) values (?, ?)"
+            # and edits with "update users set mobile = ? where id = ?".
+            expand = """
+                alter table users add column phone text;
+                update users set phone = mobile;
+                create trigger users_insert_phone after insert on users when new.phone is null
+                begin
+                    update users set phone = new.mobile where id = new.id;
+                end;
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table users (id integer primary key, name text not null, mobile text);
+                insert into users (name, mobile) values ('asha', '98450 12345'), ('bilal', '90080 55555');
+            """)
+            db.executescript(expand)
+            db.execute("insert into users (name, mobile) values (?, ?)", ("chitra", "70123 45678"))
+            db.execute("update users set mobile = ? where id = ?", ("99000 11111", 1))
+            print(db.execute("select id, mobile = phone from users order by id").fetchall())
+          - |
+            import sqlite3
+
+            # Run once, before the new code is deployed. Old code keeps running for a while:
+            # it inserts with "insert into users (name, mobile) values (?, ?)"
+            # and edits with "update users set mobile = ? where id = ?".
+            expand = """
+                alter table users add column phone text;
+                update users set phone = mobile;
+                create trigger users_insert_phone after insert on users when new.phone is null
+                begin
+                    update users set phone = new.mobile where id = new.id;
+                end;
+                create trigger users_update_phone after update of mobile on users
+                begin
+                    update users set phone = new.mobile;
+                end;
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table users (id integer primary key, name text not null, mobile text);
+                insert into users (name, mobile) values ('asha', '98450 12345'), ('bilal', '90080 55555');
+            """)
+            db.executescript(expand)
+            db.execute("insert into users (name, mobile) values (?, ?)", ("chitra", "70123 45678"))
+            db.execute("update users set mobile = ? where id = ?", ("99000 11111", 1))
+            print(db.execute("select id, mobile = phone from users order by id").fetchall())
+        explanation: |
+          Expanding takes the new column, a backfill for the existing rows, and a trigger for each way old code writes: inserts and updates of `mobile`. Without the backfill, users who existed before have no phone; without the update trigger, an old edit leaves phone stale; and an update trigger without `where id = new.id` copies one user's number into every row.
+    - question:
+        id: write-upgrade
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `upgrade` so that it returns any stored user document in version 3 form, `{"v": 3, "name": …, "phone": …, "country": …}`, applying each version's change in turn, keeping a version 3 document's own country, and without changing the stored document. The program should print `[(3, '98450 12345', 'IN'), (3, '90080 55555', 'IN'), (3, '70123 45678', 'AE')]`.
+        starter: |
+          # Documents from before versions existed have no "v" and are version 1.
+          # Version 2 renamed "mobile" to "phone". Version 3 added "country", "IN" for older users.
+          users = [
+              {"name": "Asha", "mobile": "98450 12345"},
+              {"v": 2, "name": "Bilal", "phone": "90080 55555"},
+              {"v": 3, "name": "Chitra", "phone": "70123 45678", "country": "AE"},
+          ]
+
+
+          def upgrade(doc):
+              doc = dict(doc)
+              return doc
+
+
+          print([(u.get("v"), u.get("phone"), u.get("country")) for u in [upgrade(doc) for doc in users]])
+        solution: |
+          # Documents from before versions existed have no "v" and are version 1.
+          # Version 2 renamed "mobile" to "phone". Version 3 added "country", "IN" for older users.
+          users = [
+              {"name": "Asha", "mobile": "98450 12345"},
+              {"v": 2, "name": "Bilal", "phone": "90080 55555"},
+              {"v": 3, "name": "Chitra", "phone": "70123 45678", "country": "AE"},
+          ]
+
+
+          def upgrade(doc):
+              doc = dict(doc)
+              version = doc.get("v", 1)
+              if version < 2:
+                  doc["phone"] = doc.pop("mobile")
+              if version < 3:
+                  doc["country"] = "IN"
+              doc["v"] = 3
+              return doc
+
+
+          print([(u.get("v"), u.get("phone"), u.get("country")) for u in [upgrade(doc) for doc in users]])
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(73)
+          for _ in range(30):
+              _name, _phone, _country = _rng.choice(["Asha", "Bilal", "Dev"]), "9" + str(_rng.randint(1000, 9999)), _rng.choice(["IN", "AE", "SG"])
+              _v = _rng.randint(1, 3)
+              if _v == 1:
+                  _doc = {"name": _name, "mobile": _phone}
+              elif _v == 2:
+                  _doc = {"v": 2, "name": _name, "phone": _phone}
+              else:
+                  _doc = {"v": 3, "name": _name, "phone": _phone, "country": _country}
+              _want = {"v": 3, "name": _name, "phone": _phone, "country": _country if _v == 3 else "IN"}
+              _before = dict(_doc)
+              _got = upgrade(_doc)
+              assert _got == _want, "upgrade(" + str(_before) + ") should return " + str(_want) + ", not " + str(_got)
+              assert _doc == _before, "upgrade should not change the stored document " + str(_before)
+          assert output.strip() == "[(3, '98450 12345', 'IN'), (3, '90080 55555', 'IN'), (3, '70123 45678', 'AE')]", "The program should print [(3, '98450 12345', 'IN'), (3, '90080 55555', 'IN'), (3, '70123 45678', 'AE')]"
+        wrong:
+          - |
+            # Documents from before versions existed have no "v" and are version 1.
+            # Version 2 renamed "mobile" to "phone". Version 3 added "country", "IN" for older users.
+            users = [
+                {"name": "Asha", "mobile": "98450 12345"},
+                {"v": 2, "name": "Bilal", "phone": "90080 55555"},
+                {"v": 3, "name": "Chitra", "phone": "70123 45678", "country": "AE"},
+            ]
+
+
+            def upgrade(doc):
+                doc = dict(doc)
+                version = doc.get("v", 1)
+                if version == 1:
+                    doc["phone"] = doc.pop("mobile")
+                elif version == 2:
+                    doc["country"] = "IN"
+                doc["v"] = 3
+                return doc
+
+
+            print([(u.get("v"), u.get("phone"), u.get("country")) for u in [upgrade(doc) for doc in users]])
+          - |
+            # Documents from before versions existed have no "v" and are version 1.
+            # Version 2 renamed "mobile" to "phone". Version 3 added "country", "IN" for older users.
+            users = [
+                {"name": "Asha", "mobile": "98450 12345"},
+                {"v": 2, "name": "Bilal", "phone": "90080 55555"},
+                {"v": 3, "name": "Chitra", "phone": "70123 45678", "country": "AE"},
+            ]
+
+
+            def upgrade(doc):
+                doc = dict(doc)
+                if doc.get("v", 1) < 2:
+                    doc["phone"] = doc.pop("mobile")
+                doc["country"] = "IN"
+                doc["v"] = 3
+                return doc
+
+
+            print([(u.get("v"), u.get("phone"), u.get("country")) for u in [upgrade(doc) for doc in users]])
+          - |
+            # Documents from before versions existed have no "v" and are version 1.
+            # Version 2 renamed "mobile" to "phone". Version 3 added "country", "IN" for older users.
+            users = [
+                {"name": "Asha", "mobile": "98450 12345"},
+                {"v": 2, "name": "Bilal", "phone": "90080 55555"},
+                {"v": 3, "name": "Chitra", "phone": "70123 45678", "country": "AE"},
+            ]
+
+
+            def upgrade(doc):
+                doc = dict(doc)
+                version = doc.get("v", 1)
+                if version < 2:
+                    doc["phone"] = doc["mobile"]
+                if version < 3:
+                    doc["country"] = "IN"
+                doc["v"] = 3
+                return doc
+
+
+            print([(u.get("v"), u.get("phone"), u.get("country")) for u in [upgrade(doc) for doc in users]])
+        explanation: |
+          Each step applies to every document older than its version, so a version 1 document passes through both. An `if` and `elif` chain applies only one step, so version 1 users get no country; setting the country unconditionally overwrites a version 3 user's own; and copying `mobile` without removing it leaves the old field behind.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          On average, how many of the puzzle's 1,000 nicknames survive?
+        answer: "700"
+        explanation: |
+          Each phone change lands on a version 1 server with probability 0.3, which rewrites the document without the nickname. $1{,}000 \times 0.7 = 700$ survive on average, and 300 vanish without a single error.
+    - question:
+        id: work-change
+        type: choice
+        system: s2
+        prompt: |
+          An app stores `amount` in rupees as a decimal. The team wants whole paise instead, to avoid rounding errors, while old servers keep running for a week. What should they do?
+        options:
+          - "Add a new field amount_paise, write both during the week, move readers to it, then stop writing amount."
+          - "Change amount to paise in one deploy, since it is still a number."
+          - "Rename amount to amount_paise in one deploy."
+          - "Store paise in amount only for new records."
+        answer: 0
+        explanation: |
+          A change of meaning needs a new name, and expand and contract keeps old and new servers working throughout. Reusing amount silently misreads every value on the other version, and a one-step rename breaks both directions.
+  connections:
+    - text: |
+        700 on average. Each phone change has a 30% chance of landing on version 1, which rewrites the document from the two fields it knows, and 300 nicknames disappear with no error anywhere. The cure costs one line: change the field you mean to change and carry everything else through.
+
+        This cluster has been about the shape of data: entities and keys, normal forms, deliberate copies, documents, graphs, and changing shapes safely. The same discipline applies to code. A function's parameters, a module's exports and a service's API are shapes that other code depends on, and they too must change without breaking their callers, which is where [[s4.abstraction-and-interfaces]] begins. Underneath every model sits a storage engine that lays records out on fixed-size pages of disk, and record formats there carry versions of their own: [[q2.pages-records-and-the-buffer-pool]].
