@@ -1,0 +1,803 @@
+concept: s4.abstraction-and-interfaces
+minutes: 80
+claim: You can say what an interface promises and what it hides, write callers that rely only on the promise, describe an interface in Python with a Protocol, recognise when a caller depends on behaviour nobody promised, judge whether a replacement implementation honours the whole promise, and explain why an interface turns many-to-many dependencies into many-plus-many.
+recalls: [q1.schema-evolution-and-compatibility, s3.intractability-p-np-and-heuristics]
+uses: [s1.classes-and-objects, s1.type-hints-and-dataclasses, s2.hash-tables]
+leads: [s4.modules-coupling-and-cohesion, s4.dependency-injection-and-testable-code, s4.designing-apis]
+bridges:
+  q1.schema-evolution-and-compatibility: The data modelling cluster ended with records whose shape changes while old programs still read them. A change was safe when every reader still found what it relied on. Adding an optional field was fine, renaming one broke old readers, and code that rewrote a record had to keep fields it did not understand. The same thinking applies to code. A function's name, parameters, return value and behaviour form a shape that other code relies on, and changing that shape follows the same rules. Adding is usually safe, renaming or removing breaks callers, and a breaking change is made safely by adding the new form, moving callers over, then removing the old.
+starter: |
+  # Scratch space. Two implementations behind one interface.
+  from typing import Protocol
+
+
+  class Provider(Protocol):
+      def charge(self, rupees: int) -> str: ...
+
+
+  class Upi:
+      def charge(self, rupees):
+          return f"UPI collected {rupees}"
+
+
+  class Card:
+      def charge(self, rupees):
+          return f"card charged {rupees + 2}, with a fee of 2"
+
+
+  def checkout(provider: Provider, total: int) -> str:
+      return provider.charge(total)
+
+
+  print([checkout(p, 450) for p in [Upi(), Card()]])
+parts:
+  recall:
+    - text: |
+        [[s3.intractability-p-np-and-heuristics]] met problems where the exact answer costs too much, and replaced the exact solver with a heuristic that callers could use in the same way. [[q1.schema-evolution-and-compatibility]] changed the shape of data while old programs kept reading it. Both worked because something stayed fixed while what stood behind it changed. In code, that fixed thing is an interface, and this cluster is about drawing such boundaries well. Three quick pulls first.
+  puzzle:
+    - text: |
+        A shopping app takes payments in 8 places: checkout, refunds, wallet top-ups, subscriptions, invoices, payouts, tips and gift cards. It supports 6 payment providers. Over the years, each of the 8 places grew its own code for each provider, written straight against that provider's library.
+
+        The business signs up a seventh provider.
+
+        **How many new pieces of provider-specific code must be written?**
+  intuition:
+    - text: |
+        Every room in an Indian house has the same wall socket. A fan, a phone charger and a mixer-grinder all work in it, and none of them knows whether the electricity came from a coal plant, a dam or the solar panels on the roof. The electricity board can change its sources without anyone rewiring a fan, and a new appliance needs only the right plug, not a conversation with the power station. When a foreign laptop's plug does not fit, a small adapter fixes it at the edge, and nothing else changes.
+
+        The socket is an **interface**: a fixed promise between two sides, two pins carrying 230 volts, that lets each side change freely behind it. The figure wires the places in an app that take payments to payment providers, first directly, then through one interface.
+    - figure: interface-swap
+      props: { callers: 4, providers: 3, mode: direct }
+    - text: |
+        Wired directly, every place knows every provider, so the pieces of code multiply: places times providers. Through an interface, each place knows only the interface, and each provider is wrapped once in an adapter that speaks it, so the pieces add: places plus providers. Raise both steppers and watch the direct wiring turn into a thicket while the interface version grows by one line at a time. The multiplication is the cost of not having a boundary.
+  derivation:
+    - text: |
+        **An interface is a promise.** It says what callers may rely on: the names of the operations, their parameters, their results, and their behaviour, including what each needs before it is called, what it guarantees afterwards, which errors it raises and roughly how long it takes. Everything else is **implementation**, and the whole point is that the implementation may change without callers noticing. A good interface states its promise in its documentation, because the code alone shows what happens today, not what is promised for tomorrow.
+
+        In Python, an interface is usually just a set of methods with agreed meanings. Any object with those methods can be used, which is called duck typing. A `Protocol` from the `typing` module writes the set down, so that readers and type checkers can see it:
+
+        ```python
+        class Ledger(Protocol):
+            def customers(self) -> list[str]: ...
+            def balance(self, name: str) -> int: ...
+        ```
+
+        A class need not mention `Ledger` to satisfy it; having the two methods with those meanings is enough. The `...` bodies say that the Protocol describes the methods and does not implement them. An abstract base class from the `abc` module is the other common way, where implementations inherit from the interface explicitly.
+    - question:
+        id: derivation-promise
+        type: choice
+        system: s2
+        prompt: |
+          A `Ledger` documents `balance(name)` as "the rupees the customer owes; negative when the shop owes them". Which of these may a caller rely on?
+        options:
+          - "That a customer who has paid more than they bought has a negative balance"
+          - "That balances are stored in a list called _entries"
+          - "That balance(name) adds up the entries one by one"
+          - "That customers() returns names in alphabetical order"
+        answer: 0
+        explanation: |
+          Only the documented meaning of the result is promised. How the ledger stores or computes balances is implementation, and the order of `customers()` was never promised, even if one implementation happens to sort.
+    - text: |
+        **Hiding a decision.** David Parnas argued in 1972 that a program should be split along the decisions most likely to change, each hidden behind an interface. How a clinic's free appointment slots are stored, in a set, a sorted list or a database table, is such a decision. Callers that use only `book(time)` and `free()` never learn the answer, so it can change. Python has no enforced privacy; a leading underscore, as in `_free`, marks an attribute private by agreement. A caller that reaches past the interface into `_free` has quietly tied itself to today's implementation, and breaks the day it changes.
+
+        **What nobody promised.** Hyrum Wright, an engineer at Google, observed that with enough callers, every observable behaviour of an interface will be depended on by somebody, whether it was promised or not. A `free()` built on a set returns times in an order that comes from hashing, from [[s2.hash-tables]]; it often looks sorted for small numbers and is not. A caller that takes `free()[0]` as the earliest slot works in testing, works for months, and fails when the times or the implementation change. The defence on the caller's side is to rely only on the promise: if you need the earliest, ask for `min(book.free())`. The defence on the interface's side is to state the promise plainly, and sometimes to make unpromised behaviour vary on purpose; the Go language randomises the iteration order of its hash maps for exactly this reason.
+    - question:
+        id: derivation-pieces
+        type: numeric
+        system: s2
+        prompt: |
+          An app reads and writes files in 12 places and must support 5 storage services. With one interface and an adapter per service, how many pieces of code connect them?
+        answer: "17"
+        explanation: |
+          $12 + 5 = 17$: each place uses the interface, and each service has one adapter. Wired directly, it would be $12 \times 5 = 60$.
+    - text: |
+        **Deep and shallow.** John Ousterhout calls a module **deep** when its interface is small compared with what it hides. Files are the classic example: `open`, `read`, `write` and `close` hide disks, caches, file systems and device drivers. A **shallow** module has an interface nearly as complicated as its implementation, such as a class whose methods each forward to one line of someone else's code; it adds names to learn and hides nothing. Shape an interface by what callers need to say, "charge this customer ₹450", not by how the implementation works, "open a session, get a token, post to an endpoint".
+
+        **Honouring the whole promise.** An implementation can replace another only if it keeps every part of the promise, a rule known as the Liskov substitution principle: a replacement may accept more and guarantee more, never less. An exact route planner and a greedy one, from [[s3.intractability-p-np-and-heuristics]], can share the method `plan(depot, stops)`. If the interface promises "every stop exactly once, starting from the depot", both honour it. If it promises "the shortest route", the greedy planner breaks the promise, however similar its signature, and every caller that relied on shortest is wrong. An interface should promise only what every implementation will deliver.
+    - question:
+        id: derivation-substitute
+        type: choice
+        system: s2
+        prompt: |
+          A cache's `get(key)` is documented to return None for a key it does not hold. Which replacement implementation honours the interface?
+        options:
+          - "One that also returns None for keys that have expired, and is faster"
+          - "One that raises KeyError for a missing key"
+          - "One that returns an empty string for a missing key"
+          - "One that returns None for a missing key but needs a second argument"
+        answer: 0
+        explanation: |
+          Expiry is still "a key it does not hold", so callers see what was promised. Raising, returning a different value or demanding a new argument breaks callers that relied on the promise.
+    - text: |
+        **Changing an interface.** Interfaces change too, and the rules of [[q1.schema-evolution-and-compatibility]] carry over. Adding a method, or a parameter with a default, is safe. Renaming or removing breaks callers. A breaking change is made in steps: add the new form, move callers over, mark the old form deprecated, and remove it only when nothing uses it. The more callers an interface has, the more these steps cost, which is the best argument for keeping interfaces small and their promises modest.
+  formal:
+    - text: |
+        **Interface.** The operations a component offers and the promise attached to each: parameters, results, behaviour, preconditions, guarantees, errors and cost. **Implementation**: everything behind it, free to change.
+
+        **Protocol.** A `typing.Protocol` class lists the methods an object must have; any object with matching methods satisfies it, without inheriting from it.
+
+        **Information hiding.** Split a program along decisions likely to change, and hide each behind an interface.
+
+        **Hyrum's law.** With enough callers, every observable behaviour is depended on by someone. Callers should rely only on what is promised.
+
+        **Substitution.** A replacement implementation must keep every promise of the interface; it may require less and guarantee more.
+
+        **Wiring cost.** $n$ callers and $m$ implementations need $n \times m$ connections directly and $n + m$ through one interface.
+  drill:
+    - text: Seconds each. For every caller, ask what it relies on and whether that was promised.
+    - question:
+        id: drill-pieces
+        type: numeric
+        system: s1
+        prompt: |
+          5 places in an app use 4 SMS providers through one interface, each provider behind an adapter. How many pieces of code connect them?
+        answer: "9"
+        explanation: 5 callers of the interface and 4 adapters.
+    - question:
+        id: drill-direct
+        type: numeric
+        system: s1
+        prompt: |
+          The same 5 places call the 4 providers directly. How many new pieces does a fifth provider need?
+        answer: "5"
+        explanation: One in each place that sends SMS.
+    - question:
+        id: drill-underscore
+        type: choice
+        system: s1
+        prompt: |
+          What does the leading underscore in `self._free` tell callers?
+        options:
+          - "It is private by agreement; do not rely on it from outside the class."
+          - "Python refuses access from outside the class."
+          - "It is a constant."
+          - "It is faster to read."
+        answer: 0
+        explanation: Python enforces nothing; the underscore is a convention saying the attribute is implementation.
+    - question:
+        id: drill-order
+        type: choice
+        system: s1
+        prompt: |
+          `search()` is documented to return its matches "in no particular order". Which caller is safe?
+        options:
+          - "One that sorts the matches itself before showing the top three"
+          - "One that shows the first three matches as the best"
+          - "One that assumes the newest match comes last"
+          - "One that compares the result with a saved list in a test, element by element"
+        answer: 0
+        explanation: Only the first relies on nothing beyond the promise; the others depend on an order that was never promised.
+    - question:
+        id: predict-duck
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          class Upi:
+              def charge(self, rupees):
+                  return f"UPI {rupees}"
+
+
+          class Card:
+              def charge(self, rupees):
+                  return f"card {rupees + 2}"
+
+
+          def checkout(provider, total):
+              return provider.charge(total)
+
+
+          print([checkout(p, 100) for p in [Upi(), Card()]])
+        output: "['UPI 100', 'card 102']"
+        explanation: "`checkout` relies only on a `charge` method, so either object works, each with its own behaviour behind the same call."
+    - question:
+        id: predict-set-order
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          free = {1030, 1700, 1400}
+          print(list(free)[0] == min(free), min(free))
+        output: "False 1030"
+        explanation: A set's order comes from hashing, not from the values' order, so the first element is not the smallest. Only `min` asks for what is wanted.
+  work:
+    - text: Slower now. Each problem is about what a caller relies on and what an implementation must deliver.
+    - question:
+        id: fix-earliest
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `earliest` should return the earliest free time in any slot book that offers `book(time)` and `free()` as documented. The program should print `1000`. It prints `1700`. Find the fault and fix it.
+        starter: |
+          class SlotBook:
+              # The interface: book(time) marks a time taken; free() returns the
+              # free times, such as 1430 for 2:30 pm, as a list in no particular order.
+
+              def __init__(self, times):
+                  self._free = set(times)
+
+              def book(self, time):
+                  self._free.remove(time)
+
+              def free(self):
+                  return list(self._free)
+
+
+          def earliest(book):
+              slots = book.free()
+              return slots[0]
+
+
+          book = SlotBook([1700, 900, 1100, 1400, 1000])
+          book.book(900)
+          print(earliest(book))
+        solution: |
+          class SlotBook:
+              # The interface: book(time) marks a time taken; free() returns the
+              # free times, such as 1430 for 2:30 pm, as a list in no particular order.
+
+              def __init__(self, times):
+                  self._free = set(times)
+
+              def book(self, time):
+                  self._free.remove(time)
+
+              def free(self):
+                  return list(self._free)
+
+
+          def earliest(book):
+              return min(book.free())
+
+
+          book = SlotBook([1700, 900, 1100, 1400, 1000])
+          book.book(900)
+          print(earliest(book))
+        tests: |
+          import random as _random
+
+
+          class _ListBook:
+              def __init__(self, times):
+                  self._slots = [[_t, False] for _t in times]
+
+              def book(self, time):
+                  for _slot in self._slots:
+                      if _slot[0] == time:
+                          _slot[1] = True
+
+              def free(self):
+                  _out = [_h for _h, _taken in self._slots if not _taken]
+                  _random.shuffle(_out)
+                  return _out
+
+
+          _rng = _random.Random(91)
+          for _ in range(30):
+              _hours = _rng.sample([_h * 100 + _m for _h in range(8, 21) for _m in (0, 30)], _rng.randint(2, 8))
+              _taken = _rng.sample(_hours, _rng.randint(0, len(_hours) - 1))
+              for _kind in (SlotBook, _ListBook):
+                  _b = _kind(_hours)
+                  for _h in _taken:
+                      _b.book(_h)
+                  _want = min(_h for _h in _hours if _h not in _taken)
+                  _got = earliest(_b)
+                  assert _got == _want, "With the times " + str(_hours) + " and " + str(_taken) + " booked, earliest should return " + str(_want) + ", not " + str(_got) + " (using " + _kind.__name__.strip("_") + ")"
+          assert output.strip() == "1000", "The program should print 1000"
+        wrong:
+          - |
+            class SlotBook:
+                # The interface: book(time) marks a time taken; free() returns the
+                # free times, such as 1430 for 2:30 pm, as a list in no particular order.
+
+                def __init__(self, times):
+                    self._free = set(times)
+
+                def book(self, time):
+                    self._free.remove(time)
+
+                def free(self):
+                    return list(self._free)
+
+
+            def earliest(book):
+                slots = book.free()
+                return slots[-1]
+
+
+            book = SlotBook([1700, 900, 1100, 1400, 1000])
+            book.book(900)
+            print(earliest(book))
+          - |
+            class SlotBook:
+                # The interface: book(time) marks a time taken; free() returns the
+                # free times, such as 1430 for 2:30 pm, as a list in no particular order.
+
+                def __init__(self, times):
+                    self._free = set(times)
+
+                def book(self, time):
+                    self._free.remove(time)
+
+                def free(self):
+                    return list(self._free)
+
+
+            def earliest(book):
+                return min(book._free)
+
+
+            book = SlotBook([1700, 900, 1100, 1400, 1000])
+            book.book(900)
+            print(earliest(book))
+          - |
+            class SlotBook:
+                # The interface: book(time) marks a time taken; free() returns the
+                # free times, such as 1430 for 2:30 pm, as a list in no particular order.
+
+                def __init__(self, times):
+                    self._free = set(times)
+
+                def book(self, time):
+                    self._free.remove(time)
+
+                def free(self):
+                    return list(self._free)
+
+
+            def earliest(book):
+                slots = book.free()
+                slots.sort()
+                return slots[len(slots) - 1]
+
+
+            book = SlotBook([1700, 900, 1100, 1400, 1000])
+            book.book(900)
+            print(earliest(book))
+        explanation: |
+          `free()` promises the free times in no particular order, so its first element is whatever the set's hashing put first. Asking for `min(book.free())` relies only on the promise. Taking the last element relies on order just as much; reading `book._free` works only for this one implementation; and sorting then taking the last element finds the latest time, not the earliest.
+    - question:
+        id: write-total-owed
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `total_owed` so that it returns the total that customers owe the shop, counting only customers whose balance is positive, and works with any ledger that offers `customers()` and `balance(name)` as the `Ledger` protocol describes. The program should print `190`.
+        starter: |
+          from typing import Protocol
+
+
+          class Ledger(Protocol):
+              def customers(self) -> list[str]: ...
+
+              def balance(self, name: str) -> int: ...
+
+
+          class NotebookLedger:
+              # One entry per purchase on credit (positive) or payment (negative), in rupees.
+
+              def __init__(self):
+                  self._entries = []
+
+              def record(self, name, amount):
+                  self._entries.append((name, amount))
+
+              def customers(self):
+                  return sorted({name for name, amount in self._entries})
+
+              def balance(self, name):
+                  return sum(amount for who, amount in self._entries if who == name)
+
+
+          def total_owed(ledger: Ledger) -> int:
+              return sum(amount for name, amount in ledger._entries if amount > 0)
+
+
+          book = NotebookLedger()
+          for name, amount in [("asha", 300), ("bilal", 120), ("asha", -200), ("chitra", 50), ("bilal", -170), ("asha", 40)]:
+              book.record(name, amount)
+          print(total_owed(book))
+        solution: |
+          from typing import Protocol
+
+
+          class Ledger(Protocol):
+              def customers(self) -> list[str]: ...
+
+              def balance(self, name: str) -> int: ...
+
+
+          class NotebookLedger:
+              # One entry per purchase on credit (positive) or payment (negative), in rupees.
+
+              def __init__(self):
+                  self._entries = []
+
+              def record(self, name, amount):
+                  self._entries.append((name, amount))
+
+              def customers(self):
+                  return sorted({name for name, amount in self._entries})
+
+              def balance(self, name):
+                  return sum(amount for who, amount in self._entries if who == name)
+
+
+          def total_owed(ledger: Ledger) -> int:
+              return sum(max(0, ledger.balance(name)) for name in ledger.customers())
+
+
+          book = NotebookLedger()
+          for name, amount in [("asha", 300), ("bilal", 120), ("asha", -200), ("chitra", 50), ("bilal", -170), ("asha", 40)]:
+              book.record(name, amount)
+          print(total_owed(book))
+        tests: |
+          import random as _random
+
+
+          class _CounterLedger:
+              def __init__(self, balances):
+                  self._owing = dict(balances)
+
+              def customers(self):
+                  return list(self._owing)
+
+              def balance(self, name):
+                  return self._owing[name]
+
+
+          _rng = _random.Random(92)
+          for _ in range(30):
+              _entries = [(_rng.choice(["asha", "bilal", "chitra", "dev"]), _rng.choice([1, 1, -1]) * _rng.randint(10, 300)) for _k in range(_rng.randint(1, 10))]
+              _sums = {}
+              for _n, _a in _entries:
+                  _sums[_n] = _sums.get(_n, 0) + _a
+              _want = sum(_v for _v in _sums.values() if _v > 0)
+              _nb = NotebookLedger()
+              for _n, _a in _entries:
+                  _nb.record(_n, _a)
+              for _led, _kind in [(_nb, "a notebook ledger"), (_CounterLedger(_sums), "a ledger that keeps only balances")]:
+                  _got = total_owed(_led)
+                  assert _got == _want, "For the balances " + str(_sums) + " in " + _kind + ", total_owed should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "190", "The program should print 190"
+        wrong:
+          - |
+            from typing import Protocol
+
+
+            class Ledger(Protocol):
+                def customers(self) -> list[str]: ...
+
+                def balance(self, name: str) -> int: ...
+
+
+            class NotebookLedger:
+                # One entry per purchase on credit (positive) or payment (negative), in rupees.
+
+                def __init__(self):
+                    self._entries = []
+
+                def record(self, name, amount):
+                    self._entries.append((name, amount))
+
+                def customers(self):
+                    return sorted({name for name, amount in self._entries})
+
+                def balance(self, name):
+                    return sum(amount for who, amount in self._entries if who == name)
+
+
+            def total_owed(ledger: Ledger) -> int:
+                return sum(ledger.balance(name) for name in ledger.customers())
+
+
+            book = NotebookLedger()
+            for name, amount in [("asha", 300), ("bilal", 120), ("asha", -200), ("chitra", 50), ("bilal", -170), ("asha", 40)]:
+                book.record(name, amount)
+            print(total_owed(book))
+          - |
+            from typing import Protocol
+
+
+            class Ledger(Protocol):
+                def customers(self) -> list[str]: ...
+
+                def balance(self, name: str) -> int: ...
+
+
+            class NotebookLedger:
+                # One entry per purchase on credit (positive) or payment (negative), in rupees.
+
+                def __init__(self):
+                    self._entries = []
+
+                def record(self, name, amount):
+                    self._entries.append((name, amount))
+
+                def customers(self):
+                    return sorted({name for name, amount in self._entries})
+
+                def balance(self, name):
+                    return sum(amount for who, amount in self._entries if who == name)
+
+
+            def total_owed(ledger: Ledger) -> int:
+                return max(0, sum(ledger.balance(name) for name in ledger.customers()))
+
+
+            book = NotebookLedger()
+            for name, amount in [("asha", 300), ("bilal", 120), ("asha", -200), ("chitra", 50), ("bilal", -170), ("asha", 40)]:
+                book.record(name, amount)
+            print(total_owed(book))
+          - |
+            from typing import Protocol
+
+
+            class Ledger(Protocol):
+                def customers(self) -> list[str]: ...
+
+                def balance(self, name: str) -> int: ...
+
+
+            class NotebookLedger:
+                # One entry per purchase on credit (positive) or payment (negative), in rupees.
+
+                def __init__(self):
+                    self._entries = []
+
+                def record(self, name, amount):
+                    self._entries.append((name, amount))
+
+                def customers(self):
+                    return sorted({name for name, amount in self._entries})
+
+                def balance(self, name):
+                    return sum(amount for who, amount in self._entries if who == name)
+
+
+            def total_owed(ledger: Ledger) -> int:
+                balances = {}
+                for name, amount in ledger._entries:
+                    balances[name] = balances.get(name, 0) + amount
+                return sum(max(0, b) for b in balances.values())
+
+
+            book = NotebookLedger()
+            for name, amount in [("asha", 300), ("bilal", 120), ("asha", -200), ("chitra", 50), ("bilal", -170), ("asha", 40)]:
+                book.record(name, amount)
+            print(total_owed(book))
+        explanation: |
+          Through the interface, each customer's balance is asked for by name and only positive balances are added. Adding every balance lets money the shop owes Bilal cancel what Asha owes; clamping only the total does the same; and summing `_entries` yourself is right for the notebook but fails on any ledger that stores balances differently.
+    - question:
+        id: write-greedy-planner
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `GreedyPlanner.plan` so that it honours the same interface as `ExactPlanner`, returning every stop exactly once without the depot and without changing the list it is given, by always moving to the nearest stop not yet visited, starting from the depot. The program should print `[(1, 1), (2, 3), (0, 5), (6, 4), (5, 1)] 20 19`.
+        starter: |
+          import itertools
+
+
+          def dist(a, b):
+              return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+          def length(depot, route):
+              stops = [depot] + route
+              return sum(dist(stops[i], stops[i + 1]) for i in range(len(route)))
+
+
+          class ExactPlanner:
+              # The interface: plan(depot, stops) returns every stop exactly once,
+              # in the order to visit them, starting from the depot.
+
+              def plan(self, depot, stops):
+                  return list(min(itertools.permutations(stops), key=lambda r: length(depot, list(r))))
+
+
+          class GreedyPlanner:
+              def plan(self, depot, stops):
+                  return list(stops)
+
+
+          depot = (0, 0)
+          stops = [(5, 1), (1, 1), (6, 4), (2, 3), (0, 5)]
+          greedy = GreedyPlanner().plan(depot, stops)
+          print(greedy, length(depot, greedy), length(depot, ExactPlanner().plan(depot, stops)))
+        solution: |
+          import itertools
+
+
+          def dist(a, b):
+              return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+          def length(depot, route):
+              stops = [depot] + route
+              return sum(dist(stops[i], stops[i + 1]) for i in range(len(route)))
+
+
+          class ExactPlanner:
+              # The interface: plan(depot, stops) returns every stop exactly once,
+              # in the order to visit them, starting from the depot.
+
+              def plan(self, depot, stops):
+                  return list(min(itertools.permutations(stops), key=lambda r: length(depot, list(r))))
+
+
+          class GreedyPlanner:
+              def plan(self, depot, stops):
+                  route = []
+                  here = depot
+                  left = list(stops)
+                  while left:
+                      nearest = min(left, key=lambda s: dist(here, s))
+                      route.append(nearest)
+                      left.remove(nearest)
+                      here = nearest
+                  return route
+
+
+          depot = (0, 0)
+          stops = [(5, 1), (1, 1), (6, 4), (2, 3), (0, 5)]
+          greedy = GreedyPlanner().plan(depot, stops)
+          print(greedy, length(depot, greedy), length(depot, ExactPlanner().plan(depot, stops)))
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(93)
+          for _ in range(30):
+              _depot = (_rng.randint(0, 9), _rng.randint(0, 9))
+              _stops = []
+              while len(_stops) < _rng.randint(1, 6):
+                  _p = (_rng.randint(0, 9), _rng.randint(0, 9))
+                  if _p not in _stops and _p != _depot:
+                      _stops.append(_p)
+              _given = list(_stops)
+              _route = GreedyPlanner().plan(_depot, _stops)
+              assert _stops == _given, "plan should not change the list of stops it is given, " + str(_given)
+              assert sorted(_route) == sorted(_stops), "plan(" + str(_depot) + ", " + str(_given) + ") should return every stop exactly once, not " + str(_route)
+              _here, _left = _depot, list(_given)
+              for _step in _route:
+                  _best = min(dist(_here, _s) for _s in _left)
+                  assert dist(_here, _step) == _best, "From " + str(_here) + ", the nearest unvisited stop is " + str(_best) + " away, but the route goes to " + str(_step) + ", " + str(dist(_here, _step)) + " away (stops " + str(_given) + ", depot " + str(_depot) + ")"
+                  _left.remove(_step)
+                  _here = _step
+          assert output.strip() == "[(1, 1), (2, 3), (0, 5), (6, 4), (5, 1)] 20 19", "The program should print [(1, 1), (2, 3), (0, 5), (6, 4), (5, 1)] 20 19"
+        wrong:
+          - |
+            import itertools
+
+
+            def dist(a, b):
+                return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+            def length(depot, route):
+                stops = [depot] + route
+                return sum(dist(stops[i], stops[i + 1]) for i in range(len(route)))
+
+
+            class ExactPlanner:
+                # The interface: plan(depot, stops) returns every stop exactly once,
+                # in the order to visit them, starting from the depot.
+
+                def plan(self, depot, stops):
+                    return list(min(itertools.permutations(stops), key=lambda r: length(depot, list(r))))
+
+
+            class GreedyPlanner:
+                def plan(self, depot, stops):
+                    return sorted(stops, key=lambda s: dist(depot, s))
+
+
+            depot = (0, 0)
+            stops = [(5, 1), (1, 1), (6, 4), (2, 3), (0, 5)]
+            greedy = GreedyPlanner().plan(depot, stops)
+            print(greedy, length(depot, greedy), length(depot, ExactPlanner().plan(depot, stops)))
+          - |
+            import itertools
+
+
+            def dist(a, b):
+                return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+            def length(depot, route):
+                stops = [depot] + route
+                return sum(dist(stops[i], stops[i + 1]) for i in range(len(route)))
+
+
+            class ExactPlanner:
+                # The interface: plan(depot, stops) returns every stop exactly once,
+                # in the order to visit them, starting from the depot.
+
+                def plan(self, depot, stops):
+                    return list(min(itertools.permutations(stops), key=lambda r: length(depot, list(r))))
+
+
+            class GreedyPlanner:
+                def plan(self, depot, stops):
+                    route = [depot]
+                    left = list(stops)
+                    while left:
+                        nearest = min(left, key=lambda s: dist(route[-1], s))
+                        route.append(nearest)
+                        left.remove(nearest)
+                    return route
+
+
+            depot = (0, 0)
+            stops = [(5, 1), (1, 1), (6, 4), (2, 3), (0, 5)]
+            greedy = GreedyPlanner().plan(depot, stops)
+            print(greedy, length(depot, greedy), length(depot, ExactPlanner().plan(depot, stops)))
+          - |
+            import itertools
+
+
+            def dist(a, b):
+                return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+            def length(depot, route):
+                stops = [depot] + route
+                return sum(dist(stops[i], stops[i + 1]) for i in range(len(route)))
+
+
+            class ExactPlanner:
+                # The interface: plan(depot, stops) returns every stop exactly once,
+                # in the order to visit them, starting from the depot.
+
+                def plan(self, depot, stops):
+                    return list(min(itertools.permutations(stops), key=lambda r: length(depot, list(r))))
+
+
+            class GreedyPlanner:
+                def plan(self, depot, stops):
+                    route = []
+                    here = depot
+                    left = stops
+                    while left:
+                        nearest = min(left, key=lambda s: dist(here, s))
+                        route.append(nearest)
+                        left.remove(nearest)
+                        here = nearest
+                    return route
+
+
+            depot = (0, 0)
+            stops = [(5, 1), (1, 1), (6, 4), (2, 3), (0, 5)]
+            greedy = GreedyPlanner().plan(depot, stops)
+            print(greedy, length(depot, greedy), length(depot, ExactPlanner().plan(depot, stops)))
+        explanation: |
+          The greedy route starts at the depot, takes the nearest stop not yet visited from wherever it is, and works on a copy of the stops. Sorting by distance from the depot is not the nearest stop from where you are; putting the depot in the route breaks the interface's promise of stops only; and removing from the caller's own list empties it, which the exact planner never did.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          How many new pieces of provider-specific code does the puzzle's seventh provider need?
+        answer: "8"
+        explanation: |
+          One in each of the 8 places that take payments, because each place talks to each provider directly. Through one interface, it would be a single adapter.
+    - question:
+        id: work-promise
+        type: choice
+        system: s2
+        prompt: |
+          A route planner's `plan` method is documented as "returns the shortest route through the stops". The team wants to replace its slow exact algorithm with a fast greedy one behind the same method. What should they do?
+        options:
+          - "Change the promise to a route through every stop once, then check each caller that relied on shortest."
+          - "Swap the algorithm; the signature is unchanged, so callers are safe."
+          - "Keep the docstring and add a comment that the route is nearly shortest."
+          - "Rename the method so nobody notices the change."
+        answer: 0
+        explanation: |
+          The promise, not the signature, is the interface. The greedy planner cannot keep "shortest", so the promise must shrink, and callers that depended on it must be found before the swap. Renaming breaks every caller without fixing any.
+  connections:
+    - text: |
+        8 new pieces: the seventh provider needs code in each of the 8 places, because the places and providers were wired directly, $8 \times 6 = 48$ pieces in all. With one `PaymentProvider` interface, the app would have had $8 + 6 = 14$ pieces, and the seventh provider would cost one adapter.
+
+        An interface is one boundary. A real program has many, between modules that each hide decisions of their own, and the question becomes how to draw them so that a change in one place touches as few others as possible, which is [[s4.modules-coupling-and-cohesion]]. Swapping implementations behind an interface is also what makes code testable, since a test can supply a fake, which is [[s4.dependency-injection-and-testable-code]]. And when the callers are other teams or other companies, the interface becomes an API, with promises that are very hard to take back: [[s4.designing-apis]].

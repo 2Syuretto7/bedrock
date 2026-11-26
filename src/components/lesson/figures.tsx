@@ -7245,6 +7245,82 @@ function SchemaVersions(props: Props) {
   );
 }
 
+const IS_CALLERS = ["checkout", "refunds", "top-ups", "subscriptions", "invoices", "payouts", "tips", "gift cards"];
+const IS_PROVIDERS = ["UPI", "cards", "net banking", "pay later", "EMI", "wallet"];
+
+/** Places in an app that take payments, wired to payment providers directly or through one interface. */
+function InterfaceSwap(props: Props) {
+  const [callers, setCallers] = useState(clamp(Math.round(num(props.callers, 4)), 1, IS_CALLERS.length));
+  const [providers, setProviders] = useState(clamp(Math.round(num(props.providers, 3)), 1, IS_PROVIDERS.length));
+  const [shared, setShared] = useState(props.mode === "interface");
+  const pieces = shared ? callers + providers : callers * providers;
+  const added = shared ? 1 : callers;
+  const summary = shared
+    ? `${plural(callers, "place", "places")} in the app take payments through one PaymentProvider interface, and each of the ${plural(providers, "provider", "providers")} sits behind it in one adapter: ${callers} + ${providers} = ${pieces} pieces of code, and only the ${plural(providers, "adapter", "adapters")} know anything about a provider. Adding another provider means writing 1 new adapter; no caller changes.`
+    : `${plural(callers, "place", "places")} in the app each talk to each of the ${plural(providers, "provider", "providers")} directly: ${callers} × ${providers} = ${pieces} pieces of provider-specific code. Adding another provider means writing ${plural(added, "new piece", "new pieces")}, one in every place that takes payments.`;
+  const cy = (i: number, n: number) => 130 + (i - (n - 1) / 2) * 27;
+  return (
+    <Frame
+      title="Calling providers directly or through an interface"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!shared} onClick={() => setShared(false)}>
+            direct
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={shared} onClick={() => setShared(true)}>
+            through an interface
+          </button>
+          <Stepper label="places" value={callers} min={1} max={IS_CALLERS.length} onChange={setCallers} />
+          <Stepper label="providers" value={providers} min={1} max={IS_PROVIDERS.length} onChange={setProviders} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 270" role="img" aria-label={`${pieces} pieces of code connecting ${plural(callers, "place", "places")} to ${plural(providers, "provider", "providers")}${shared ? " through one interface" : " directly"}`}>
+        {IS_CALLERS.slice(0, callers).map((name, i) =>
+          shared ? (
+            <line key={`l${name}`} x1={112} y1={cy(i, callers)} x2={178} y2={130} className="fig-axis" />
+          ) : (
+            IS_PROVIDERS.slice(0, providers).map((p, j) => <line key={`l${name}${p}`} x1={112} y1={cy(i, callers)} x2={348} y2={cy(j, providers)} className="fig-axis" />)
+          ),
+        )}
+        {shared &&
+          IS_PROVIDERS.slice(0, providers).map((p, j) => <line key={`r${p}`} x1={282} y1={130} x2={348} y2={cy(j, providers)} className="fig-accent-line" />)}
+        {shared && (
+          <g>
+            <rect x={178} y={112} width={104} height={36} rx={4} className="fig-accent" />
+            <text x={230} y={127} textAnchor="middle" className="fig-small" style={{ fill: "var(--bg)", fontWeight: 600 }}>
+              PaymentProvider
+            </text>
+            <text x={230} y={141} textAnchor="middle" className="fig-small" style={{ fill: "var(--bg)" }}>
+              charge, refund
+            </text>
+          </g>
+        )}
+        {IS_CALLERS.slice(0, callers).map((name, i) => (
+          <g key={name}>
+            <rect x={8} y={cy(i, callers) - 10} width={104} height={20} rx={4} className="fig-fill" />
+            <text x={60} y={cy(i, callers) + 4} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+              {name}
+            </text>
+          </g>
+        ))}
+        {IS_PROVIDERS.slice(0, providers).map((p, j) => (
+          <g key={p}>
+            <rect x={348} y={cy(j, providers) - 10} width={104} height={20} rx={4} className="fig-fill" />
+            <text x={400} y={cy(j, providers) + 4} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+              {p}
+            </text>
+          </g>
+        ))}
+        <text x={8} y={262} className="fig-small">
+          {shared ? `${callers} + ${providers} = ${pieces} pieces; a new provider costs 1 adapter` : `${callers} × ${providers} = ${pieces} pieces; a new provider costs ${added} more`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -8576,6 +8652,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "doc-embed": DocEmbed,
   "graph-hops": GraphHops,
   "schema-versions": SchemaVersions,
+  "interface-swap": InterfaceSwap,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
