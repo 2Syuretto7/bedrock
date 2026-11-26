@@ -4174,6 +4174,98 @@ function DistributionBars(props: Props) {
   );
 }
 
+/** The error function, to about seven places (Abramowitz and Stegun 7.1.26), for the normal distribution's cdf. */
+const erf = (x: number) => {
+  const t = 1 / (1 + 0.3275911 * Math.abs(x));
+  const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return x < 0 ? -y : y;
+};
+
+type DensityShape = "uniform" | "triangle" | "exponential" | "normal";
+const DENSITY_ORDER: DensityShape[] = ["uniform", "triangle", "exponential", "normal"];
+const DENSITIES: Record<DensityShape, { name: string; story: string; density: (x: number) => number; cdf: (x: number) => number }> = {
+  uniform: {
+    name: "uniform",
+    story: "The wait for a train that comes every 10 minutes, arriving at a random moment",
+    density: (x) => (x >= 0 && x <= 10 ? 0.1 : 0),
+    cdf: (x) => clamp(x / 10, 0, 1),
+  },
+  triangle: {
+    name: "triangular",
+    story: "The total of two separate random waits, each between 0 and 5 minutes",
+    density: (x) => (x <= 0 || x >= 10 ? 0 : x <= 5 ? x / 25 : (10 - x) / 25),
+    cdf: (x) => (x <= 0 ? 0 : x <= 5 ? (x * x) / 50 : x < 10 ? 1 - ((10 - x) * (10 - x)) / 50 : 1),
+  },
+  exponential: {
+    name: "exponential",
+    story: "The time until the next request reaches a server that gets one every 2 minutes on average",
+    density: (x) => (x < 0 ? 0 : 0.5 * Math.exp(-0.5 * x)),
+    cdf: (x) => (x <= 0 ? 0 : 1 - Math.exp(-0.5 * x)),
+  },
+  normal: {
+    name: "normal",
+    story: "A delivery time with mean 5 minutes and standard deviation 1.5 minutes",
+    density: (x) => Math.exp(-((x - 5) ** 2) / (2 * 1.5 * 1.5)) / (1.5 * Math.sqrt(2 * Math.PI)),
+    cdf: (x) => 0.5 * (1 + erf((x - 5) / (1.5 * Math.SQRT2))),
+  },
+};
+
+/** A density curve over 0 to 10 minutes; the chance of landing between two times is the area under it, shaded. */
+function DensityArea(props: Props) {
+  const [shape, setShape] = useState<DensityShape>(typeof props.shape === "string" && props.shape in DENSITIES ? (props.shape as DensityShape) : "uniform");
+  const [from, setFrom] = useState(clamp(Math.round(num(props.from, 4) * 2) / 2, 0, 10));
+  const [to, setTo] = useState(clamp(Math.round(num(props.to, 6) * 2) / 2, 0, 10));
+  const { name, story, density, cdf } = DENSITIES[shape];
+  const low = Math.min(from, to);
+  const high = Math.max(from, to);
+  const area = cdf(high) - cdf(low);
+  const xs = Array.from({ length: 201 }, (_, i) => i / 20);
+  const peak = Math.max(...xs.map(density));
+  const sx = (x: number) => 40 + x * 36;
+  const sy = (y: number) => 200 - (y / peak) * 150;
+  const curve = xs.map((x) => `${dp(sx(x), 2)},${dp(sy(density(x)), 2)}`).join(" ");
+  const inside = xs.filter((x) => x >= low && x <= high);
+  const shaded = inside.length > 0 ? `M ${sx(low)} 200 ${inside.map((x) => `L ${dp(sx(x), 2)} ${dp(sy(density(x)), 2)}`).join(" ")} L ${sx(high)} 200 Z` : "";
+  const middle = (low + high) / 2;
+  const nextShape = DENSITY_ORDER[(DENSITY_ORDER.indexOf(shape) + 1) % DENSITY_ORDER.length];
+  return (
+    <Frame
+      title="Chance as area under a density"
+      summary={`${story}: a ${name} distribution. The chance that it lands between ${dp(low, 1)} and ${dp(high, 1)} minutes is the shaded area, about ${dp(area, 3)}.${
+        low === high ? " An interval of zero width has zero area, so any one exact time has chance 0." : ` The height of the curve at ${dp(middle, 2)} minutes is ${dp(density(middle), 3)} per minute: a density, not a chance.`
+      }`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setShape(nextShape)}>
+            {`Show the ${DENSITIES[nextShape].name} distribution`}
+          </button>
+          <Slider label="from" value={from} onChange={setFrom} min={0} max={10} step={0.5} text={`${dp(from, 1)} min`} />
+          <Slider label="to" value={to} onChange={setTo} min={0} max={10} step={0.5} text={`${dp(to, 1)} min`} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`A ${name} density from 0 to 10 minutes, with the area from ${dp(low, 1)} to ${dp(high, 1)} shaded, about ${dp(area, 3)}`}>
+        {shaded ? <path d={shaded} className="fig-accent" opacity={0.6} /> : null}
+        <polyline points={curve} className="fig-line" />
+        <line x1="40" y1="200" x2="400" y2="200" className="fig-axis" />
+        {[0, 2, 4, 6, 8, 10].map((t) => (
+          <text key={t} x={sx(t)} y="218" textAnchor="middle" className="fig-small">
+            {t}
+          </text>
+        ))}
+        <text x="400" y="236" textAnchor="end" className="fig-small">
+          minutes
+        </text>
+        <line x1={sx(low)} y1="40" x2={sx(low)} y2="200" className="fig-guide" />
+        <line x1={sx(high)} y1="40" x2={sx(high)} y2="200" className="fig-guide" />
+        <text x="40" y="30" className="fig-small">
+          {`area ${dp(area, 3)}, highest density ${dp(peak, 3)} per minute`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5469,6 +5561,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "bayes-square": BayesSquare,
   "variable-bars": VariableBars,
   "distribution-bars": DistributionBars,
+  "density-area": DensityArea,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
