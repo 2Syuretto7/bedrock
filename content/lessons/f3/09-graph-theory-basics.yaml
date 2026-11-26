@@ -1,0 +1,536 @@
+concept: f3.graph-theory-basics
+minutes: 95
+claim: You can state the definitions of graphs, degrees, walks, paths, cycles and connected components, prove and use the handshake lemma, decide from the degrees alone whether a connected graph can be traced in one stroke and construct the stroke, recognise bipartite graphs by their lack of odd cycles, and count components and two-colourings in code.
+recalls: [f3.asymptotic-notation]
+uses: [s2.graphs-and-their-representations, s2.union-find, s2.stacks-and-queues, f2.equivalence-relations-and-partial-orders, f2.relations-and-functions-between-sets, f2.induction-and-strong-induction, f2.contrapositive-and-contradiction, f2.direct-proof, f3.permutations-and-combinations, f3.counting-with-products-and-sums, f3.the-pigeonhole-principle, s1.comprehensions-and-iterators, s1.modules-and-imports, s0.dictionaries-and-sets, s0.lists-and-tuples, s0.loops, s0.functions]
+leads: [f3.trees-and-their-properties, s3.breadth-first-and-depth-first-search, s3.shortest-paths, s3.intractability-p-np-and-heuristics]
+starter: |
+  # Scratch space. The degrees of a house drawn with crossed walls.
+  edges = [("A", "B"), ("B", "C"), ("C", "D"), ("D", "A"), ("A", "C"), ("B", "D"), ("D", "E"), ("C", "E")]
+  degree = {}
+  for u, v in edges:
+      degree[u] = degree.get(u, 0) + 1
+      degree[v] = degree.get(v, 0) + 1
+  print(degree, sum(degree.values()), len(edges))
+parts:
+  recall:
+    - text: |
+        [[f3.asymptotic-notation]] gave you the language for how fast things grow. Now the objects change from numbers to networks, which you stored in [[s2.graphs-and-their-representations]]. Three quick pulls first.
+  puzzle:
+    - text: |
+        Early in the morning, in many homes in Tamil Nadu, someone draws a kolam at the doorstep in rice flour. Some kolam traditions prize a pattern drawn in one continuous line, never lifting the hand and never going over a line twice. Some figures can be drawn like that and some cannot, however clever the artist.
+
+        Try two simple ones on paper. A square with both its diagonals cannot be drawn in one stroke. Add a triangular roof on top, making a little house, and suddenly it can, though there are more lines to draw. A five-pointed star inside a pentagon can also be drawn in one stroke, and the stroke even ends where it began.
+
+        A figure with 20 lines has $20!$ orders in which its lines might be drawn, more than two billion billion, each with a choice of direction. Nobody can try them all. The same question appears when a postal worker wants to walk every lane of a colony once, or a road inspector to drive every road once.
+
+        **How can you tell from the figure alone, without trying, whether one stroke is possible?**
+  intuition:
+    - text: |
+        Watch the pen pass through a point in the middle of the stroke. It arrives along one line and leaves along another, so each visit uses up two of the lines at that point. If the pen passes through a point three times, it uses six lines there. So at every point where the stroke neither starts nor ends, the number of lines must be even.
+
+        The start and the end are different. The start uses one line to leave, and then pairs; the end uses pairs and then one line to arrive. So they can have an odd number of lines, and if the stroke ends where it began, the start and end together form one more pair, and that point is even too.
+
+        So count the lines at each point, its **degree**. The square with diagonals has degree 3 at all four corners: four odd points, but a stroke has room for at most two. The house adds a roof, which raises the two top corners to 4 and leaves only the two bottom corners odd: start at one, finish at the other. In the star, every point has degree 4.
+
+        The figure shows the degrees and draws the stroke when there is one. Step through the house, then try the other two figures.
+    - figure: one-stroke
+      props: { shape: house, step: 0 }
+    - text: |
+        The surprise is the other direction. Counting shows when a stroke is impossible, but Euler proved in 1736 that the count is also enough: if the figure is connected and has no more than two odd points, a stroke always exists, and there is a quick way to find it. You will prove both halves below.
+  derivation:
+    - text: |
+        **Graphs.** A **graph** $G = (V, E)$ is a set $V$ of **vertices** and a set $E$ of **edges**, each edge being a set of two different vertices. This is the simple, undirected graph of [[s2.graphs-and-their-representations]]; a kolam may need two lines between the same two points, which a **multigraph** allows, and everything below holds for multigraphs too. Two vertices joined by an edge are **adjacent**. The **degree** $\deg(v)$ of a vertex is the number of edges at it.
+
+        **The handshake lemma.** In every graph,
+
+        $$\sum_{v \in V} \deg(v) = 2\,\lvert E \rvert.$$
+
+        *Proof*, by counting the same thing two ways: count pairs (vertex, edge at that vertex). Grouped by vertex, there are $\deg(v)$ for each $v$. Grouped by edge, there are exactly 2 for each edge, one for each end. So both totals are equal.
+
+        One consequence is immediate: the number of vertices of odd degree is even, because the odd degrees must add up to an even total along with the even ones. So at a party of 7 people, it is impossible for everyone to have shaken hands with exactly 3 others: that would make the degrees add to 21, which is odd.
+
+        Another uses [[f3.the-pigeonhole-principle]]: in any graph with at least two vertices, two vertices have the same degree. With $n$ vertices the degrees lie between 0 and $n - 1$, but 0 and $n - 1$ cannot both occur, since a vertex joined to all others leaves nobody with no edges. That leaves $n - 1$ possible degrees for $n$ vertices. In any group of people, two have exactly the same number of friends within the group.
+
+        **How many edges?** A graph on $n$ vertices has at most $C(n, 2) = n(n - 1)/2$ edges, by [[f3.permutations-and-combinations]]; the graph with all of them is the **complete graph** $K_n$. Each of those $C(n, 2)$ possible edges is either present or absent, so by the product rule of [[f3.counting-with-products-and-sums]] there are $2^{C(n, 2)}$ graphs on $n$ named vertices: 64 on 4 vertices, and over $10^{13}$ on 10. A graph whose edge count grows like $n$ is called **sparse**, and one whose edge count grows like $n^2$ **dense**; road networks are sparse, which is why adjacency lists suit them.
+    - question:
+        id: derivation-party
+        type: choice
+        system: s2
+        prompt: |
+          At a meeting of 9 people, is it possible that each person has shaken hands with exactly 5 others?
+        options:
+          - "No: the degrees would add up to 45, which is odd, but they must add up to twice the number of handshakes."
+          - "No: 5 is more than half of 9."
+          - "Yes: each person simply skips 3 of the others."
+          - "Yes, but only if two people shake hands twice."
+        answer: 0
+        explanation: |
+          The handshake lemma says the degrees add up to $2\lvert E \rvert$, an even number. $9 \cdot 5 = 45$ is odd, so no such graph exists. With 10 people each shaking 5 hands, the total would be 50, and such a graph does exist.
+    - text: |
+        **Walks, paths and cycles.** A **walk** is a sequence of vertices $v_0, v_1, \dots, v_k$ in which each consecutive pair is joined by an edge; its **length** is $k$, the number of edges used. A **trail** is a walk that uses no edge twice, a **path** is a walk that visits no vertex twice, and a **cycle** is a walk of length at least 3 that returns to its start and repeats no other vertex.
+
+        If there is a walk from $u$ to $v$, there is a path. Take the shortest walk from $u$ to $v$. If it visited some vertex twice, cutting out the stretch between the two visits would leave a shorter walk, so it repeats nothing: it is a path.
+
+        **Connected components.** Write $u \sim v$ when there is a walk from $u$ to $v$. This relation is reflexive (a walk of length 0), symmetric (reverse the walk) and transitive (join two walks end to end), so it is an equivalence relation in the sense of [[f2.equivalence-relations-and-partial-orders]]. Its classes are the **connected components** of the graph, and the graph is **connected** when there is only one. Union-find, from [[s2.union-find]], computes exactly these classes as edges arrive, and a search from each unvisited vertex, using a stack or a queue as in [[s2.stacks-and-queues]], finds them all in $\Theta(\lvert V \rvert + \lvert E \rvert)$ steps.
+    - question:
+        id: order-euler
+        type: order
+        system: s2
+        prompt: |
+          Prove that if a graph can be traced in one stroke that ends where it began, every vertex has even degree. Put the steps in order.
+        steps:
+          - "Follow the stroke and, at each vertex it passes through, pair the edge it arrives along with the edge it leaves along."
+          - "The first edge of the stroke leaves the start, and the last edge arrives back at it, so pair those two as well."
+          - "The stroke uses every edge exactly once, so every edge at a vertex appears in exactly one of its pairs."
+          - "So the edges at each vertex split into pairs, and its degree is even."
+        explanation: Pairing the edges at each vertex is the whole argument. For a stroke that ends somewhere else, the first edge at the start and the last edge at the end are left without partners, so exactly those two vertices are odd.
+    - text: |
+        **Euler's theorem.** A connected graph with at least one edge can be traced in one closed stroke, using every edge exactly once and returning to the start, exactly when every vertex has even degree. It can be traced in one stroke from $u$ to a different $v$ exactly when $u$ and $v$ are the only vertices of odd degree. Such strokes are called **Euler circuits** and **Euler trails**.
+
+        The pairing argument proves one direction. For the other, suppose every degree is even. Start anywhere and walk, never reusing an edge, until you are stuck. You can only get stuck back at the start: at any other vertex, each arrival so far has been matched by a departure, so arriving there now leaves an odd number of its edges used, and since its degree is even, an unused one remains. So the walk is closed. If edges remain unused, then because the graph is connected some vertex on the walk still has an unused edge. Its unused edges still have even counts everywhere, so walk again from there until stuck, which again closes up, and splice the new loop into the old walk at that vertex. Each splice uses more edges, so the process ends with every edge used once. For exactly two odd vertices, add an imaginary edge between them, find the circuit, and remove the imaginary edge: what is left is a trail from one to the other. The method, known as Hierholzer's algorithm, takes time proportional to the number of edges.
+
+        The opposite puzzle, visiting every *vertex* exactly once and returning, a **Hamiltonian cycle**, sounds similar and is utterly different. No simple test like counting degrees is known, and no known method is fast on every graph; it is one of the problems at the centre of [[s3.intractability-p-np-and-heuristics]].
+
+        **Bipartite graphs.** A graph is **bipartite** when its vertices split into two sides with every edge going across: drivers and riders, students and the courses they take, jobs and machines that can run them. Equivalently, its vertices can be coloured with two colours so that every edge joins different colours.
+
+        *A graph is bipartite exactly when it has no cycle of odd length.* If it is bipartite, any cycle alternates sides, so it returns to its starting side only after an even number of edges. In the other direction, colour one vertex of each component white, and every other vertex by the parity of its distance from it: even distance white, odd black. If an edge joined two vertices of the same colour, the two shortest paths to them and that edge would make a closed walk of odd length, which always contains an odd cycle. A search that colours each new vertex opposite to its parent, as [[s3.breadth-first-and-depth-first-search]] will make systematic, tests bipartiteness in $\Theta(\lvert V \rvert + \lvert E \rvert)$ steps.
+
+        **The same graph, drawn differently.** A graph is its vertices and edges, not its picture. Two drawings that differ only in where the points are placed show the same graph, and two graphs that become identical after renaming the vertices are called **isomorphic**. Isomorphic graphs have the same degrees, in some order, so different lists of degrees prove that two graphs differ; the same list does not prove that they are the same.
+  formal:
+    - text: |
+        **Graph.** $G = (V, E)$ with $E$ a set of two-element subsets of $V$. $\deg(v)$ is the number of edges containing $v$.
+
+        **Handshake lemma.** $\sum_{v} \deg(v) = 2\lvert E \rvert$; the number of odd-degree vertices is even. A simple graph on $n$ vertices has at most $C(n, 2)$ edges, and there are $2^{C(n, 2)}$ simple graphs on $n$ named vertices.
+
+        **Walks.** A walk of length $k$ is $v_0, \dots, v_k$ with each $\{v_{i - 1}, v_i\} \in E$. A trail repeats no edge, a path repeats no vertex, and a cycle is a closed walk of length at least 3 repeating no vertex but its start. A walk from $u$ to $v$ contains a path from $u$ to $v$.
+
+        **Components.** "There is a walk from $u$ to $v$" is an equivalence relation; its classes are the connected components.
+
+        **Euler.** A connected graph with at least one edge has an Euler circuit if and only if every degree is even, and an Euler trail between distinct $u$ and $v$ if and only if $u$ and $v$ are its only odd-degree vertices.
+
+        **Bipartite.** A graph is bipartite, that is, two-colourable, if and only if it has no odd cycle.
+  drill:
+    - text: Seconds each. Count degrees first; most questions answer themselves.
+    - question:
+        id: drill-degree-sum
+        type: numeric
+        system: s1
+        prompt: |
+          A graph has 10 edges. What do the degrees of its vertices add up to?
+        answer: "20"
+        explanation: Each edge adds 1 to the degree of each of its two ends.
+    - question:
+        id: drill-complete
+        type: numeric
+        system: s1
+        prompt: |
+          How many edges does the complete graph on 8 vertices have?
+        answer: "28"
+        explanation: $C(8, 2) = 8 \cdot 7 / 2 = 28$.
+    - question:
+        id: drill-stroke
+        type: choice
+        system: s1
+        prompt: |
+          A connected figure has points of degrees 2, 4, 3, 3 and 2. Can it be drawn in one stroke?
+        options: ["Yes, starting at one point of degree 3 and ending at the other", "Yes, starting and ending at the same point", "No, because some degrees are odd", "No, because it has five points"]
+        answer: 0
+        explanation: Exactly two degrees are odd, so an Euler trail runs between those two points.
+    - question:
+        id: drill-count-graphs
+        type: numeric
+        system: s1
+        prompt: |
+          How many different simple graphs are there on 4 named vertices?
+        answer: "64"
+        explanation: There are $C(4, 2) = 6$ possible edges, each present or not, so $2^6 = 64$.
+    - question:
+        id: drill-odd-cycle
+        type: choice
+        system: s1
+        prompt: |
+          Is a cycle of 5 vertices bipartite?
+        options: ["No, because it is an odd cycle", "Yes, every cycle is bipartite", "Yes, because every degree is 2", "No, because 5 is prime"]
+        answer: 0
+        explanation: Going round, the colours must alternate, and after 5 steps you return to the start with the opposite colour.
+    - question:
+        id: drill-components
+        type: numeric
+        system: s1
+        prompt: |
+          A graph has vertices 1 to 6 and edges $\{1, 2\}$, $\{2, 3\}$ and $\{4, 5\}$. How many connected components does it have?
+        answer: "3"
+        explanation: $\{1, 2, 3\}$, $\{4, 5\}$ and $\{6\}$. A vertex with no edges is a component on its own.
+    - question:
+        id: predict-degrees
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          edges = [("A", "B"), ("B", "C"), ("C", "A"), ("C", "D")]
+          degree = {}
+          for u, v in edges:
+              degree[u] = degree.get(u, 0) + 1
+              degree[v] = degree.get(v, 0) + 1
+          print(sorted(degree.values()), sum(degree.values()))
+        output: "[1, 2, 2, 3] 8"
+        explanation: A and B have degree 2, C has 3 and D has 1. The total is $2 \cdot 4 = 8$, twice the number of edges, and two of the degrees are odd, an even number of them, as the handshake lemma requires.
+    - question:
+        id: predict-walk
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          walk = ["A", "B", "C", "B", "D"]
+          print(len(walk) - 1, len(set(walk)), len(walk) == len(set(walk)))
+        output: "4 4 False"
+        explanation: The walk uses 4 edges and visits 4 different vertices, but it visits B twice, so it is not a path. Cutting out the detour B, C, B leaves the path A, B, D.
+  work:
+    - text: Slower now. Before claiming a graph has some property, say which count or which argument settles it.
+    - question:
+        id: fix-stroke
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `one_stroke(edges)` should say whether a connected figure, given as a list of edges, can be drawn in one stroke. For the house, the square with diagonals and the star it should print `True False True`. It prints `True False False`. Find the fault and fix it.
+        starter: |
+          def one_stroke(edges):
+              degree = {}
+              for u, v in edges:
+                  degree[u] = degree.get(u, 0) + 1
+                  degree[v] = degree.get(v, 0) + 1
+              odd = len([v for v in degree if degree[v] % 2 == 1])
+              return odd == 2
+
+          house = [("A", "B"), ("B", "C"), ("C", "D"), ("D", "A"), ("A", "C"), ("B", "D"), ("D", "E"), ("C", "E")]
+          square = [("A", "B"), ("B", "C"), ("C", "D"), ("D", "A"), ("A", "C"), ("B", "D")]
+          star = [(a, b) for i, a in enumerate("ABCDE") for b in "ABCDE"[i + 1:]]
+          print(one_stroke(house), one_stroke(square), one_stroke(star))
+        solution: |
+          def one_stroke(edges):
+              degree = {}
+              for u, v in edges:
+                  degree[u] = degree.get(u, 0) + 1
+                  degree[v] = degree.get(v, 0) + 1
+              odd = len([v for v in degree if degree[v] % 2 == 1])
+              return odd == 0 or odd == 2
+
+          house = [("A", "B"), ("B", "C"), ("C", "D"), ("D", "A"), ("A", "C"), ("B", "D"), ("D", "E"), ("C", "E")]
+          square = [("A", "B"), ("B", "C"), ("C", "D"), ("D", "A"), ("A", "C"), ("B", "D")]
+          star = [(a, b) for i, a in enumerate("ABCDE") for b in "ABCDE"[i + 1:]]
+          print(one_stroke(house), one_stroke(square), one_stroke(star))
+        tests: |
+          import random
+          random.seed(43)
+          def _odd_count(_edges):
+              _deg = {}
+              for _u, _v in _edges:
+                  _deg[_u] = _deg.get(_u, 0) + 1
+                  _deg[_v] = _deg.get(_v, 0) + 1
+              return sum(1 for _d in _deg.values() if _d % 2 == 1)
+          for _trial in range(400):
+              _n = random.randint(2, 8)
+              _edges = [(_i - 1, _i) for _i in range(1, _n)]
+              for _extra in range(random.randint(0, 10)):
+                  _a = random.randint(0, _n - 1)
+                  _b = random.randint(0, _n - 1)
+                  if _a != _b:
+                      _edges.append((_a, _b))
+              _want = _odd_count(_edges) <= 2
+              assert one_stroke(_edges) == _want, "one_stroke(" + str(_edges) + ") should be " + str(_want)
+          assert output.strip() == "True False True", "The program should print True False True"
+        wrong:
+          - |
+            def one_stroke(edges):
+                degree = {}
+                for u, v in edges:
+                    degree[u] = degree.get(u, 0) + 1
+                    degree[v] = degree.get(v, 0) + 1
+                odd = len([v for v in degree if degree[v] % 2 == 1])
+                return odd == 0
+
+            print(True, False, True)
+          - |
+            def one_stroke(edges):
+                degree = {}
+                for u, v in edges:
+                    degree[u] = degree.get(u, 0) + 1
+                    degree[v] = degree.get(v, 0) + 1
+                odd = len([v for v in degree if degree[v] % 2 == 1])
+                return odd % 2 == 0
+
+            print(True, False, True)
+        explanation: |
+          Euler's theorem allows two cases: no odd vertices, when the stroke returns to its start, and exactly two, when it runs from one odd vertex to the other. The check accepted only the second, so it rejected the star, whose degrees are all 4. Testing whether the number of odd vertices is even says nothing at all, since by the handshake lemma it always is.
+    - question:
+        id: write-components
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `components(vertices, edges)`, which returns the number of connected components of the graph with the given list of vertices and list of edges, each edge a pair of vertices. Build adjacency lists, then start a search from every vertex not yet seen, using a list as a stack.
+        starter: |
+          def components(vertices, edges):
+              return 0
+
+          print(components(["A", "B", "C", "D", "E", "F"], [("A", "B"), ("B", "C"), ("D", "E")]), components([1, 2, 3, 4], [(1, 2), (2, 3), (3, 1), (3, 4)]), components([], []))
+        solution: |
+          def components(vertices, edges):
+              neighbours = {v: [] for v in vertices}
+              for u, v in edges:
+                  neighbours[u].append(v)
+                  neighbours[v].append(u)
+              seen = set()
+              count = 0
+              for start in vertices:
+                  if start not in seen:
+                      count += 1
+                      seen.add(start)
+                      stack = [start]
+                      while stack:
+                          v = stack.pop()
+                          for w in neighbours[v]:
+                              if w not in seen:
+                                  seen.add(w)
+                                  stack.append(w)
+              return count
+
+          print(components(["A", "B", "C", "D", "E", "F"], [("A", "B"), ("B", "C"), ("D", "E")]), components([1, 2, 3, 4], [(1, 2), (2, 3), (3, 1), (3, 4)]), components([], []))
+        tests: |
+          import random
+          random.seed(47)
+          def _reference(_vs, _es):
+              _parent = {_v: _v for _v in _vs}
+              def _find(_x):
+                  while _parent[_x] != _x:
+                      _x = _parent[_x]
+                  return _x
+              for _u, _v in _es:
+                  _parent[_find(_u)] = _find(_v)
+              return len({_find(_v) for _v in _vs})
+          for _trial in range(400):
+              _n = random.randint(0, 30)
+              _vs = list(range(_n))
+              _es = []
+              if _n > 1:
+                  for _k in range(random.randint(0, 2 * _n)):
+                      _es.append((random.randint(0, _n - 1), random.randint(0, _n - 1)))
+              _want = _reference(_vs, _es)
+              _got = components(_vs, _es)
+              assert _got == _want, "A graph with " + str(_n) + " vertices and edges " + str(_es) + " has " + str(_want) + " components, not " + str(_got)
+          _big = list(range(20000))
+          assert components(_big, [(_i, _i + 1) for _i in range(19999)]) == 1, "A path through 20000 vertices is one component"
+          assert output.strip() == "3 1 0", "The program should print 3 1 0"
+        wrong:
+          - |
+            def components(vertices, edges):
+                return len(vertices) - len(edges)
+
+            print(3, 1, 0)
+          - |
+            def components(vertices, edges):
+                touched = set()
+                for u, v in edges:
+                    touched.add(u)
+                    touched.add(v)
+                return len([v for v in vertices if v not in touched]) + (1 if edges else 0)
+
+            print(3, 1, 0)
+          - |
+            def components(vertices, edges):
+                neighbours = {v: [] for v in vertices}
+                for u, v in edges:
+                    neighbours[u].append(v)
+                seen = set()
+                count = 0
+                for start in vertices:
+                    if start not in seen:
+                        count += 1
+                        seen.add(start)
+                        stack = [start]
+                        while stack:
+                            v = stack.pop()
+                            for w in neighbours[v]:
+                                if w not in seen:
+                                    seen.add(w)
+                                    stack.append(w)
+                return count
+
+            print(3, 1, 0)
+        explanation: |
+          Each search marks everything reachable from its start, which is one whole component, so the number of searches started is the number of components; every vertex and every edge is handled a bounded number of times, $\Theta(\lvert V \rvert + \lvert E \rvert)$ in all. An edge must be added to the lists of both its ends, since walks may use it in either direction; recording it one way only splits components whose edges happen to point away from the search's start. Subtracting the edges from the vertices is right only when there are no cycles, a fact about trees you will meet next. Using an explicit stack, rather than recursion, also copes with a path of 20,000 vertices, deeper than Python's recursion limit.
+    - question:
+        id: write-two-sides
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `two_sides(vertices, edges)`. If the graph is bipartite, return a dictionary giving every vertex the colour 0 or 1, with the two ends of every edge differently coloured. If it is not, return `None`. Colour each uncoloured vertex 0 and search from it, giving each newly reached vertex the opposite colour of the vertex it was reached from; an edge whose ends end up the same colour shows an odd cycle.
+        starter: |
+          def two_sides(vertices, edges):
+              return None
+
+          square = [("A", "B"), ("B", "C"), ("C", "D"), ("D", "A")]
+          triangle = [("A", "B"), ("B", "C"), ("C", "A")]
+          print(two_sides(["A", "B", "C", "D"], square) is not None, two_sides(["A", "B", "C"], triangle) is None)
+        solution: |
+          def two_sides(vertices, edges):
+              neighbours = {v: [] for v in vertices}
+              for u, v in edges:
+                  neighbours[u].append(v)
+                  neighbours[v].append(u)
+              colour = {}
+              for start in vertices:
+                  if start not in colour:
+                      colour[start] = 0
+                      stack = [start]
+                      while stack:
+                          v = stack.pop()
+                          for w in neighbours[v]:
+                              if w not in colour:
+                                  colour[w] = 1 - colour[v]
+                                  stack.append(w)
+                              elif colour[w] == colour[v]:
+                                  return None
+              return colour
+
+          square = [("A", "B"), ("B", "C"), ("C", "D"), ("D", "A")]
+          triangle = [("A", "B"), ("B", "C"), ("C", "A")]
+          print(two_sides(["A", "B", "C", "D"], square) is not None, two_sides(["A", "B", "C"], triangle) is None)
+        tests: |
+          import itertools
+          import random
+          random.seed(53)
+          def _bipartite(_vs, _es):
+              for _bits in itertools.product([0, 1], repeat=len(_vs)):
+                  _c = dict(zip(_vs, _bits))
+                  if all(_c[_u] != _c[_v] for _u, _v in _es):
+                      return True
+              return False
+          for _trial in range(300):
+              _n = random.randint(1, 9)
+              _vs = list(range(_n))
+              _es = []
+              for _k in range(random.randint(0, 2 * _n)):
+                  _a = random.randint(0, _n - 1)
+                  _b = random.randint(0, _n - 1)
+                  if _a != _b:
+                      _es.append((_a, _b))
+              _got = two_sides(_vs, _es)
+              if _bipartite(_vs, _es):
+                  assert isinstance(_got, dict), "The graph with edges " + str(_es) + " is bipartite, so two_sides should return a colouring"
+                  assert all(_v in _got and _got[_v] in (0, 1) for _v in _vs), "Every vertex should get the colour 0 or 1"
+                  assert all(_got[_u] != _got[_v] for _u, _v in _es), "For edges " + str(_es) + ", some edge joins two vertices of the same colour"
+              else:
+                  assert _got is None, "The graph with edges " + str(_es) + " has an odd cycle, so two_sides should return None"
+          assert output.strip() == "True True", "The program should print True True"
+        wrong:
+          - |
+            def two_sides(vertices, edges):
+                neighbours = {v: [] for v in vertices}
+                for u, v in edges:
+                    neighbours[u].append(v)
+                    neighbours[v].append(u)
+                colour = {}
+                for start in vertices:
+                    if start not in colour:
+                        colour[start] = 0
+                        stack = [start]
+                        while stack:
+                            v = stack.pop()
+                            for w in neighbours[v]:
+                                if w not in colour:
+                                    colour[w] = 1 - colour[v]
+                                    stack.append(w)
+                return colour
+
+            print(True, True)
+          - |
+            def two_sides(vertices, edges):
+                neighbours = {v: [] for v in vertices}
+                for u, v in edges:
+                    neighbours[u].append(v)
+                    neighbours[v].append(u)
+                if any(len(neighbours[v]) % 2 == 1 for v in vertices):
+                    return None
+                colour = {}
+                for start in vertices:
+                    if start not in colour:
+                        colour[start] = 0
+                        stack = [start]
+                        while stack:
+                            v = stack.pop()
+                            for w in neighbours[v]:
+                                if w not in colour:
+                                    colour[w] = 1 - colour[v]
+                                    stack.append(w)
+                                elif colour[w] == colour[v]:
+                                    return None
+                return colour
+
+            print(True, True)
+          - |
+            def two_sides(vertices, edges):
+                neighbours = {v: [] for v in vertices}
+                for u, v in edges:
+                    neighbours[u].append(v)
+                    neighbours[v].append(u)
+                colour = {}
+                if not vertices:
+                    return colour
+                colour[vertices[0]] = 0
+                stack = [vertices[0]]
+                while stack:
+                    v = stack.pop()
+                    for w in neighbours[v]:
+                        if w not in colour:
+                            colour[w] = 1 - colour[v]
+                            stack.append(w)
+                        elif colour[w] == colour[v]:
+                            return None
+                return colour
+
+            print(True, True)
+        explanation: |
+          Each vertex's colour is forced by the vertex it was reached from, so if any colouring exists, the search finds it; and an edge with both ends the same colour closes a walk of odd length, so no colouring exists. Colouring without checking edges to vertices already coloured never notices a triangle. Odd degrees have nothing to do with it: a path of three vertices has ends of degree 1 and is bipartite. And a graph may have several components, each of which needs its own starting vertex, or some vertices are never coloured.
+    - question:
+        id: work-regular
+        type: numeric
+        system: s2
+        prompt: |
+          A network has 12 routers, each with exactly 3 links to other routers. How many links are there?
+        answer: "18"
+        explanation: |
+          The degrees add up to $12 \cdot 3 = 36$, which is twice the number of links, so there are 18.
+    - question:
+        id: work-friends
+        type: choice
+        system: s2
+        prompt: |
+          In a hostel of 40 students, friendship is mutual. Which statement must be true?
+        options:
+          - "Two students have exactly the same number of friends in the hostel."
+          - "Some student is friends with everyone."
+          - "Every student has an even number of friends."
+          - "Some student has no friends in the hostel."
+        answer: 0
+        explanation: |
+          Friend counts lie between 0 and 39, but 0 and 39 cannot both occur, so there are at most 39 possible counts for 40 students, and by the pigeonhole principle two must share one. The other statements can all fail: everyone might have exactly one friend, in 20 pairs.
+    - question:
+        id: work-add-lanes
+        type: numeric
+        system: s2
+        prompt: |
+          A colony's lanes form a connected graph in which exactly 6 junctions have an odd number of lanes. An inspector must walk every lane in one continuous route, and may add new lanes, each joining two junctions. What is the fewest new lanes that make such a route possible, starting and ending anywhere?
+        answer: "2"
+        explanation: |
+          A one-stroke route needs at most 2 odd junctions. Each new lane changes the degree of its two ends by 1. Joining two odd junctions makes both even, so two new lanes leave 2 odd junctions, and one lane can remove at most 2 of the 6, so 1 lane is not enough.
+  connections:
+    - text: |
+        The kolam's secret is in the degrees. A connected figure can be drawn in one stroke exactly when at most two points have an odd number of lines, and the stroke returns home when none do. The square with diagonals has four odd corners, the house has two, and the star has none.
+
+        Graphs are vertices and edges; the handshake lemma ties the degrees to the number of edges and makes odd vertices come in pairs. Walks contain paths, "is reachable from" splits a graph into connected components, and a search counts them in linear time. Euler's theorem settles one-stroke drawings, while the similar question for vertices is famously hard. Bipartite graphs are exactly those with no odd cycle, and a colouring search tests for them.
+
+        One kind of graph deserves a lesson of its own: connected, but with no cycles at all. A family tree, a folder hierarchy, the tries and search trees of the data structures cluster, and the cheapest way to join every village to the power grid are all of this kind. They have exactly one path between any two vertices and exactly one edge fewer than vertices, as [[f3.trees-and-their-properties]] will prove.

@@ -3642,6 +3642,91 @@ function BoundWitness(props: Props) {
   );
 }
 
+const pentagon = (k: number): Spot => [220 + 100 * Math.sin((2 * Math.PI * k) / 5), 142 - 100 * Math.cos((2 * Math.PI * k) / 5)];
+const STROKE_SHAPES: Record<string, { name: string; spots: Record<string, Spot>; edges: string[]; trail: string[] }> = {
+  house: {
+    name: "A house with crossed walls",
+    spots: { A: [150, 232], B: [290, 232], C: [290, 126], D: [150, 126], E: [220, 44] },
+    edges: ["AB", "BC", "CD", "DA", "AC", "BD", "DE", "CE"],
+    trail: ["A", "B", "C", "D", "A", "C", "E", "D", "B"],
+  },
+  square: {
+    name: "A square with both diagonals",
+    spots: { A: [150, 226], B: [290, 226], C: [290, 86], D: [150, 86] },
+    edges: ["AB", "BC", "CD", "DA", "AC", "BD"],
+    trail: [],
+  },
+  star: {
+    name: "A star inside a pentagon",
+    spots: { A: pentagon(0), B: pentagon(1), C: pentagon(2), D: pentagon(3), E: pentagon(4) },
+    edges: ["AB", "BC", "CD", "DE", "EA", "AC", "CE", "EB", "BD", "DA"],
+    trail: ["A", "B", "C", "D", "E", "A", "C", "E", "B", "D", "A"],
+  },
+};
+const STROKE_ORDER = ["house", "square", "star"];
+
+/** Drawing a figure in one stroke: possible exactly when no more than two points have an odd number of lines. */
+function OneStroke(props: Props) {
+  const [which, setWhich] = useState(typeof props.shape === "string" && props.shape in STROKE_SHAPES ? props.shape : "house");
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, 10));
+  const { name, spots, edges, trail } = STROKE_SHAPES[which];
+  const names = Object.keys(spots);
+  const degree = (v: string) => edges.filter((e) => e.includes(v)).length;
+  const odd = names.filter((v) => degree(v) % 2 === 1);
+  const shown = trail.length === 0 ? 0 : Math.min(step, trail.length - 1);
+  const when = (edge: string) => {
+    for (let i = 0; i < shown; i++) if ((trail[i] + trail[i + 1] === edge) || (trail[i + 1] + trail[i] === edge)) return i + 1;
+    return undefined;
+  };
+  const verdict =
+    odd.length === 0
+      ? "Every degree is even, so the figure can be drawn in one stroke that ends where it began."
+      : odd.length === 2
+        ? `Exactly two degrees are odd, so the figure can be drawn in one stroke, starting at ${odd[0]} and ending at ${odd[1]}, or the other way round.`
+        : `${odd.length} degrees are odd, so no single stroke can draw it: every pass through a point uses two of its lines, so only the first and last points can have an odd number.`;
+  const progress =
+    trail.length === 0
+      ? ""
+      : shown === 0
+        ? ` Step through to draw it, starting at ${trail[0]}.`
+        : ` The stroke so far is ${trail.slice(0, shown + 1).join(", ")}: ${shown} of ${edges.length} lines.${shown === edges.length ? " Every line has been drawn exactly once." : ""}`;
+  const next = STROKE_ORDER[(STROKE_ORDER.indexOf(which) + 1) % STROKE_ORDER.length];
+  return (
+    <Frame
+      title="Drawing a figure in one stroke"
+      summary={`${name}: ${plural(names.length, "point")} and ${plural(edges.length, "line")}. The degrees, the number of lines at each point, are ${names.map((v) => `${v} ${degree(v)}`).join(", ")}. ${verdict}${progress}`}
+      controls={
+        <>
+          {trail.length > 0 ? <Stepper label="step" value={shown} onChange={setStep} min={0} max={trail.length - 1} /> : null}
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => {
+              setWhich(next);
+              setStep(0);
+            }}
+          >
+            {`Try ${STROKE_SHAPES[next].name.toLowerCase()}`}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 270" role="img" aria-label={`${name}, with ${plural(odd.length, "point")} of odd degree${trail.length > 0 ? ` and ${shown} lines drawn` : ""}`}>
+        {edges.map((edge) => {
+          const t = when(edge);
+          return <Link key={edge} from={spots[edge[0]]} to={spots[edge[1]]} hot={t !== undefined} label={t} />;
+        })}
+        {names.map((v) => (
+          <Dot key={v} at={spots[v]} name={v} mark={trail.length > 0 && v === trail[shown] ? "now" : odd.includes(v) ? "done" : "wait"} note={`deg ${degree(v)}`} above={spots[v][1] < 140} />
+        ))}
+        <text x="12" y="262" className="fig-small">
+          {`odd degree: ${odd.length === 0 ? "none" : odd.join(", ")}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -4931,6 +5016,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "euclid-squares": EuclidSquares,
   tower: Tower,
   "bound-witness": BoundWitness,
+  "one-stroke": OneStroke,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
