@@ -6590,6 +6590,114 @@ function IndexLookup(props: Props) {
   );
 }
 
+type ErKind = "one-one" | "one-many" | "many-many";
+const ER_KINDS: ErKind[] = ["one-one", "one-many", "many-many"];
+const ER_SHAPES: Record<
+  ErKind,
+  { label: string; left: string; right: string; verb: string; ends: [string, string]; tables: { name: string; head: string[]; rows: SqlCell[][]; key: number[] }[]; rule: string; short: string; reading: string }
+> = {
+  "one-one": {
+    label: "one to one",
+    left: "employee",
+    right: "laptop",
+    verb: "is issued",
+    ends: ["1", "1"],
+    tables: [
+      { name: "employees", head: ["id", "name"], rows: [[1, "Asha"], [2, "Bilal"]], key: [] },
+      { name: "laptops", head: ["id", "serial", "employee"], rows: [[7, "LX-201", 1], [8, "LX-305", 2]], key: [2] },
+    ],
+    rule: "laptops.employee is a foreign key declared unique",
+    short: "laptops.employee: a unique foreign key",
+    reading: "Each employee is issued at most one laptop, and each laptop goes to at most one employee",
+  },
+  "one-many": {
+    label: "one to many",
+    left: "teacher",
+    right: "batch",
+    verb: "teaches",
+    ends: ["1", "N"],
+    tables: [
+      { name: "teachers", head: ["id", "name"], rows: [[1, "Rao"], [2, "Iyer"]], key: [] },
+      { name: "batches", head: ["id", "subject", "teacher"], rows: [[10, "Physics", 1], [11, "Chemistry", 1], [12, "Maths", 2]], key: [2] },
+    ],
+    rule: "the foreign key batches.teacher sits on the many side",
+    short: "the foreign key goes on the many side",
+    reading: "Each teacher teaches any number of batches, and each batch has exactly one teacher",
+  },
+  "many-many": {
+    label: "many to many",
+    left: "student",
+    right: "batch",
+    verb: "enrols in",
+    ends: ["M", "N"],
+    tables: [
+      { name: "students", head: ["id", "name"], rows: [[1, "Asha"], [2, "Bilal"]], key: [] },
+      { name: "enrolments", head: ["student", "batch", "fee"], rows: [[1, 10, 4000], [1, 11, 3500], [2, 10, 4000]], key: [0, 1] },
+      { name: "batches", head: ["id", "subject"], rows: [[10, "Physics"], [11, "Chemistry"]], key: [] },
+    ],
+    rule: "a junction table, enrolments, holds a foreign key to each side and the fee",
+    short: "a junction table holds a key to each side",
+    reading: "Each student enrols in any number of batches, and each batch has any number of students",
+  },
+};
+
+/** An entity-relationship pair at three cardinalities, and the tables each one becomes. */
+function ErCardinality(props: Props) {
+  const [kind, setKind] = useState<ErKind>(ER_KINDS.includes(props.kind as ErKind) ? (props.kind as ErKind) : "one-many");
+  const shape = ER_SHAPES[kind];
+  const widths = (t: { head: string[]; rows: SqlCell[][] }) => t.head.map((h, c) => Math.max(34, ...[h, ...t.rows.map((r) => String(r[c]))].map((v) => v.length * 7 + 10)));
+  const lefts: number[] = [];
+  let x = 8;
+  for (const t of shape.tables) {
+    lefts.push(x);
+    x += widths(t).reduce((s, w) => s + w, 0) + 16;
+  }
+  const summary = `${shape.label[0].toUpperCase()}${shape.label.slice(1)}: ${shape.reading}. As tables: ${shape.tables.map((t) => `${t.name} (${t.head.join(", ")})`).join("; ")}. The rule: ${shape.rule}.`;
+  return (
+    <Frame
+      title="Relationships and the tables they become"
+      summary={summary}
+      controls={
+        <>
+          {ER_KINDS.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={kind === k} onClick={() => setKind(k)}>
+              {ER_SHAPES[k].label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 236" role="img" aria-label={`${shape.label}: ${shape.left} ${shape.verb} ${shape.right}, stored as ${shape.tables.length} tables`}>
+        <rect x={20} y={12} width={110} height={32} className="fig-cell" />
+        <text x={75} y={32} textAnchor="middle" className="fig-small">
+          {shape.left}
+        </text>
+        <rect x={310} y={12} width={110} height={32} className="fig-cell" />
+        <text x={365} y={32} textAnchor="middle" className="fig-small">
+          {shape.right}
+        </text>
+        <line x1={130} y1={28} x2={310} y2={28} className="fig-axis" />
+        <rect x={172} y={16} width={96} height={24} className="fig-fill" />
+        <text x={220} y={32} textAnchor="middle" className="fig-small">
+          {shape.verb}
+        </text>
+        <text x={140} y={22} className="fig-small" style={{ fontWeight: 600 }}>
+          {shape.ends[0]}
+        </text>
+        <text x={296} y={22} className="fig-small" style={{ fontWeight: 600 }}>
+          {shape.ends[1]}
+        </text>
+        {shape.tables.map((t, i) => (
+          <SqlTable key={t.name} x={lefts[i]} y={88} widths={widths(t)} head={t.head} rows={t.rows} title={t.name} mark={(_, c) => (t.key.includes(c) ? "accent" : undefined)} />
+        ))}
+        <text x={8} y={222} className="fig-small">
+          {shape.short}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -7914,6 +8022,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "three-valued": ThreeValued,
   "transfer-crash": TransferCrash,
   "index-lookup": IndexLookup,
+  "er-cardinality": ErCardinality,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
