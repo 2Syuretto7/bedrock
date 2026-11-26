@@ -1,0 +1,318 @@
+cluster: Q1
+title: The data model behind a tiffin service
+minutes: 100
+claim: You will have designed a tiffin service's data from a founder's spreadsheet to a running app, finding the entities and the relationship that needs its own table, the key and the decomposition the spreadsheet was hiding, a meal counter kept right in one transaction, a profile document that nests only what stays small, a referral query that walks a graph safely, and a change to meal preferences that old phones survive.
+brief: |
+  This cluster was about the shape of data before any query is written: the entities an application talks about and how they relate, the keys and functional dependencies that decide its tables, the normal forms that keep each fact in one place, the copies worth making on purpose, the document and graph models that suit other shapes, and the discipline of changing a shape while old code and old data are still in use.
+
+  **The project.** A tiffin service in Bengaluru delivers lunch to office workers. Customers buy a subscription for a number of meals, choose a delivery address, and get one tiffin on each working day until the meals run out. Riders cover several areas each. For its first year the founder ran everything from one spreadsheet. Now an engineer is building a proper database and a phone app, and has six decisions to make.
+
+  Each stage below is one of those decisions. Every stage draws on one or two lessons of this cluster, and the skill being tested is seeing which shape a piece of data wants, and what a careless shape would get quietly wrong.
+starter: |
+  # Scratch space for the tiffin service's design.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.executescript("""
+      create table subscriptions (id integer primary key, customer text not null,
+                                  meals_left integer not null check (meals_left >= 0));
+      create table deliveries (subscription integer not null references subscriptions (id),
+                               day text not null, primary key (subscription, day));
+      insert into subscriptions values (1, 'asha', 20);
+  """)
+  print(db.execute("select * from subscriptions").fetchall())
+stages:
+  - title: What the business talks about
+    blocks:
+      - text: |
+          The engineer lists what the business talks about: customers, subscriptions, deliveries, riders and areas. A customer buys a new subscription each month. Each delivery belongs to one subscription and is made by one rider. A rider covers several areas, and the busy areas such as Koramangala are covered by several riders.
+      - question:
+          id: rider-areas
+          type: choice
+          system: s2
+          concepts: [q1.entities-and-relationships]
+          prompt: |
+            Which relationship needs a table of its own, rather than a foreign key column on one side?
+          options:
+            - "Riders and the areas they cover"
+            - "Subscriptions and their deliveries"
+            - "Customers and their subscriptions"
+            - "Deliveries and the rider who made each"
+          answer: 0
+          explanation: |
+            Riders and areas are many-to-many, so each pairing is a row in a table such as `rider_areas (rider, area)` with both columns as the key. The other three are one-to-many and need only a foreign key on the many side: each delivery names its subscription and rider, and each subscription names its customer.
+  - title: The founder's spreadsheet
+    blocks:
+      - text: |
+          The founder's spreadsheet has one row per delivery, with the columns `day, customer, customer_phone, area, rider, rider_phone, meal`. A customer has one phone and one delivery area, a rider has one phone, and a customer gets at most one delivery a day, made by one rider with one meal. Last month a rider changed numbers and the founder updated only some of the rider's rows.
+      - question:
+          id: sheet-split
+          type: choice
+          system: s2
+          concepts: [q1.keys-and-functional-dependencies, q1.normal-forms]
+          prompt: |
+            What is the sheet's key, and which set of tables puts it in BCNF?
+          options:
+            - "Key (day, customer); customers (customer, customer_phone, area), riders (rider, rider_phone), deliveries (day, customer, rider, meal)"
+            - "Key (day, customer); one table, since every column depends on the key"
+            - "Key (day, rider); riders (rider, rider_phone), deliveries (day, rider, customer, customer_phone, area, meal)"
+            - "Key (customer); customers (customer, customer_phone, area, rider, rider_phone), meals (customer, meal)"
+          answer: 0
+          explanation: |
+            From (day, customer) you get the rider and meal directly, and the phones and area through customer and rider, so it is the key. But `customer → customer_phone, area` and `rider → rider_phone` have left sides that are not keys of the sheet, which is exactly how one rider ended up with two numbers. Giving each of those dependencies its own table leaves only key dependencies everywhere. A rider makes many deliveries a day, so (day, rider) is no key, and a customer has many deliveries, so customer alone is no key either.
+  - title: Meals left
+    blocks:
+      - text: |
+          The app's home screen shows how many meals are left on the subscription, and it is opened far more often than meals are delivered. Rather than count deliveries on every open, the engineer keeps `meals_left` on each subscription, with a check that it never goes below zero, and a key on `(subscription, day)` so that a customer is never charged twice for one day. A delivery must count against the subscription exactly when it is recorded.
+      - question:
+          id: record-delivery
+          type: code
+          mode: write
+          system: s2
+          concepts: [q1.denormalisation-and-its-costs, q1.keys-and-functional-dependencies]
+          prompt: |
+            Change `deliver` so that it records the delivery and takes one meal off `meals_left` as one all-or-nothing step, letting `IntegrityError` reach the caller when the subscription has no meals left or the day is already delivered, and leaving nothing behind when it does. The program should print `[(1, '2026-11-26'), (2, '2026-11-26')] [(1, 0), (2, 19)] 3`.
+          starter: |
+            import sqlite3
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table subscriptions (id integer primary key, customer text not null,
+                                            meals_left integer not null check (meals_left >= 0));
+                create table deliveries (subscription integer not null references subscriptions (id),
+                                         day text not null, primary key (subscription, day));
+                insert into subscriptions values (1, 'asha', 2), (2, 'bilal', 20);
+            """)
+
+
+            def deliver(db, subscription, day):
+                db.execute("insert into deliveries values (?, ?)", (subscription, day))
+                db.commit()
+
+
+            refused = []
+            for sub, day in [(1, "2026-11-24"), (1, "2026-11-25"), (1, "2026-11-26"), (2, "2026-11-26"), (2, "2026-11-26")]:
+                try:
+                    deliver(db, sub, day)
+                except sqlite3.IntegrityError:
+                    refused.append((sub, day))
+            print(refused, db.execute("select id, meals_left from subscriptions order by id").fetchall(), db.execute("select count(*) from deliveries").fetchone()[0])
+          solution: |
+            import sqlite3
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table subscriptions (id integer primary key, customer text not null,
+                                            meals_left integer not null check (meals_left >= 0));
+                create table deliveries (subscription integer not null references subscriptions (id),
+                                         day text not null, primary key (subscription, day));
+                insert into subscriptions values (1, 'asha', 2), (2, 'bilal', 20);
+            """)
+
+
+            def deliver(db, subscription, day):
+                with db:
+                    db.execute("insert into deliveries values (?, ?)", (subscription, day))
+                    db.execute("update subscriptions set meals_left = meals_left - 1 where id = ?", (subscription,))
+
+
+            refused = []
+            for sub, day in [(1, "2026-11-24"), (1, "2026-11-25"), (1, "2026-11-26"), (2, "2026-11-26"), (2, "2026-11-26")]:
+                try:
+                    deliver(db, sub, day)
+                except sqlite3.IntegrityError:
+                    refused.append((sub, day))
+            print(refused, db.execute("select id, meals_left from subscriptions order by id").fetchall(), db.execute("select count(*) from deliveries").fetchone()[0])
+          tests: |
+            import random as _random
+
+            _rng = _random.Random(81)
+            for _ in range(25):
+                _db = sqlite3.connect(":memory:")
+                _db.executescript("""
+                    create table subscriptions (id integer primary key, customer text not null,
+                                                meals_left integer not null check (meals_left >= 0));
+                    create table deliveries (subscription integer not null references subscriptions (id),
+                                             day text not null, primary key (subscription, day));
+                """)
+                _left = {_s: _rng.randint(0, 4) for _s in [1, 2, 3]}
+                _db.executemany("insert into subscriptions values (?, 'c', ?)", list(_left.items()))
+                _db.commit()
+                _done, _refused, _got_refused = set(), [], []
+                for _k in range(10):
+                    _s, _d = _rng.choice([1, 2, 3]), "2026-11-" + str(_rng.randint(20, 26))
+                    if (_s, _d) in _done or _left[_s] == 0:
+                        _refused.append((_s, _d))
+                    else:
+                        _done.add((_s, _d))
+                        _left[_s] -= 1
+                    try:
+                        deliver(_db, _s, _d)
+                    except sqlite3.IntegrityError:
+                        _got_refused.append((_s, _d))
+                _db.rollback()
+                _got_left = dict(_db.execute("select id, meals_left from subscriptions").fetchall())
+                _got_done = set(_db.execute("select subscription, day from deliveries").fetchall())
+                assert _got_refused == _refused, "deliver should refuse " + str(_refused) + ", but refused " + str(_got_refused)
+                assert _got_done == _done, "The saved deliveries should be " + str(sorted(_done)) + ", not " + str(sorted(_got_done))
+                assert _got_left == _left, "After the deliveries " + str(sorted(_done)) + ", meals left should be " + str(_left) + ", not " + str(_got_left)
+            assert output.strip() == "[(1, '2026-11-26'), (2, '2026-11-26')] [(1, 0), (2, 19)] 3", "The program should print [(1, '2026-11-26'), (2, '2026-11-26')] [(1, 0), (2, 19)] 3"
+          wrong:
+            - |
+              import sqlite3
+
+              db = sqlite3.connect(":memory:")
+              db.executescript("""
+                  create table subscriptions (id integer primary key, customer text not null,
+                                              meals_left integer not null check (meals_left >= 0));
+                  create table deliveries (subscription integer not null references subscriptions (id),
+                                           day text not null, primary key (subscription, day));
+                  insert into subscriptions values (1, 'asha', 2), (2, 'bilal', 20);
+              """)
+
+
+              def deliver(db, subscription, day):
+                  db.execute("update subscriptions set meals_left = meals_left - 1 where id = ?", (subscription,))
+                  db.execute("insert into deliveries values (?, ?)", (subscription, day))
+                  db.commit()
+
+
+              refused = []
+              for sub, day in [(1, "2026-11-24"), (1, "2026-11-25"), (1, "2026-11-26"), (2, "2026-11-26"), (2, "2026-11-26")]:
+                  try:
+                      deliver(db, sub, day)
+                  except sqlite3.IntegrityError:
+                      refused.append((sub, day))
+              print(refused, db.execute("select id, meals_left from subscriptions order by id").fetchall(), db.execute("select count(*) from deliveries").fetchone()[0])
+            - |
+              import sqlite3
+
+              db = sqlite3.connect(":memory:")
+              db.executescript("""
+                  create table subscriptions (id integer primary key, customer text not null,
+                                              meals_left integer not null check (meals_left >= 0));
+                  create table deliveries (subscription integer not null references subscriptions (id),
+                                           day text not null, primary key (subscription, day));
+                  insert into subscriptions values (1, 'asha', 2), (2, 'bilal', 20);
+              """)
+
+
+              def deliver(db, subscription, day):
+                  db.execute("insert into deliveries values (?, ?)", (subscription, day))
+                  db.execute("update subscriptions set meals_left = meals_left - 1 where id = ?", (subscription,))
+                  db.commit()
+
+
+              refused = []
+              for sub, day in [(1, "2026-11-24"), (1, "2026-11-25"), (1, "2026-11-26"), (2, "2026-11-26"), (2, "2026-11-26")]:
+                  try:
+                      deliver(db, sub, day)
+                  except sqlite3.IntegrityError:
+                      refused.append((sub, day))
+              print(refused, db.execute("select id, meals_left from subscriptions order by id").fetchall(), db.execute("select count(*) from deliveries").fetchone()[0])
+            - |
+              import sqlite3
+
+              db = sqlite3.connect(":memory:")
+              db.executescript("""
+                  create table subscriptions (id integer primary key, customer text not null,
+                                              meals_left integer not null check (meals_left >= 0));
+                  create table deliveries (subscription integer not null references subscriptions (id),
+                                           day text not null, primary key (subscription, day));
+                  insert into subscriptions values (1, 'asha', 2), (2, 'bilal', 20);
+              """)
+
+
+              def deliver(db, subscription, day):
+                  with db:
+                      db.execute("insert into deliveries values (?, ?)", (subscription, day))
+                      db.execute("update subscriptions set meals_left = max(meals_left - 1, 0) where id = ?", (subscription,))
+
+
+              refused = []
+              for sub, day in [(1, "2026-11-24"), (1, "2026-11-25"), (1, "2026-11-26"), (2, "2026-11-26"), (2, "2026-11-26")]:
+                  try:
+                      deliver(db, sub, day)
+                  except sqlite3.IntegrityError:
+                      refused.append((sub, day))
+              print(refused, db.execute("select id, meals_left from subscriptions order by id").fetchall(), db.execute("select count(*) from deliveries").fetchone()[0])
+          explanation: |
+            Inside `with db:`, the delivery and the decrement commit together; when the check refuses the decrement or the key refuses the delivery, both roll back. Decrementing first and committing at the end leaves a decrement behind when the delivery is refused; inserting and decrementing without the `with` leaves a refused delivery pending, to be committed by the next successful call; and clamping at zero with `max` records deliveries the customer has not paid for.
+  - title: The profile screen
+    blocks:
+      - text: |
+          The app team wants each customer's profile screen to load in one read, so they plan a profile document. It shows the customer's name, up to three saved addresses, the current subscription and its meals left, and a "past deliveries" tab. A regular customer receives about 250 tiffins a year, for years.
+      - question:
+          id: profile-document
+          type: choice
+          system: s2
+          concepts: [q1.document-models, q1.denormalisation-and-its-costs]
+          prompt: |
+            Which profile document fits?
+          options:
+            - "Nest the name and addresses, reference the current subscription, and fetch past deliveries from their own collection, newest first."
+            - "Nest everything, including every past delivery, so the profile is always one read."
+            - "Reference the addresses and nest every past delivery."
+            - "Copy meals left into the profile and update it from the app whenever a tiffin arrives."
+          answer: 0
+          explanation: |
+            Addresses belong to the customer, are few and are always shown with her, so they nest. Past deliveries grow without bound, about 250 a year, so nesting them makes every profile read drag years of history along and eventually hits the size limit. Meals left already has one home, kept right in the same transaction as each delivery; a second copy maintained by the app would need its own maintenance and would drift.
+  - title: Referrals
+    blocks:
+      - text: |
+          The service launches "refer a friend". Each referral is stored as an edge `(referrer, referred)`, and nobody can be referred twice. For a festival, the founder wants to give a sweet box to everyone a top customer brought in directly or indirectly, up to three levels down. Customers sometimes create a second account and refer the first, which can make a loop.
+      - question:
+          id: referral-query
+          type: choice
+          system: s2
+          concepts: [q1.graph-models]
+          prompt: |
+            Which query finds the people to send sweet boxes to?
+          options:
+            - "A recursive query from the top customer with a hop count, stopping at 3 hops, then the distinct people other than the top customer"
+            - "A recursive query with union all and no depth limit, counting every row"
+            - "One join of the referrals table to itself"
+            - "Every customer who has ever referred anyone"
+          answer: 0
+          explanation: |
+            The depth limit stops at three levels and also stops a loop from running forever; `distinct` turns paths into people, and leaving out the start keeps the top customer from sending herself a box when a loop leads back. One self-join reaches only two levels, and the last option ignores the top customer altogether.
+      - question:
+          id: referral-fanout
+          type: numeric
+          system: s1
+          concepts: [q1.graph-models]
+          prompt: |
+            If each customer refers exactly 4 new customers and no one is referred twice, how many people lie within three levels below the top customer?
+          answer: "84"
+          explanation: |
+            $4 + 4^2 + 4^3 = 4 + 16 + 64 = 84$ sweet boxes.
+  - title: Veg, egg or non-veg
+    blocks:
+      - text: |
+          Meal preferences live in each customer's profile document as `"veg": true` or `"veg": false`. Customers now want a third choice, eggetarian. The new app version will store a `diet` field, `"veg"`, `"egg"` or `"non-veg"`. Many customers do not update their app for months, and old versions read `veg` and send the kitchen a veg or non-veg tiffin.
+      - question:
+          id: diet-change
+          type: choice
+          system: s2
+          concepts: [q1.schema-evolution-and-compatibility, q1.document-models]
+          prompt: |
+            How should the new version make this change?
+          options:
+            - "Add diet; read it with a fallback from veg for documents without it; keep writing veg, true for veg and egg, until old versions are gone."
+            - "Rename veg to diet in every document in one migration."
+            - "Store the strings veg, egg or non-veg in the existing veg field."
+            - "Add diet, and stop writing veg straight away."
+          answer: 0
+          explanation: |
+            The new field is optional with a fallback, so new code reads old documents. Keeping veg written means old phones still find the field they require, and writing it as true for eggetarians means an old phone sends them a veg tiffin, which they eat, never a non-veg one. A one-step rename breaks every old app at once; reusing veg for strings changes its type under old code; and dropping veg makes every new document unreadable to old versions.
+review: |
+  The six decisions are made, and each came from a lesson of this cluster:
+
+  - The many-to-many relationship between riders and areas was spotted with [[q1.entities-and-relationships]].
+  - The spreadsheet's key and the dependencies that caused the two phone numbers came from [[q1.keys-and-functional-dependencies]], and the cure from [[q1.normal-forms]].
+  - The meal counter was a deliberate copy, as in [[q1.denormalisation-and-its-costs]], kept right in the same transaction and guarded by a key and a check.
+  - The profile document nested only what was small and owned, the rule of [[q1.document-models]].
+  - The referral reward was a bounded traversal that survives loops, from [[q1.graph-models]].
+  - The new diet choice was made in compatible steps, from [[q1.schema-evolution-and-compatibility]].
+
+  Notice what the wrong answers had in common. Each would have worked on the day it shipped and failed later, when a rider changed numbers, a delivery was refused, a customer's history grew, a referral loop appeared or an old phone opened the app. A data model is a set of promises about the future, and this cluster was about making the ones you can keep. The next cluster turns the same habit on code: how to draw the boundaries between pieces of a program so that each can change without breaking the rest.

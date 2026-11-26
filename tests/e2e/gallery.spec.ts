@@ -646,3 +646,66 @@ test("an index search takes a few comparisons where a scan reads every row", asy
   for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase step" }).click();
   await expect(figure).toContainText("After 4 comparisons, entries 7 and 8 hold Meera: orders 2 and 11. About log₂ 16 = 4 comparisons, then one read per match.");
 });
+
+test("each kind of relationship becomes its own arrangement of tables", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="er-cardinality"]').first().getByRole("figure");
+  await expect(figure).toContainText("One to many: Each teacher teaches any number of batches, and each batch has exactly one teacher. As tables: teachers (id, name); batches (id, subject, teacher).");
+  await figure.getByRole("button", { name: "many to many", exact: true }).click();
+  await expect(figure).toContainText("The rule: a junction table, enrolments, holds a foreign key to each side and the fee.");
+  await figure.getByRole("button", { name: "one to one", exact: true }).click();
+  await expect(figure).toContainText("The rule: laptops.employee is a foreign key declared unique.");
+});
+
+test("a closure grows rule by rule until it covers every column or stops short", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="fd-closure"]').first().getByRole("figure");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Known so far: 8 of 8 columns, pnr, pax, name, train, train_name, date, coach, berth. The closure is all 8 columns, so {pnr, pax} is a superkey, and dropping any one of its columns loses that: a candidate key.");
+  await figure.getByRole("button", { name: "pax", exact: true }).click();
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Known so far: 4 of 8 columns, pnr, train, train_name, date. No rule adds anything more, and 4 of the 8 columns are missing, so {pnr} is not a key.");
+});
+
+test("normalising splits one wide table until each fact is stored once", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="normalise-steps"]').first().getByRole("figure");
+  await expect(figure).toContainText("Step 1 of 3, one wide table: flat (student, s_phone, batch, subject, teacher, t_phone, fee) with 6 rows.");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Step 3 of 3, third normal form: students (student, s_phone) with 4 rows; enrolments (student, batch, fee) with 6 rows; batches (batch, subject, teacher) with 3 rows; teachers (teacher, t_phone) with 2 rows.");
+});
+
+test("a stored count pays off only when reads far outnumber writes", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="denorm-tradeoff"]').first().getByRole("figure");
+  await expect(figure).toContainText("Keeping a likes column reads 2,00,000 rows and writes 4,000, since each like also updates its post: 2,04,000 in all. The count column touches 98 times fewer rows.");
+  await figure.getByRole("button", { name: "0.01 views per like" }).click();
+  await expect(figure).toContainText("Keeping a likes column reads 20 rows and writes 4,000, since each like also updates its post: 4,020 in all. Both touch about the same number of rows, so the column buys nothing.");
+});
+
+test("embedding a customer saves a read and costs a write per copy", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="doc-embed"]').first().getByRole("figure");
+  await figure.getByRole("button", { name: "1,000 orders" }).click();
+  await expect(figure).toContainText("Showing an order with its customer takes 1 read. When Asha changes her phone number, 1,000 documents must be rewritten, and any one missed shows the old number.");
+  await figure.getByRole("button", { name: "reference", exact: true }).click();
+  await expect(figure).toContainText("Showing an order with its customer takes 2 reads. When Asha changes her phone number, 1 document is rewritten.");
+});
+
+test("each hop through a graph is one more self-join", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="graph-hops"]').first().getByRole("figure");
+  await expect(figure).toContainText("Within 1 hop of Asha: Bilal, Chitra, Dev, 3 people besides Asha.");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase hops" }).click();
+  await expect(figure).toContainText("Within 4 hops of Asha: Bilal, Chitra, Dev, Esha, Farhan, Gita, Hari, Isha, Jai, 9 people besides Asha. In tables, a query for exactly this reach joins the friendships table to itself 4 times");
+});
+
+test("each change to a record's shape breaks a different pair of versions", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="schema-versions"]').first().getByRole("figure");
+  await expect(figure).toContainText("The change is backward and forward compatible, so old and new versions can run side by side.");
+  await figure.getByRole("button", { name: "rename", exact: true }).click();
+  await expect(figure).toContainText("New code reading old data fails: phone missing. Old code reading new data fails: mobile missing. The change is neither backward nor forward compatible");
+  await figure.getByRole("button", { name: "add required", exact: true }).click();
+  await expect(figure).toContainText("The change is forward compatible only: old code reads new data, but new code cannot read old data.");
+});

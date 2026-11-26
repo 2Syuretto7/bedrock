@@ -6885,11 +6885,13 @@ function DenormTradeoff(props: Props) {
   const bar = (n: number) => Math.max(4, ((Math.log10(n) - 2) / 9) * 250);
   const better = total(kept) < total(plain) ? "kept" : "plain";
   const ratio = better === "kept" ? total(plain) / total(kept) : total(kept) / total(plain);
-  const verdict =
-    better === "kept"
+  const even = ratio < 1.1;
+  const verdict = even
+    ? "Both touch about the same number of rows, so the column buys nothing."
+    : better === "kept"
       ? `The count column touches ${dp(ratio, 1)} times fewer rows.`
       : `Counting on each view touches ${dp(ratio, 1)} times fewer rows; the column is not worth keeping.`;
-  const summary = `${show(DN_WRITES)} likes an hour, ${show(reads)} views an hour (${views} per like), ${show(likes)} likes on a typical post. Counting likes on every view reads ${show(plain.read)} rows and writes ${show(plain.write)}: ${show(total(plain))} in all. Keeping a likes column reads ${show(kept.read)} rows and writes ${show(kept.write)}, since each like also updates its post: ${show(total(kept))} in all. ${verdict}`;
+  const summary = `${show(DN_WRITES)} likes an hour, ${show(reads)} views an hour (${group(views)} per like), ${show(likes)} likes on a typical post. Counting likes on every view reads ${show(plain.read)} rows and writes ${show(plain.write)}: ${show(total(plain))} in all. Keeping a likes column reads ${show(kept.read)} rows and writes ${show(kept.write)}, since each like also updates its post: ${show(total(kept))} in all. ${verdict}`;
   const rows: [string, { read: number; write: number }][] = [
     ["count on every view", plain],
     ["keep a likes column", kept],
@@ -6938,7 +6940,7 @@ function DenormTradeoff(props: Props) {
           </g>
         ))}
         <text x={8} y={168} className="fig-small">
-          {better === "kept" ? `the column is ${dp(ratio, 1)} times cheaper` : `counting is ${dp(ratio, 1)} times cheaper`}
+          {even ? "about the same either way" : better === "kept" ? `the column is ${dp(ratio, 1)} times cheaper` : `counting is ${dp(ratio, 1)} times cheaper`}
         </text>
       </svg>
     </Frame>
@@ -6969,9 +6971,9 @@ function DocEmbed(props: Props) {
   const embed = mode === "embed";
   const reads = embed ? 1 : 2;
   const writes = embed ? orders : 1;
-  const ordersText = `${group(orders)} ${plural(orders, "order", "orders")}`;
+  const ordersText = `${group(orders)} ${orders === 1 ? "order" : "orders"}`;
   const summary = embed
-    ? `The customer is embedded: each of Asha's ${ordersText} carries its own copy of her name and phone number, next to its lines. Showing an order with its customer takes ${reads} read. When Asha changes her phone number, ${group(writes)} ${plural(writes, "document", "documents")} must be rewritten, and any one missed shows the old number.`
+    ? `The customer is embedded: each of Asha's ${ordersText} carries its own copy of her name and phone number, next to its lines. Showing an order with its customer takes ${reads} read. When Asha changes her phone number, ${group(writes)} ${writes === 1 ? "document" : "documents"} must be rewritten, and any one missed shows the old number.`
     : `The customer is referenced: each of Asha's ${ordersText} stores only her id, 77, next to its lines, and her name and phone number live once, in customer document 77. Showing an order with its customer takes ${reads} reads. When Asha changes her phone number, ${group(writes)} document is rewritten.`;
   const order = embed
     ? ['{ "id": 5012,', '  "customer": {', '    "name": "Asha Rao",', '    "phone": "98450 12345" },', '  "lines": [', '    { "item": "dosa", "qty": 2 },', '    { "item": "coffee", "qty": 1 } ] }']
@@ -6999,14 +7001,14 @@ function DocEmbed(props: Props) {
             <span className="label">Asha&apos;s orders</span>
           </span>
           {DE_ORDERS.map((n) => (
-            <button key={n} type="button" className="btn btn-secondary btn-small" aria-pressed={orders === n} aria-label={`${n} ${plural(n, "order", "orders")}`} onClick={() => setOrders(n)}>
+            <button key={n} type="button" className="btn btn-secondary btn-small" aria-pressed={orders === n} aria-label={`${group(n)} ${n === 1 ? "order" : "orders"}`} onClick={() => setOrders(n)}>
               {group(n)}
             </button>
           ))}
         </>
       }
     >
-      <svg viewBox="0 0 480 250" role="img" aria-label={`${embed ? "Embedded" : "Referenced"} customer: ${reads} ${plural(reads, "read", "reads")} to show an order, ${group(writes)} ${plural(writes, "write", "writes")} to change her phone number`}>
+      <svg viewBox="0 0 480 250" role="img" aria-label={`${embed ? "Embedded" : "Referenced"} customer: ${plural(reads, "read", "reads")} to show an order, ${group(writes)} ${writes === 1 ? "write" : "writes"} to change her phone number`}>
         <text x={8} y={16} className="fig-small" style={{ fontWeight: 600 }}>
           {embed ? `order 5012, one of ${ordersText}` : "order 5012"}
         </text>
@@ -7083,7 +7085,7 @@ function GraphHops(props: Props) {
   const dist = ghDistances();
   const reached = GH_PEOPLE.filter((_, i) => dist[i] <= hops).map(([name]) => name);
   const others = reached.slice(1);
-  const summary = `Within ${hops} ${plural(hops, "hop", "hops")} of Asha: ${others.length === 0 ? "nobody but Asha herself" : others.join(", ")}, ${others.length} ${plural(others.length, "person", "people")} besides Asha. In tables, a query for exactly this reach joins the friendships table to itself ${hops} ${plural(hops, "time", "times")}, one join per hop; a recursive query lets the number of hops be decided by the data.`;
+  const summary = `Within ${plural(hops, "hop", "hops")} of Asha: ${others.length === 0 ? "nobody but Asha herself" : others.join(", ")}, ${plural(others.length, "person", "people")} besides Asha. In tables, a query for exactly this reach joins the friendships table to itself ${plural(hops, "time", "times")}, one join per hop; a recursive query lets the number of hops be decided by the data.`;
   return (
     <Frame
       title="Hops through a friendship graph"
@@ -7092,7 +7094,7 @@ function GraphHops(props: Props) {
         <Stepper label="hops" value={hops} min={0} max={4} onChange={setHops} />
       }
     >
-      <svg viewBox="0 0 470 230" role="img" aria-label={`${others.length} ${plural(others.length, "person", "people")} within ${hops} ${plural(hops, "hop", "hops")} of Asha`}>
+      <svg viewBox="0 0 470 230" role="img" aria-label={`${plural(others.length, "person", "people")} within ${plural(hops, "hop", "hops")} of Asha`}>
         {GH_LINKS.map(([a, b]) => {
           const walked = Math.min(dist[a], dist[b]) < hops;
           return (
@@ -7111,7 +7113,7 @@ function GraphHops(props: Props) {
           );
         })}
         <text x={8} y={222} className="fig-small">
-          {`${others.length} ${plural(others.length, "person", "people")} reached, ${hops} ${plural(hops, "self-join", "self-joins")} of the friendships table`}
+          {`${plural(others.length, "person", "people")} reached, ${plural(hops, "self-join", "self-joins")} of the friendships table`}
         </text>
       </svg>
     </Frame>
