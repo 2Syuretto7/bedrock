@@ -1,0 +1,610 @@
+concept: q1.document-models
+minutes: 80
+claim: You can model data as documents, nesting what belongs to one parent and is read with it and referencing what is shared, say which relationships embedding copies and what that costs on every change, replace one query per item with one batched fetch, spot a nested list that will grow without bound, and write readers that cope with every shape of document ever stored.
+recalls: [q1.denormalisation-and-its-costs]
+uses: [q1.entities-and-relationships, q1.normal-forms, q0.writes-constraints-and-transactions, s1.files-and-data-formats, s2.hash-tables]
+leads: [q1.graph-models, q1.schema-evolution-and-compatibility]
+starter: |
+  # Scratch space. One order as a document: its lines nested, its customer referenced.
+  import json
+
+  customer = {"id": 77, "name": "Asha Rao", "phone": "98450 12345"}
+  order = {
+      "id": 5012,
+      "customer": 77,
+      "lines": [{"item": "dosa", "qty": 2}, {"item": "coffee", "qty": 1}],
+  }
+  print(json.dumps(order))
+  print(order["lines"][0]["item"], customer["name"])
+parts:
+  recall:
+    - text: |
+        [[q1.denormalisation-and-its-costs]] stored a fact twice on purpose, one table at a time, and paid for it on every write. A document database turns one kind of denormalisation into the default: everything a page needs, nested inside a single record and fetched in a single read. That works beautifully for some relationships and badly for others, and telling them apart is most of the skill. Three quick pulls first.
+  puzzle:
+    - text: |
+        A chat app stores each group as one document: the group's name, its members, and every message ever sent to it, nested in a list inside the document. The database refuses any document larger than 1,60,00,000 bytes.
+
+        A message takes about 400 bytes. A busy college group receives 2,000 messages a day.
+
+        **After how many days can the group's document hold no more messages?**
+  intuition:
+    - text: |
+        A clinic keeps one folder per patient. Every visit, prescription and test report goes into that patient's folder, so when the patient walks in, the doctor opens one folder and has the whole story. Nobody has to visit the pharmacy register, the lab ledger and the appointment book and match them by patient number.
+
+        But some things in the folder are not really the patient's. Each prescription carries the doctor's name and phone number. When the doctor changes her number, the clinic must either find every folder and correct every prescription in it, or accept that old prescriptions show a number that no longer works. The folder is perfect for what belongs to the patient alone, and awkward for what many patients share.
+
+        That folder is a **document**: one record holding a whole object with its parts nested inside it. The figure shows one order of Asha's as a document, with its lines nested, and lets you either copy her details into the order or store only her id.
+    - figure: doc-embed
+      props: { mode: embed, orders: 10 }
+    - text: |
+        With the customer embedded, one read shows the order and its customer, but her phone number exists once per order, and changing it means rewriting every one of them. With the customer referenced, a change is one write, but showing an order now needs a second read, for the customer. Raise her order count to 1,000 and the cost of embedding grows with it, while the cost of referencing stays at one extra read per page. The lines are nested in both versions, because they belong to this order and to nothing else.
+  derivation:
+    - text: |
+        **A document is a tree.** A document database such as MongoDB or Firestore stores records in a JSON-like form, the format of [[s1.files-and-data-formats]]: objects with named fields, whose values can be numbers, strings, lists or further objects. A one-to-many relationship from [[q1.entities-and-relationships]] becomes nesting: the order holds a list of its lines, each line an object. Reading the order brings its lines along, with no join, and the database usually stores the whole document in one place on disk, so the read touches one spot. This is called **locality**, and it is the main reason the model exists.
+
+        Nesting fits a relationship when three things hold. The child belongs to exactly one parent; an order line belongs to one order. The child is read together with its parent; nobody shows an order without its lines. And the number of children is small and bounded; an order has a handful of lines, not millions.
+
+        **What nesting cannot hold.** Many-to-one and many-to-many relationships do not fit a tree. Many orders share one customer, many carts hold one product, many students take one course. Nesting the customer inside every order copies her, and every update anomaly of [[q1.normal-forms]] comes back: change her phone number and every copy must change. The alternative is a **reference**: the order stores the customer's id, exactly like a foreign key, and the customer lives once, in her own document.
+    - question:
+        id: derivation-embed
+        type: choice
+        system: s2
+        prompt: |
+          A recipe site shows each recipe with its steps, and each step belongs to one recipe. Recipes are also tagged with cuisines such as "Kerala" or "Punjabi", and a cuisine page lists every recipe with that tag. Which design fits a document model?
+        options:
+          - "Nest the steps in the recipe; store the cuisines as ids or names that point to cuisine documents."
+          - "Nest the steps in the recipe and nest every recipe inside its cuisine document."
+          - "Store each step as its own document that references its recipe."
+          - "Nest each cuisine document, with its description, inside every recipe."
+        answer: 0
+        explanation: |
+          Steps belong to one recipe and are always read with it, so they nest. Cuisines are shared by many recipes, a many-to-many relationship, so recipes refer to them. Nesting recipes inside cuisines would copy a recipe into every cuisine it is tagged with.
+    - text: |
+        **Joins move into the application.** With references, the database no longer joins for you; many document databases join poorly or not at all. Your code fetches the order, reads the customer id, and fetches the customer. That is fine for one order. For a feed of 50 posts, the natural loop fetches the posts with one query and then each post's author with another query, 51 round trips in all, a pattern so common it has a name: the **N + 1 problem**. A round trip inside a data centre takes about a millisecond, so 51 of them add a visible delay before anything else happens.
+
+        The cure is to batch. Collect the distinct author ids from the posts, fetch all of them in one query, `where id in (...)` in SQL or `$in` in MongoDB, and build a dictionary from id to author, a hash table from [[s2.hash-tables]], so that attaching each name is a lookup. Two round trips, whatever the number of posts.
+    - question:
+        id: order-batch
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of showing a feed of posts with their authors' names in two round trips in order.
+        steps:
+          - "Fetch the posts for the feed in one query."
+          - "Collect the set of distinct author ids from those posts."
+          - "Fetch all of those authors in one query."
+          - "Build a dictionary from author id to author."
+          - "Attach each post's author name by looking up its id in the dictionary."
+        explanation: |
+          The author ids are known only after the posts arrive, and the lookup needs the dictionary built from the second query. A set of ids avoids asking for the same author twice.
+    - text: |
+        **Lists that never stop growing.** Nesting assumed few children. Some children arrive forever: the messages in a group, the readings from a sensor, the comments on a post that goes viral. A nested list of those grows without bound, and every database has a limit on document size; MongoDB's is 16 MB. Long before the limit, the document becomes slow, because many databases rewrite or at least re-read the whole document to change any part of it, and a page that wanted the latest 20 messages drags along all of them.
+
+        The fix is to stop nesting: store each message as its own document holding the group's id, and fetch the latest 20 with an index on group and time. Look closely at that design. It is a table of messages with a foreign key to groups, the normalised design of a relational database, reached from the other side.
+    - question:
+        id: derivation-reviews
+        type: numeric
+        system: s2
+        prompt: |
+          A product document nests its reviews. A document may be at most 1,60,00,000 bytes, and a review takes about 2,000 bytes. Ignoring the rest of the product, how many reviews fit?
+        answer: "8000"
+        explanation: |
+          $1{,}60{,}00{,}000 \div 2{,}000 = 8{,}000$ reviews. A popular product can pass that, so reviews belong in their own collection.
+    - text: |
+        **Schema on read.** A relational database checks every row against the table's definition when it is written, the constraints of [[q0.writes-constraints-and-transactions]]: a missing column or a wrong type is refused. This is **schema on write**. Most document databases accept any document, so the structure is whatever the code that wrote it believed at the time. When version 1 of an app stored `"name": "Asha Rao"` and version 2 stores `"name": {"first": "Asha", "last": "Rao"}`, both shapes sit in the database side by side, and every piece of code that reads a name must handle both. This is **schema on read**: there is still a schema, but it is enforced, or forgotten, by each reader.
+
+        Schema on read makes some things easy. Adding a field needs no migration; records of genuinely different shapes, such as products whose attributes depend on their category, sit together without a hundred mostly empty columns. It makes other things hard: a bug that writes a wrong shape is accepted silently and found later by a reader that crashes. Many teams add validation in the database or in one shared layer of code, which brings back some of schema on write.
+
+        **The two models are converging.** PostgreSQL stores JSON in `jsonb` columns, with indexes into the nested fields, and SQLite has JSON functions too. Several document databases now offer joins and schema validation. The real decision is not which product to use but, relationship by relationship, whether to nest or to refer. Ask how the data is read: what is read together should be stored together, and what is shared should be stored once.
+  formal:
+    - text: |
+        **Document.** A record stored as a tree of objects, lists and values, typically in a JSON-like format, read and written as a unit.
+
+        **Embedding.** Nesting related data inside a document. Suits one-to-many relationships where each child has one parent, is read with it, and the number of children is small and bounded.
+
+        **Reference.** Storing another document's id instead of a copy, like a foreign key. Required for many-to-one and many-to-many relationships unless the copies are maintained.
+
+        **Locality.** A document is usually stored contiguously, so reading it whole is one read.
+
+        **N + 1 problem.** Fetching N items with one query and then each item's related document with its own query. Cure: collect the ids and fetch them in one batched query.
+
+        **Unbounded nesting.** A nested list that grows without limit; it eventually hits the document size limit and makes every read and write slower. Store the children as their own documents with the parent's id.
+
+        **Schema on write and schema on read.** Structure checked by the database when data is written, or left to the code that reads it, which must handle every shape ever stored.
+  drill:
+    - text: Seconds each. For every relationship, ask whether the child belongs to one parent.
+    - question:
+        id: drill-address
+        type: choice
+        system: s1
+        prompt: |
+          A delivery app's order document must show the address the order was delivered to, even if the customer later moves. Embed or reference?
+        options:
+          - "Embed the address in the order."
+          - "Reference the customer's current address."
+          - "Store the address in a separate collection of addresses."
+          - "Leave the address out of the order."
+        answer: 0
+        explanation: It is the address at the time of delivery, a historical fact that belongs to the order, so it should not follow later changes.
+    - question:
+        id: drill-courses
+        type: choice
+        system: s1
+        prompt: |
+          Students take many courses and each course has many students. How should a document model connect them?
+        options:
+          - "By references, ids stored on one or both sides."
+          - "Nest each student's courses, with their full details, in the student."
+          - "Nest each course's students, with their full details, in the course."
+          - "Nest every student and course in one document."
+        answer: 0
+        explanation: A many-to-many relationship nested on either side copies the other side many times.
+    - question:
+        id: drill-round-trips
+        type: numeric
+        system: s1
+        prompt: |
+          A page shows 30 posts. The code fetches the posts in one query and then each post's author with a separate query. How many round trips is that?
+        answer: "31"
+        explanation: One for the posts and one per post for its author.
+    - question:
+        id: drill-batched
+        type: numeric
+        system: s1
+        prompt: |
+          The same page fetches the posts, then all their authors in one batched query. How many round trips now?
+        answer: "2"
+        explanation: However many posts there are.
+    - question:
+        id: drill-schema
+        type: choice
+        system: s1
+        prompt: |
+          A document database without validation accepts a user document that is missing its email field. When is the mistake noticed?
+        options:
+          - "When some code reads the document and expects an email."
+          - "When the document is written."
+          - "Never; documents cannot have missing fields."
+          - "When the database restarts."
+        answer: 0
+        explanation: Under schema on read, the check happens, if at all, in the reader.
+    - question:
+        id: predict-path
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          order = {
+              "id": 5012,
+              "customer": {"name": "Asha", "city": "Pune"},
+              "lines": [{"item": "dosa", "qty": 2}, {"item": "coffee", "qty": 1}, {"item": "vada", "qty": 3}],
+          }
+          print(order["customer"]["city"], order["lines"][2]["item"], len(order["lines"]))
+        output: "Pune vada 3"
+        explanation: Each step of the path goes one level down the tree; the lines are a list, counted from 0.
+    - question:
+        id: predict-drift
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          customer = {"id": 77, "phone": "98450"}
+          orders = [{"id": n, "customer": {"id": 77, "phone": customer["phone"]}} for n in [1, 2, 3]]
+          customer["phone"] = "90080"
+          orders[0]["customer"]["phone"] = customer["phone"]
+          print([order["customer"]["phone"] for order in orders])
+        output: "['90080', '98450', '98450']"
+        explanation: Each order holds its own copy of the phone number, and only the first copy was updated.
+  work:
+    - text: Slower now. Each problem is about where a piece of data lives and who must cope with its shape.
+    - question:
+        id: fix-shared-lines
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `to_documents` turns order rows and line rows from a relational database into order documents, each with its own lines nested. The program should print `[2, 1, 1]`, the number of lines in each order. It prints `[4, 4, 4]`. Find the fault and fix it.
+        starter: |
+          orders = [(5012, "asha"), (5013, "bilal"), (5014, "asha")]
+          lines = [(5012, "dosa", 2), (5013, "idli", 4), (5012, "coffee", 1), (5014, "vada", 3)]
+
+
+          def to_documents(orders, lines):
+              docs = {}
+              items = []
+              for order_id, customer in orders:
+                  docs[order_id] = {"id": order_id, "customer": customer, "lines": items}
+              for order_id, item, qty in lines:
+                  docs[order_id]["lines"].append({"item": item, "qty": qty})
+              return [docs[order_id] for order_id, customer in orders]
+
+
+          print([len(doc["lines"]) for doc in to_documents(orders, lines)])
+        solution: |
+          orders = [(5012, "asha"), (5013, "bilal"), (5014, "asha")]
+          lines = [(5012, "dosa", 2), (5013, "idli", 4), (5012, "coffee", 1), (5014, "vada", 3)]
+
+
+          def to_documents(orders, lines):
+              docs = {}
+              for order_id, customer in orders:
+                  docs[order_id] = {"id": order_id, "customer": customer, "lines": []}
+              for order_id, item, qty in lines:
+                  docs[order_id]["lines"].append({"item": item, "qty": qty})
+              return [docs[order_id] for order_id, customer in orders]
+
+
+          print([len(doc["lines"]) for doc in to_documents(orders, lines)])
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(52)
+          for _ in range(20):
+              _ids = _rng.sample(range(100, 200), _rng.randint(1, 5))
+              _orders = [(_o, _rng.choice(["asha", "bilal", "chitra"])) for _o in _ids]
+              _lines = [(_rng.choice(_ids), _rng.choice(["dosa", "idli", "vada", "coffee"]), _rng.randint(1, 4)) for _k in range(_rng.randint(0, 8))]
+              _want = [{"id": _o, "customer": _c, "lines": [{"item": _i, "qty": _q} for _p, _i, _q in _lines if _p == _o]} for _o, _c in _orders]
+              _got = to_documents(_orders, _lines)
+              assert _got == _want, "For the orders " + str(_orders) + " and lines " + str(_lines) + ", the documents should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[2, 1, 1]", "The program should print [2, 1, 1]"
+        wrong:
+          - |
+            orders = [(5012, "asha"), (5013, "bilal"), (5014, "asha")]
+            lines = [(5012, "dosa", 2), (5013, "idli", 4), (5012, "coffee", 1), (5014, "vada", 3)]
+
+
+            def to_documents(orders, lines):
+                docs = {}
+                for order_id, customer in orders:
+                    items = []
+                    docs[order_id] = {"id": order_id, "customer": customer, "lines": items}
+                for order_id, item, qty in lines:
+                    items.append({"item": item, "qty": qty})
+                return [docs[order_id] for order_id, customer in orders]
+
+
+            print([len(doc["lines"]) for doc in to_documents(orders, lines)])
+          - |
+            orders = [(5012, "asha"), (5013, "bilal"), (5014, "asha")]
+            lines = [(5012, "dosa", 2), (5013, "idli", 4), (5012, "coffee", 1), (5014, "vada", 3)]
+
+
+            def to_documents(orders, lines):
+                docs = {}
+                for order_id, customer in orders:
+                    docs[order_id] = {"id": order_id, "customer": customer, "lines": []}
+                for order_id, item, qty in lines:
+                    docs[order_id]["lines"] = [{"item": item, "qty": qty}]
+                return [docs[order_id] for order_id, customer in orders]
+
+
+            print([len(doc["lines"]) for doc in to_documents(orders, lines)])
+          - |
+            orders = [(5012, "asha"), (5013, "bilal"), (5014, "asha")]
+            lines = [(5012, "dosa", 2), (5013, "idli", 4), (5012, "coffee", 1), (5014, "vada", 3)]
+
+
+            def to_documents(orders, lines):
+                docs = {}
+                for order_id, customer in orders:
+                    docs[order_id] = {"id": order_id, "customer": customer, "lines": []}
+                for order_id, item, qty in lines:
+                    docs[order_id]["lines"].append((item, qty))
+                return [docs[order_id] for order_id, customer in orders]
+
+
+            print([len(doc["lines"]) for doc in to_documents(orders, lines)])
+        explanation: |
+          Every document was given the same list object, `items`, so each line was appended to one list shared by all three orders. Creating a new empty list for each document gives each order its own. Appending to `items` after the loop puts every line in the last order; assigning a one-line list keeps only each order's last line; and tuples instead of objects change the documents' shape.
+    - question:
+        id: write-batched-authors
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          `feed` fetches each post's author with its own call to `fetch_authors`. Change it so that it calls `fetch_authors` exactly once, asking for exactly the authors the posts need, and still returns `(post id, author name)` for every post in order, with `"[deleted]"` for an author who no longer exists. The program should print `[(1, 'Asha'), (2, 'Bilal'), (3, 'Asha'), (4, '[deleted]'), (5, 'Chitra')] 1`.
+        starter: |
+          authors = {7: {"name": "Asha"}, 9: {"name": "Bilal"}, 12: {"name": "Chitra"}}
+          calls = []
+
+
+          def fetch_authors(ids):
+              # One round trip to the database: the authors with these ids, by id.
+              calls.append(sorted(set(ids)))
+              return {i: authors[i] for i in ids if i in authors}
+
+
+          posts = [{"id": 1, "author": 7}, {"id": 2, "author": 9}, {"id": 3, "author": 7}, {"id": 4, "author": 30}, {"id": 5, "author": 12}]
+
+
+          def feed(posts):
+              result = []
+              for post in posts:
+                  found = fetch_authors([post["author"]])
+                  if post["author"] in found:
+                      result.append((post["id"], found[post["author"]]["name"]))
+                  else:
+                      result.append((post["id"], "[deleted]"))
+              return result
+
+
+          print(feed(posts), len(calls))
+        solution: |
+          authors = {7: {"name": "Asha"}, 9: {"name": "Bilal"}, 12: {"name": "Chitra"}}
+          calls = []
+
+
+          def fetch_authors(ids):
+              # One round trip to the database: the authors with these ids, by id.
+              calls.append(sorted(set(ids)))
+              return {i: authors[i] for i in ids if i in authors}
+
+
+          posts = [{"id": 1, "author": 7}, {"id": 2, "author": 9}, {"id": 3, "author": 7}, {"id": 4, "author": 30}, {"id": 5, "author": 12}]
+
+
+          def feed(posts):
+              found = fetch_authors({post["author"] for post in posts})
+              result = []
+              for post in posts:
+                  if post["author"] in found:
+                      result.append((post["id"], found[post["author"]]["name"]))
+                  else:
+                      result.append((post["id"], "[deleted]"))
+              return result
+
+
+          print(feed(posts), len(calls))
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(53)
+          _names = ["Asha", "Bilal", "Chitra", "Dev", "Esha", "Farhan"]
+          for _ in range(25):
+              authors = {_a: {"name": _rng.choice(_names)} for _a in _rng.sample(range(1, 20), _rng.randint(1, 5))}
+              _posts = [{"id": _k + 1, "author": _rng.randint(1, 19) if _rng.random() < 0.2 else _rng.choice(list(authors))} for _k in range(_rng.randint(1, 9))]
+              _want = [(_p["id"], authors[_p["author"]]["name"] if _p["author"] in authors else "[deleted]") for _p in _posts]
+              calls.clear()
+              _got = feed(_posts)
+              assert _got == _want, "For the posts " + str(_posts) + " and authors " + str(authors) + ", the feed should be " + str(_want) + ", not " + str(_got)
+              assert len(calls) == 1, "For " + str(len(_posts)) + " posts, feed called fetch_authors " + str(len(calls)) + " times, not once"
+              _need = sorted({_p["author"] for _p in _posts})
+              assert calls[0] == _need, "For the posts " + str(_posts) + ", feed should fetch the authors " + str(_need) + ", not " + str(calls[0])
+        wrong:
+          - |
+            authors = {7: {"name": "Asha"}, 9: {"name": "Bilal"}, 12: {"name": "Chitra"}}
+            calls = []
+
+
+            def fetch_authors(ids):
+                # One round trip to the database: the authors with these ids, by id.
+                calls.append(sorted(set(ids)))
+                return {i: authors[i] for i in ids if i in authors}
+
+
+            posts = [{"id": 1, "author": 7}, {"id": 2, "author": 9}, {"id": 3, "author": 7}, {"id": 4, "author": 30}, {"id": 5, "author": 12}]
+
+
+            def feed(posts):
+                found = {}
+                for author in {post["author"] for post in posts}:
+                    found[author] = fetch_authors([author]).get(author)
+                result = []
+                for post in posts:
+                    if found[post["author"]] is not None:
+                        result.append((post["id"], found[post["author"]]["name"]))
+                    else:
+                        result.append((post["id"], "[deleted]"))
+                return result
+
+
+            print(feed(posts), len(calls))
+          - |
+            authors = {7: {"name": "Asha"}, 9: {"name": "Bilal"}, 12: {"name": "Chitra"}}
+            calls = []
+
+
+            def fetch_authors(ids):
+                # One round trip to the database: the authors with these ids, by id.
+                calls.append(sorted(set(ids)))
+                return {i: authors[i] for i in ids if i in authors}
+
+
+            posts = [{"id": 1, "author": 7}, {"id": 2, "author": 9}, {"id": 3, "author": 7}, {"id": 4, "author": 30}, {"id": 5, "author": 12}]
+
+
+            def feed(posts):
+                found = fetch_authors(list(authors))
+                result = []
+                for post in posts:
+                    if post["author"] in found:
+                        result.append((post["id"], found[post["author"]]["name"]))
+                    else:
+                        result.append((post["id"], "[deleted]"))
+                return result
+
+
+            print(feed(posts), len(calls))
+          - |
+            authors = {7: {"name": "Asha"}, 9: {"name": "Bilal"}, 12: {"name": "Chitra"}}
+            calls = []
+
+
+            def fetch_authors(ids):
+                # One round trip to the database: the authors with these ids, by id.
+                calls.append(sorted(set(ids)))
+                return {i: authors[i] for i in ids if i in authors}
+
+
+            posts = [{"id": 1, "author": 7}, {"id": 2, "author": 9}, {"id": 3, "author": 7}, {"id": 4, "author": 30}, {"id": 5, "author": 12}]
+
+
+            def feed(posts):
+                found = fetch_authors({post["author"] for post in posts})
+                result = []
+                for post_id, author in zip([post["id"] for post in posts], found.values()):
+                    result.append((post_id, author["name"]))
+                return result
+
+
+            print(feed(posts), len(calls))
+        explanation: |
+          One call with the set of the posts' author ids returns a dictionary, and each post looks its author up in it. One call per distinct author is still several round trips; fetching every author in the table is one call that reads far more than needed; and pairing posts with the returned authors by position fails because the dictionary has one entry per author, not per post, and none for a deleted one.
+    - question:
+        id: write-display-name
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          The users collection holds documents written by two versions of an app. Change `display_name` so that it returns the full name for a version 1 string, first and last joined by one space for a version 2 object, the first name alone when there is no last name, and `"guest"` when there is no name at all. The program should print `['Asha Rao', 'Bilal Khan', 'guest', 'Chitra']`.
+        starter: |
+          # Version 1 of the app stored the name as one string. Version 2 stores it in parts,
+          # and "last" is optional. Guests have no name at all.
+          users = [
+              {"id": 1, "name": "Asha Rao"},
+              {"id": 2, "name": {"first": "Bilal", "last": "Khan"}},
+              {"id": 3, "phone": "98450 12345"},
+              {"id": 4, "name": {"first": "Chitra"}},
+          ]
+
+
+          def display_name(doc):
+              return doc.get("name", "guest")
+
+
+          print([display_name(doc) for doc in users])
+        solution: |
+          # Version 1 of the app stored the name as one string. Version 2 stores it in parts,
+          # and "last" is optional. Guests have no name at all.
+          users = [
+              {"id": 1, "name": "Asha Rao"},
+              {"id": 2, "name": {"first": "Bilal", "last": "Khan"}},
+              {"id": 3, "phone": "98450 12345"},
+              {"id": 4, "name": {"first": "Chitra"}},
+          ]
+
+
+          def display_name(doc):
+              name = doc.get("name")
+              if name is None:
+                  return "guest"
+              if isinstance(name, str):
+                  return name
+              if "last" in name:
+                  return name["first"] + " " + name["last"]
+              return name["first"]
+
+
+          print([display_name(doc) for doc in users])
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(54)
+          _firsts = ["Asha", "Bilal", "Chitra", "Dev", "Esha"]
+          _lasts = ["Rao", "Khan", "Iyer", "Singh", "Das"]
+          for _ in range(40):
+              _f, _l = _rng.choice(_firsts), _rng.choice(_lasts)
+              _shape = _rng.randrange(4)
+              if _shape == 0:
+                  _doc, _want = {"id": 1, "name": _f + " " + _l}, _f + " " + _l
+              elif _shape == 1:
+                  _doc, _want = {"id": 1, "name": {"first": _f, "last": _l}}, _f + " " + _l
+              elif _shape == 2:
+                  _doc, _want = {"id": 1, "name": {"first": _f}}, _f
+              else:
+                  _doc, _want = {"id": 1, "phone": "90080 55555"}, "guest"
+              _got = display_name(_doc)
+              assert _got == _want, "For " + str(_doc) + ", display_name should return " + repr(_want) + ", not " + repr(_got)
+          assert output.strip() == "['Asha Rao', 'Bilal Khan', 'guest', 'Chitra']", "The program should print ['Asha Rao', 'Bilal Khan', 'guest', 'Chitra']"
+        wrong:
+          - |
+            # Version 1 of the app stored the name as one string. Version 2 stores it in parts,
+            # and "last" is optional. Guests have no name at all.
+            users = [
+                {"id": 1, "name": "Asha Rao"},
+                {"id": 2, "name": {"first": "Bilal", "last": "Khan"}},
+                {"id": 3, "phone": "98450 12345"},
+                {"id": 4, "name": {"first": "Chitra"}},
+            ]
+
+
+            def display_name(doc):
+                name = doc["name"]
+                if isinstance(name, str):
+                    return name
+                if "last" in name:
+                    return name["first"] + " " + name["last"]
+                return name["first"]
+
+
+            print([display_name(doc) for doc in users])
+          - |
+            # Version 1 of the app stored the name as one string. Version 2 stores it in parts,
+            # and "last" is optional. Guests have no name at all.
+            users = [
+                {"id": 1, "name": "Asha Rao"},
+                {"id": 2, "name": {"first": "Bilal", "last": "Khan"}},
+                {"id": 3, "phone": "98450 12345"},
+                {"id": 4, "name": {"first": "Chitra"}},
+            ]
+
+
+            def display_name(doc):
+                name = doc.get("name")
+                if name is None:
+                    return "guest"
+                if isinstance(name, str):
+                    return name
+                return name["first"] + " " + name.get("last", "")
+
+
+            print([display_name(doc) for doc in users])
+          - |
+            # Version 1 of the app stored the name as one string. Version 2 stores it in parts,
+            # and "last" is optional. Guests have no name at all.
+            users = [
+                {"id": 1, "name": "Asha Rao"},
+                {"id": 2, "name": {"first": "Bilal", "last": "Khan"}},
+                {"id": 3, "phone": "98450 12345"},
+                {"id": 4, "name": {"first": "Chitra"}},
+            ]
+
+
+            def display_name(doc):
+                name = doc.get("name", "guest")
+                if isinstance(name, dict):
+                    return name["first"] + " " + name["last"]
+                return name
+
+
+            print([display_name(doc) for doc in users])
+        explanation: |
+          A reader under schema on read must handle every shape ever stored: no name, a string, and an object with or without a last name. `doc["name"]` crashes on a guest; joining with `name.get("last", "")` leaves a trailing space; and reading `name["last"]` unconditionally crashes on a version 2 user with only a first name.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          After how many days can the puzzle's group document hold no more messages?
+        answer: "20"
+        explanation: |
+          The document holds $1{,}60{,}00{,}000 \div 400 = 40{,}000$ messages, and the group fills that in $40{,}000 \div 2{,}000 = 20$ days.
+    - question:
+        id: work-catalogue
+        type: choice
+        system: s2
+        prompt: |
+          A grocery app shows a product page with the product's name, price, its 4 to 6 photos and its seller's name and rating. A seller lists about 3,000 products and their rating changes daily. Which document design fits?
+        options:
+          - "Nest the photos in the product; store the seller's id and fetch the seller separately."
+          - "Nest the photos and the seller's name and rating in every product."
+          - "Store each photo as its own document referencing the product."
+          - "Nest all of the seller's products inside the seller's document."
+        answer: 0
+        explanation: |
+          Photos belong to one product, are few and are always shown with it, so they nest. Copying the seller's rating into 3,000 products would mean 3,000 rewrites a day, and nesting 3,000 products inside the seller makes one huge document that every product page must read.
+  connections:
+    - text: |
+        20 days: the document holds $1{,}60{,}00{,}000 \div 400 = 40{,}000$ messages, and a busy group sends 2,000 a day. Long before then, every new message rewrites a document of several megabytes and every screen that wants the latest 20 messages reads all of them. Real chat systems store each message as its own record keyed by group and time, which is the normalised table the document model seemed to escape.
+
+        The document model shines for trees: an object with parts that belong to it alone. Data where everything can connect to everything, such as people who follow people, stations linked by trains or papers citing papers, is neither a tree nor comfortably a set of tables, and has a model of its own in [[q1.graph-models]]. And schema on read means that every shape of document the app has ever written is still in the database, waiting for a reader; changing a shape safely while old code and old data are still around is [[q1.schema-evolution-and-compatibility]].

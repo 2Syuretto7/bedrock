@@ -1,0 +1,791 @@
+concept: q1.entities-and-relationships
+minutes: 80
+claim: You can read a description of a business and pick out its entities, their attributes and the relationships between them, state each relationship's cardinality and whether it is optional, turn a one-to-many relationship into a foreign key on the many side and a many-to-many relationship into a junction table that carries the relationship's own attributes, key a weak entity by its owner, and sketch the result as an entity-relationship diagram.
+recalls: [q0.indexes-from-the-outside]
+uses: [q0.tables-rows-and-keys, q0.joins, q0.writes-constraints-and-transactions, q0.subqueries-and-common-table-expressions, f2.relations-and-functions-between-sets]
+leads: [q1.keys-and-functional-dependencies, q1.normal-forms, q1.document-models]
+starter: |
+  # Scratch space. Two entities joined by a many-to-many relationship.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.executescript("""
+      create table students (id integer primary key, name text not null);
+      create table batches (id integer primary key, subject text not null);
+      create table enrolments (
+          student integer not null references students (id),
+          batch integer not null references batches (id),
+          fee integer not null,
+          primary key (student, batch)
+      );
+      insert into students values (1, 'Asha'), (2, 'Bilal');
+      insert into batches values (10, 'Physics'), (11, 'Chemistry');
+      insert into enrolments values (1, 10, 4000), (1, 11, 3500), (2, 10, 4000);
+  """)
+  print(db.execute("select s.name, b.subject, e.fee from enrolments e join students s on s.id = e.student join batches b on b.id = e.batch").fetchall())
+parts:
+  recall:
+    - text: |
+        The last cluster ended with [[q0.indexes-from-the-outside]], and throughout it the tables were handed over ready-made: orders, customers, wallets, each with its columns and keys. Real projects start earlier, with a description of a business in ordinary words, and someone must decide which tables to make. Bad choices here cost more than any slow query, because every program written later inherits them. This cluster is about making those choices well, and it begins with the oldest method for it. Three quick pulls first.
+  puzzle:
+    - text: |
+        A coaching institute in Kota describes its business:
+
+        "We have students and teachers. Each batch covers one subject and is taught by one teacher, though a teacher may take several batches. A student can join any number of batches, and the fee is agreed separately for each student in each batch, because of scholarships."
+
+        The institute wants a database in which no fact is written down twice: changing a teacher's phone number, or a batch's subject, should touch exactly one row.
+
+        **What is the smallest number of tables that does this?**
+  intuition:
+    - text: |
+        Listen to how people describe their work. The nouns they keep returning to, student, teacher, batch, are the things they need to remember facts about and tell apart: these are **entities**. The facts about one of them, a student's name and phone number, are its **attributes**. The verbs that connect the nouns, "teaches", "joins", are **relationships**. A railway clerk describing reservations would give passengers, trains and bookings in exactly the same way, and a doctor's receptionist patients, doctors and appointments.
+
+        Each entity becomes a table and each attribute a column. A relationship becomes something different depending on its **cardinality**: how many things on one side each thing on the other side can be related to. The figure shows the three cases and the tables each turns into.
+    - figure: er-cardinality
+      props: { kind: one-many }
+    - text: |
+        In "one to many", each batch has one teacher, so a batch row can simply name its teacher in a column, a foreign key; a teacher row could not hold a list of batches in one column. In "many to many", neither side can hold the other, so the relationship gets a table of its own, one row per pair, and that table is also the natural home for facts about the pair, such as the fee. In "one to one", either side could hold the key, and declaring it unique keeps the relationship one to one.
+  derivation:
+    - text: |
+        **Entities and attributes.** An entity is a kind of thing with an existence of its own, which the business needs to identify and remember facts about. The test for whether something is an entity or merely an attribute is whether it has facts of its own or is shared. A batch's subject might be a single word, an attribute of the batch. But if each subject has a syllabus, a number of hours and a head of department, then subject is an entity with its own table, and each batch refers to one. Each entity needs an identifier, which becomes its key, chosen by the rules of [[q0.tables-rows-and-keys]].
+
+        **Relationships.** A relationship between two entities is a set of pairs, a relation in the sense of [[f2.relations-and-functions-between-sets]]. Its **cardinality** says, for each side, whether a thing can be paired with at most one or with many things on the other side: one to one, one to many, or many to many. Its **optionality** says whether a thing must take part: must every batch have a teacher, or can a batch be announced before one is found? A mandatory relationship becomes a `not null` foreign key; an optional one allows NULL, with the consequences [[q0.writes-constraints-and-transactions]] spelled out.
+    - question:
+        id: derivation-cardinality
+        type: choice
+        system: s2
+        prompt: |
+          "Each flat in a housing society belongs to one block, and a block has many flats." Which tables follow?
+        options:
+          - "blocks, and flats with a not null foreign key block referring to blocks"
+          - "flats, and blocks with a column listing its flats"
+          - "blocks, flats and a junction table flats_blocks"
+          - "one table holding each flat with its block's details repeated"
+        answer: 0
+        explanation: |
+          One to many puts the foreign key on the many side, and "belongs to one block" makes it mandatory. A list in one column cannot be joined or constrained; a junction table would allow a flat in two blocks; and repeating the block's details in every flat writes each of them many times.
+    - text: |
+        **Turning a diagram into tables.** The rules are short.
+
+        - Each entity becomes a table with a key.
+        - A one-to-many relationship becomes a foreign key in the table on the many side.
+        - A many-to-many relationship becomes a **junction table** with a foreign key to each side; its key is the pair, `primary key (student, batch)`, so the same pair cannot be stored twice. Attributes of the relationship itself, the fee, the date of joining, become columns of the junction table, because they belong to neither side alone.
+        - A one-to-one relationship becomes a foreign key declared `unique`, usually on the side whose participation is optional, or the two tables are merged.
+
+        Joining back through the junction table with [[q0.joins]] recovers every student's batches. A relationship can also join an entity to itself: an employee's manager is another employee, so `employees` gets a column `manager` referring to `employees (id)`, and a recursive common table expression from [[q0.subqueries-and-common-table-expressions]] walks the chain upwards. A relationship among three entities, such as a teacher teaching a subject to a batch in a room, becomes a table with three foreign keys.
+    - question:
+        id: order-design
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of turning a description of a business into tables in order.
+        steps:
+          - "List the nouns the business needs to remember facts about: the entities."
+          - "Give each entity its attributes and choose an identifier for it."
+          - "Find the relationships between entities and state each one's cardinality."
+          - "Turn each relationship into a foreign key or a junction table, according to its cardinality."
+          - "Write the create table statements with their keys and constraints."
+        explanation: |
+          A relationship can only be drawn between entities already found, its translation depends on its cardinality, and the statements come last, once every table, column and key is decided.
+    - text: |
+        **Weak entities.** Some things are identified only within an owner. The lines of an order are numbered 1, 2, 3 inside each order; "line 2" means nothing without saying which order. Such a **weak entity** takes its owner's key as part of its own, `primary key (order_id, line_no)`, and usually disappears with its owner: `references orders (id) on delete cascade`. Instalments of a loan, seats in a train coach and floors of a building are other examples.
+
+        **Diagrams.** An **entity-relationship diagram** draws entities as boxes and relationships as lines between them, with marks at each end for cardinality and optionality. The common style draws a "crow's foot", a three-pronged end, on the many side. A diagram is worth drawing because it can be checked with the people who run the business before any table exists: "can a batch really have two teachers?" is a cheap question on paper and an expensive one after a year of data.
+    - question:
+        id: derivation-tables
+        type: numeric
+        system: s2
+        prompt: |
+          An online shop has customers, products and orders. Each order is placed by one customer and contains several products, each with a quantity, and a product appears in many orders. How many tables does the design need?
+        answer: "4"
+        explanation: |
+          customers, products and orders are entities; orders refer to customers, one to many; and orders and products are many to many with a quantity on each pair, which needs a junction table such as `order_items (order_id, product, qty)`.
+  formal:
+    - text: |
+        **Entity.** A kind of thing with independent existence that must be identified; becomes a table with a key. **Attribute.** A fact about one entity; becomes a column.
+
+        **Relationship.** A set of pairs of entities. **Cardinality:** one to one, one to many or many to many. **Optionality:** whether each side must take part.
+
+        **Mapping to tables.** One to many: a foreign key on the many side, `not null` if mandatory. Many to many: a junction table with foreign keys to both sides, keyed by the pair, holding the relationship's attributes. One to one: a `unique` foreign key, or one merged table. A relationship of three entities: a table with three foreign keys.
+
+        **Weak entity.** Identified only within an owner; its key includes the owner's key, and it is usually deleted with the owner.
+
+        **Entity-relationship diagram.** Entities as boxes, relationships as lines, cardinality and optionality marked at each end.
+  drill:
+    - text: Seconds each. Say the cardinality out loud before choosing.
+    - question:
+        id: drill-fk-side
+        type: choice
+        system: s1
+        prompt: |
+          Each order is placed by one customer, and a customer places many orders. Where does the foreign key go?
+        options:
+          - "In orders, naming the customer"
+          - "In customers, naming the orders"
+          - "In a junction table"
+          - "In both tables"
+        answer: 0
+        explanation: The many side holds the key, since each order has exactly one customer to name.
+    - question:
+        id: drill-junction-key
+        type: choice
+        system: s1
+        prompt: |
+          What is the natural primary key of `enrolments (student, batch, fee)`?
+        options:
+          - "(student, batch)"
+          - "(student)"
+          - "(batch)"
+          - "(fee)"
+        answer: 0
+        explanation: A student may join many batches and a batch has many students, so only the pair identifies an enrolment.
+    - question:
+        id: drill-relationship-attribute
+        type: choice
+        system: s1
+        prompt: |
+          Where does the date a student joined a batch belong?
+        options:
+          - "In the junction table enrolments"
+          - "In students"
+          - "In batches"
+          - "In a table of its own"
+        answer: 0
+        explanation: The date is a fact about the pair, not about the student or the batch alone.
+    - question:
+        id: drill-tables
+        type: numeric
+        system: s1
+        prompt: |
+          Doctors and patients meet in appointments; each appointment has one doctor, one patient and a time. How many tables?
+        answer: "3"
+        explanation: doctors, patients, and appointments, which is the junction between them with its own time.
+    - question:
+        id: drill-self
+        type: choice
+        system: s1
+        prompt: |
+          Every employee except the director has one manager, who is also an employee. How is this stored?
+        options:
+          - "A column manager in employees, referring to employees (id) and allowing NULL"
+          - "A separate managers table copying the managers' details"
+          - "A junction table employees_managers"
+          - "A not null column manager referring to employees (id)"
+        answer: 0
+        explanation: A one-to-many relationship from the table to itself; NULL is allowed for the director, who has no manager.
+    - question:
+        id: predict-junction
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table students (id integer primary key, name text);
+              create table enrolments (student integer, batch integer, primary key (student, batch));
+              insert into students values (1, 'Asha'), (2, 'Bilal');
+              insert into enrolments values (1, 10), (1, 11), (2, 10);
+          """)
+          print(db.execute("select s.name, count(*) from students s join enrolments e on e.student = s.id group by s.id order by s.name").fetchall())
+        output: "[('Asha', 2), ('Bilal', 1)]"
+        explanation: Each enrolment row is one pair; Asha appears in two, Bilal in one.
+    - question:
+        id: predict-manager
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table employees (id integer primary key, name text, manager integer references employees (id));
+              insert into employees values (1, 'Meera', null), (2, 'Ravi', 1), (3, 'Sana', 2);
+          """)
+          print(db.execute("select e.name, m.name from employees e join employees m on m.id = e.manager order by e.id").fetchall())
+        output: "[('Ravi', 'Meera'), ('Sana', 'Ravi')]"
+        explanation: The table is joined to itself, and Meera, with no manager, finds no partner in the inner join.
+  work:
+    - text: Slower now. For every relationship, ask the business question that decides its cardinality before writing a key.
+    - question:
+        id: fix-enrolment-key
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A student may join any number of batches, but not the same batch twice, and only existing students and batches can be enrolled. The program should print `[(1, 10), (2, 12)]`, the attempts refused. It prints `[(1, 11), (1, 10), (2, 12)]`. Find the fault and fix it.
+        starter: |
+          import sqlite3
+
+          schema = """
+              create table enrolments (
+                  student integer not null references students (id),
+                  batch integer not null references batches (id),
+                  fee integer not null check (fee >= 0),
+                  primary key (student)
+              )
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.execute("pragma foreign_keys = on")
+          db.execute("create table students (id integer primary key, name text not null)")
+          db.execute("create table batches (id integer primary key, subject text not null)")
+          db.execute(schema)
+          db.executemany("insert into students values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+          db.executemany("insert into batches values (?, ?)", [(10, "Physics"), (11, "Chemistry")])
+          attempts = [(1, 10, 4000), (1, 11, 3500), (2, 10, 4000), (1, 10, 4000), (2, 12, 3000)]
+          refused = []
+          for student, batch, fee in attempts:
+              try:
+                  db.execute("insert into enrolments values (?, ?, ?)", (student, batch, fee))
+              except sqlite3.IntegrityError:
+                  refused.append((student, batch))
+          print(refused)
+        solution: |
+          import sqlite3
+
+          schema = """
+              create table enrolments (
+                  student integer not null references students (id),
+                  batch integer not null references batches (id),
+                  fee integer not null check (fee >= 0),
+                  primary key (student, batch)
+              )
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.execute("pragma foreign_keys = on")
+          db.execute("create table students (id integer primary key, name text not null)")
+          db.execute("create table batches (id integer primary key, subject text not null)")
+          db.execute(schema)
+          db.executemany("insert into students values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+          db.executemany("insert into batches values (?, ?)", [(10, "Physics"), (11, "Chemistry")])
+          attempts = [(1, 10, 4000), (1, 11, 3500), (2, 10, 4000), (1, 10, 4000), (2, 12, 3000)]
+          refused = []
+          for student, batch, fee in attempts:
+              try:
+                  db.execute("insert into enrolments values (?, ?, ?)", (student, batch, fee))
+              except sqlite3.IntegrityError:
+                  refused.append((student, batch))
+          print(refused)
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(3)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("pragma foreign_keys = on")
+              _db.execute("create table students (id integer primary key, name text not null)")
+              _db.execute("create table batches (id integer primary key, subject text not null)")
+              _db.execute(schema)
+              _db.executemany("insert into students values (?, ?)", [(_i, "S" + str(_i)) for _i in range(1, 4)])
+              _db.executemany("insert into batches values (?, ?)", [(_b, "B" + str(_b)) for _b in range(10, 13)])
+              _held = set()
+              for _k in range(8):
+                  _s = _rng.randint(1, 4)
+                  _b = _rng.randint(10, 13)
+                  _f = _rng.choice([3000, 3500, 4000])
+                  _ok = _s <= 3 and _b <= 12 and (_s, _b) not in _held
+                  try:
+                      _db.execute("insert into enrolments values (?, ?, ?)", (_s, _b, _f))
+                      _done = True
+                  except sqlite3.IntegrityError:
+                      _done = False
+                  assert _done == _ok, "With enrolments " + str(sorted(_held)) + ", enrolling student " + str(_s) + " in batch " + str(_b) + " should be " + ("accepted" if _ok else "refused")
+                  if _ok:
+                      _held.add((_s, _b))
+          assert output.strip() == "[(1, 10), (2, 12)]", "The program should print [(1, 10), (2, 12)]"
+        wrong:
+          - |
+            import sqlite3
+
+            schema = """
+                create table enrolments (
+                    student integer not null references students (id),
+                    batch integer not null references batches (id),
+                    fee integer not null check (fee >= 0),
+                    primary key (batch)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("pragma foreign_keys = on")
+            db.execute("create table students (id integer primary key, name text not null)")
+            db.execute("create table batches (id integer primary key, subject text not null)")
+            db.execute(schema)
+            db.executemany("insert into students values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+            db.executemany("insert into batches values (?, ?)", [(10, "Physics"), (11, "Chemistry")])
+            attempts = [(1, 10, 4000), (1, 11, 3500), (2, 10, 4000), (1, 10, 4000), (2, 12, 3000)]
+            refused = []
+            for student, batch, fee in attempts:
+                try:
+                    db.execute("insert into enrolments values (?, ?, ?)", (student, batch, fee))
+                except sqlite3.IntegrityError:
+                    refused.append((student, batch))
+            print(refused)
+          - |
+            import sqlite3
+
+            schema = """
+                create table enrolments (
+                    student integer not null references students (id),
+                    batch integer not null references batches (id),
+                    fee integer not null check (fee >= 0),
+                    primary key (student, batch, fee)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("pragma foreign_keys = on")
+            db.execute("create table students (id integer primary key, name text not null)")
+            db.execute("create table batches (id integer primary key, subject text not null)")
+            db.execute(schema)
+            db.executemany("insert into students values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+            db.executemany("insert into batches values (?, ?)", [(10, "Physics"), (11, "Chemistry")])
+            attempts = [(1, 10, 4000), (1, 11, 3500), (2, 10, 4000), (1, 10, 4000), (2, 12, 3000)]
+            refused = []
+            for student, batch, fee in attempts:
+                try:
+                    db.execute("insert into enrolments values (?, ?, ?)", (student, batch, fee))
+                except sqlite3.IntegrityError:
+                    refused.append((student, batch))
+            print(refused)
+          - |
+            import sqlite3
+
+            schema = """
+                create table enrolments (
+                    student integer not null references students (id),
+                    batch integer not null,
+                    fee integer not null check (fee >= 0),
+                    primary key (student, batch)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("pragma foreign_keys = on")
+            db.execute("create table students (id integer primary key, name text not null)")
+            db.execute("create table batches (id integer primary key, subject text not null)")
+            db.execute(schema)
+            db.executemany("insert into students values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+            db.executemany("insert into batches values (?, ?)", [(10, "Physics"), (11, "Chemistry")])
+            attempts = [(1, 10, 4000), (1, 11, 3500), (2, 10, 4000), (1, 10, 4000), (2, 12, 3000)]
+            refused = []
+            for student, batch, fee in attempts:
+                try:
+                    db.execute("insert into enrolments values (?, ?, ?)", (student, batch, fee))
+                except sqlite3.IntegrityError:
+                    refused.append((student, batch))
+            print(refused)
+        explanation: |
+          Keying enrolments by the student alone makes the relationship one to many, so Asha's second batch is refused. The pair `(student, batch)` is the key of a many-to-many relationship. Keying by the batch lets each batch hold one student; adding the fee to the key lets the same pair be stored twice at different fees; and dropping the foreign key to batches lets a student into a batch that does not exist.
+    - question:
+        id: write-appointments
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `schema` so that every appointment has an existing patient, an existing doctor and a slot, a doctor is never booked twice in one slot, and a patient is never booked twice in one slot. The program should print `4 of 8 booked`.
+        starter: |
+          import sqlite3
+
+          schema = """
+              create table appointments (
+                  id integer primary key,
+                  patient integer,
+                  doctor integer,
+                  slot text
+              )
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.execute("pragma foreign_keys = on")
+          db.execute("create table patients (id integer primary key, name text not null)")
+          db.execute("create table doctors (id integer primary key, name text not null)")
+          db.execute(schema)
+          db.executemany("insert into patients values (?, ?)", [(1, "Asha"), (2, "Bilal"), (3, "Chitra")])
+          db.executemany("insert into doctors values (?, ?)", [(1, "Dr Rao"), (2, "Dr Iyer")])
+          attempts = [
+              (1, 1, "Mon 10:00"), (2, 1, "Mon 10:00"), (2, 2, "Mon 10:00"), (1, 2, "Mon 10:00"),
+              (3, 1, "Mon 10:30"), (1, 1, "Mon 11:00"), (4, 2, "Mon 11:00"), (3, 3, "Mon 11:00"),
+          ]
+          accepted = 0
+          for patient, doctor, slot in attempts:
+              try:
+                  db.execute("insert into appointments (patient, doctor, slot) values (?, ?, ?)", (patient, doctor, slot))
+                  accepted = accepted + 1
+              except sqlite3.IntegrityError:
+                  pass
+          print(accepted, "of", len(attempts), "booked")
+        solution: |
+          import sqlite3
+
+          schema = """
+              create table appointments (
+                  id integer primary key,
+                  patient integer not null references patients (id),
+                  doctor integer not null references doctors (id),
+                  slot text not null,
+                  unique (doctor, slot),
+                  unique (patient, slot)
+              )
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.execute("pragma foreign_keys = on")
+          db.execute("create table patients (id integer primary key, name text not null)")
+          db.execute("create table doctors (id integer primary key, name text not null)")
+          db.execute(schema)
+          db.executemany("insert into patients values (?, ?)", [(1, "Asha"), (2, "Bilal"), (3, "Chitra")])
+          db.executemany("insert into doctors values (?, ?)", [(1, "Dr Rao"), (2, "Dr Iyer")])
+          attempts = [
+              (1, 1, "Mon 10:00"), (2, 1, "Mon 10:00"), (2, 2, "Mon 10:00"), (1, 2, "Mon 10:00"),
+              (3, 1, "Mon 10:30"), (1, 1, "Mon 11:00"), (4, 2, "Mon 11:00"), (3, 3, "Mon 11:00"),
+          ]
+          accepted = 0
+          for patient, doctor, slot in attempts:
+              try:
+                  db.execute("insert into appointments (patient, doctor, slot) values (?, ?, ?)", (patient, doctor, slot))
+                  accepted = accepted + 1
+              except sqlite3.IntegrityError:
+                  pass
+          print(accepted, "of", len(attempts), "booked")
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(11)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("pragma foreign_keys = on")
+              _db.execute("create table patients (id integer primary key, name text not null)")
+              _db.execute("create table doctors (id integer primary key, name text not null)")
+              _db.execute(schema)
+              _db.executemany("insert into patients values (?, ?)", [(_i, "P" + str(_i)) for _i in range(1, 4)])
+              _db.executemany("insert into doctors values (?, ?)", [(_i, "D" + str(_i)) for _i in range(1, 3)])
+              _booked = []
+              for _k in range(10):
+                  _p = _rng.randint(1, 4)
+                  _d = _rng.randint(1, 3)
+                  _s = _rng.choice(["Mon 10:00", "Mon 10:30", "Mon 11:00"])
+                  _ok = _p <= 3 and _d <= 2 and all(_b[1:] != (_d, _s) and (_b[0], _b[2]) != (_p, _s) for _b in _booked)
+                  try:
+                      _db.execute("insert into appointments (patient, doctor, slot) values (?, ?, ?)", (_p, _d, _s))
+                      _done = True
+                  except sqlite3.IntegrityError:
+                      _done = False
+                  assert _done == _ok, "With appointments " + str(_booked) + " as (patient, doctor, slot), booking patient " + str(_p) + " with doctor " + str(_d) + " at " + _s + " should be " + ("accepted" if _ok else "refused")
+                  if _ok:
+                      _booked.append((_p, _d, _s))
+              for _bad in [(None, 1, "Tue 09:00"), (1, None, "Tue 09:30"), (2, 2, None)]:
+                  try:
+                      _db.execute("insert into appointments (patient, doctor, slot) values (?, ?, ?)", _bad)
+                      _done = True
+                  except sqlite3.IntegrityError:
+                      _done = False
+                  assert not _done, "An appointment with a missing patient, doctor or slot, such as " + str(_bad) + ", should be refused"
+          assert output.strip() == "4 of 8 booked", "The program should print 4 of 8 booked"
+        wrong:
+          - |
+            import sqlite3
+
+            schema = """
+                create table appointments (
+                    id integer primary key,
+                    patient integer not null references patients (id),
+                    doctor integer not null references doctors (id),
+                    slot text not null,
+                    unique (doctor, slot)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("pragma foreign_keys = on")
+            db.execute("create table patients (id integer primary key, name text not null)")
+            db.execute("create table doctors (id integer primary key, name text not null)")
+            db.execute(schema)
+            db.executemany("insert into patients values (?, ?)", [(1, "Asha"), (2, "Bilal"), (3, "Chitra")])
+            db.executemany("insert into doctors values (?, ?)", [(1, "Dr Rao"), (2, "Dr Iyer")])
+            attempts = [
+                (1, 1, "Mon 10:00"), (2, 1, "Mon 10:00"), (2, 2, "Mon 10:00"), (1, 2, "Mon 10:00"),
+                (3, 1, "Mon 10:30"), (1, 1, "Mon 11:00"), (4, 2, "Mon 11:00"), (3, 3, "Mon 11:00"),
+            ]
+            accepted = 0
+            for patient, doctor, slot in attempts:
+                try:
+                    db.execute("insert into appointments (patient, doctor, slot) values (?, ?, ?)", (patient, doctor, slot))
+                    accepted = accepted + 1
+                except sqlite3.IntegrityError:
+                    pass
+            print(accepted, "of", len(attempts), "booked")
+          - |
+            import sqlite3
+
+            schema = """
+                create table appointments (
+                    id integer primary key,
+                    patient integer not null references patients (id),
+                    doctor integer not null references doctors (id),
+                    slot text not null,
+                    unique (doctor, patient),
+                    unique (doctor, slot)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("pragma foreign_keys = on")
+            db.execute("create table patients (id integer primary key, name text not null)")
+            db.execute("create table doctors (id integer primary key, name text not null)")
+            db.execute(schema)
+            db.executemany("insert into patients values (?, ?)", [(1, "Asha"), (2, "Bilal"), (3, "Chitra")])
+            db.executemany("insert into doctors values (?, ?)", [(1, "Dr Rao"), (2, "Dr Iyer")])
+            attempts = [
+                (1, 1, "Mon 10:00"), (2, 1, "Mon 10:00"), (2, 2, "Mon 10:00"), (1, 2, "Mon 10:00"),
+                (3, 1, "Mon 10:30"), (1, 1, "Mon 11:00"), (4, 2, "Mon 11:00"), (3, 3, "Mon 11:00"),
+            ]
+            accepted = 0
+            for patient, doctor, slot in attempts:
+                try:
+                    db.execute("insert into appointments (patient, doctor, slot) values (?, ?, ?)", (patient, doctor, slot))
+                    accepted = accepted + 1
+                except sqlite3.IntegrityError:
+                    pass
+            print(accepted, "of", len(attempts), "booked")
+          - |
+            import sqlite3
+
+            schema = """
+                create table appointments (
+                    id integer primary key,
+                    patient integer not null references patients (id),
+                    doctor integer not null,
+                    slot text not null,
+                    unique (doctor, slot),
+                    unique (patient, slot)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("pragma foreign_keys = on")
+            db.execute("create table patients (id integer primary key, name text not null)")
+            db.execute("create table doctors (id integer primary key, name text not null)")
+            db.execute(schema)
+            db.executemany("insert into patients values (?, ?)", [(1, "Asha"), (2, "Bilal"), (3, "Chitra")])
+            db.executemany("insert into doctors values (?, ?)", [(1, "Dr Rao"), (2, "Dr Iyer")])
+            attempts = [
+                (1, 1, "Mon 10:00"), (2, 1, "Mon 10:00"), (2, 2, "Mon 10:00"), (1, 2, "Mon 10:00"),
+                (3, 1, "Mon 10:30"), (1, 1, "Mon 11:00"), (4, 2, "Mon 11:00"), (3, 3, "Mon 11:00"),
+            ]
+            accepted = 0
+            for patient, doctor, slot in attempts:
+                try:
+                    db.execute("insert into appointments (patient, doctor, slot) values (?, ?, ?)", (patient, doctor, slot))
+                    accepted = accepted + 1
+                except sqlite3.IntegrityError:
+                    pass
+            print(accepted, "of", len(attempts), "booked")
+        explanation: |
+          Appointments are the junction between patients and doctors, with the slot as the relationship's own attribute, and each rule is a `unique` pair. Without `unique (patient, slot)` a patient can be in two rooms at once; `unique (doctor, patient)` forbids a follow-up visit, which is normal; and without the foreign key to doctors an appointment can name a doctor who does not exist.
+    - question:
+        id: write-order-lines
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `schema` so that each order's lines are numbered from 1 within the order: the same line number may appear in different orders but not twice in one, a line must belong to an existing order, and deleting an order deletes its lines.
+        starter: |
+          import sqlite3
+
+          schema = """
+              create table order_lines (
+                  order_id integer,
+                  line_no integer,
+                  item text not null,
+                  qty integer not null check (qty > 0)
+              )
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.execute("pragma foreign_keys = on")
+          db.execute("create table orders (id integer primary key, customer text not null)")
+          db.execute(schema)
+          db.executemany("insert into orders values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+          attempts = [(1, 1, "dosa", 2), (1, 2, "coffee", 2), (2, 1, "idli", 4), (1, 2, "vada", 1), (3, 1, "tea", 1)]
+          refused = []
+          for order_id, line_no, item, qty in attempts:
+              try:
+                  db.execute("insert into order_lines values (?, ?, ?, ?)", (order_id, line_no, item, qty))
+              except sqlite3.IntegrityError:
+                  refused.append((order_id, line_no))
+          db.execute("delete from orders where id = 1")
+          print(refused, db.execute("select order_id, line_no, item from order_lines").fetchall())
+        solution: |
+          import sqlite3
+
+          schema = """
+              create table order_lines (
+                  order_id integer not null references orders (id) on delete cascade,
+                  line_no integer not null check (line_no >= 1),
+                  item text not null,
+                  qty integer not null check (qty > 0),
+                  primary key (order_id, line_no)
+              )
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.execute("pragma foreign_keys = on")
+          db.execute("create table orders (id integer primary key, customer text not null)")
+          db.execute(schema)
+          db.executemany("insert into orders values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+          attempts = [(1, 1, "dosa", 2), (1, 2, "coffee", 2), (2, 1, "idli", 4), (1, 2, "vada", 1), (3, 1, "tea", 1)]
+          refused = []
+          for order_id, line_no, item, qty in attempts:
+              try:
+                  db.execute("insert into order_lines values (?, ?, ?, ?)", (order_id, line_no, item, qty))
+              except sqlite3.IntegrityError:
+                  refused.append((order_id, line_no))
+          db.execute("delete from orders where id = 1")
+          print(refused, db.execute("select order_id, line_no, item from order_lines").fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(5)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("pragma foreign_keys = on")
+              _db.execute("create table orders (id integer primary key, customer text not null)")
+              _db.execute(schema)
+              _db.executemany("insert into orders values (?, ?)", [(1, "A"), (2, "B"), (3, "C")])
+              _lines = set()
+              for _k in range(8):
+                  _o = _rng.randint(1, 4)
+                  _n = _rng.randint(0, 3)
+                  _ok = _o <= 3 and _n >= 1 and (_o, _n) not in _lines
+                  try:
+                      _db.execute("insert into order_lines values (?, ?, ?, ?)", (_o, _n, "x", 1))
+                      _done = True
+                  except sqlite3.IntegrityError:
+                      _done = False
+                  assert _done == _ok, "With lines " + str(sorted(_lines)) + " as (order, line), adding line " + str(_n) + " to order " + str(_o) + " should be " + ("accepted" if _ok else "refused")
+                  if _ok:
+                      _lines.add((_o, _n))
+              _gone = _rng.randint(1, 3)
+              try:
+                  _db.execute("delete from orders where id = ?", (_gone,))
+              except sqlite3.IntegrityError:
+                  assert False, "Deleting order " + str(_gone) + " should delete its lines, not be refused"
+              _left = sorted(_db.execute("select order_id, line_no from order_lines").fetchall())
+              _want = sorted(_l for _l in _lines if _l[0] != _gone)
+              assert _left == _want, "After deleting order " + str(_gone) + ", the lines left should be " + str(_want) + ", not " + str(_left)
+          assert output.strip() == "[(1, 2), (3, 1)] [(2, 1, 'idli')]", "The program should print [(1, 2), (3, 1)] [(2, 1, 'idli')]"
+        wrong:
+          - |
+            import sqlite3
+
+            schema = """
+                create table order_lines (
+                    order_id integer not null references orders (id) on delete cascade,
+                    line_no integer not null check (line_no >= 1),
+                    item text not null,
+                    qty integer not null check (qty > 0),
+                    primary key (line_no)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("pragma foreign_keys = on")
+            db.execute("create table orders (id integer primary key, customer text not null)")
+            db.execute(schema)
+            db.executemany("insert into orders values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+            attempts = [(1, 1, "dosa", 2), (1, 2, "coffee", 2), (2, 1, "idli", 4), (1, 2, "vada", 1), (3, 1, "tea", 1)]
+            refused = []
+            for order_id, line_no, item, qty in attempts:
+                try:
+                    db.execute("insert into order_lines values (?, ?, ?, ?)", (order_id, line_no, item, qty))
+                except sqlite3.IntegrityError:
+                    refused.append((order_id, line_no))
+            db.execute("delete from orders where id = 1")
+            print(refused, db.execute("select order_id, line_no, item from order_lines").fetchall())
+          - |
+            import sqlite3
+
+            schema = """
+                create table order_lines (
+                    order_id integer not null references orders (id),
+                    line_no integer not null check (line_no >= 1),
+                    item text not null,
+                    qty integer not null check (qty > 0),
+                    primary key (order_id, line_no)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("pragma foreign_keys = on")
+            db.execute("create table orders (id integer primary key, customer text not null)")
+            db.execute(schema)
+            db.executemany("insert into orders values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+            attempts = [(1, 1, "dosa", 2), (1, 2, "coffee", 2), (2, 1, "idli", 4), (1, 2, "vada", 1), (3, 1, "tea", 1)]
+            refused = []
+            for order_id, line_no, item, qty in attempts:
+                try:
+                    db.execute("insert into order_lines values (?, ?, ?, ?)", (order_id, line_no, item, qty))
+                except sqlite3.IntegrityError:
+                    refused.append((order_id, line_no))
+            db.execute("delete from orders where id = 1")
+            print(refused, db.execute("select order_id, line_no, item from order_lines").fetchall())
+          - |
+            import sqlite3
+
+            schema = """
+                create table order_lines (
+                    order_id integer not null,
+                    line_no integer not null check (line_no >= 1),
+                    item text not null,
+                    qty integer not null check (qty > 0),
+                    primary key (order_id, line_no)
+                )
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.execute("pragma foreign_keys = on")
+            db.execute("create table orders (id integer primary key, customer text not null)")
+            db.execute(schema)
+            db.executemany("insert into orders values (?, ?)", [(1, "Asha"), (2, "Bilal")])
+            attempts = [(1, 1, "dosa", 2), (1, 2, "coffee", 2), (2, 1, "idli", 4), (1, 2, "vada", 1), (3, 1, "tea", 1)]
+            refused = []
+            for order_id, line_no, item, qty in attempts:
+                try:
+                    db.execute("insert into order_lines values (?, ?, ?, ?)", (order_id, line_no, item, qty))
+                except sqlite3.IntegrityError:
+                    refused.append((order_id, line_no))
+            db.execute("delete from orders where id = 1")
+            print(refused, db.execute("select order_id, line_no, item from order_lines").fetchall())
+        explanation: |
+          An order line is a weak entity: its key is the owner's key plus its number, `primary key (order_id, line_no)`, and `on delete cascade` removes it with its order. Keying by `line_no` alone allows only one order to have a line 1; without the cascade, deleting an order with lines is refused; and without the foreign key a line can belong to an order that does not exist.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          What is the smallest number of tables for the puzzle's coaching institute?
+        answer: "4"
+        explanation: |
+          students, teachers and batches are entities; batches refer to their one teacher; and students and batches are many to many with a fee on each pair, which needs a fourth table, enrolments.
+    - question:
+        id: work-cuisines
+        type: choice
+        system: s2
+        prompt: |
+          A food app stores each restaurant's cuisines in one text column, such as 'South Indian, Chinese'. Searching by cuisine is slow and the spellings drift. What design fixes this?
+        options:
+          - "A cuisines table, and a junction table restaurant_cuisines with a foreign key to each side."
+          - "Columns cuisine1, cuisine2 and cuisine3 in restaurants."
+          - "An index on the cuisines column."
+          - "A cuisine column in restaurants holding just the main cuisine."
+        answer: 0
+        explanation: |
+          A restaurant serves many cuisines and a cuisine is served by many restaurants, so the relationship is many to many and needs a junction table. Numbered columns cap the count and make every query check three columns; an index cannot search inside a list; and keeping one cuisine throws facts away.
+  connections:
+    - text: |
+        Four: students, teachers, batches, and enrolments. The teacher's phone number sits in one row of teachers, the subject in one row of batches, and each fee in one row of enrolments. Folding teachers into batches would repeat a teacher's details in every batch they take; putting the fee in students would leave no place for a second batch's fee.
+
+        "No fact written twice" was decided here by judgement, from nouns, verbs and cardinalities. There is a precise version of the same idea, which can check a design rather than trust it: which columns determine which others, written as functional dependencies, and which sets of columns determine everything, the keys. That is [[q1.keys-and-functional-dependencies]], and it leads to the normal forms of [[q1.normal-forms]]. Not every system stores entities as rows: the nested records of [[q1.document-models]] make different choices about the same relationships.

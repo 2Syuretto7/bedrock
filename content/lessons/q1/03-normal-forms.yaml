@@ -1,0 +1,701 @@
+concept: q1.normal-forms
+minutes: 85
+claim: You can name the update, insertion and deletion anomalies a badly split table suffers, state first, second, third and Boyce-Codd normal form in terms of keys and functional dependencies, find the dependency that breaks each, split a table into normal form, check that a split is lossless because the shared columns are a key of one side, and say when Boyce-Codd normal form costs a dependency that third normal form keeps.
+recalls: [q1.keys-and-functional-dependencies]
+uses: [q1.entities-and-relationships, q0.joins, q0.relational-algebra, q0.writes-constraints-and-transactions, f2.sets-and-set-operations]
+leads: [q1.denormalisation-and-its-costs, q1.document-models]
+starter: |
+  # Scratch space. A wide table, and the facts it repeats.
+  import sqlite3
+
+  db = sqlite3.connect(":memory:")
+  db.executescript("""
+      create table flat (student text, batch text, teacher text, t_phone text);
+      insert into flat values ('Asha', 'P1', 'Rao', '99001'), ('Bilal', 'P1', 'Rao', '99001'), ('Chitra', 'M1', 'Rao', '99001');
+  """)
+  print(db.execute("select count(*) from flat where teacher = 'Rao'").fetchone())
+  print(db.execute("select distinct teacher, t_phone from flat").fetchall())
+parts:
+  recall:
+    - text: |
+        [[q1.keys-and-functional-dependencies]] gave a precise language: dependencies say which columns decide which, closures follow them, and keys are the column sets that decide everything. This lesson uses that language to judge a table. The question is always the same: does every fact live in exactly one row? The normal forms are a ladder of answers, each rung ruling out one way a fact can end up written many times. Three quick pulls first.
+  puzzle:
+    - text: |
+        A coaching institute keeps one wide table, a row for each student in each batch:
+
+        | student | s_phone | batch | subject | teacher | t_phone | fee |
+        | --- | --- | --- | --- | --- | --- | --- |
+        | Asha | 98450 | P1 | Physics | Rao | 99001 | 4,000 |
+        | Bilal | 98761 | P1 | Physics | Rao | 99001 | 4,000 |
+
+        Mr Rao teaches three batches, with 40, 35 and 45 students.
+
+        **When Mr Rao changes his phone number, how many rows must be updated?**
+  intuition:
+    - text: |
+        A family keeps its wedding guest list in a spreadsheet, one row per guest, and copies each household's address into every one of its rows. When the Sharmas move house, someone must change twelve rows, and if they miss one, the list now holds two addresses for the same family and nobody knows which is right. The address is a fact about the household, not about each guest, yet it is written once per guest.
+
+        That is the whole problem normalisation solves: a column that depends on only part of what identifies a row, or on another non-key column, gets repeated in every row that shares that part. The figure takes the institute's wide table and splits it in two steps until each fact is stored once. Rao's phone number is marked.
+    - figure: normalise-steps
+      props: { step: 1 }
+    - text: |
+        In the wide table, the key is (student, batch), but a student's phone depends on the student alone, and a batch's subject and teacher on the batch alone, so they repeat. Moving them into students and batches leaves Rao's phone in each of his batches, because it depends on the teacher, who depends on the batch. One more split, into teachers, and every fact sits in one row. Nothing was lost: joining the four tables gives back the six rows.
+  derivation:
+    - text: |
+        **Anomalies.** A table that stores a fact many times suffers three kinds of trouble. An **update anomaly**: changing the fact means changing many rows, and missing one leaves the data contradicting itself. An **insertion anomaly**: a fact cannot be recorded without an unrelated one, so a new batch with its teacher cannot be entered until a student joins, because the key needs a student. A **deletion anomaly**: removing a row removes a fact with it, so when the last student leaves batch M1, the record that Rao teaches it disappears. The constraints of [[q0.writes-constraints-and-transactions]] cannot fix this; the cure is a different set of tables.
+
+        **First normal form.** Every cell holds one value: no lists such as 'Physics, Maths' in a column, and no repeating groups such as `phone1`, `phone2`, `phone3`. A many-valued fact is a relationship, and it becomes rows of another table, as the junction tables of [[q1.entities-and-relationships]] did.
+
+        **Second normal form.** In first normal form, and no column outside every key depends on only part of a candidate key. In the wide table, student → s_phone and batch → subject, teacher are such **partial dependencies**, since the key is (student, batch). The cure moves each one to a table keyed by that part.
+    - question:
+        id: derivation-anomaly
+        type: choice
+        system: s2
+        prompt: |
+          In the wide table, the institute cannot record a new batch, Chemistry C2 with Ms Iyer, until some student joins it. Which anomaly is this?
+        options:
+          - "An insertion anomaly"
+          - "An update anomaly"
+          - "A deletion anomaly"
+          - "A lossy join"
+        answer: 0
+        explanation: |
+          The key (student, batch) needs a student, so the batch's own facts have nowhere to go on their own. In a separate batches table, C2 is one row from the start.
+    - text: |
+        **Third normal form.** For every non-trivial dependency $X \to A$, either $X$ is a superkey or $A$ is part of some candidate key. It rules out **transitive** dependencies through a non-key column, such as batch → teacher → t_phone: teacher is not a key of batches, so t_phone repeats for every batch Rao takes. The old summary is that every column depends on "the key, the whole key, and nothing but the key".
+
+        **Boyce-Codd normal form.** For every non-trivial dependency $X \to Y$, $X$ is a superkey. It is stricter than third normal form only in one situation: a non-key set of columns determining part of a key. Suppose each teacher teaches one subject, and each student has one teacher per subject. In `tutoring (student, subject, teacher)`, the keys are (student, subject) and (student, teacher), and teacher → subject holds. Subject is part of a key, so the table is in third normal form; teacher is not a superkey, so it is not in Boyce-Codd normal form, and each teacher's subject repeats for every student.
+
+        **Splitting.** To remove a violation $X \to Y$ from a table $R$, split it into $X^+$, the columns $X$ decides, and $X$ together with everything else. Repeat on each piece until no violation remains.
+    - question:
+        id: order-split
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of splitting a table into Boyce-Codd normal form in order.
+        steps:
+          - "Find the candidate keys from the dependencies."
+          - "Find a non-trivial dependency X → Y whose left side X is not a superkey."
+          - "Compute the closure of X."
+          - "Split the table into the closure of X, and X with all the remaining columns."
+          - "Check each new table for violations and repeat until none remain."
+        explanation: |
+          Whether a left side is a superkey needs the keys, the split needs the closure, and each piece must be checked again, because a piece can still contain a violation.
+    - text: |
+        **Lossless splits.** A split must not lose information: joining the pieces with [[q0.joins]], or the natural join of [[q0.relational-algebra]], must give back exactly the original rows. A split of $R$ into $R_1$ and $R_2$ is **lossless** when the columns they share, $R_1 \cap R_2$ in the sense of [[f2.sets-and-set-operations]], are a superkey of $R_1$ or of $R_2$. Then each row of the other piece joins with exactly one row. Splitting enrolments from batches on `batch` is lossless, since batch is the key of batches. Splitting on `subject` is not: Physics has two batches, so every Physics student joins with both, and the join invents rows that never existed.
+
+        **What Boyce-Codd can cost.** Splitting `tutoring` on teacher → subject gives `(teacher, subject)` and `(student, teacher)`. The split is lossless, but the rule "one teacher per student per subject" now spans two tables, and no key in either can enforce it. Third normal form can always be reached without losing a dependency; Boyce-Codd normal form sometimes cannot. Designers usually aim for Boyce-Codd and settle for third normal form when this happens.
+    - question:
+        id: derivation-lossy
+        type: numeric
+        system: s2
+        prompt: |
+          Physics has two batches, P1 and P2. A wide table is split into `(student, subject, fee)` and `(batch, subject, teacher)`, and joined back on subject. A student who was in P1 only appears in how many rows of the join?
+        answer: "2"
+        explanation: |
+          The student's row matches every batch with subject Physics, P1 and P2, so one real enrolment becomes two rows. Subject is not a key of either piece, so the split is lossy.
+  formal:
+    - text: |
+        **Anomalies.** Update, insertion and deletion anomalies arise when one fact is stored in many rows.
+
+        **1NF.** Each cell holds a single value; no repeating groups.
+
+        **2NF.** 1NF, and no column outside every candidate key depends on a proper subset of a candidate key.
+
+        **3NF.** For every non-trivial $X \to A$: $X$ is a superkey, or $A$ belongs to some candidate key.
+
+        **BCNF.** For every non-trivial $X \to Y$: $X$ is a superkey.
+
+        **Decomposition.** Replace $R$ by projections $R_1, R_2$ with $R_1 \cup R_2 = R$. Lossless if $R_1 \cap R_2$ is a superkey of $R_1$ or $R_2$. Dependency-preserving if every dependency can be checked within one piece. 3NF is always reachable losslessly with dependencies preserved; BCNF always losslessly, but not always preserving dependencies.
+  drill:
+    - text: Seconds each. Ask what each column depends on, and whether that is a whole key.
+    - question:
+        id: drill-1nf
+        type: choice
+        system: s1
+        prompt: |
+          A table has columns phone1, phone2 and phone3. Which normal form does it break?
+        options:
+          - "First"
+          - "Second"
+          - "Third"
+          - "None"
+        answer: 0
+        explanation: A repeating group is a list spread over columns; the phones belong in rows of their own table.
+    - question:
+        id: drill-partial
+        type: choice
+        system: s1
+        prompt: |
+          The key is (student, batch), and student → s_phone holds. Which normal form does that break?
+        options:
+          - "Second"
+          - "First"
+          - "Boyce-Codd only"
+          - "None"
+        answer: 0
+        explanation: s_phone depends on part of the key, a partial dependency.
+    - question:
+        id: drill-transitive
+        type: choice
+        system: s1
+        prompt: |
+          In `batches (batch, teacher, t_phone)` with batch the key, teacher → t_phone holds. Which normal form does that break?
+        options:
+          - "Third"
+          - "Second"
+          - "First"
+          - "None"
+        answer: 0
+        explanation: t_phone depends on the key only through teacher, a non-key column.
+    - question:
+        id: drill-lossless
+        type: choice
+        system: s1
+        prompt: |
+          A table is split into two pieces sharing the column batch. When is the split certainly lossless?
+        options:
+          - "When batch is a key of one of the pieces"
+          - "When both pieces have the same number of rows"
+          - "When batch is not null"
+          - "Always"
+        answer: 0
+        explanation: Then each row of the other piece joins with exactly one row.
+    - question:
+        id: drill-rows
+        type: numeric
+        system: s1
+        prompt: |
+          A teacher's phone is stored in a batches table, and the teacher takes 4 batches. After moving phones to a teachers table, how many rows hold that phone?
+        answer: "1"
+        explanation: The phone is a fact about the teacher, so it lives in the teacher's one row.
+    - question:
+        id: predict-lossy
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table e (student text, subject text);
+              create table b (batch text, subject text);
+              insert into e values ('Asha', 'Physics');
+              insert into b values ('P1', 'Physics'), ('P2', 'Physics');
+          """)
+          print(db.execute("select student, batch from e natural join b").fetchall())
+        output: "[('Asha', 'P1'), ('Asha', 'P2')]"
+        explanation: Joining on subject matches Asha with every Physics batch, inventing a row.
+    - question:
+        id: predict-distinct
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table flat (student text, batch text, teacher text);
+              insert into flat values ('Asha', 'P1', 'Rao'), ('Bilal', 'P1', 'Rao'), ('Asha', 'M1', 'Rao');
+          """)
+          print(db.execute("select count(*) from (select distinct batch, teacher from flat)").fetchone())
+        output: "(2,)"
+        explanation: The projection onto (batch, teacher) has one row per batch, P1 and M1, however many students each has.
+  work:
+    - text: Slower now. For every split, name the shared columns and check that they are a key of one side.
+    - question:
+        id: fix-lossy-split
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `split` should break `flat` into batches, one row per batch with its subject and teacher, and enrolments, one row per student and batch with the fee, so that their natural join gives back exactly the original rows. The program should print `6 6 True`. It prints `6 10 False`. Find the fault and fix it.
+        starter: |
+          import sqlite3
+
+          split = """
+              create table batches as select distinct batch, subject, teacher from flat;
+              create table enrolments as select distinct student, subject, fee from flat;
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table flat (student text, batch text, subject text, teacher text, fee integer);
+              insert into flat values
+                  ('Asha', 'P1', 'Physics', 'Rao', 4000), ('Asha', 'C1', 'Chemistry', 'Iyer', 3500),
+                  ('Bilal', 'P2', 'Physics', 'Sen', 4000), ('Chitra', 'P1', 'Physics', 'Rao', 3000),
+                  ('Dev', 'C1', 'Chemistry', 'Iyer', 3500), ('Esha', 'P2', 'Physics', 'Sen', 4000);
+          """)
+          db.executescript(split)
+          rejoined = db.execute("select student, batch, subject, teacher, fee from enrolments natural join batches").fetchall()
+          original = db.execute("select student, batch, subject, teacher, fee from flat").fetchall()
+          print(len(original), len(rejoined), sorted(rejoined) == sorted(original))
+        solution: |
+          import sqlite3
+
+          split = """
+              create table batches as select distinct batch, subject, teacher from flat;
+              create table enrolments as select distinct student, batch, fee from flat;
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table flat (student text, batch text, subject text, teacher text, fee integer);
+              insert into flat values
+                  ('Asha', 'P1', 'Physics', 'Rao', 4000), ('Asha', 'C1', 'Chemistry', 'Iyer', 3500),
+                  ('Bilal', 'P2', 'Physics', 'Sen', 4000), ('Chitra', 'P1', 'Physics', 'Rao', 3000),
+                  ('Dev', 'C1', 'Chemistry', 'Iyer', 3500), ('Esha', 'P2', 'Physics', 'Sen', 4000);
+          """)
+          db.executescript(split)
+          rejoined = db.execute("select student, batch, subject, teacher, fee from enrolments natural join batches").fetchall()
+          original = db.execute("select student, batch, subject, teacher, fee from flat").fetchall()
+          print(len(original), len(rejoined), sorted(rejoined) == sorted(original))
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(9)
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table flat (student text, batch text, subject text, teacher text, fee integer)")
+              _batches = {}
+              for _b in ["P1", "P2", "C1", "C2", "M1"][: _rng.randint(2, 5)]:
+                  _batches[_b] = ({"P": "Physics", "C": "Chemistry", "M": "Maths"}[_b[0]], _rng.choice(["Rao", "Iyer", "Sen"]))
+              _rows = []
+              for _st in ["Asha", "Bilal", "Chitra", "Dev", "Esha"][: _rng.randint(1, 5)]:
+                  for _b in _rng.sample(sorted(_batches), _rng.randint(1, len(_batches))):
+                      _rows.append((_st, _b, _batches[_b][0], _batches[_b][1], _rng.choice([3000, 3500, 4000])))
+              _db.executemany("insert into flat values (?, ?, ?, ?, ?)", _rows)
+              _db.executescript(split)
+              _back = sorted(_db.execute("select student, batch, subject, teacher, fee from enrolments natural join batches").fetchall())
+              assert _back == sorted(_rows), "Joining the tables back should give the original " + str(len(_rows)) + " rows, but gives " + str(len(_back))
+              _bcols = [_c[1] for _c in _db.execute("pragma table_info(batches)").fetchall()]
+              _ecols = [_c[1] for _c in _db.execute("pragma table_info(enrolments)").fetchall()]
+              assert sorted(_bcols) == ["batch", "subject", "teacher"], "batches should hold one row per batch with its subject and teacher, but its columns are " + str(_bcols)
+              assert sorted(_ecols) == ["batch", "fee", "student"], "enrolments should hold one row per student and batch with the fee, but its columns are " + str(_ecols)
+          assert output.strip() == "6 6 True", "The program should print 6 6 True"
+        wrong:
+          - |
+            import sqlite3
+
+            split = """
+                create table batches as select distinct batch, subject, teacher from flat;
+                create table enrolments as select distinct student, teacher, fee from flat;
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table flat (student text, batch text, subject text, teacher text, fee integer);
+                insert into flat values
+                    ('Asha', 'P1', 'Physics', 'Rao', 4000), ('Asha', 'C1', 'Chemistry', 'Iyer', 3500),
+                    ('Bilal', 'P2', 'Physics', 'Sen', 4000), ('Chitra', 'P1', 'Physics', 'Rao', 3000),
+                    ('Dev', 'C1', 'Chemistry', 'Iyer', 3500), ('Esha', 'P2', 'Physics', 'Sen', 4000);
+            """)
+            db.executescript(split)
+            rejoined = db.execute("select student, batch, subject, teacher, fee from enrolments natural join batches").fetchall()
+            original = db.execute("select student, batch, subject, teacher, fee from flat").fetchall()
+            print(len(original), len(rejoined), sorted(rejoined) == sorted(original))
+          - |
+            import sqlite3
+
+            split = """
+                create table batches as select distinct batch, subject, teacher from flat;
+                create table enrolments as select distinct student, batch from flat;
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table flat (student text, batch text, subject text, teacher text, fee integer);
+                insert into flat values
+                    ('Asha', 'P1', 'Physics', 'Rao', 4000), ('Asha', 'C1', 'Chemistry', 'Iyer', 3500),
+                    ('Bilal', 'P2', 'Physics', 'Sen', 4000), ('Chitra', 'P1', 'Physics', 'Rao', 3000),
+                    ('Dev', 'C1', 'Chemistry', 'Iyer', 3500), ('Esha', 'P2', 'Physics', 'Sen', 4000);
+            """)
+            db.executescript(split)
+            rejoined = db.execute("select student, batch, subject, teacher, fee from enrolments natural join batches").fetchall()
+            original = db.execute("select student, batch, subject, teacher, fee from flat").fetchall()
+            print(len(original), len(rejoined), sorted(rejoined) == sorted(original))
+          - |
+            import sqlite3
+
+            split = """
+                create table batches as select distinct batch, subject, teacher, fee from flat;
+                create table enrolments as select distinct student, batch, fee from flat;
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table flat (student text, batch text, subject text, teacher text, fee integer);
+                insert into flat values
+                    ('Asha', 'P1', 'Physics', 'Rao', 4000), ('Asha', 'C1', 'Chemistry', 'Iyer', 3500),
+                    ('Bilal', 'P2', 'Physics', 'Sen', 4000), ('Chitra', 'P1', 'Physics', 'Rao', 3000),
+                    ('Dev', 'C1', 'Chemistry', 'Iyer', 3500), ('Esha', 'P2', 'Physics', 'Sen', 4000);
+            """)
+            db.executescript(split)
+            rejoined = db.execute("select student, batch, subject, teacher, fee from enrolments natural join batches").fetchall()
+            original = db.execute("select student, batch, subject, teacher, fee from flat").fetchall()
+            print(len(original), len(rejoined), sorted(rejoined) == sorted(original))
+        explanation: |
+          The two tables shared only subject, which is not a key of batches, so every Physics enrolment joined with both Physics batches. Sharing batch, the key of batches, makes the split lossless. Sharing the teacher fails the same way when a teacher takes two batches; dropping the fee loses a fact; and putting the fee into batches gives a batch one row per fee.
+    - question:
+        id: write-bcnf-violations
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `bcnf_violations(columns, fds)`, returning `(sorted left, sorted right)` for each non-trivial dependency whose left side is not a superkey, in the order given. A dependency is trivial when its right side lies inside its left side. `closure` is written for you. The program should print `[(['student'], ['phone']), (['batch'], ['subject', 'teacher'])]`.
+        starter: |
+          def closure(attributes, fds):
+              result = set(attributes)
+              changed = True
+              while changed:
+                  changed = False
+                  for left, right in fds:
+                      if left <= result and not right <= result:
+                          result = result | right
+                          changed = True
+              return result
+
+
+          def bcnf_violations(columns, fds):
+              # Return (sorted left, sorted right) for every dependency that breaks Boyce-Codd normal form, in the order given.
+              return []
+
+
+          columns = {"student", "phone", "batch", "subject", "teacher", "fee"}
+          fds = [
+              ({"student"}, {"phone"}),
+              ({"batch"}, {"subject", "teacher"}),
+              ({"student", "batch"}, {"fee"}),
+              ({"student", "batch"}, {"student"}),
+          ]
+          print(bcnf_violations(columns, fds))
+        solution: |
+          def closure(attributes, fds):
+              result = set(attributes)
+              changed = True
+              while changed:
+                  changed = False
+                  for left, right in fds:
+                      if left <= result and not right <= result:
+                          result = result | right
+                          changed = True
+              return result
+
+
+          def bcnf_violations(columns, fds):
+              # Return (sorted left, sorted right) for every dependency that breaks Boyce-Codd normal form, in the order given.
+              found = []
+              for left, right in fds:
+                  if not right <= left and closure(left, fds) != columns:
+                      found.append((sorted(left), sorted(right)))
+              return found
+
+
+          columns = {"student", "phone", "batch", "subject", "teacher", "fee"}
+          fds = [
+              ({"student"}, {"phone"}),
+              ({"batch"}, {"subject", "teacher"}),
+              ({"student", "batch"}, {"fee"}),
+              ({"student", "batch"}, {"student"}),
+          ]
+          print(bcnf_violations(columns, fds))
+        tests: |
+          import random as _random
+
+
+          def _cl(_attrs, _fds):
+              _r = set(_attrs)
+              _grew = True
+              while _grew:
+                  _grew = False
+                  for _l, _rt in _fds:
+                      if _l <= _r and not _rt <= _r:
+                          _r = _r | _rt
+                          _grew = True
+              return _r
+
+
+          _rng = _random.Random(31)
+          for _ in range(50):
+              _cols = set(["a", "b", "c", "d", "e"][: _rng.randint(2, 5)])
+              _fds = []
+              for _k in range(_rng.randint(1, 5)):
+                  _fds.append((set(_rng.sample(sorted(_cols), _rng.randint(1, 2))), set(_rng.sample(sorted(_cols), _rng.randint(1, 2)))))
+              _want = [(sorted(_l), sorted(_r)) for _l, _r in _fds if not _r <= _l and _cl(_l, _fds) != _cols]
+              _got = bcnf_violations(set(_cols), [(set(_l), set(_r)) for _l, _r in _fds])
+              assert _got == _want, "With columns " + str(sorted(_cols)) + " and dependencies " + str([(sorted(_l), sorted(_r)) for _l, _r in _fds]) + ", the violations are " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[(['student'], ['phone']), (['batch'], ['subject', 'teacher'])]", "The program should print [(['student'], ['phone']), (['batch'], ['subject', 'teacher'])]"
+        wrong:
+          - |
+            def closure(attributes, fds):
+                result = set(attributes)
+                changed = True
+                while changed:
+                    changed = False
+                    for left, right in fds:
+                        if left <= result and not right <= result:
+                            result = result | right
+                            changed = True
+                return result
+
+
+            def bcnf_violations(columns, fds):
+                # Return (sorted left, sorted right) for every dependency that breaks Boyce-Codd normal form, in the order given.
+                found = []
+                for left, right in fds:
+                    if closure(left, fds) != columns:
+                        found.append((sorted(left), sorted(right)))
+                return found
+
+
+            columns = {"student", "phone", "batch", "subject", "teacher", "fee"}
+            fds = [
+                ({"student"}, {"phone"}),
+                ({"batch"}, {"subject", "teacher"}),
+                ({"student", "batch"}, {"fee"}),
+                ({"student", "batch"}, {"student"}),
+            ]
+            print(bcnf_violations(columns, fds))
+          - |
+            def closure(attributes, fds):
+                result = set(attributes)
+                changed = True
+                while changed:
+                    changed = False
+                    for left, right in fds:
+                        if left <= result and not right <= result:
+                            result = result | right
+                            changed = True
+                return result
+
+
+            def bcnf_violations(columns, fds):
+                # Return (sorted left, sorted right) for every dependency that breaks Boyce-Codd normal form, in the order given.
+                found = []
+                for left, right in fds:
+                    if not right <= left and left | right != columns:
+                        found.append((sorted(left), sorted(right)))
+                return found
+
+
+            columns = {"student", "phone", "batch", "subject", "teacher", "fee"}
+            fds = [
+                ({"student"}, {"phone"}),
+                ({"batch"}, {"subject", "teacher"}),
+                ({"student", "batch"}, {"fee"}),
+                ({"student", "batch"}, {"student"}),
+            ]
+            print(bcnf_violations(columns, fds))
+          - |
+            def closure(attributes, fds):
+                result = set(attributes)
+                changed = True
+                while changed:
+                    changed = False
+                    for left, right in fds:
+                        if left <= result and not right <= result:
+                            result = result | right
+                            changed = True
+                return result
+
+
+            def bcnf_violations(columns, fds):
+                # Return (sorted left, sorted right) for every dependency that breaks Boyce-Codd normal form, in the order given.
+                found = []
+                for left, right in fds:
+                    if not right <= left and len(left) == 1 and closure(left, fds) != columns:
+                        found.append((sorted(left), sorted(right)))
+                return found
+
+
+            columns = {"student", "phone", "batch", "subject", "teacher", "fee"}
+            fds = [
+                ({"student"}, {"phone"}),
+                ({"batch"}, {"subject", "teacher"}),
+                ({"student", "batch"}, {"fee"}),
+                ({"student", "batch"}, {"student"}),
+            ]
+            print(bcnf_violations(columns, fds))
+        explanation: |
+          A left side is a superkey exactly when its closure is every column, and trivial dependencies never break a normal form. Forgetting to skip trivial dependencies reports harmless ones; testing whether the left and right sides together cover every column ignores what the left side decides through other dependencies; and checking only one-column left sides misses violations such as (a, b) → c.
+    - question:
+        id: write-normalise
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Change `split` so that it creates four tables from `flat`: `students (student, s_phone)`, `teachers (teacher, t_phone)`, `batches (batch, subject, teacher)` and `enrolments (student, batch, fee)`, each holding one row per key, so that their natural join gives back the original rows. The program should print `[('batches', 3), ('enrolments', 6), ('flat', 6), ('students', 4), ('teachers', 2)]`.
+        starter: |
+          import sqlite3
+
+          split = """
+              create table enrolments as select distinct student, batch, fee from flat;
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table flat (student text, s_phone text, batch text, subject text, teacher text, t_phone text, fee integer);
+              insert into flat values
+                  ('Asha', '98450', 'P1', 'Physics', 'Rao', '99001', 4000),
+                  ('Asha', '98450', 'C1', 'Chemistry', 'Iyer', '99002', 3500),
+                  ('Bilal', '98761', 'P1', 'Physics', 'Rao', '99001', 4000),
+                  ('Chitra', '97012', 'P1', 'Physics', 'Rao', '99001', 3000),
+                  ('Chitra', '97012', 'M1', 'Maths', 'Rao', '99001', 3800),
+                  ('Dev', '96543', 'C1', 'Chemistry', 'Iyer', '99002', 3500);
+          """)
+          db.executescript(split)
+          names = [row[0] for row in db.execute("select name from sqlite_master where type = 'table' order by name").fetchall()]
+          print([(name, db.execute("select count(*) from " + name).fetchone()[0]) for name in names])
+        solution: |
+          import sqlite3
+
+          split = """
+              create table students as select distinct student, s_phone from flat;
+              create table teachers as select distinct teacher, t_phone from flat;
+              create table batches as select distinct batch, subject, teacher from flat;
+              create table enrolments as select distinct student, batch, fee from flat;
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table flat (student text, s_phone text, batch text, subject text, teacher text, t_phone text, fee integer);
+              insert into flat values
+                  ('Asha', '98450', 'P1', 'Physics', 'Rao', '99001', 4000),
+                  ('Asha', '98450', 'C1', 'Chemistry', 'Iyer', '99002', 3500),
+                  ('Bilal', '98761', 'P1', 'Physics', 'Rao', '99001', 4000),
+                  ('Chitra', '97012', 'P1', 'Physics', 'Rao', '99001', 3000),
+                  ('Chitra', '97012', 'M1', 'Maths', 'Rao', '99001', 3800),
+                  ('Dev', '96543', 'C1', 'Chemistry', 'Iyer', '99002', 3500);
+          """)
+          db.executescript(split)
+          names = [row[0] for row in db.execute("select name from sqlite_master where type = 'table' order by name").fetchall()]
+          print([(name, db.execute("select count(*) from " + name).fetchone()[0]) for name in names])
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(57)
+          _want_cols = {"students": ["s_phone", "student"], "teachers": ["t_phone", "teacher"], "batches": ["batch", "subject", "teacher"], "enrolments": ["batch", "fee", "student"]}
+          _keys = {"students": "student", "teachers": "teacher", "batches": "batch", "enrolments": "student, batch"}
+          for _ in range(20):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table flat (student text, s_phone text, batch text, subject text, teacher text, t_phone text, fee integer)")
+              _tphone = {_t: str(99000 + _i) for _i, _t in enumerate(["Rao", "Iyer", "Sen"])}
+              _batches = {_b: ({"P": "Physics", "C": "Chemistry", "M": "Maths"}[_b[0]], _rng.choice(sorted(_tphone))) for _b in ["P1", "P2", "C1", "M1"][: _rng.randint(1, 4)]}
+              _rows = []
+              for _i, _st in enumerate(["Asha", "Bilal", "Chitra", "Dev", "Esha"][: _rng.randint(1, 5)]):
+                  for _b in _rng.sample(sorted(_batches), _rng.randint(1, len(_batches))):
+                      _rows.append((_st, str(98000 + _i), _b, _batches[_b][0], _batches[_b][1], _tphone[_batches[_b][1]], _rng.choice([3000, 4000])))
+              _db.executemany("insert into flat values (?, ?, ?, ?, ?, ?, ?)", _rows)
+              _db.executescript(split)
+              for _t in ["students", "teachers", "batches", "enrolments"]:
+                  _cols = sorted(_c[1] for _c in _db.execute("pragma table_info(" + _t + ")").fetchall())
+                  assert _cols == _want_cols[_t], "The table " + _t + " should have the columns " + str(_want_cols[_t]) + ", not " + str(_cols)
+                  _n = _db.execute("select count(*) from " + _t).fetchone()[0]
+                  _k = _db.execute("select count(*) from (select distinct " + _keys[_t] + " from " + _t + ")").fetchone()[0]
+                  assert _n == _k, "The table " + _t + " should hold one row for each " + _keys[_t] + ", but has " + str(_n) + " rows for " + str(_k) + " of them"
+              _back = sorted(_db.execute("select student, s_phone, batch, subject, teacher, t_phone, fee from enrolments natural join students natural join batches natural join teachers").fetchall())
+              assert _back == sorted(_rows), "Joining the four tables should give back the original rows"
+          assert output.strip() == "[('batches', 3), ('enrolments', 6), ('flat', 6), ('students', 4), ('teachers', 2)]", "The program should print [('batches', 3), ('enrolments', 6), ('flat', 6), ('students', 4), ('teachers', 2)]"
+        wrong:
+          - |
+            import sqlite3
+
+            split = """
+                create table students as select distinct student, s_phone from flat;
+                create table teachers as select distinct teacher, t_phone from flat;
+                create table batches as select distinct batch, subject, teacher, t_phone from flat;
+                create table enrolments as select distinct student, batch, fee from flat;
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table flat (student text, s_phone text, batch text, subject text, teacher text, t_phone text, fee integer);
+                insert into flat values
+                    ('Asha', '98450', 'P1', 'Physics', 'Rao', '99001', 4000),
+                    ('Asha', '98450', 'C1', 'Chemistry', 'Iyer', '99002', 3500),
+                    ('Bilal', '98761', 'P1', 'Physics', 'Rao', '99001', 4000),
+                    ('Chitra', '97012', 'P1', 'Physics', 'Rao', '99001', 3000),
+                    ('Chitra', '97012', 'M1', 'Maths', 'Rao', '99001', 3800),
+                    ('Dev', '96543', 'C1', 'Chemistry', 'Iyer', '99002', 3500);
+            """)
+            db.executescript(split)
+            names = [row[0] for row in db.execute("select name from sqlite_master where type = 'table' order by name").fetchall()]
+            print([(name, db.execute("select count(*) from " + name).fetchone()[0]) for name in names])
+          - |
+            import sqlite3
+
+            split = """
+                create table students as select distinct student, s_phone from flat;
+                create table teachers as select distinct teacher, t_phone from flat;
+                create table batches as select distinct batch, teacher from flat;
+                create table enrolments as select distinct student, batch, subject, fee from flat;
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table flat (student text, s_phone text, batch text, subject text, teacher text, t_phone text, fee integer);
+                insert into flat values
+                    ('Asha', '98450', 'P1', 'Physics', 'Rao', '99001', 4000),
+                    ('Asha', '98450', 'C1', 'Chemistry', 'Iyer', '99002', 3500),
+                    ('Bilal', '98761', 'P1', 'Physics', 'Rao', '99001', 4000),
+                    ('Chitra', '97012', 'P1', 'Physics', 'Rao', '99001', 3000),
+                    ('Chitra', '97012', 'M1', 'Maths', 'Rao', '99001', 3800),
+                    ('Dev', '96543', 'C1', 'Chemistry', 'Iyer', '99002', 3500);
+            """)
+            db.executescript(split)
+            names = [row[0] for row in db.execute("select name from sqlite_master where type = 'table' order by name").fetchall()]
+            print([(name, db.execute("select count(*) from " + name).fetchone()[0]) for name in names])
+          - |
+            import sqlite3
+
+            split = """
+                create table students as select student, s_phone from flat;
+                create table teachers as select distinct teacher, t_phone from flat;
+                create table batches as select distinct batch, subject, teacher from flat;
+                create table enrolments as select distinct student, batch, fee from flat;
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table flat (student text, s_phone text, batch text, subject text, teacher text, t_phone text, fee integer);
+                insert into flat values
+                    ('Asha', '98450', 'P1', 'Physics', 'Rao', '99001', 4000),
+                    ('Asha', '98450', 'C1', 'Chemistry', 'Iyer', '99002', 3500),
+                    ('Bilal', '98761', 'P1', 'Physics', 'Rao', '99001', 4000),
+                    ('Chitra', '97012', 'P1', 'Physics', 'Rao', '99001', 3000),
+                    ('Chitra', '97012', 'M1', 'Maths', 'Rao', '99001', 3800),
+                    ('Dev', '96543', 'C1', 'Chemistry', 'Iyer', '99002', 3500);
+            """)
+            db.executescript(split)
+            names = [row[0] for row in db.execute("select name from sqlite_master where type = 'table' order by name").fetchall()]
+            print([(name, db.execute("select count(*) from " + name).fetchone()[0]) for name in names])
+        explanation: |
+          Each table is a `distinct` projection onto a key and the columns that depend on it. Keeping t_phone in batches leaves the transitive dependency through teacher; moving subject into enrolments repeats it for every student; and leaving out `distinct` gives students one row per enrolment.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle's wide table, how many rows must change when Mr Rao changes his phone number?
+        answer: "120"
+        explanation: |
+          His phone is copied into every row of every student in his batches: $40 + 35 + 45 = 120$. With a teachers table, it is one row.
+    - question:
+        id: work-tutoring
+        type: choice
+        system: s2
+        prompt: |
+          `tutoring (student, subject, teacher)` has keys (student, subject) and (student, teacher), and teacher → subject. The team must choose between keeping it and splitting it into (teacher, subject) and (student, teacher). What does each choice cost?
+        options:
+          - "Keeping it repeats each teacher's subject for every student; splitting it means no key can enforce one teacher per student per subject."
+          - "Keeping it loses rows; splitting it is free."
+          - "Splitting it is lossy; keeping it is free."
+          - "Both choices store every fact once."
+        answer: 0
+        explanation: |
+          The table is in third normal form but not Boyce-Codd: teacher → subject repeats. The Boyce-Codd split is lossless, but the rule (student, subject) → teacher now spans two tables and needs a check outside any key, such as a trigger or application code.
+  connections:
+    - text: |
+        120 rows: 40, 35 and 45 students, each row carrying Rao's phone. If one of the 120 updates fails or is forgotten, the institute holds two phone numbers for one teacher and cannot tell which is right. In third normal form, the same change is one row.
+
+        Normalisation trades repetition for joins: the report that once read one wide table now joins four. Most of the time that trade is right, because joins on keys are cheap with the indexes the keys bring. Sometimes a read is so frequent, or the data so rarely changes, that storing a fact twice on purpose is worth its cost, and [[q1.denormalisation-and-its-costs]] is about doing that knowingly. Systems that keep related facts nested inside one record, the [[q1.document-models]], make that trade by default.

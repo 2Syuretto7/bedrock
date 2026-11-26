@@ -6590,6 +6590,661 @@ function IndexLookup(props: Props) {
   );
 }
 
+type ErKind = "one-one" | "one-many" | "many-many";
+const ER_KINDS: ErKind[] = ["one-one", "one-many", "many-many"];
+const ER_SHAPES: Record<
+  ErKind,
+  { label: string; left: string; right: string; verb: string; ends: [string, string]; tables: { name: string; head: string[]; rows: SqlCell[][]; key: number[] }[]; rule: string; short: string; reading: string }
+> = {
+  "one-one": {
+    label: "one to one",
+    left: "employee",
+    right: "laptop",
+    verb: "is issued",
+    ends: ["1", "1"],
+    tables: [
+      { name: "employees", head: ["id", "name"], rows: [[1, "Asha"], [2, "Bilal"]], key: [] },
+      { name: "laptops", head: ["id", "serial", "employee"], rows: [[7, "LX-201", 1], [8, "LX-305", 2]], key: [2] },
+    ],
+    rule: "laptops.employee is a foreign key declared unique",
+    short: "laptops.employee: a unique foreign key",
+    reading: "Each employee is issued at most one laptop, and each laptop goes to at most one employee",
+  },
+  "one-many": {
+    label: "one to many",
+    left: "teacher",
+    right: "batch",
+    verb: "teaches",
+    ends: ["1", "N"],
+    tables: [
+      { name: "teachers", head: ["id", "name"], rows: [[1, "Rao"], [2, "Iyer"]], key: [] },
+      { name: "batches", head: ["id", "subject", "teacher"], rows: [[10, "Physics", 1], [11, "Chemistry", 1], [12, "Maths", 2]], key: [2] },
+    ],
+    rule: "the foreign key batches.teacher sits on the many side",
+    short: "the foreign key goes on the many side",
+    reading: "Each teacher teaches any number of batches, and each batch has exactly one teacher",
+  },
+  "many-many": {
+    label: "many to many",
+    left: "student",
+    right: "batch",
+    verb: "enrols in",
+    ends: ["M", "N"],
+    tables: [
+      { name: "students", head: ["id", "name"], rows: [[1, "Asha"], [2, "Bilal"]], key: [] },
+      { name: "enrolments", head: ["student", "batch", "fee"], rows: [[1, 10, 4000], [1, 11, 3500], [2, 10, 4000]], key: [0, 1] },
+      { name: "batches", head: ["id", "subject"], rows: [[10, "Physics"], [11, "Chemistry"]], key: [] },
+    ],
+    rule: "a junction table, enrolments, holds a foreign key to each side and the fee",
+    short: "a junction table holds a key to each side",
+    reading: "Each student enrols in any number of batches, and each batch has any number of students",
+  },
+};
+
+/** An entity-relationship pair at three cardinalities, and the tables each one becomes. */
+function ErCardinality(props: Props) {
+  const [kind, setKind] = useState<ErKind>(ER_KINDS.includes(props.kind as ErKind) ? (props.kind as ErKind) : "one-many");
+  const shape = ER_SHAPES[kind];
+  const widths = (t: { head: string[]; rows: SqlCell[][] }) => t.head.map((h, c) => Math.max(34, ...[h, ...t.rows.map((r) => String(r[c]))].map((v) => v.length * 7 + 10)));
+  const lefts: number[] = [];
+  let x = 8;
+  for (const t of shape.tables) {
+    lefts.push(x);
+    x += widths(t).reduce((s, w) => s + w, 0) + 16;
+  }
+  const summary = `${shape.label[0].toUpperCase()}${shape.label.slice(1)}: ${shape.reading}. As tables: ${shape.tables.map((t) => `${t.name} (${t.head.join(", ")})`).join("; ")}. The rule: ${shape.rule}.`;
+  return (
+    <Frame
+      title="Relationships and the tables they become"
+      summary={summary}
+      controls={
+        <>
+          {ER_KINDS.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={kind === k} onClick={() => setKind(k)}>
+              {ER_SHAPES[k].label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 236" role="img" aria-label={`${shape.label}: ${shape.left} ${shape.verb} ${shape.right}, stored as ${shape.tables.length} tables`}>
+        <rect x={20} y={12} width={110} height={32} className="fig-cell" />
+        <text x={75} y={32} textAnchor="middle" className="fig-small">
+          {shape.left}
+        </text>
+        <rect x={310} y={12} width={110} height={32} className="fig-cell" />
+        <text x={365} y={32} textAnchor="middle" className="fig-small">
+          {shape.right}
+        </text>
+        <line x1={130} y1={28} x2={310} y2={28} className="fig-axis" />
+        <rect x={172} y={16} width={96} height={24} className="fig-fill" />
+        <text x={220} y={32} textAnchor="middle" className="fig-small">
+          {shape.verb}
+        </text>
+        <text x={140} y={22} className="fig-small" style={{ fontWeight: 600 }}>
+          {shape.ends[0]}
+        </text>
+        <text x={296} y={22} className="fig-small" style={{ fontWeight: 600 }}>
+          {shape.ends[1]}
+        </text>
+        {shape.tables.map((t, i) => (
+          <SqlTable key={t.name} x={lefts[i]} y={88} widths={widths(t)} head={t.head} rows={t.rows} title={t.name} mark={(_, c) => (t.key.includes(c) ? "accent" : undefined)} />
+        ))}
+        <text x={8} y={222} className="fig-small">
+          {shape.short}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const FD_COLUMNS = ["pnr", "pax", "name", "train", "train_name", "date", "coach", "berth"];
+const FD_RULES: [string[], string[]][] = [
+  [["pnr"], ["train", "date"]],
+  [["train"], ["train_name"]],
+  [["pnr", "pax"], ["name", "coach", "berth"]],
+  [["train", "date", "coach", "berth"], ["pnr", "pax"]],
+];
+/** The rules applied, in order, while working out the closure of a set of columns: each with the columns it added. */
+const fdSteps = (start: string[]) => {
+  const known = new Set(start);
+  const steps: { rule: number; added: string[] }[] = [];
+  let grew = true;
+  while (grew) {
+    grew = false;
+    FD_RULES.forEach(([left, right], i) => {
+      const added = right.filter((c) => !known.has(c));
+      if (left.every((c) => known.has(c)) && added.length > 0) {
+        added.forEach((c) => known.add(c));
+        steps.push({ rule: i, added });
+        grew = true;
+      }
+    });
+  }
+  return { steps, closure: known };
+};
+
+/** Working out which columns a set of columns determines, one functional dependency at a time. */
+function FdClosure(props: Props) {
+  const initial = Array.isArray(props.start) ? FD_COLUMNS.filter((c) => (props.start as unknown[]).includes(c)) : ["pnr", "pax"];
+  const [start, setStart] = useState<string[]>(initial);
+  const { steps, closure } = fdSteps(start);
+  const [stepRaw, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, 8));
+  const step = Math.min(stepRaw, steps.length);
+  const known = new Set([...start, ...steps.slice(0, step).flatMap((s) => s.added)]);
+  const done = step === steps.length;
+  const full = closure.size === FD_COLUMNS.length;
+  const minimal = full && start.every((c) => fdSteps(start.filter((d) => d !== c)).closure.size < FD_COLUMNS.length);
+  const toggle = (c: string) => {
+    setStart(start.includes(c) ? start.filter((d) => d !== c) : FD_COLUMNS.filter((d) => d === c || start.includes(d)));
+    setStep(0);
+  };
+  const rule = (i: number) => `${FD_RULES[i][0].join(", ")} → ${FD_RULES[i][1].join(", ")}`;
+  const set = (cs: string[]) => (cs.length === 0 ? "nothing" : `{${cs.join(", ")}}`);
+  const now = step > 0 ? steps[step - 1] : null;
+  const verdict = !done
+    ? ""
+    : full
+      ? minimal
+        ? `The closure is all ${FD_COLUMNS.length} columns, so ${set(start)} is a superkey, and dropping any one of its columns loses that: a candidate key.`
+        : `The closure is all ${FD_COLUMNS.length} columns, so ${set(start)} is a superkey, but a smaller set inside it would do: not a candidate key.`
+      : `No rule adds anything more, and ${FD_COLUMNS.length - closure.size} of the ${FD_COLUMNS.length} columns are missing, so ${set(start)} is not a key.`;
+  const summary = `Start from ${set(start)}. ${now ? `Step ${step} of ${steps.length}: the rule ${rule(now.rule)} applies, adding ${now.added.join(", ")}.` : `Step 0 of ${steps.length}.`} Known so far: ${known.size} of ${FD_COLUMNS.length} columns, ${FD_COLUMNS.filter((c) => known.has(c)).join(", ")}. ${verdict}`;
+  return (
+    <Frame
+      title="The closure of a set of columns"
+      summary={summary}
+      controls={
+        <>
+          {FD_COLUMNS.map((c) => (
+            <button key={c} type="button" className="btn btn-secondary btn-small" aria-pressed={start.includes(c)} onClick={() => toggle(c)}>
+              {c}
+            </button>
+          ))}
+          <Stepper label="step" value={step} onChange={setStep} min={0} max={steps.length} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 226" role="img" aria-label={`Closure of ${set(start)}: ${known.size} of ${FD_COLUMNS.length} columns known after ${step} steps`}>
+        {FD_COLUMNS.map((c, i) => {
+          const x = 8 + (i % 4) * 106;
+          const y = 8 + Math.floor(i / 4) * 30;
+          const cls = start.includes(c) ? "fig-accent" : known.has(c) ? "fig-fill" : "fig-ghost";
+          return (
+            <g key={c}>
+              <rect x={x} y={y} width={100} height={24} className={cls} />
+              <text x={x + 50} y={y + 16} textAnchor="middle" className="fig-small" style={start.includes(c) ? { fill: "var(--bg)" } : undefined}>
+                {c}
+              </text>
+            </g>
+          );
+        })}
+        {FD_RULES.map((_, i) => {
+          const used = steps.slice(0, step).some((s) => s.rule === i);
+          const current = now?.rule === i;
+          return (
+            <g key={i}>
+              <rect x={8} y={84 + i * 24} width={424} height={20} className={current ? "fig-accent" : used ? "fig-fill" : "fig-cell"} />
+              <text x={14} y={98 + i * 24} className="fig-small" style={current ? { fill: "var(--bg)" } : undefined}>
+                {rule(i)}
+              </text>
+            </g>
+          );
+        })}
+        <text x={8} y={200} className="fig-small">
+          {`known: ${known.size} of ${FD_COLUMNS.length} columns`}
+        </text>
+        <text x={8} y={218} className="fig-small">
+          {done ? (full ? (minimal ? "superkey, and minimal: a candidate key" : "superkey, but not minimal") : "not a superkey") : ""}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const NF_FLAT: string[][] = [
+  ["Asha", "98450", "P1", "Physics", "Rao", "99001", "4,000"],
+  ["Asha", "98450", "C1", "Chemistry", "Iyer", "99002", "3,500"],
+  ["Bilal", "98761", "P1", "Physics", "Rao", "99001", "4,000"],
+  ["Chitra", "97012", "P1", "Physics", "Rao", "99001", "3,000"],
+  ["Chitra", "97012", "M1", "Maths", "Rao", "99001", "3,800"],
+  ["Dev", "96543", "C1", "Chemistry", "Iyer", "99002", "3,500"],
+];
+const NF_HEAD = ["student", "s_phone", "batch", "subject", "teacher", "t_phone", "fee"];
+type NfTable = { name: string; cols: number[]; x: number; y: number; widths: number[] };
+const nfRows = (cols: number[]) => {
+  const seen = new Set<string>();
+  return NF_FLAT.map((r) => cols.map((c) => r[c])).filter((r) => (seen.has(r.join("|")) ? false : (seen.add(r.join("|")), true)));
+};
+const NF_STAGES: { title: string; tables: NfTable[]; note: string; text: string }[] = [
+  {
+    title: "one wide table",
+    tables: [{ name: "flat", cols: [0, 1, 2, 3, 4, 5, 6], x: 6, y: 22, widths: [52, 50, 40, 64, 50, 50, 40] }],
+    note: "key (student, batch); Rao's phone is in 4 rows",
+    text: "One table holds everything, keyed by (student, batch). Rao's phone number appears in 4 rows, Physics as P1's subject in 3, and Asha's phone in 2: changing one fact means changing many rows, and a batch with no students cannot be recorded at all.",
+  },
+  {
+    title: "second normal form",
+    tables: [
+      { name: "students", cols: [0, 1], x: 6, y: 22, widths: [52, 50] },
+      { name: "enrolments", cols: [0, 2, 6], x: 112, y: 22, widths: [52, 40, 40] },
+      { name: "batches", cols: [2, 3, 4, 5], x: 250, y: 22, widths: [40, 64, 50, 50] },
+    ],
+    note: "no partial dependency; Rao's phone is in 2 rows",
+    text: "student → s_phone and batch → subject, teacher depend on part of the key, so those columns move to tables of their own, students and batches. Every non-key column now depends on a whole key. But batch → teacher → t_phone still repeats Rao's phone in both of his batches.",
+  },
+  {
+    title: "third normal form",
+    tables: [
+      { name: "students", cols: [0, 1], x: 6, y: 22, widths: [52, 50] },
+      { name: "enrolments", cols: [0, 2, 6], x: 112, y: 22, widths: [52, 40, 40] },
+      { name: "batches", cols: [2, 3, 4], x: 250, y: 22, widths: [40, 64, 50] },
+      { name: "teachers", cols: [4, 5], x: 250, y: 132, widths: [50, 50] },
+    ],
+    note: "every fact once; Rao's phone is in 1 row",
+    text: "teacher → t_phone does not start from a key of batches, so the teachers get their own table. Now every column depends on the key, the whole key and nothing but the key: each fact is stored once, Rao's phone in exactly one row, and joining the four tables gives back the original six rows.",
+  },
+];
+
+/** A wide table split step by step into tables in second and third normal form. */
+function NormaliseSteps(props: Props) {
+  const [stage, setStage] = useState(clamp(Math.round(num(props.step, 1)), 1, NF_STAGES.length) - 1);
+  const s = NF_STAGES[stage];
+  const raos = (t: NfTable) => (r: number, c: number): SqlMark => {
+    const rows = nfRows(t.cols);
+    return t.cols[c] === 5 && rows[r][c] === "99001" ? "accent" : undefined;
+  };
+  const summary = `Step ${stage + 1} of ${NF_STAGES.length}, ${s.title}: ${s.tables.map((t) => `${t.name} (${t.cols.map((c) => NF_HEAD[c]).join(", ")}) with ${plural(nfRows(t.cols).length, "row")}`).join("; ")}. ${s.text}`;
+  return (
+    <Frame title="Splitting a table until each fact is stored once" summary={summary} controls={<Stepper label="step" value={stage + 1} onChange={(v) => setStage(v - 1)} min={1} max={NF_STAGES.length} />}>
+      <svg viewBox="0 0 466 214" role="img" aria-label={`${s.title}: ${s.tables.length} tables; ${s.note}`}>
+        {s.tables.map((t) => (
+          <SqlTable key={t.name} x={t.x} y={t.y} widths={t.widths} head={t.cols.map((c) => NF_HEAD[c])} rows={nfRows(t.cols)} title={t.name} height={18} mark={raos(t)} />
+        ))}
+        <text x={8} y={206} className="fig-small">
+          {s.note}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const DN_VIEWS = [0.01, 0.1, 1, 10, 100, 1000];
+const DN_LIKES = [10, 100, 1000];
+const DN_WRITES = 2000;
+
+/** Rows touched per hour by counting likes on every view, against keeping a count column up to date. */
+function DenormTradeoff(props: Props) {
+  const [views, setViews] = useState(DN_VIEWS.includes(num(props.views, 100)) ? num(props.views, 100) : 100);
+  const [likes, setLikes] = useState(DN_LIKES.includes(num(props.likes, 100)) ? num(props.likes, 100) : 100);
+  const reads = DN_WRITES * views;
+  const plain = { read: reads * likes, write: DN_WRITES };
+  const kept = { read: reads, write: DN_WRITES * 2 };
+  const total = (c: { read: number; write: number }) => c.read + c.write;
+  const show = (n: number) => group(Math.round(n));
+  const bar = (n: number) => Math.max(4, ((Math.log10(n) - 2) / 9) * 250);
+  const better = total(kept) < total(plain) ? "kept" : "plain";
+  const ratio = better === "kept" ? total(plain) / total(kept) : total(kept) / total(plain);
+  const even = ratio < 1.1;
+  const verdict = even
+    ? "Both touch about the same number of rows, so the column buys nothing."
+    : better === "kept"
+      ? `The count column touches ${dp(ratio, 1)} times fewer rows.`
+      : `Counting on each view touches ${dp(ratio, 1)} times fewer rows; the column is not worth keeping.`;
+  const summary = `${show(DN_WRITES)} likes an hour, ${show(reads)} views an hour (${group(views)} per like), ${show(likes)} likes on a typical post. Counting likes on every view reads ${show(plain.read)} rows and writes ${show(plain.write)}: ${show(total(plain))} in all. Keeping a likes column reads ${show(kept.read)} rows and writes ${show(kept.write)}, since each like also updates its post: ${show(total(kept))} in all. ${verdict}`;
+  const rows: [string, { read: number; write: number }][] = [
+    ["count on every view", plain],
+    ["keep a likes column", kept],
+  ];
+  return (
+    <Frame
+      title="Reading a count against keeping one"
+      summary={summary}
+      controls={
+        <>
+          <span className="fig-stepper">
+            <span className="label">views per like</span>
+          </span>
+          {DN_VIEWS.map((v) => (
+            <button key={v} type="button" className="btn btn-secondary btn-small" aria-pressed={views === v} aria-label={`${group(v)} views per like`} onClick={() => setViews(v)}>
+              {group(v)}
+            </button>
+          ))}
+          <span className="fig-stepper">
+            <span className="label">likes per post</span>
+          </span>
+          {DN_LIKES.map((l) => (
+            <button key={l} type="button" className="btn btn-secondary btn-small" aria-pressed={likes === l} aria-label={`${group(l)} likes per post`} onClick={() => setLikes(l)}>
+              {group(l)}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 176" role="img" aria-label={`Rows touched per hour: ${show(total(plain))} counting on every view, ${show(total(kept))} keeping a column`}>
+        <text x={8} y={16} className="fig-small">
+          rows touched per hour, on a log scale
+        </text>
+        {rows.map(([label, c], i) => (
+          <g key={label}>
+            <text x={8} y={46 + i * 56} className="fig-small" style={{ fontWeight: 600 }}>
+              {label}
+            </text>
+            <rect x={8} y={54 + i * 56} width={bar(total(c))} height={16} className={(better === "kept") === (i === 1) ? "fig-accent" : "fig-fill"} />
+            <text x={16 + bar(total(c))} y={66 + i * 56} className="fig-small">
+              {show(total(c))}
+            </text>
+            <text x={8} y={84 + i * 56} className="fig-small">
+              {`${show(c.read)} read, ${show(c.write)} written`}
+            </text>
+          </g>
+        ))}
+        <text x={8} y={168} className="fig-small">
+          {even ? "about the same either way" : better === "kept" ? `the column is ${dp(ratio, 1)} times cheaper` : `counting is ${dp(ratio, 1)} times cheaper`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const DE_ORDERS = [1, 10, 100, 1000];
+
+/** One line of a document listing, indented by its leading spaces, on a marked band when lit. */
+function DeLine({ x, y, line, lit }: { x: number; y: number; line: string; lit: boolean }) {
+  const indent = line.length - line.trimStart().length;
+  const text = line.trimStart();
+  const left = x + indent * 6.6;
+  return (
+    <g>
+      {lit && <rect x={left - 3} y={y - 11} width={text.length * 6.6 + 6} height={15} className="fig-accent" />}
+      <text x={left} y={y} className="fig-small" style={lit ? { fill: "var(--bg)" } : undefined}>
+        {text}
+      </text>
+    </g>
+  );
+}
+
+/** One order document with its customer embedded or referenced, and what each choice costs to read and to change. */
+function DocEmbed(props: Props) {
+  const [mode, setMode] = useState(props.mode === "reference" ? "reference" : "embed");
+  const [orders, setOrders] = useState(DE_ORDERS.includes(num(props.orders, 10)) ? num(props.orders, 10) : 10);
+  const embed = mode === "embed";
+  const reads = embed ? 1 : 2;
+  const writes = embed ? orders : 1;
+  const ordersText = `${group(orders)} ${orders === 1 ? "order" : "orders"}`;
+  const summary = embed
+    ? `The customer is embedded: each of Asha's ${ordersText} carries its own copy of her name and phone number, next to its lines. Showing an order with its customer takes ${reads} read. When Asha changes her phone number, ${group(writes)} ${writes === 1 ? "document" : "documents"} must be rewritten, and any one missed shows the old number.`
+    : `The customer is referenced: each of Asha's ${ordersText} stores only her id, 77, next to its lines, and her name and phone number live once, in customer document 77. Showing an order with its customer takes ${reads} reads. When Asha changes her phone number, ${group(writes)} document is rewritten.`;
+  const order = embed
+    ? ['{ "id": 5012,', '  "customer": {', '    "name": "Asha Rao",', '    "phone": "98450 12345" },', '  "lines": [', '    { "item": "dosa", "qty": 2 },', '    { "item": "coffee", "qty": 1 } ] }']
+    : ['{ "id": 5012,', '  "customer": 77,', '  "lines": [', '    { "item": "dosa", "qty": 2 },', '    { "item": "coffee", "qty": 1 } ] }'];
+  const lit = (line: string) => line.includes('"phone"');
+  const customer = ['{ "id": 77,', '  "name": "Asha Rao",', '  "phone": "98450 12345" }'];
+  const stats: [string, string][] = [
+    ["reads to show an order with its customer", group(reads)],
+    ["writes when Asha changes her phone number", group(writes)],
+    ["copies of her phone number", group(embed ? orders : 1)],
+  ];
+  return (
+    <Frame
+      title="Embedding or referencing the customer"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={embed} onClick={() => setMode("embed")}>
+            embed
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!embed} onClick={() => setMode("reference")}>
+            reference
+          </button>
+          <span className="fig-stepper">
+            <span className="label">Asha&apos;s orders</span>
+          </span>
+          {DE_ORDERS.map((n) => (
+            <button key={n} type="button" className="btn btn-secondary btn-small" aria-pressed={orders === n} aria-label={`${group(n)} ${n === 1 ? "order" : "orders"}`} onClick={() => setOrders(n)}>
+              {group(n)}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 480 250" role="img" aria-label={`${embed ? "Embedded" : "Referenced"} customer: ${plural(reads, "read", "reads")} to show an order, ${group(writes)} ${writes === 1 ? "write" : "writes"} to change her phone number`}>
+        <text x={8} y={16} className="fig-small" style={{ fontWeight: 600 }}>
+          {embed ? `order 5012, one of ${ordersText}` : "order 5012"}
+        </text>
+        {order.map((line, i) => (
+          <DeLine key={i} x={8} y={36 + i * 15} line={line} lit={lit(line)} />
+        ))}
+        {!embed && (
+          <g>
+            <text x={286} y={16} className="fig-small" style={{ fontWeight: 600 }}>
+              customer 77, stored once
+            </text>
+            {customer.map((line, i) => (
+              <DeLine key={i} x={286} y={36 + i * 15} line={line} lit={lit(line)} />
+            ))}
+            <line x1={132} y1={47} x2={278} y2={32} className="fig-guide" />
+          </g>
+        )}
+        <line x1={8} y1={148} x2={472} y2={148} className="fig-line" />
+        {stats.map(([label, value], i) => (
+          <g key={label}>
+            <text x={8} y={170 + i * 20} className="fig-small">
+              {label}
+            </text>
+            <text x={420} y={170 + i * 20} className="fig-small" style={{ fontWeight: 600 }}>
+              {value}
+            </text>
+          </g>
+        ))}
+        <text x={8} y={240} className="fig-small">
+          {embed ? "one read, but every copy must be rewritten on a change" : "one write on a change, but one more read to show"}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const GH_PEOPLE: [string, number, number][] = [
+  ["Asha", 40, 110],
+  ["Bilal", 140, 46],
+  ["Chitra", 140, 110],
+  ["Dev", 140, 174],
+  ["Esha", 240, 30],
+  ["Farhan", 240, 98],
+  ["Gita", 240, 174],
+  ["Hari", 340, 64],
+  ["Isha", 340, 174],
+  ["Jai", 430, 118],
+];
+const GH_LINKS: [number, number][] = [
+  [0, 1], [0, 2], [0, 3], [1, 2], [1, 4], [2, 5], [3, 6], [4, 7], [5, 7], [6, 8], [7, 9], [8, 9],
+];
+
+/** Breadth-first distance of every person from Asha along the friendships. */
+function ghDistances(): number[] {
+  const dist = GH_PEOPLE.map(() => -1);
+  dist[0] = 0;
+  const queue = [0];
+  while (queue.length > 0) {
+    const p = queue.shift()!;
+    for (const [a, b] of GH_LINKS) {
+      const q = a === p ? b : b === p ? a : -1;
+      if (q >= 0 && dist[q] < 0) {
+        dist[q] = dist[p] + 1;
+        queue.push(q);
+      }
+    }
+  }
+  return dist;
+}
+
+/** People within a number of hops of Asha in a friendship graph, and the self-joins a query needs to find them. */
+function GraphHops(props: Props) {
+  const [hops, setHops] = useState(clamp(Math.round(num(props.hops, 1)), 0, 4));
+  const dist = ghDistances();
+  const reached = GH_PEOPLE.filter((_, i) => dist[i] <= hops).map(([name]) => name);
+  const others = reached.slice(1);
+  const summary = `Within ${plural(hops, "hop", "hops")} of Asha: ${others.length === 0 ? "nobody but Asha herself" : others.join(", ")}, ${plural(others.length, "person", "people")} besides Asha. In tables, a query for exactly this reach joins the friendships table to itself ${plural(hops, "time", "times")}, one join per hop; a recursive query lets the number of hops be decided by the data.`;
+  return (
+    <Frame
+      title="Hops through a friendship graph"
+      summary={summary}
+      controls={
+        <Stepper label="hops" value={hops} min={0} max={4} onChange={setHops} />
+      }
+    >
+      <svg viewBox="0 0 470 230" role="img" aria-label={`${plural(others.length, "person", "people")} within ${plural(hops, "hop", "hops")} of Asha`}>
+        {GH_LINKS.map(([a, b]) => {
+          const walked = Math.min(dist[a], dist[b]) < hops;
+          return (
+            <line key={`${a}-${b}`} x1={GH_PEOPLE[a][1]} y1={GH_PEOPLE[a][2]} x2={GH_PEOPLE[b][1]} y2={GH_PEOPLE[b][2]} className={walked ? "fig-accent-line" : "fig-grid"} />
+          );
+        })}
+        {GH_PEOPLE.map(([name, x, y], i) => {
+          const lit = dist[i] <= hops;
+          return (
+            <g key={name}>
+              <rect x={x - 26} y={y - 11} width={52} height={22} rx={4} className={lit ? "fig-accent" : "fig-fill"} />
+              <text x={x} y={y + 4} textAnchor="middle" className="fig-small" style={lit ? { fill: "var(--bg)" } : { fill: "var(--text)" }}>
+                {name}
+              </text>
+            </g>
+          );
+        })}
+        <text x={8} y={222} className="fig-small">
+          {`${plural(others.length, "person", "people")} reached, ${plural(hops, "self-join", "self-joins")} of the friendships table`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+type SvCell = { ok: boolean; note: string };
+const SV_CHANGES: { key: string; label: string; what: string; cells: [SvCell, SvCell, SvCell, SvCell] }[] = [
+  {
+    key: "add-optional",
+    label: "add optional",
+    what: "version 2 adds a nickname field, with a default of none when it is missing",
+    cells: [
+      { ok: true, note: "same version" },
+      { ok: true, note: "no nickname: default" },
+      { ok: true, note: "ignores nickname" },
+      { ok: true, note: "same version" },
+    ],
+  },
+  {
+    key: "add-required",
+    label: "add required",
+    what: "version 2 adds a nickname field that every reader expects to find",
+    cells: [
+      { ok: true, note: "same version" },
+      { ok: false, note: "nickname missing" },
+      { ok: true, note: "ignores nickname" },
+      { ok: true, note: "same version" },
+    ],
+  },
+  {
+    key: "remove",
+    label: "remove",
+    what: "version 2 stops writing the phone field, which version 1 requires",
+    cells: [
+      { ok: true, note: "same version" },
+      { ok: true, note: "ignores phone" },
+      { ok: false, note: "phone missing" },
+      { ok: true, note: "same version" },
+    ],
+  },
+  {
+    key: "rename",
+    label: "rename",
+    what: "version 2 renames the mobile field to phone",
+    cells: [
+      { ok: true, note: "same version" },
+      { ok: false, note: "phone missing" },
+      { ok: false, note: "mobile missing" },
+      { ok: true, note: "same version" },
+    ],
+  },
+];
+
+/** Which pairs of writer and reader versions still work after one change to a record's shape. */
+function SchemaVersions(props: Props) {
+  const start = SV_CHANGES.findIndex((c) => c.key === props.change);
+  const [index, setIndex] = useState(start >= 0 ? start : 0);
+  const change = SV_CHANGES[index];
+  const [, backward, forward] = change.cells;
+  const verdict = (ok: boolean) => (ok ? "works" : "fails");
+  const kind =
+    backward.ok && forward.ok
+      ? "The change is backward and forward compatible, so old and new versions can run side by side."
+      : backward.ok
+        ? "The change is backward compatible only: new code reads old data, but old code cannot read new data."
+        : forward.ok
+          ? "The change is forward compatible only: old code reads new data, but new code cannot read old data."
+          : "The change is neither backward nor forward compatible, so it cannot be made in one step while both versions run.";
+  const summary = `Change: ${change.what}. New code reading old data ${verdict(backward.ok)}: ${backward.note}. Old code reading new data ${verdict(forward.ok)}: ${forward.note}. ${kind}`;
+  const cx = [184, 330];
+  const cy = [80, 150];
+  return (
+    <Frame
+      title="Old and new versions reading each other's data"
+      summary={summary}
+      controls={
+        <>
+          {SV_CHANGES.map((c, i) => (
+            <button key={c.key} type="button" className="btn btn-secondary btn-small" aria-pressed={index === i} onClick={() => setIndex(i)}>
+              {c.label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 410 236" role="img" aria-label={`New code reading old data ${verdict(backward.ok)}; old code reading new data ${verdict(forward.ok)}`}>
+        <text x={257} y={16} textAnchor="middle" className="fig-small" style={{ fontWeight: 600 }}>
+          read by
+        </text>
+        <text x={cx[0]} y={36} textAnchor="middle" className="fig-small">
+          version 1 code
+        </text>
+        <text x={cx[1]} y={36} textAnchor="middle" className="fig-small">
+          version 2 code
+        </text>
+        <text x={8} y={cy[0] - 18} className="fig-small" style={{ fontWeight: 600 }}>
+          written by
+        </text>
+        {[0, 1].map((w) => (
+          <text key={w} x={8} y={cy[w] + 4} className="fig-small">
+            {`version ${w + 1} data`}
+          </text>
+        ))}
+        {[0, 1].map((w) =>
+          [0, 1].map((r) => {
+            const cell = change.cells[w * 2 + r];
+            return (
+              <g key={`${w}-${r}`}>
+                <rect x={cx[r] - 70} y={cy[w] - 28} width={140} height={56} rx={4} className={cell.ok ? "fig-fill" : "fig-accent"} />
+                <text x={cx[r]} y={cy[w] - 4} textAnchor="middle" className="fig-small" style={{ fontWeight: 600, fill: cell.ok ? "var(--text)" : "var(--bg)" }}>
+                  {cell.ok ? "works" : "fails"}
+                </text>
+                <text x={cx[r]} y={cy[w] + 14} textAnchor="middle" className="fig-small" style={{ fill: cell.ok ? "var(--text)" : "var(--bg)" }}>
+                  {cell.note}
+                </text>
+              </g>
+            );
+          }),
+        )}
+        <text x={8} y={206} className="fig-small">
+          {`backward (v2 code, v1 data): ${verdict(backward.ok)}`}
+        </text>
+        <text x={8} y={224} className="fig-small">
+          {`forward (v1 code, v2 data): ${verdict(forward.ok)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -7914,6 +8569,13 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "three-valued": ThreeValued,
   "transfer-crash": TransferCrash,
   "index-lookup": IndexLookup,
+  "er-cardinality": ErCardinality,
+  "fd-closure": FdClosure,
+  "normalise-steps": NormaliseSteps,
+  "denorm-tradeoff": DenormTradeoff,
+  "doc-embed": DocEmbed,
+  "graph-hops": GraphHops,
+  "schema-versions": SchemaVersions,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

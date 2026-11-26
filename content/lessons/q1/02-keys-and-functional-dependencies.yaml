@@ -1,0 +1,707 @@
+concept: q1.keys-and-functional-dependencies
+minutes: 85
+claim: You can state a functional dependency precisely, tell a rule of the business from a pattern in today's rows, derive new dependencies with Armstrong's rules, compute the closure of a set of columns, use closures to decide whether a set of columns is a superkey or a candidate key and to find every candidate key of a table, and find the rows that break a dependency with a query.
+recalls: [q1.entities-and-relationships]
+uses: [q0.tables-rows-and-keys, q0.grouping-and-aggregation, f2.relations-and-functions-between-sets, f2.direct-proof, f3.permutations-and-combinations, s1.comprehensions-and-iterators]
+leads: [q1.normal-forms, q1.denormalisation-and-its-costs]
+starter: |
+  # Scratch space. Which columns does a set of columns determine?
+  fds = [
+      ({"pnr"}, {"train", "date"}),
+      ({"train"}, {"train_name"}),
+  ]
+  known = {"pnr"}
+  changed = True
+  while changed:
+      changed = False
+      for left, right in fds:
+          if left <= known and not right <= known:
+              known = known | right
+              changed = True
+  print(sorted(known))
+parts:
+  recall:
+    - text: |
+        [[q1.entities-and-relationships]] chose tables by judgement: listen for nouns and verbs, decide cardinalities, and place keys and junction tables so that no fact is written twice. Judgement can be wrong, and a design with hundreds of columns is too big to judge by eye. This lesson makes "this column decides that one" precise, so that keys can be found and designs checked by a procedure. Three quick pulls first.
+  puzzle:
+    - text: |
+        A railway keeps one row for each passenger on each booking:
+
+        | pnr | pax | name | train | train_name | date | coach | berth |
+        | --- | --- | --- | --- | --- | --- | --- | --- |
+        | 4521 | 1 | Asha | 12627 | Karnataka Express | 2026-12-01 | S4 | 17 |
+        | 4521 | 2 | Ravi | 12627 | Karnataka Express | 2026-12-01 | S4 | 18 |
+
+        Its rules: a PNR is one booking, for one train on one date; a train number has one name; within a booking, passengers are numbered 1, 2, 3, and each has a name, a coach and a berth; and a berth in a coach of a train on a date is sold to at most one passenger.
+
+        A **candidate key** is a set of columns that singles out every row, with no column to spare.
+
+        **How many candidate keys does this table have?**
+  intuition:
+    - text: |
+        A school knows that a roll number decides a student's name: two rows with the same roll number must show the same name. It does not work the other way, since two students can share a name. That one-way rule, "if two rows agree on these columns, they agree on those", is a **functional dependency**, written roll → name. A dependency is a promise made by the business, not a pattern noticed in the data: today's rows may happen to show every Ravi in section B, but nothing in the school's rules makes name → section true, and next year's admissions will break it.
+
+        Dependencies chain. If a PNR decides the train, and a train decides its name, then a PNR decides the train's name. Starting from some columns and repeatedly applying every rule whose left side is already known gives everything those columns decide: their **closure**. The figure works it out for the railway table. Choose the starting columns and step through.
+    - figure: fd-closure
+      props: { start: [pnr, pax], step: 0 }
+    - text: |
+        From PNR and passenger number, the first rule adds the train and date, the second the train's name, the third the passenger's name, coach and berth: all eight columns, so (pnr, pax) singles out every row, a key. Now try starting from train, date, coach and berth, the columns on a ticket's seat: the last rule gives back the PNR and passenger number, and from those everything else follows. A table can have more than one key, and the closure is how to find them all.
+  derivation:
+    - text: |
+        **Functional dependency.** For sets of columns $X$ and $Y$ of a table, $X \to Y$ holds when any two rows that agree on every column of $X$ also agree on every column of $Y$. In the language of [[f2.relations-and-functions-between-sets]], the table's projection onto $X$ and $Y$ is a function from $X$-values to $Y$-values. $X \to Y$ is **trivial** when $Y \subseteq X$, since then it holds in every table.
+
+        Data can refute a dependency but never prove it. A query finds the counterexamples: `select train from bookings group by train having count(distinct train_name) > 1` lists the trains that appear under two names, each a row pair breaking train → train_name, using the counting of [[q0.grouping-and-aggregation]]. Whether the dependency should hold is a question for the business. A clean result today says only that nobody has broken it yet.
+    - question:
+        id: derivation-rule
+        type: choice
+        system: s2
+        prompt: |
+          In a table of orders, every row so far with city 'Pune' has the pin code 411001. Should city → pin code be treated as a dependency?
+        options:
+          - "No; a city has many pin codes, so the business rule is false even though today's rows fit it."
+          - "Yes; the data shows it holds."
+          - "Yes, but only for Pune."
+          - "No, because dependencies must have one column on each side."
+        answer: 0
+        explanation: |
+          A dependency is a promise about every row the table will ever hold. Pune has dozens of pin codes, so the first order from another part of the city breaks the pattern. The reverse, pin code → city, is closer to a real rule.
+    - text: |
+        **Armstrong's rules.** Three rules derive every dependency that follows from a given set, and each can be proved directly from the definition, as in [[f2.direct-proof]].
+
+        - **Reflexivity.** If $Y \subseteq X$, then $X \to Y$.
+        - **Augmentation.** If $X \to Y$, then $XZ \to YZ$ for any columns $Z$.
+        - **Transitivity.** If $X \to Y$ and $Y \to Z$, then $X \to Z$.
+
+        Two handy consequences: **union**, from $X \to Y$ and $X \to Z$ conclude $X \to YZ$; and **decomposition**, from $X \to YZ$ conclude $X \to Y$. A left side cannot be split the same way: (pnr, pax) → berth does not give pnr → berth.
+
+        **Closure.** The closure $X^+$ of a set of columns is every column that $X$ determines. The procedure from the figure computes it: start with $X$; while some dependency $L \to R$ has $L$ inside the set and $R$ not yet all inside, add $R$. The loop must run until a full pass adds nothing, because a dependency checked early may only become usable after a later one adds its left side. Then $X \to Y$ follows from the given dependencies exactly when $Y \subseteq X^+$.
+    - question:
+        id: order-closure
+        type: order
+        system: s2
+        prompt: |
+          With pnr → train, date and train → train_name, put the steps of computing the closure of {pnr} in order.
+        steps:
+          - "Start with the set {pnr}."
+          - "pnr is in the set, so the first rule adds train and date."
+          - "train is now in the set, so the second rule adds train_name."
+          - "A full pass over the rules adds nothing new, so stop."
+        explanation: |
+          Each rule fires only once its left side is known, so the second rule must wait for the first; and the procedure stops only after a pass that changes nothing.
+    - text: |
+        **Keys from closures.** A set of columns $K$ is a **superkey** when $K^+$ is every column of the table: two rows agreeing on $K$ agree on everything, so they are the same row. A **candidate key** is a superkey with no column to spare, so removing any one column breaks it. This is the precise version of the keys of [[q0.tables-rows-and-keys]].
+
+        To find every candidate key, try subsets of the columns from the smallest up, keep each one whose closure is everything, and skip any that contains a key already found. A table of $n$ columns has $2^n$ subsets, by [[f3.permutations-and-combinations]], which is fine for the tables people design by hand. Two shortcuts cut the search: a column that appears on no right-hand side cannot be determined by anything else, so it belongs to every key; and a column that appears only on right-hand sides belongs to none.
+    - question:
+        id: derivation-superkey
+        type: numeric
+        system: s2
+        prompt: |
+          A table has columns a, b, c, d with a → b and b → c. How many columns are in the closure of {a, d}?
+        answer: "4"
+        explanation: |
+          From {a, d}: a gives b, then b gives c, so the closure is {a, b, c, d}, all four, and {a, d} is a superkey. Since d appears on no right-hand side, every key contains d.
+  formal:
+    - text: |
+        **Functional dependency.** $X \to Y$: any two rows equal on $X$ are equal on $Y$. Trivial when $Y \subseteq X$.
+
+        **Armstrong's rules.** Reflexivity, augmentation, transitivity; derived: union and decomposition (of the right side only).
+
+        **Closure.** $X^+$, computed by repeatedly adding $R$ for every $L \to R$ with $L \subseteq X^+$, until nothing changes. $X \to Y$ follows from the given dependencies if and only if $Y \subseteq X^+$.
+
+        **Superkey.** $K$ with $K^+$ equal to all columns. **Candidate key.** A superkey with no proper subset that is a superkey. **Prime column.** A column in some candidate key.
+
+        **Checking data.** `select x from t group by x having count(distinct y) > 1` lists the values of `x` that break $x \to y$.
+  drill:
+    - text: Seconds each. Follow the arrows from left to right only.
+    - question:
+        id: drill-direction
+        type: choice
+        system: s1
+        prompt: |
+          Roll number → name holds in a class. What follows?
+        options:
+          - "Two rows with the same roll number have the same name."
+          - "Two rows with the same name have the same roll number."
+          - "Every name is unique."
+          - "Roll number and name are both keys."
+        answer: 0
+        explanation: A dependency runs one way; students can share a name.
+    - question:
+        id: drill-transitive
+        type: choice
+        system: s1
+        prompt: |
+          pin → city and city → state. Which rule gives pin → state?
+        options:
+          - "Transitivity"
+          - "Augmentation"
+          - "Reflexivity"
+          - "Decomposition"
+        answer: 0
+        explanation: Chaining two dependencies is transitivity.
+    - question:
+        id: drill-split
+        type: choice
+        system: s1
+        prompt: |
+          (pnr, pax) → berth holds. Does pnr → berth follow?
+        options:
+          - "No; the left side cannot be split."
+          - "Yes, by decomposition."
+          - "Yes, by reflexivity."
+          - "Only if pax → berth also holds."
+        answer: 0
+        explanation: Decomposition splits the right side. A booking with two passengers has two berths, so pnr alone does not decide one.
+    - question:
+        id: drill-closure
+        type: numeric
+        system: s1
+        prompt: |
+          Columns a, b, c with a → b only. How many columns are in the closure of {a}?
+        answer: "2"
+        explanation: "{a} gives b and nothing gives c, so the closure is {a, b}."
+    - question:
+        id: drill-subsets
+        type: numeric
+        system: s1
+        prompt: |
+          How many non-empty sets of columns are there to try when searching a 6-column table for keys?
+        answer: "63"
+        explanation: "$2^6 - 1 = 63$."
+    - question:
+        id: predict-closure
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          fds = [({"b"}, {"c"}), ({"a"}, {"b"})]
+          known = {"a"}
+          for left, right in fds:
+              if left <= known:
+                  known = known | right
+          print(sorted(known))
+        output: "['a', 'b']"
+        explanation: One pass checks b → c before a → b has added b, so c is missed. The procedure must repeat until a pass adds nothing.
+    - question:
+        id: predict-violations
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import sqlite3
+          db = sqlite3.connect(":memory:")
+          db.executescript("create table t (pin text, city text); insert into t values ('411001', 'Pune'), ('411001', 'Poona'), ('560001', 'Bengaluru');")
+          print(db.execute("select pin from t group by pin having count(distinct city) > 1").fetchall())
+        output: "[('411001',)]"
+        explanation: The pin 411001 appears with two city spellings, a pair of rows breaking pin → city.
+  work:
+    - text: Slower now. When a result surprises you, compute the closure by hand and compare.
+    - question:
+        id: fix-closure
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `closure` should return every column that `attributes` determine under the dependencies `fds`, whatever order the dependencies are listed in. The program should print `['berth', 'coach', 'date', 'name', 'pax', 'pnr', 'train', 'train_name']`. It prints `['berth', 'coach', 'date', 'name', 'pax', 'pnr', 'train']`. Find the fault and fix it.
+        starter: |
+          def closure(attributes, fds):
+              # fds is a list of (left, right) pairs of sets. Return every column that attributes determine.
+              result = set(attributes)
+              for left, right in fds:
+                  if left <= result:
+                      result = result | right
+              return result
+
+
+          fds = [
+              ({"train"}, {"train_name"}),
+              ({"pnr"}, {"train", "date"}),
+              ({"pnr", "pax"}, {"name", "coach", "berth"}),
+          ]
+          print(sorted(closure({"pnr", "pax"}, fds)))
+        solution: |
+          def closure(attributes, fds):
+              # fds is a list of (left, right) pairs of sets. Return every column that attributes determine.
+              result = set(attributes)
+              changed = True
+              while changed:
+                  changed = False
+                  for left, right in fds:
+                      if left <= result and not right <= result:
+                          result = result | right
+                          changed = True
+              return result
+
+
+          fds = [
+              ({"train"}, {"train_name"}),
+              ({"pnr"}, {"train", "date"}),
+              ({"pnr", "pax"}, {"name", "coach", "berth"}),
+          ]
+          print(sorted(closure({"pnr", "pax"}, fds)))
+        tests: |
+          import random as _random
+
+
+          def _closure(_attrs, _fds):
+              _r = set(_attrs)
+              _grew = True
+              while _grew:
+                  _grew = False
+                  for _l, _rt in _fds:
+                      if _l <= _r and not _rt <= _r:
+                          _r = _r | _rt
+                          _grew = True
+              return _r
+
+
+          _rng = _random.Random(17)
+          _names = ["a", "b", "c", "d", "e", "f", "g"]
+          for _ in range(60):
+              _fds = []
+              for _k in range(_rng.randint(1, 6)):
+                  _l = set(_rng.sample(_names, _rng.randint(1, 2)))
+                  _fds.append((_l, set(_rng.sample(_names, _rng.randint(1, 2)))))
+              _start = set(_rng.sample(_names, _rng.randint(0, 2)))
+              _want = _closure(_start, _fds)
+              _got = closure(set(_start), [(set(_l), set(_r)) for _l, _r in _fds])
+              assert _got == _want, "The closure of " + str(sorted(_start)) + " under " + str([(sorted(_l), sorted(_r)) for _l, _r in _fds]) + " is " + str(sorted(_want)) + ", not " + str(sorted(_got))
+          _chain = [({"e"}, {"f"}), ({"d"}, {"e"}), ({"c"}, {"d"}), ({"b"}, {"c"}), ({"a"}, {"b"})]
+          assert closure({"a"}, _chain) == {"a", "b", "c", "d", "e", "f"}, "Following a chain a → b → c → d → e → f listed backwards should reach f"
+          assert output.strip() == "['berth', 'coach', 'date', 'name', 'pax', 'pnr', 'train', 'train_name']", "The program should print ['berth', 'coach', 'date', 'name', 'pax', 'pnr', 'train', 'train_name']"
+        wrong:
+          - |
+            def closure(attributes, fds):
+                # fds is a list of (left, right) pairs of sets. Return every column that attributes determine.
+                result = set(attributes)
+                for rounds in range(2):
+                    for left, right in fds:
+                        if left <= result:
+                            result = result | right
+                return result
+
+
+            fds = [
+                ({"train"}, {"train_name"}),
+                ({"pnr"}, {"train", "date"}),
+                ({"pnr", "pax"}, {"name", "coach", "berth"}),
+            ]
+            print(sorted(closure({"pnr", "pax"}, fds)))
+          - |
+            def closure(attributes, fds):
+                # fds is a list of (left, right) pairs of sets. Return every column that attributes determine.
+                result = set(attributes)
+                changed = True
+                while changed:
+                    changed = False
+                    for left, right in fds:
+                        if left & result and not right <= result:
+                            result = result | right
+                            changed = True
+                return result
+
+
+            fds = [
+                ({"train"}, {"train_name"}),
+                ({"pnr"}, {"train", "date"}),
+                ({"pnr", "pax"}, {"name", "coach", "berth"}),
+            ]
+            print(sorted(closure({"pnr", "pax"}, fds)))
+          - |
+            def closure(attributes, fds):
+                # fds is a list of (left, right) pairs of sets. Return every column that attributes determine.
+                result = set()
+                changed = True
+                while changed:
+                    changed = False
+                    for left, right in fds:
+                        if left <= result and not right <= result:
+                            result = result | right
+                            changed = True
+                return result
+
+
+            fds = [
+                ({"train"}, {"train_name"}),
+                ({"pnr"}, {"train", "date"}),
+                ({"pnr", "pax"}, {"name", "coach", "berth"}),
+            ]
+            print(sorted(closure({"pnr", "pax"}, fds)))
+        explanation: |
+          One pass checks train → train_name before the second rule has added train, and never looks again. Repeating passes until one adds nothing reaches the full closure whatever the order. Two fixed passes still miss longer chains listed backwards; firing a rule when its left side merely overlaps the set adds columns that are not determined; and starting from an empty set forgets the columns given.
+    - question:
+        id: write-candidate-keys
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `candidate_keys(columns, fds)`, returning every candidate key as a sorted tuple of column names, in sorted order. A candidate key is a set of columns whose closure is all of `columns` and that contains no smaller such set. `closure` is written for you. The program should print `[('berth', 'coach', 'date', 'train'), ('berth', 'coach', 'pnr'), ('pax', 'pnr')]`.
+        starter: |
+          from itertools import combinations
+
+
+          def closure(attributes, fds):
+              result = set(attributes)
+              changed = True
+              while changed:
+                  changed = False
+                  for left, right in fds:
+                      if left <= result and not right <= result:
+                          result = result | right
+                          changed = True
+              return result
+
+
+          def candidate_keys(columns, fds):
+              # Return every minimal set of columns that determines all of columns, each as a sorted tuple, in sorted order.
+              return []
+
+
+          columns = {"pnr", "pax", "name", "train", "train_name", "date", "coach", "berth"}
+          fds = [
+              ({"pnr"}, {"train", "date"}),
+              ({"train"}, {"train_name"}),
+              ({"pnr", "pax"}, {"name", "coach", "berth"}),
+              ({"train", "date", "coach", "berth"}, {"pnr", "pax"}),
+          ]
+          print(candidate_keys(columns, fds))
+        solution: |
+          from itertools import combinations
+
+
+          def closure(attributes, fds):
+              result = set(attributes)
+              changed = True
+              while changed:
+                  changed = False
+                  for left, right in fds:
+                      if left <= result and not right <= result:
+                          result = result | right
+                          changed = True
+              return result
+
+
+          def candidate_keys(columns, fds):
+              # Return every minimal set of columns that determines all of columns, each as a sorted tuple, in sorted order.
+              keys = []
+              for size in range(1, len(columns) + 1):
+                  for combo in combinations(sorted(columns), size):
+                      if closure(set(combo), fds) == columns and not any(set(key) <= set(combo) for key in keys):
+                          keys.append(combo)
+              return sorted(keys)
+
+
+          columns = {"pnr", "pax", "name", "train", "train_name", "date", "coach", "berth"}
+          fds = [
+              ({"pnr"}, {"train", "date"}),
+              ({"train"}, {"train_name"}),
+              ({"pnr", "pax"}, {"name", "coach", "berth"}),
+              ({"train", "date", "coach", "berth"}, {"pnr", "pax"}),
+          ]
+          print(candidate_keys(columns, fds))
+        tests: |
+          import random as _random
+          from itertools import combinations as _combinations
+
+
+          def _cl(_attrs, _fds):
+              _r = set(_attrs)
+              _grew = True
+              while _grew:
+                  _grew = False
+                  for _l, _rt in _fds:
+                      if _l <= _r and not _rt <= _r:
+                          _r = _r | _rt
+                          _grew = True
+              return _r
+
+
+          _rng = _random.Random(29)
+          for _ in range(40):
+              _cols = set(["a", "b", "c", "d", "e"][: _rng.randint(2, 5)])
+              _fds = []
+              for _k in range(_rng.randint(1, 5)):
+                  _fds.append((set(_rng.sample(sorted(_cols), _rng.randint(1, 2))), set(_rng.sample(sorted(_cols), _rng.randint(1, 2)))))
+              _supers = [_c for _n in range(1, len(_cols) + 1) for _c in _combinations(sorted(_cols), _n) if _cl(set(_c), _fds) == _cols]
+              _want = sorted(_c for _c in _supers if not any(set(_d) < set(_c) for _d in _supers))
+              _got = candidate_keys(set(_cols), [(set(_l), set(_r)) for _l, _r in _fds])
+              assert _got == _want, "With columns " + str(sorted(_cols)) + " and dependencies " + str([(sorted(_l), sorted(_r)) for _l, _r in _fds]) + ", the candidate keys are " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('berth', 'coach', 'date', 'train'), ('berth', 'coach', 'pnr'), ('pax', 'pnr')]", "The program should print [('berth', 'coach', 'date', 'train'), ('berth', 'coach', 'pnr'), ('pax', 'pnr')]"
+        wrong:
+          - |
+            from itertools import combinations
+
+
+            def closure(attributes, fds):
+                result = set(attributes)
+                changed = True
+                while changed:
+                    changed = False
+                    for left, right in fds:
+                        if left <= result and not right <= result:
+                            result = result | right
+                            changed = True
+                return result
+
+
+            def candidate_keys(columns, fds):
+                # Return every minimal set of columns that determines all of columns, each as a sorted tuple, in sorted order.
+                for size in range(1, len(columns) + 1):
+                    keys = [combo for combo in combinations(sorted(columns), size) if closure(set(combo), fds) == columns]
+                    if keys:
+                        return sorted(keys)
+                return []
+
+
+            columns = {"pnr", "pax", "name", "train", "train_name", "date", "coach", "berth"}
+            fds = [
+                ({"pnr"}, {"train", "date"}),
+                ({"train"}, {"train_name"}),
+                ({"pnr", "pax"}, {"name", "coach", "berth"}),
+                ({"train", "date", "coach", "berth"}, {"pnr", "pax"}),
+            ]
+            print(candidate_keys(columns, fds))
+          - |
+            from itertools import combinations
+
+
+            def closure(attributes, fds):
+                result = set(attributes)
+                changed = True
+                while changed:
+                    changed = False
+                    for left, right in fds:
+                        if left <= result and not right <= result:
+                            result = result | right
+                            changed = True
+                return result
+
+
+            def candidate_keys(columns, fds):
+                # Return every minimal set of columns that determines all of columns, each as a sorted tuple, in sorted order.
+                keys = []
+                for size in range(1, len(columns) + 1):
+                    for combo in combinations(sorted(columns), size):
+                        if closure(set(combo), fds) == columns:
+                            keys.append(combo)
+                return sorted(keys)
+
+
+            columns = {"pnr", "pax", "name", "train", "train_name", "date", "coach", "berth"}
+            fds = [
+                ({"pnr"}, {"train", "date"}),
+                ({"train"}, {"train_name"}),
+                ({"pnr", "pax"}, {"name", "coach", "berth"}),
+                ({"train", "date", "coach", "berth"}, {"pnr", "pax"}),
+            ]
+            print(candidate_keys(columns, fds))
+          - |
+            from itertools import combinations
+
+
+            def closure(attributes, fds):
+                result = set(attributes)
+                changed = True
+                while changed:
+                    changed = False
+                    for left, right in fds:
+                        if left <= result and not right <= result:
+                            result = result | right
+                            changed = True
+                return result
+
+
+            def candidate_keys(columns, fds):
+                # Return every minimal set of columns that determines all of columns, each as a sorted tuple, in sorted order.
+                keys = []
+                for size in range(1, len(columns) + 1):
+                    for combo in combinations(sorted(columns), size):
+                        if closure(set(combo), fds) == columns and not any(set(key) <= set(combo) for key in keys):
+                            keys.append(combo)
+                            return [combo]
+                return sorted(keys)
+
+
+            columns = {"pnr", "pax", "name", "train", "train_name", "date", "coach", "berth"}
+            fds = [
+                ({"pnr"}, {"train", "date"}),
+                ({"train"}, {"train_name"}),
+                ({"pnr", "pax"}, {"name", "coach", "berth"}),
+                ({"train", "date", "coach", "berth"}, {"pnr", "pax"}),
+            ]
+            print(candidate_keys(columns, fds))
+        explanation: |
+          Trying subsets from the smallest up and skipping any that contains a key already found keeps exactly the minimal superkeys. Stopping at the first size that has a key misses larger keys, such as the four seat columns; keeping every superkey includes sets with columns to spare; and returning the first key found misses the others.
+    - question:
+        id: write-violations
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A train number should have one name. Change `query` so that it returns the train numbers that appear in `bookings` under more than one name, each once, in order.
+        starter: |
+          import sqlite3
+
+          query = """
+              select train
+              from bookings
+              order by train
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table bookings (pnr text, pax integer, train text, train_name text, date text);
+              insert into bookings values
+                  ('4521', 1, '12627', 'Karnataka Express', '2026-12-01'),
+                  ('4521', 2, '12627', 'Karnataka Express', '2026-12-01'),
+                  ('4733', 1, '12627', 'Karnataka Exp', '2026-12-02'),
+                  ('4810', 1, '22691', 'Rajdhani Express', '2026-12-01'),
+                  ('4902', 1, '12951', 'Mumbai Rajdhani', '2026-12-03'),
+                  ('4902', 2, '12951', 'Mumbai Rajdhani', '2026-12-03');
+          """)
+          print(db.execute(query).fetchall())
+        solution: |
+          import sqlite3
+
+          query = """
+              select train
+              from bookings
+              group by train
+              having count(distinct train_name) > 1
+              order by train
+          """
+
+          db = sqlite3.connect(":memory:")
+          db.executescript("""
+              create table bookings (pnr text, pax integer, train text, train_name text, date text);
+              insert into bookings values
+                  ('4521', 1, '12627', 'Karnataka Express', '2026-12-01'),
+                  ('4521', 2, '12627', 'Karnataka Express', '2026-12-01'),
+                  ('4733', 1, '12627', 'Karnataka Exp', '2026-12-02'),
+                  ('4810', 1, '22691', 'Rajdhani Express', '2026-12-01'),
+                  ('4902', 1, '12951', 'Mumbai Rajdhani', '2026-12-03'),
+                  ('4902', 2, '12951', 'Mumbai Rajdhani', '2026-12-03');
+          """)
+          print(db.execute(query).fetchall())
+        tests: |
+          import random as _random
+
+          _rng = _random.Random(43)
+          _trains = {"12627": ["Karnataka Express", "Karnataka Exp"], "22691": ["Rajdhani Express", "Bengaluru Rajdhani"], "12951": ["Mumbai Rajdhani"], "16525": ["Island Express", "Kanyakumari Express"]}
+          for _ in range(25):
+              _db = sqlite3.connect(":memory:")
+              _db.execute("create table bookings (pnr text, pax integer, train text, train_name text, date text)")
+              _rows = []
+              for _k in range(_rng.randint(1, 12)):
+                  _t = _rng.choice(sorted(_trains))
+                  _names = _trains[_t]
+                  _n = _names[0] if _rng.random() < 0.75 else _rng.choice(_names)
+                  _rows.append((str(4000 + _k), 1, _t, _n, "2026-12-01"))
+              if _rng.random() < 0.3:
+                  _rows.append(("5000", 1, "99999", "Mumbai Rajdhani", "2026-12-01"))
+              _db.executemany("insert into bookings values (?, ?, ?, ?, ?)", _rows)
+              _want = sorted((_t,) for _t in set(_r[2] for _r in _rows) if len(set(_r[3] for _r in _rows if _r[2] == _t)) > 1)
+              _got = _db.execute(query).fetchall()
+              assert _got == _want, "For the bookings " + str([(_r[2], _r[3]) for _r in _rows]) + ", the trains with more than one name are " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[('12627',)]", "The program should print [('12627',)]"
+        wrong:
+          - |
+            import sqlite3
+
+            query = """
+                select train
+                from bookings
+                group by train
+                having count(train_name) > 1
+                order by train
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table bookings (pnr text, pax integer, train text, train_name text, date text);
+                insert into bookings values
+                    ('4521', 1, '12627', 'Karnataka Express', '2026-12-01'),
+                    ('4521', 2, '12627', 'Karnataka Express', '2026-12-01'),
+                    ('4733', 1, '12627', 'Karnataka Exp', '2026-12-02'),
+                    ('4810', 1, '22691', 'Rajdhani Express', '2026-12-01'),
+                    ('4902', 1, '12951', 'Mumbai Rajdhani', '2026-12-03'),
+                    ('4902', 2, '12951', 'Mumbai Rajdhani', '2026-12-03');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select min(train)
+                from bookings
+                group by train_name
+                having count(distinct train) > 1
+                order by 1
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table bookings (pnr text, pax integer, train text, train_name text, date text);
+                insert into bookings values
+                    ('4521', 1, '12627', 'Karnataka Express', '2026-12-01'),
+                    ('4521', 2, '12627', 'Karnataka Express', '2026-12-01'),
+                    ('4733', 1, '12627', 'Karnataka Exp', '2026-12-02'),
+                    ('4810', 1, '22691', 'Rajdhani Express', '2026-12-01'),
+                    ('4902', 1, '12951', 'Mumbai Rajdhani', '2026-12-03'),
+                    ('4902', 2, '12951', 'Mumbai Rajdhani', '2026-12-03');
+            """)
+            print(db.execute(query).fetchall())
+          - |
+            import sqlite3
+
+            query = """
+                select train
+                from bookings
+                group by train, train_name
+                having count(*) > 1
+                order by train
+            """
+
+            db = sqlite3.connect(":memory:")
+            db.executescript("""
+                create table bookings (pnr text, pax integer, train text, train_name text, date text);
+                insert into bookings values
+                    ('4521', 1, '12627', 'Karnataka Express', '2026-12-01'),
+                    ('4521', 2, '12627', 'Karnataka Express', '2026-12-01'),
+                    ('4733', 1, '12627', 'Karnataka Exp', '2026-12-02'),
+                    ('4810', 1, '22691', 'Rajdhani Express', '2026-12-01'),
+                    ('4902', 1, '12951', 'Mumbai Rajdhani', '2026-12-03'),
+                    ('4902', 2, '12951', 'Mumbai Rajdhani', '2026-12-03');
+            """)
+            print(db.execute(query).fetchall())
+        explanation: |
+          Grouping by train and counting distinct names finds every train with two spellings, each a counterexample to train → train_name. Counting rows instead of distinct names flags every train booked twice; grouping by name tests the reverse dependency, name → train; and grouping by train and name together finds repeated pairs, which are not conflicts.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          How many candidate keys does the puzzle's table have?
+        answer: "3"
+        explanation: |
+          (pnr, pax); (train, date, coach, berth); and (pnr, coach, berth), because a PNR gives the train and date, and with the coach and berth that gives the seat, which belongs to one passenger.
+    - question:
+        id: work-rule-or-pattern
+        type: choice
+        system: s2
+        prompt: |
+          A delivery app's analyst finds that in a year of data, every rider has worked from exactly one store, and proposes declaring rider → store and moving store into the riders table. What should be checked first?
+        options:
+          - "Whether the business promises that a rider never works from two stores, since the data only shows it has not happened yet."
+          - "Whether the query proving it ran on all the rows."
+          - "Whether store → rider holds as well."
+          - "Nothing; a year of data is enough."
+        answer: 0
+        explanation: |
+          A dependency is a rule, and declaring it changes what the database can store: once store lives in riders, a rider who moves between stores cannot be recorded. If riders can be reassigned, store belongs with each shift instead.
+  connections:
+    - text: |
+        Three. (pnr, pax) is the obvious one, and (train, date, coach, berth) is the seat on the ticket. The third, (pnr, coach, berth), is easy to miss: a PNR fixes the train and date, so with the coach and berth it names one seat and therefore one passenger. Closures found it mechanically, where intuition stopped at two.
+
+        Keys and dependencies are the tools for checking a design, not only for describing it. A table in which some column depends on something less than a whole key, as train_name depends on train here, stores the same fact in many rows: every passenger on the Karnataka Express repeats its name, and a rename must touch them all. The normal forms of [[q1.normal-forms]] name these situations and say how to split such tables, and [[q1.denormalisation-and-its-costs]] says when it is worth keeping the repetition on purpose.
