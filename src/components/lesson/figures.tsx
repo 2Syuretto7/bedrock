@@ -3727,6 +3727,92 @@ function OneStroke(props: Props) {
   );
 }
 
+const LEAF_TREES: Record<string, { name: string; spots: Record<number, Spot>; edges: [number, number][] }> = {
+  branching: {
+    name: "A branching tree",
+    spots: { 1: [56, 56], 2: [56, 138], 3: [56, 220], 4: [150, 138], 5: [240, 138], 6: [322, 138], 7: [394, 70], 8: [394, 206] },
+    edges: [[1, 4], [2, 4], [3, 4], [4, 5], [5, 6], [6, 7], [6, 8]],
+  },
+  path: {
+    name: "A path",
+    spots: { 3: [36, 100], 1: [88, 180], 7: [140, 100], 5: [192, 180], 2: [244, 100], 8: [296, 180], 4: [348, 100], 6: [400, 180] },
+    edges: [[3, 1], [1, 7], [7, 5], [5, 2], [2, 8], [8, 4], [4, 6]],
+  },
+  star: {
+    name: "A star",
+    spots: { 8: [220, 138], 1: [220, 40], 2: [296, 76], 3: [318, 160], 4: [270, 228], 5: [170, 228], 6: [122, 160], 7: [144, 76] },
+    edges: [[8, 1], [8, 2], [8, 3], [8, 4], [8, 5], [8, 6], [8, 7]],
+  },
+};
+const LEAF_ORDER = ["branching", "path", "star"];
+
+/** Stripping leaves from a tree: each removal leaves a smaller tree, and writing down each removed leaf's neighbour gives the tree's code. */
+function LeafStrip(props: Props) {
+  const [which, setWhich] = useState(typeof props.tree === "string" && props.tree in LEAF_TREES ? props.tree : "branching");
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, 6));
+  const { name, spots, edges } = LEAF_TREES[which];
+  const n = Object.keys(spots).length;
+  const removed: number[] = [];
+  const code: number[] = [];
+  const alive = (e: [number, number]) => !removed.includes(e[0]) && !removed.includes(e[1]);
+  const leafNext = () => {
+    const live = edges.filter(alive);
+    const degree = (v: number) => live.filter((e) => e[0] === v || e[1] === v).length;
+    const leaf = Math.min(...Object.keys(spots).map(Number).filter((v) => !removed.includes(v) && degree(v) === 1));
+    const edge = live.find((e) => e[0] === leaf || e[1] === leaf) as [number, number];
+    return [leaf, edge[0] === leaf ? edge[1] : edge[0]];
+  };
+  for (let k = 0; k < Math.min(step, n - 2); k++) {
+    const [leaf, neighbour] = leafNext();
+    removed.push(leaf);
+    code.push(neighbour);
+  }
+  const shown = removed.length;
+  const done = shown === n - 2;
+  const [nextLeaf, nextNeighbour] = done ? [0, 0] : leafNext();
+  const left = n - shown;
+  const next = LEAF_ORDER[(LEAF_ORDER.indexOf(which) + 1) % LEAF_ORDER.length];
+  return (
+    <Frame
+      title="Removing leaves from a tree"
+      summary={`${name} on ${n} numbered vertices, with ${n - 1} edges. ${
+        shown === 0 ? "No leaves removed yet." : `Removed ${plural(shown, "leaf", "leaves")} so far, ${removed.join(", ")}, writing down the neighbour of each: the code so far is (${code.join(", ")}).`
+      } What is left is still a tree, with ${plural(left, "vertex", "vertices")} and ${plural(left - 1, "edge")}. ${
+        done
+          ? `Two vertices remain, joined by one edge, so the code is complete: ${n - 2} numbers, each from 1 to ${n}, from which the whole tree can be rebuilt.`
+          : `The smallest leaf now is ${nextLeaf}, attached to ${nextNeighbour}.`
+      }`}
+      controls={
+        <>
+          <Stepper label="leaves removed" value={shown} onChange={setStep} min={0} max={n - 2} />
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => {
+              setWhich(next);
+              setStep(0);
+            }}
+          >
+            {`Try ${LEAF_TREES[next].name.toLowerCase()}`}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 270" role="img" aria-label={`${name} with ${shown} leaves removed and code (${code.join(", ")})`}>
+        {edges.map((e) => (
+          <Link key={`${e[0]}-${e[1]}`} from={spots[e[0]]} to={spots[e[1]]} faint={!alive(e)} hot={!done && alive(e) && (e[0] === nextLeaf || e[1] === nextLeaf)} />
+        ))}
+        {Object.keys(spots)
+          .map(Number)
+          .map((v) => (removed.includes(v) ? null : <Dot key={v} at={spots[v]} name={v} mark={v === nextLeaf ? "now" : "done"} />))}
+        <text x="12" y="262" className="fig-small">
+          {`code: (${code.join(", ")})`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5017,6 +5103,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   tower: Tower,
   "bound-witness": BoundWitness,
   "one-stroke": OneStroke,
+  "leaf-strip": LeafStrip,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

@@ -1,0 +1,567 @@
+concept: f3.trees-and-their-properties
+minutes: 95
+claim: You can prove that a connected graph without cycles on $n$ vertices has exactly $n - 1$ edges and exactly one path between any two vertices, use leaves and induction to prove facts about trees, find a spanning tree inside any connected graph, relate the height of a binary tree to its number of nodes, and count labelled trees by encoding each one as a sequence.
+recalls: [f3.graph-theory-basics]
+uses: [s2.binary-search-trees, s2.heaps-and-priority-queues, s2.tries, s2.union-find, s2.graphs-and-their-representations, f2.induction-and-strong-induction, f2.contrapositive-and-contradiction, f2.direct-proof, f2.relations-and-functions-between-sets, f3.counting-with-products-and-sums, f3.asymptotic-notation, f1.logarithms, f1.arithmetic-and-geometric-series, s1.recursion, s1.comprehensions-and-iterators, s1.modules-and-imports, s0.dictionaries-and-sets, s0.lists-and-tuples, s0.loops, s0.functions]
+leads: [f4.sample-spaces-and-events, s3.minimum-spanning-trees, s3.breadth-first-and-depth-first-search]
+starter: |
+  # Scratch space. A knockout tournament: every match sends one team home.
+  teams = 37
+  matches = 0
+  while teams > 1:
+      matches += teams // 2
+      teams = teams - teams // 2
+  print(matches)
+parts:
+  recall:
+    - text: |
+        [[f3.graph-theory-basics]] ended with the graphs that are connected but have no cycles. You have already built several, the search trees, heaps and tries of the data structures cluster. Today you prove what they all have in common. Three quick pulls first.
+  puzzle:
+    - text: |
+        Two planning problems from one district office.
+
+        The district's cricket association runs a knockout tournament for 37 village teams. Each match is between two teams, and the loser goes home. When the number of teams left is odd, one team gets a bye into the next round. How many matches must be scheduled? Working round by round, with all its byes, gives an answer; but there is a way to see it in one line.
+
+        The electricity board must connect 12 villages so that power can flow from any village to any other, along lines that each join two villages. Lines are expensive, so it wants no line that could be removed without cutting some village off. How many lines will it build? The answer does not depend on which villages are joined to which, and nor does the tournament's.
+
+        And a third question, for later: how many different such networks of lines are possible for the 12 villages? It is more than 60 billion.
+
+        **What do all networks without a spare connection have in common, and how many of them are there?**
+  intuition:
+    - text: |
+        Start with the tournament. Every match sends exactly one team home, and the tournament ends when exactly one team is left. So 36 teams go home, in 36 matches, byes or no byes.
+
+        Now the villages. Picture building the network one line at a time, where each new line brings one new village into the connected group. The first village needs no line; each of the other 11 arrives by exactly one. That gives 11 lines. Could a network with no spare line be built in some other order and end up with more? If it had a closed loop of lines, any line on the loop could be removed and power would still flow the other way round the loop, so that line was spare. A network with no spare line has no loops, and the argument shows such a network on 12 villages has exactly 11 lines.
+
+        A connected graph with no cycles is a **tree**. Trees have **leaves**, vertices with only one edge. Pluck a leaf, with its edge, and what is left is still connected and still has no cycles: a smaller tree, with one vertex and one edge fewer. Keep plucking and you end with a single edge between two vertices. Counting back, the tree had one edge fewer than vertices.
+
+        The figure plucks the smallest-numbered leaf each time, and writes down the vertex it was attached to. Watch the counts, and keep an eye on the numbers it writes down: they will turn out to describe the tree completely.
+    - figure: leaf-strip
+      props: { tree: branching, step: 0 }
+    - text: |
+        For the branching tree the code is (4, 4, 4, 5, 6, 6). Vertex 4 appears three times, and it had four edges. Each vertex appears in the code one time fewer than its degree, and the leaves of the original tree never appear at all. Try the path and the star.
+  derivation:
+    - text: |
+        **Definition.** A **tree** is a connected graph with no cycles. A graph with no cycles, connected or not, is a **forest**: each of its connected components is a tree.
+
+        **Every tree with at least two vertices has at least two leaves.** Take a longest path in the tree, $v_0, v_1, \dots, v_k$. Its end $v_0$ is joined to $v_1$. If it were joined to any other vertex $w$, then either $w$ is on the path, and the edge $v_0 w$ would close a cycle, or $w$ is not, and $w, v_0, v_1, \dots, v_k$ would be a longer path. Neither is possible, so $v_0$ is a leaf, and so is $v_k$.
+
+        **A tree on $n$ vertices has exactly $n - 1$ edges.** By [[f2.induction-and-strong-induction]] on $n$. A single vertex has no edges. For $n \ge 2$, remove a leaf and its one edge. What is left has no cycles, since removing things cannot create one, and is connected, since no path between two other vertices passed through a leaf. So it is a tree on $n - 1$ vertices, with $n - 2$ edges by the induction hypothesis, and putting the leaf back gives $n - 1$.
+    - question:
+        id: derivation-longest
+        type: choice
+        system: s2
+        prompt: |
+          In the proof that a tree has two leaves, why can the end $v_0$ of a longest path not be joined to a vertex $w$ off the path?
+        options:
+          - "Because $w, v_0, v_1, \\dots, v_k$ would then be a longer path."
+          - "Because it would create a cycle."
+          - "Because $v_0$ has degree 1 by definition."
+          - "Because $w$ would have to be a leaf."
+        answer: 0
+        explanation: |
+          A vertex off the path, joined to $v_0$, extends the path by one edge, contradicting the choice of a longest path. An extra edge to a vertex *on* the path is ruled out differently, because it would close a cycle. That $v_0$ has degree 1 is what is being proved, so it cannot be used.
+    - text: |
+        **One path between any two vertices.** In a tree there is exactly one path between any two vertices. There is at least one, since the tree is connected. If there were two different paths from $u$ to $v$, follow them from $u$ until they first split, and then each until they first meet again; the two stretches between the split and the meeting form a cycle. So a tree's paths are unique, which is why every node of a search tree has exactly one route from the root, and why a parent pointer is all a node needs.
+
+        **Every edge is a bridge.** Removing any edge $\{u, v\}$ from a tree disconnects it, because that edge was the only path from $u$ to $v$. Adding any new edge creates exactly one cycle, made of the new edge and the unique path between its ends. So a tree is connected with as few edges as possible, and has no cycles with as many edges as possible.
+
+        **Many definitions, one idea.** For a graph with $n$ vertices, each of these says the same thing:
+
+        1. it is connected and has no cycles;
+        2. it is connected and has $n - 1$ edges;
+        3. it has no cycles and has $n - 1$ edges;
+        4. there is exactly one path between any two vertices.
+
+        You have proved that 1 implies the others. For 3 implies 1: a graph with no cycles is a forest of $c$ trees, and adding up $n_i - 1$ edges over the trees gives $n - c$ edges, so $n - 1$ edges means $c = 1$. That formula, $n - c$ edges for a forest of $c$ trees on $n$ vertices, is why counting components by subtracting edges from vertices worked only for forests. For 2 implies 1, the next fact is enough.
+
+        **Spanning trees.** Every connected graph contains a **spanning tree**: a tree using all its vertices and some of its edges. While there is a cycle, remove one of its edges; the graph stays connected, because the rest of the cycle still links the ends of the removed edge. When no cycle is left, what remains is a tree on all $n$ vertices. So every connected graph on $n$ vertices has at least $n - 1$ edges, and one with exactly $n - 1$ edges is its own spanning tree.
+
+        Building one edge by edge is just as easy, and it is exactly union-find from [[s2.union-find]]: go through the edges, keep an edge if its ends are in different components so far, and skip it if they are already connected, since it would close a cycle. When the lines cost different amounts, taking the edges in order of cost gives the cheapest spanning tree, the board's real problem, in [[s3.minimum-spanning-trees]].
+    - question:
+        id: order-edges
+        type: order
+        system: s2
+        prompt: |
+          Prove that every tree on $n$ vertices has $n - 1$ edges. Put the steps in order.
+        steps:
+          - "Base case: a tree on 1 vertex has 0 edges."
+          - "For $n \\ge 2$, the tree has a leaf, because the ends of a longest path are leaves."
+          - "Removing the leaf and its edge leaves a tree on $n - 1$ vertices, which by the induction hypothesis has $n - 2$ edges."
+          - "Adding the leaf and its one edge back gives $n - 1$ edges."
+        explanation: The leaf is what makes the induction work. Removing an arbitrary vertex could split the tree into several pieces, but a leaf has only one edge, so the rest stays connected.
+    - text: |
+        **Rooted trees.** Choosing one vertex as the **root** gives every other vertex a **parent**, the next vertex on its unique path to the root, and makes the tree a hierarchy, as with a folder system or the trees of [[s2.binary-search-trees]]. The **depth** of a vertex is the length of its path from the root, and the **height** of the tree is the largest depth.
+
+        In a binary tree, where every vertex has at most two children, there are at most $2^d$ vertices at depth $d$, since each level at most doubles. So a binary tree of height $h$ has at most $1 + 2 + \cdots + 2^h = 2^{h + 1} - 1$ vertices, by [[f1.arithmetic-and-geometric-series]]. Turned round with [[f1.logarithms]], a binary tree with $n$ vertices has height at least $\log_2(n + 1) - 1$, which in [[f3.asymptotic-notation]] is $\Omega(\log n)$. That is the best any binary search tree can do, and it is what the heaps of [[s2.heaps-and-priority-queues]] achieve by filling each level before starting the next.
+
+        **Full binary trees, and the tournament again.** In a binary tree where every vertex has either 0 or 2 children, let $i$ be the number with 2 children, the internal vertices, and $\ell$ the number of leaves. Counting edges two ways: each internal vertex has 2 edges to its children, so there are $2i$ edges, and a tree on $i + \ell$ vertices has $i + \ell - 1$ edges. So $2i = i + \ell - 1$, and
+
+        $$\ell = i + 1.$$
+
+        A knockout tournament is such a tree: the teams are the leaves and the matches are the internal vertices, each with the two teams or winners that played in it. 37 leaves means 36 internal vertices: 36 matches.
+
+        **Counting labelled trees.** How many trees are there on the vertices $1, 2, \dots, n$? For $n = 3$ there are 3, each a path with a different vertex in the middle. For $n = 4$ there are 16: 12 paths and 4 stars. In 1889 Cayley showed that the answer is
+
+        $$n^{n - 2}.$$
+
+        The figure's code proves it. Remove the smallest leaf and write down its neighbour, $n - 2$ times, until one edge is left: this turns each tree into a sequence of $n - 2$ numbers from 1 to $n$, its **Prüfer code**. The process can be run backwards. The vertices missing from the code are exactly the leaves of the tree, so the first leaf removed was the smallest number not in the code, and it was attached to the code's first entry. Remove that number from consideration and repeat, and the whole tree is rebuilt. So the code is a bijection, in the sense of [[f2.relations-and-functions-between-sets]], between trees and sequences, and by the product rule of [[f3.counting-with-products-and-sums]] there are $n^{n - 2}$ sequences. For the 12 villages that is $12^{10}$, about 62 billion possible networks.
+  formal:
+    - text: |
+        **Tree.** A connected graph with no cycles. A **forest** is a graph with no cycles; a forest on $n$ vertices with $c$ components has $n - c$ edges.
+
+        **Equivalent conditions.** For a graph $G$ on $n$ vertices, these are equivalent: $G$ is a tree; $G$ is connected with $n - 1$ edges; $G$ has no cycles and $n - 1$ edges; between any two vertices of $G$ there is exactly one path.
+
+        **Leaves.** Every tree with $n \ge 2$ vertices has at least two leaves.
+
+        **Edges and cycles.** Removing any edge of a tree disconnects it; adding any edge creates exactly one cycle.
+
+        **Spanning trees.** Every connected graph has a spanning tree, so has at least $n - 1$ edges.
+
+        **Binary trees.** At most $2^d$ vertices at depth $d$; at most $2^{h + 1} - 1$ in a tree of height $h$; a full binary tree with $i$ internal vertices has $i + 1$ leaves.
+
+        **Cayley's formula.** There are $n^{n - 2}$ trees on $n$ labelled vertices, in bijection with Prüfer codes, the sequences of length $n - 2$ with entries from 1 to $n$.
+  drill:
+    - text: Seconds each. Count vertices, and the edges follow.
+    - question:
+        id: drill-edges
+        type: numeric
+        system: s1
+        prompt: |
+          A tree has 50 vertices. How many edges does it have?
+        answer: "49"
+        explanation: Every tree on $n$ vertices has $n - 1$ edges.
+    - question:
+        id: drill-knockout
+        type: numeric
+        system: s1
+        prompt: |
+          A knockout tournament starts with 100 teams. How many matches are played?
+        answer: "99"
+        explanation: Each match sends one team home, and 99 must go home.
+    - question:
+        id: drill-forest
+        type: numeric
+        system: s1
+        prompt: |
+          A forest has 20 vertices and 4 connected components. How many edges does it have?
+        answer: "16"
+        explanation: Each of the 4 trees has one edge fewer than its vertices, so $20 - 4 = 16$.
+    - question:
+        id: drill-cayley
+        type: numeric
+        system: s1
+        prompt: |
+          How many different trees are there on the 4 labelled vertices 1, 2, 3 and 4?
+        answer: "16"
+        explanation: '$4^{4 - 2} = 16$: 12 paths and 4 stars.'
+    - question:
+        id: drill-binary
+        type: numeric
+        system: s1
+        prompt: |
+          What is the largest number of vertices in a binary tree of height 3, with the root at depth 0?
+        answer: "15"
+        explanation: $1 + 2 + 4 + 8 = 2^4 - 1 = 15$.
+    - question:
+        id: drill-full
+        type: numeric
+        system: s1
+        prompt: |
+          A binary tree in which every vertex has 0 or 2 children has 10 vertices with 2 children. How many leaves does it have?
+        answer: "11"
+        explanation: In such a tree the leaves number one more than the internal vertices.
+    - question:
+        id: drill-paths
+        type: choice
+        system: s1
+        prompt: |
+          How many paths are there between two different vertices of a tree?
+        options: ["Exactly one", "At least two", "It depends on the tree", "None, if they are both leaves"]
+        answer: 0
+        explanation: There is one because a tree is connected, and no more because two different paths would form a cycle.
+    - question:
+        id: predict-leaves
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          parent = {2: 1, 3: 1, 4: 2, 5: 2, 6: 3}
+          children = {}
+          for child, p in parent.items():
+              children[p] = children.get(p, 0) + 1
+          leaves = [v for v in range(1, 7) if v not in children]
+          print(len(parent), leaves)
+        output: "5 [4, 5, 6]"
+        explanation: Each vertex but the root has exactly one parent link, so a rooted tree on 6 vertices has 5 links, its $n - 1$ edges. The leaves are the vertices that are nobody's parent.
+    - question:
+        id: predict-height
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          children = {1: [2, 3], 2: [4, 5], 3: [6], 4: [], 5: [7], 6: [], 7: []}
+
+          def height(v):
+              if not children[v]:
+                  return 0
+              return 1 + max(height(c) for c in children[v])
+
+          print(height(1), height(3))
+        output: "3 1"
+        explanation: The deepest path from 1 is 1, 2, 5, 7, of length 3. From 3 the only path down is 3, 6. A leaf has height 0.
+  work:
+    - text: Slower now. Before trusting a claim about a tree, check it on a path and on a star, the two extremes.
+    - question:
+        id: fix-is-tree
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `is_tree(n, edges)` should say whether the graph on the vertices $0, 1, \dots, n - 1$ with the given edges is a tree. It uses union-find to reject any edge that would close a cycle. For a tree, a triangle and two separate edges on four vertices, it should print `True False False`. It prints `True False True`. Find the fault and fix it.
+        starter: |
+          def is_tree(n, edges):
+              parent = list(range(n))
+
+              def find(x):
+                  while parent[x] != x:
+                      x = parent[x]
+                  return x
+
+              for u, v in edges:
+                  ru = find(u)
+                  rv = find(v)
+                  if ru == rv:
+                      return False
+                  parent[ru] = rv
+              return True
+
+          print(is_tree(4, [(0, 1), (1, 2), (1, 3)]), is_tree(3, [(0, 1), (1, 2), (2, 0)]), is_tree(4, [(0, 1), (2, 3)]))
+        solution: |
+          def is_tree(n, edges):
+              parent = list(range(n))
+
+              def find(x):
+                  while parent[x] != x:
+                      x = parent[x]
+                  return x
+
+              for u, v in edges:
+                  ru = find(u)
+                  rv = find(v)
+                  if ru == rv:
+                      return False
+                  parent[ru] = rv
+              return len(edges) == n - 1
+
+          print(is_tree(4, [(0, 1), (1, 2), (1, 3)]), is_tree(3, [(0, 1), (1, 2), (2, 0)]), is_tree(4, [(0, 1), (2, 3)]))
+        tests: |
+          import random
+          random.seed(59)
+          def _reference(_n, _es):
+              if len(_es) != _n - 1:
+                  return False
+              _nb = {_v: [] for _v in range(_n)}
+              for _u, _v in _es:
+                  _nb[_u].append(_v)
+                  _nb[_v].append(_u)
+              _seen = {0}
+              _stack = [0]
+              while _stack:
+                  _x = _stack.pop()
+                  for _y in _nb[_x]:
+                      if _y not in _seen:
+                          _seen.add(_y)
+                          _stack.append(_y)
+              return len(_seen) == _n
+          for _trial in range(500):
+              _n = random.randint(1, 9)
+              _es = []
+              for _k in range(random.randint(0, _n + 1)):
+                  _a = random.randint(0, _n - 1)
+                  _b = random.randint(0, _n - 1)
+                  if _a != _b:
+                      _es.append((_a, _b))
+              _want = _reference(_n, _es)
+              assert is_tree(_n, _es) == _want, "is_tree(" + str(_n) + ", " + str(_es) + ") should be " + str(_want)
+          assert output.strip() == "True False False", "The program should print True False False"
+        wrong:
+          - |
+            def is_tree(n, edges):
+                return len(edges) == n - 1
+
+            print(True, False, False)
+          - |
+            def is_tree(n, edges):
+                parent = list(range(n))
+
+                def find(x):
+                    while parent[x] != x:
+                        x = parent[x]
+                    return x
+
+                for u, v in edges:
+                    ru = find(u)
+                    rv = find(v)
+                    if ru == rv:
+                        return False
+                    parent[ru] = rv
+                return len(edges) == n
+
+            print(True, False, False)
+        explanation: |
+          Rejecting every edge that closes a cycle proves the graph has no cycles, but a forest of several trees has none either, and two separate edges on four vertices is such a forest. By the equivalent conditions, a graph with no cycles is a tree exactly when it has $n - 1$ edges, so one count finishes the job. Counting edges alone is not enough: a triangle plus a separate vertex has 3 edges on 4 vertices and is not a tree.
+    - question:
+        id: write-spanning
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `spanning_tree(n, edges)` for a connected graph on the vertices $0, 1, \dots, n - 1$. Return a list of edges, taken from `edges` in the order given, that forms a spanning tree: keep an edge exactly when its ends are not yet connected by the edges kept so far, using union-find.
+        starter: |
+          def spanning_tree(n, edges):
+              return []
+
+          print(spanning_tree(4, [(0, 1), (1, 2), (2, 0), (2, 3), (3, 1)]))
+          print(len(spanning_tree(6, [(i, j) for i in range(6) for j in range(i + 1, 6)])))
+        solution: |
+          def spanning_tree(n, edges):
+              parent = list(range(n))
+
+              def find(x):
+                  while parent[x] != x:
+                      x = parent[x]
+                  return x
+
+              kept = []
+              for u, v in edges:
+                  ru = find(u)
+                  rv = find(v)
+                  if ru != rv:
+                      parent[ru] = rv
+                      kept.append((u, v))
+              return kept
+
+          print(spanning_tree(4, [(0, 1), (1, 2), (2, 0), (2, 3), (3, 1)]))
+          print(len(spanning_tree(6, [(i, j) for i in range(6) for j in range(i + 1, 6)])))
+        tests: |
+          import random
+          random.seed(61)
+          for _trial in range(400):
+              _n = random.randint(1, 12)
+              _order = list(range(_n))
+              random.shuffle(_order)
+              _es = [(_order[random.randint(0, _i - 1)], _order[_i]) for _i in range(1, _n)]
+              for _k in range(random.randint(0, 2 * _n)):
+                  _a = random.randint(0, _n - 1)
+                  _b = random.randint(0, _n - 1)
+                  if _a != _b:
+                      _es.append((_a, _b))
+              random.shuffle(_es)
+              _got = spanning_tree(_n, _es)
+              assert isinstance(_got, list), "spanning_tree should return a list of edges"
+              assert all(_e in _es for _e in _got), "spanning_tree should only use edges of the graph"
+              assert len(_got) == _n - 1, "A spanning tree on " + str(_n) + " vertices has " + str(_n - 1) + " edges, not " + str(len(_got))
+              _nb = {_v: [] for _v in range(_n)}
+              for _u, _v in _got:
+                  _nb[_u].append(_v)
+                  _nb[_v].append(_u)
+              _seen = {0}
+              _stack = [0]
+              while _stack:
+                  _x = _stack.pop()
+                  for _y in _nb[_x]:
+                      if _y not in _seen:
+                          _seen.add(_y)
+                          _stack.append(_y)
+              assert len(_seen) == _n, "The edges returned for edges " + str(_es) + " do not connect every vertex"
+              _positions = [_es.index(_e) for _e in _got]
+              assert _positions == sorted(_positions), "Keep the edges in the order they are given"
+          assert output.strip() == "[(0, 1), (1, 2), (2, 3)]\n5", "The program should print [(0, 1), (1, 2), (2, 3)], then 5"
+        wrong:
+          - |
+            def spanning_tree(n, edges):
+                return edges[:n - 1]
+
+            print([(0, 1), (1, 2), (2, 3)])
+            print(5)
+          - |
+            def spanning_tree(n, edges):
+                seen = set()
+                kept = []
+                for u, v in edges:
+                    if u not in seen or v not in seen:
+                        seen.add(u)
+                        seen.add(v)
+                        kept.append((u, v))
+                return kept
+
+            print([(0, 1), (1, 2), (2, 3)])
+            print(5)
+          - |
+            def spanning_tree(n, edges):
+                parent = list(range(n))
+
+                def find(x):
+                    while parent[x] != x:
+                        x = parent[x]
+                    return x
+
+                kept = []
+                for u, v in edges:
+                    if find(u) != find(v):
+                        parent[u] = v
+                        kept.append((u, v))
+                return kept
+
+            print([(0, 1), (1, 2), (2, 3)])
+            print(5)
+        explanation: |
+          An edge whose ends are already connected would close a cycle, so it is skipped; any other edge joins two components into one, and is kept. A connected graph starts as $n$ components and ends as one, so exactly $n - 1$ edges are kept, and they form a tree. Keeping an edge whenever one of its ends is new goes wrong when two separate groups have formed: an edge joining them has both ends already seen and is skipped, so the groups never join. And union-find must link the roots, `parent[ru] = rv`; linking `u` itself can cut `u` off from the rest of its component.
+    - question:
+        id: write-code
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `prufer(n, edges)`, which returns the Prüfer code of a tree on the vertices $1, 2, \dots, n$, with $n \ge 2$: repeat $n - 2$ times, remove the smallest-numbered leaf and append the number of its neighbour to the code. Return the code as a list.
+        starter: |
+          def prufer(n, edges):
+              return []
+
+          print(prufer(8, [(1, 4), (2, 4), (3, 4), (4, 5), (5, 6), (6, 7), (6, 8)]))
+          print(prufer(8, [(8, v) for v in range(1, 8)]), prufer(2, [(1, 2)]))
+        solution: |
+          def prufer(n, edges):
+              neighbours = {v: set() for v in range(1, n + 1)}
+              for u, v in edges:
+                  neighbours[u].add(v)
+                  neighbours[v].add(u)
+              code = []
+              for _ in range(n - 2):
+                  leaf = min(v for v in neighbours if len(neighbours[v]) == 1)
+                  other = neighbours[leaf].pop()
+                  code.append(other)
+                  neighbours[other].remove(leaf)
+                  neighbours.pop(leaf)
+              return code
+
+          print(prufer(8, [(1, 4), (2, 4), (3, 4), (4, 5), (5, 6), (6, 7), (6, 8)]))
+          print(prufer(8, [(8, v) for v in range(1, 8)]), prufer(2, [(1, 2)]))
+        tests: |
+          import itertools
+          import random
+          random.seed(67)
+          def _tree_from(_code):
+              _n = len(_code) + 2
+              _degree = {_v: 1 for _v in range(1, _n + 1)}
+              for _x in _code:
+                  _degree[_x] += 1
+              _es = []
+              for _x in _code:
+                  _leaf = min(_v for _v in _degree if _degree[_v] == 1)
+                  _es.append((_leaf, _x))
+                  _degree[_x] -= 1
+                  _degree.pop(_leaf)
+              _u, _v = [_w for _w in _degree if _degree[_w] == 1]
+              _es.append((_u, _v))
+              return _es
+          for _trial in range(300):
+              _n = random.randint(2, 15)
+              _code = [random.randint(1, _n) for _ in range(_n - 2)]
+              _es = _tree_from(_code)
+              random.shuffle(_es)
+              _es = [(_b, _a) if random.random() < 0.5 else (_a, _b) for _a, _b in _es]
+              _got = prufer(_n, _es)
+              assert _got == _code, "The tree with edges " + str(_es) + " has code " + str(_code) + ", not " + str(_got)
+          _all = set()
+          for _code in itertools.product(range(1, 6), repeat=3):
+              _all.add(tuple(prufer(5, _tree_from(list(_code)))))
+          assert len(_all) == 125, "The 125 trees on 5 vertices should have 125 different codes"
+          assert output.strip() == "[4, 4, 4, 5, 6, 6]\n[8, 8, 8, 8, 8, 8] []", "The program should print [4, 4, 4, 5, 6, 6], then [8, 8, 8, 8, 8, 8] []"
+        wrong:
+          - |
+            def prufer(n, edges):
+                neighbours = {v: set() for v in range(1, n + 1)}
+                for u, v in edges:
+                    neighbours[u].add(v)
+                    neighbours[v].add(u)
+                code = []
+                for _ in range(n - 2):
+                    leaf = min(v for v in neighbours if len(neighbours[v]) == 1)
+                    other = neighbours[leaf].pop()
+                    code.append(leaf)
+                    neighbours[other].remove(leaf)
+                    neighbours.pop(leaf)
+                return code
+
+            print([4, 4, 4, 5, 6, 6])
+            print([8, 8, 8, 8, 8, 8], [])
+          - |
+            def prufer(n, edges):
+                neighbours = {v: set() for v in range(1, n + 1)}
+                for u, v in edges:
+                    neighbours[u].add(v)
+                    neighbours[v].add(u)
+                code = []
+                for _ in range(n - 2):
+                    leaf = max(v for v in neighbours if len(neighbours[v]) == 1)
+                    other = neighbours[leaf].pop()
+                    code.append(other)
+                    neighbours[other].remove(leaf)
+                    neighbours.pop(leaf)
+                return code
+
+            print([4, 4, 4, 5, 6, 6])
+            print([8, 8, 8, 8, 8, 8], [])
+          - |
+            def prufer(n, edges):
+                neighbours = {v: set() for v in range(1, n + 1)}
+                for u, v in edges:
+                    neighbours[u].add(v)
+                    neighbours[v].add(u)
+                code = []
+                leaves = sorted(v for v in neighbours if len(neighbours[v]) == 1)
+                for leaf in leaves:
+                    if len(code) < n - 2:
+                        code.append(neighbours[leaf].pop())
+                return code
+
+            print([4, 4, 4, 5, 6, 6])
+            print([8, 8, 8, 8, 8, 8], [])
+        explanation: |
+          The code records neighbours, not leaves: the leaves are what the decoder works out for itself, as the smallest numbers not yet accounted for, so recording them throws away the information. Always taking the smallest leaf is what makes the code unique and reversible; the largest would also give a code, but a different one from the standard. And the leaves must be found afresh after each removal, because removing a leaf can turn its neighbour into a new leaf, as vertex 4 became after 1, 2 and 3 were gone. Each step scans all the vertices, so this simple version takes $\Theta(n^2)$ time.
+    - question:
+        id: work-cayley
+        type: numeric
+        system: s2
+        prompt: |
+          How many different trees are there on 6 labelled vertices?
+        answer: "1296"
+        explanation: |
+          By Cayley's formula, $6^{6 - 2} = 6^4 = 1{,}296$, one for each Prüfer code of length 4 with entries from 1 to 6.
+    - question:
+        id: work-min-height
+        type: numeric
+        system: s2
+        prompt: |
+          What is the smallest possible height of a binary tree with 1,000 vertices, with the root at depth 0?
+        answer: "9"
+        explanation: |
+          A binary tree of height $h$ holds at most $2^{h + 1} - 1$ vertices. Height 8 holds at most 511, too few; height 9 holds up to 1,023. So the height is at least 9, and a tree filled level by level achieves it.
+    - question:
+        id: work-leaves
+        type: numeric
+        system: s2
+        prompt: |
+          A tree has 4 vertices of degree 3, 2 vertices of degree 2, and every other vertex is a leaf. How many leaves does it have?
+        answer: "6"
+        explanation: |
+          With $\ell$ leaves there are $6 + \ell$ vertices and so $5 + \ell$ edges. By the handshake lemma, the degrees add up to twice that: $4 \cdot 3 + 2 \cdot 2 + \ell = 2(5 + \ell)$, so $16 + \ell = 10 + 2\ell$ and $\ell = 6$.
+  connections:
+    - text: |
+        The tournament needs 36 matches, because every match sends one team home; the villages need 11 lines, because a connected network with no spare line is a tree, and a tree on 12 vertices has 11 edges; and there are $12^{10}$, about 62 billion, such networks, one for each Prüfer code.
+
+        A tree is connected with no cycles, and that one definition has many faces: $n - 1$ edges, a unique path between any two vertices, every edge a bridge, at least two leaves. Leaves make induction on trees easy. Every connected graph contains a spanning tree, found edge by edge with union-find. Binary trees of height $h$ hold at most $2^{h + 1} - 1$ vertices, so their height is at least logarithmic in their size, and full binary trees have one more leaf than internal vertex.
+
+        This closes discrete mathematics. You can now count outcomes, arrangements, overlaps, remainders, steps and structures. Counting leads directly to chance. If a network of lines were chosen at random from those 62 billion, how likely is it to be a single path? If 23 people are in a room, how likely is it that two share a birthday? Each is a count of favourable outcomes against a count of all outcomes, and making that precise, for situations where outcomes are not all equally likely too, starts with [[f4.sample-spaces-and-events]].

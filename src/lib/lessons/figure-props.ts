@@ -74,6 +74,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   tower: z.strictObject({ discs: z.number().optional(), move: z.number().optional() }),
   "bound-witness": z.strictObject({ pair: z.enum(["linear", "log", "square", "exponential"]).optional(), c: z.number().optional(), start: z.number().optional() }),
   "one-stroke": z.strictObject({ shape: z.enum(["house", "square", "star"]).optional(), step: z.number().optional() }),
+  "leaf-strip": z.strictObject({ tree: z.enum(["branching", "path", "star"]).optional(), step: z.number().optional() }),
   "union-find": z.strictObject({ bySize: z.boolean().optional(), find: z.number().optional(), joins: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
