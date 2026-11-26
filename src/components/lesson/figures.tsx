@@ -7642,6 +7642,101 @@ function DiClock(props: Props) {
   );
 }
 
+const FS_PLANS: [string, string, string][] = [
+  ["flat", "flat", "₹30 whatever the distance"],
+  ["distance", "by_distance", "₹10 + ₹8 per km"],
+  ["busy", "busy", "by_distance × 1.5, rounded down"],
+  ["free_over_500", "free_over_500", "₹0 from ₹500, else by_distance"],
+];
+
+/** A delivery fee chosen from a table of plans, each plan a function with the same parameters. */
+function FeeStrategy(props: Props) {
+  const keys = FS_PLANS.map(([k]) => k);
+  const [plan, setPlan] = useState(typeof props.plan === "string" && keys.includes(props.plan) ? props.plan : "distance");
+  const [km, setKm] = useState(clamp(Math.round(num(props.km, 4)), 1, 10));
+  const [big, setBig] = useState(props.total === 650);
+  const total = big ? 650 : 300;
+  const feeOf = (p: string, d: number) => {
+    const dist = 10 + 8 * d;
+    if (p === "flat") return 30;
+    if (p === "distance") return dist;
+    if (p === "busy") return Math.floor((dist * 3) / 2);
+    return total >= 500 ? 0 : dist;
+  };
+  const row = FS_PLANS.find(([k]) => k === plan)!;
+  const fee = feeOf(plan, km);
+  const working =
+    plan === "flat"
+      ? "₹30"
+      : plan === "distance"
+        ? `10 + 8 × ${km} = ₹${fee}`
+        : plan === "busy"
+          ? `(10 + 8 × ${km}) × 1.5 = ₹${fee}`
+          : total >= 500
+            ? `₹${total} is at least ₹500, so ₹0`
+            : `₹${total} is under ₹500, so 10 + 8 × ${km} = ₹${fee}`;
+  const summary = `PLANS["${plan}"] is the function ${row[1]}: ${row[2]}. For ${km} km and an order of ₹${total}: ${working}. fee() only looks the plan up and calls it, so adding a plan means writing one function and adding one row to the table; fee() itself never changes.`;
+  const top = 135;
+  return (
+    <Frame
+      title="Choosing behaviour from a table"
+      summary={summary}
+      controls={
+        <>
+          {keys.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={plan === k} onClick={() => setPlan(k)}>
+              {k}
+            </button>
+          ))}
+          <Stepper label="km" value={km} min={1} max={10} onChange={setKm} />
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={big} onClick={() => setBig(!big)}>
+            order of ₹650
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 230" role="img" aria-label={`Plan ${plan}: ₹${fee} for ${km} km`}>
+        <text x={8} y={16} className="fig-small" style={{ fontWeight: 600 }}>
+          PLANS
+        </text>
+        {FS_PLANS.map(([k, fn], i) => (
+          <g key={k}>
+            <rect x={8} y={26 + i * 28} width={196} height={22} rx={3} className={k === plan ? "fig-accent" : "fig-fill"} />
+            <text x={14} y={41 + i * 28} className="fig-small" style={{ fill: k === plan ? "var(--bg)" : "var(--text)" }}>
+              {`"${k}": ${fn}`}
+            </text>
+          </g>
+        ))}
+        <text x={8} y={160} className="fig-small">
+          fee(plan, km, total):
+        </text>
+        <text x={8} y={176} className="fig-small">
+          return PLANS[plan](km, total)
+        </text>
+        <text x={230} y={16} className="fig-small" style={{ fontWeight: 600 }}>
+          {`fee by distance, order ₹${total}`}
+        </text>
+        {Array.from({ length: 10 }, (_, i) => {
+          const d = i + 1;
+          const f = feeOf(plan, d);
+          const h = Math.max(1, (f / top) * 170);
+          return (
+            <g key={d}>
+              <rect x={230 + i * 22} y={200 - h} width={16} height={h} className={d === km ? "fig-accent" : "fig-fill"} />
+              <text x={238 + i * 22} y={216} textAnchor="middle" className="fig-small">
+                {d}
+              </text>
+            </g>
+          );
+        })}
+        <text x={8} y={216} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`${km} km: ₹${fee}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -8978,6 +9073,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "state-flags": StateFlags,
   "error-unwind": ErrorUnwind,
   "di-clock": DiClock,
+  "fee-strategy": FeeStrategy,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
