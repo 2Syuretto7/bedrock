@@ -9,5 +9,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!sign-in|api/health|_next/static|_next/image|favicon.ico|icon.svg|manifest.webmanifest).*)"],
+  matcher: ["/((?!sign-in|api/health|_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|icon-192.png|icon-512.png|manifest.webmanifest).*)"],
 };
