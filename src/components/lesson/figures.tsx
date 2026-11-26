@@ -5245,6 +5245,81 @@ function BenchmarkRuns(props: Props) {
   );
 }
 
+const TREE_N = 16;
+const TREE_LEVELS = 4;
+
+function growthName(a: number, d: number): string {
+  const ratio = a / 2 ** d;
+  const power = (e: number) => (e === 0 ? "1" : e === 1 ? "n" : "n²");
+  if (ratio < 1) return `Θ(${power(d)})`;
+  if (ratio === 1) return d === 0 ? "Θ(log n)" : `Θ(${power(d)} log n)`;
+  const e = Math.log2(a);
+  return Number.isInteger(e) ? `Θ(${power(e)})` : `Θ(n^${dp(e, 2)}), since log₂ ${a} = ${dp(e, 2)}`;
+}
+
+/** The recursion tree of T(n) = a T(n/2) + n^d on n = 16: the work of each level, and which levels dominate. */
+function RecursionTree(props: Props) {
+  const [a, setA] = useState(clamp(Math.round(num(props.a, 2)), 1, 4));
+  const [d, setD] = useState(clamp(Math.round(num(props.d, 1)), 0, 2));
+  const levels = Array.from({ length: TREE_LEVELS + 1 }, (_, k) => {
+    const count = a ** k;
+    const size = TREE_N / 2 ** k;
+    return { k, count, size, work: count * size ** d };
+  });
+  const total = levels.reduce((s, l) => s + l.work, 0);
+  const widest = Math.max(...levels.map((l) => l.work));
+  const ratio = a / 2 ** d;
+  const ratioText = Number.isInteger(ratio) ? `${ratio}` : `${a}/${2 ** d}`;
+  const cost = d === 0 ? "1 step" : d === 1 ? "as many steps as its size" : "its size squared in steps";
+  const verdict =
+    ratio < 1
+      ? `Each level does ${ratioText} of the work of the level above, so the top level dominates and the total is ${growthName(a, d)}.`
+      : ratio === 1
+        ? `Each level does the same work as the level above, so every level counts and the total is the work of one level times the number of levels: ${growthName(a, d)}.`
+        : `Each level does ${ratioText} times the work of the level above, so the leaves dominate and the total is ${growthName(a, d)}.`;
+  const y = (k: number) => 44 + k * 34;
+  return (
+    <Frame
+      title="The recursion tree"
+      summary={`T(n) = ${a === 1 ? "" : a}T(n/2) + ${d === 0 ? "1" : d === 1 ? "n" : "n²"} on an input of size ${TREE_N}: each problem splits into ${plural(a, "half-size subproblem")}, and splitting and combining cost ${cost}. The levels, from the top, do ${levels
+        .map((l) => group(l.work))
+        .join(", ")} steps of work, ${group(total)} in all. ${verdict}`}
+      controls={
+        <>
+          <Slider label="subproblems" value={a} onChange={setA} min={1} max={4} text={`${a}`} />
+          <Slider label="work exponent" value={d} onChange={setD} min={0} max={2} text={`${d}`} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 224" role="img" aria-label={`Bars for the five levels of the recursion tree, with work ${levels.map((l) => l.work).join(", ")} from top to bottom`}>
+        <text x="10" y="18" className="fig-small">
+          problems × size
+        </text>
+        <text x="96" y="18" className="fig-small">
+          work of the level
+        </text>
+        {levels.map((l) => {
+          const width = Math.max(2, (l.work / widest) * 270);
+          return (
+            <g key={l.k}>
+              <text x="10" y={y(l.k) + 4} className="fig-small">
+                {`${group(l.count)} × ${l.size}`}
+              </text>
+              <rect x="96" y={y(l.k) - 10} width={width} height="20" className={l.work === widest ? "fig-accent" : "fig-fill"} />
+              <text x={102 + width} y={y(l.k) + 4} className="fig-small">
+                {group(l.work)}
+              </text>
+            </g>
+          );
+        })}
+        <text x="10" y="216" className="fig-small">
+          {`total ${group(total)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -6554,6 +6629,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "bootstrap": Bootstrap,
   "ab-test": AbTest,
   "benchmark-runs": BenchmarkRuns,
+  "recursion-tree": RecursionTree,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

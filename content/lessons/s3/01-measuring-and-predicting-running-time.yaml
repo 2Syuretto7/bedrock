@@ -1,0 +1,450 @@
+concept: s3.measuring-and-predicting-running-time
+minutes: 90
+claim: You can count the basic steps a piece of code takes as a function of its input size, recognise the common growth rates from the shape of the loops, predict a program's time on a large input from a small one, estimate the growth rate of a real program by a doubling experiment, explain why constant factors decide which algorithm wins on small inputs, and time Python code honestly.
+recalls: [s2.union-find, f3.trees-and-their-properties, f5.noise-in-measurements-and-benchmarks]
+uses: [f3.asymptotic-notation, f3.recurrences, f1.logarithms, f1.exponents-and-exponential-growth, f5.summaries-mean-median-and-percentiles, s2.arrays-and-dynamic-arrays, s2.hash-tables, s1.modules-and-imports, s1.comprehensions-and-iterators, s0.loops, s0.functions, s0.lists-and-tuples]
+leads: [s3.sorting, s3.binary-search, s3.divide-and-conquer-and-the-master-theorem, s3.amortised-analysis]
+bridges:
+  f3.trees-and-their-properties: |
+    The trees lesson counted a tree's parts: n nodes and n − 1 edges, and a height of about log₂ n when a binary tree is kept balanced. That last number returns here as a unit of time. Halving n again and again reaches 1 after about log₂ n halvings, the same as the height of a balanced tree, and so does any algorithm that discards half of what remains at each step or walks one path from the root of a balanced tree. This lesson counts such steps, alongside the loops that take n and n² of them, and uses the counts to predict how long a program will take.
+  f5.noise-in-measurements-and-benchmarks: |
+    The statistics cluster ended with how to time a program honestly: repeat the runs, discard the warm-up, interleave, and prefer the median or the minimum. That answered which of two programs is faster on one input. This lesson asks a different question of the same timings: how does a program's time grow as its input grows? With a model of that growth, a few honest timings on small inputs predict the time on an input far too large to try, and a timing that disagrees with the prediction points to a slow step hidden in the code.
+starter: |
+  # Scratch space. Time a quadratic loop at two sizes and compare.
+  import time
+
+  def pairs(n):
+      count = 0
+      for i in range(n):
+          for j in range(i + 1, n):
+              count += 1
+      return count
+
+  for n in [500, 1000]:
+      start = time.perf_counter()
+      pairs(n)
+      print(n, time.perf_counter() - start)
+parts:
+  recall:
+    - text: |
+        Three threads meet here. [[s2.union-find]] and the other data structures promised operations that are fast "even for a million items", without saying how fast is measured. [[f3.trees-and-their-properties]] showed why a balanced tree is only about log₂ n deep. [[f5.noise-in-measurements-and-benchmarks]] showed how to time code without fooling yourself. This lesson joins them into the habit at the centre of algorithms: predicting how long a program will take before running it. Three quick pulls first.
+  puzzle:
+    - text: |
+        A script that matches every customer record against every other one, looking for duplicates, takes 2 seconds on a test file of 10,000 records. Its running time grows with the square of the number of records.
+
+        The production file has 10 lakh, that is 1,000,000, records. **About how many seconds will the script take on it?**
+  intuition:
+    - text: |
+        Ask how long it takes to read a book and you will be told it depends on the book. Ask how long it takes to find a word in a dictionary and the answer barely depends on the dictionary: open near the middle, go left or right, repeat, and even a fat dictionary takes a few dozen looks. Ask how long it takes to check whether any two people in a room share a birthday by comparing every pair, and doubling the room quadruples the work.
+
+        These are three kinds of growth, and they matter far more than the speed of the computer. A program's **running time** is described as a function of the size of its input, $n$: the number of records, the length of the list, the number of nodes. Rather than seconds, which depend on the machine, we count **basic steps**: comparisons, additions, reads and writes of single values, each taking roughly a fixed time. The count tells how the time will grow, and growth is what decides whether a program finishes in a second or a week.
+
+        The figure lists five common growth rates for one input size. Move $n$ from 2 to 32 and watch how each responds to doubling.
+    - figure: growth-rates
+      props: { n: 16 }
+    - text: |
+        At $n = 16$ a logarithmic algorithm takes 4 steps and a quadratic one 256; at $n = 32$, 5 steps and 1,024. The exponential one, $2^n$, passes four billion by $n = 32$. Doubling the input adds one step to $\log_2 n$, doubles $n$, quadruples $n^2$, and squares $2^n$. That last row is why an exponential algorithm is hopeless beyond tiny inputs, whatever the machine.
+  derivation:
+    - text: |
+        **Counting loops.** The shape of the loops usually gives the count.
+
+        - One loop over $n$ items, with a fixed amount of work inside, takes about $n$ steps: **linear**.
+        - A loop inside a loop, each over $n$ items, takes $n \times n = n^2$: **quadratic**.
+        - A loop over all pairs $i < j$ runs its body $0 + 1 + 2 + \cdots + (n - 1) = \frac{n(n - 1)}{2}$ times, still about $n^2/2$, so still quadratic.
+        - A loop that halves what remains, `while n > 1: n = n // 2`, runs about $\log_2 n$ times, by [[f1.logarithms]]: **logarithmic**. So does one that doubles a counter until it reaches $n$.
+        - Trying every subset of $n$ items takes $2^n$ steps: **exponential**, as in [[f1.exponents-and-exponential-growth]].
+
+        Hidden loops count too. In Python, `x in some_list` checks the items one by one, so it is linear, while `x in some_set` hashes `x` and looks in one bucket of [[s2.hash-tables]], so it takes a constant time on average. `some_list.insert(0, x)` shifts every item along, as [[s2.arrays-and-dynamic-arrays]] showed, so a loop of such inserts is quadratic.
+    - question:
+        id: derivation-doubling-loop
+        type: numeric
+        system: s2
+        prompt: |
+          How many times does the body of this loop run when `n = 1000`?
+
+          ```python
+          i = 1
+          while i < n:
+              i = i * 2
+          ```
+        answer: "10"
+        explanation: |
+          `i` takes the values 1, 2, 4, …, 512 while it is below 1,000, and the body runs once for each: 10 times, since $2^{10} = 1{,}024$ is the first power of 2 that is at least 1,000. That is $\lceil \log_2 1000 \rceil$.
+    - text: |
+        **Asymptotic notation.** Exact counts like $3n^2 + 100n + 7$ are tedious and depend on what counts as a step. [[f3.asymptotic-notation]] gave the shorthand: keep the fastest-growing term and drop its constant, so $3n^2 + 100n + 7$ is $\Theta(n^2)$. $O$ gives an upper bound on growth, $\Omega$ a lower bound, and $\Theta$ both. Running times are usually stated for the **worst case**, the input of size $n$ that takes longest, because that is a promise; sometimes for the **average case** over random inputs, which is what a program usually meets.
+
+        **Predicting.** If the time is close to $c \cdot n^k$ for large $n$, then the constant $c$ cancels in a ratio:
+
+        $$\frac{T(n_2)}{T(n_1)} \approx \left(\frac{n_2}{n_1}\right)^k, \qquad T(n_2) \approx T(n_1)\left(\frac{n_2}{n_1}\right)^k.$$
+
+        One honest timing on a small input and the exponent $k$ predict the time on any larger input. For $n \log n$, the ratio is a little more than $n_2/n_1$, because the logarithm grows too.
+
+        **Constant factors.** Growth wins in the end but not at the start. An algorithm taking $100n$ steps beats one taking $n^2$ only once $n > 100$; below that, the "worse" algorithm is faster. Real libraries exploit this: Python's sort uses a simple quadratic method on short runs of a list, because on a few dozen items its small constant beats everything else.
+    - question:
+        id: derivation-crossover
+        type: numeric
+        system: s2
+        prompt: |
+          Algorithm A takes $100n$ steps and algorithm B takes $n^2$ steps. Above which input size $n$ does A take fewer steps?
+        answer: "100"
+        explanation: |
+          $100n < n^2$ exactly when $n > 100$. For $n < 100$ the quadratic algorithm B is faster, and at $n = 100$ they tie at 10,000 steps.
+    - text: |
+        **Doubling experiments.** When the code is too tangled to count, measure. Time the program at $n$, $2n$, $4n$, and so on, each timing taken honestly, as in [[f5.noise-in-measurements-and-benchmarks]]: several runs, warm-up discarded, the median or minimum kept. If each doubling multiplies the time by about $r$, then $2^k = r$ and
+
+        $$k = \log_2 r, \qquad \text{or in general } k = \frac{\ln(t_2/t_1)}{\ln(n_2/n_1)}.$$
+
+        A ratio near 2 means linear, near 4 quadratic, near 8 cubic; a ratio a little above 2 suggests $n \log n$. Plotted on logarithmic axes, time against $n$ is a straight line of slope $k$. The sizes must be large enough that the steps being counted dominate: at tiny $n$, starting the program and the timer's own cost swamp everything.
+
+        **In Python.** `time.perf_counter()` reads a high-resolution clock; subtract two readings to time a stretch of code, and repeat to get a distribution rather than one number. Counting steps directly, by adding a counter to the code, gives a noise-free measure of growth that does not depend on the machine at all, which is how this cluster will check its predictions.
+    - question:
+        id: order-doubling
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of a doubling experiment in order.
+        steps:
+          - "Choose a starting size large enough that the main loop dominates the running time."
+          - "Time the program several times at that size and keep the median."
+          - "Double the size and time it again the same way, repeating for a few doublings."
+          - "Take $\\log_2$ of the ratio between successive times to estimate the exponent."
+        explanation: |
+          The size must be chosen first, each timing needs several runs, the ratios need at least two sizes, and the exponent comes from the ratios. Repeating the doubling a few times shows whether the ratio has settled.
+  formal:
+    - text: |
+        **Running time.** $T(n)$, the number of basic steps on inputs of size $n$: worst case $\max$ over inputs of size $n$, average case the expectation over a stated distribution of inputs.
+
+        **Common counts.** A loop over $n$: $\Theta(n)$. All pairs $i < j$: $\binom{n}{2} = n(n - 1)/2 = \Theta(n^2)$. Halving from $n$ to 1: $\lceil \log_2 n \rceil$ iterations, $\Theta(\log n)$. All subsets: $2^n$.
+
+        **Prediction.** If $T(n) \sim c\,n^k$, then $T(n_2)/T(n_1) \to (n_2/n_1)^k$, so $T(n_2) \approx T(n_1)(n_2/n_1)^k$.
+
+        **Exponent from measurements.** $k \approx \ln(t_2/t_1)/\ln(n_2/n_1)$; with doubling, $k \approx \log_2(t_{2n}/t_n)$.
+
+        **Crossover.** $a\,n < b\,n^2$ exactly when $n > a/b$.
+  drill:
+    - text: Seconds each. Read the loops; doubling n tells the story.
+    - question:
+        id: drill-quadruple
+        type: numeric
+        system: s1
+        prompt: |
+          A quadratic algorithm takes 3 seconds on an input. How many seconds on an input twice as large?
+        answer: "12"
+        explanation: Doubling $n$ multiplies $n^2$ by 4, so $3 \times 4 = 12$.
+    - question:
+        id: drill-log
+        type: numeric
+        system: s1
+        prompt: |
+          What is $\log_2 1{,}048{,}576$?
+        answer: "20"
+        explanation: $2^{20} = 1{,}048{,}576$, so a binary search over about a million items needs about 20 steps.
+    - question:
+        id: drill-nested
+        type: numeric
+        system: s1
+        prompt: |
+          Two nested loops each run 100 times. How many times does the inner body run?
+        answer: "10000"
+        explanation: $100 \times 100 = 10{,}000$.
+    - question:
+        id: drill-membership
+        type: choice
+        system: s1
+        prompt: |
+          Which is fastest on average for checking whether a value is among a million stored values?
+        options:
+          - "`x in some_set`"
+          - "`x in some_list`"
+          - "`x in some_tuple`"
+        answer: 0
+        explanation: A set looks in one bucket of a hash table, a constant time on average. A list or a tuple is checked item by item.
+    - question:
+        id: drill-theta
+        type: choice
+        system: s1
+        prompt: |
+          A loop takes $3n^2 + 100n + 7$ steps. What is its growth rate?
+        options:
+          - "$\\Theta(n^2)$"
+          - "$\\Theta(n)$"
+          - "$\\Theta(n^3)$"
+          - "$\\Theta(100n)$"
+        answer: 0
+        explanation: The fastest-growing term is $3n^2$; dropping its constant gives $\Theta(n^2)$.
+    - question:
+        id: drill-ratio
+        type: numeric
+        system: s1
+        prompt: |
+          Each doubling of the input multiplies a program's time by 8. What is the exponent $k$ in $n^k$?
+        answer: "3"
+        explanation: '$2^k = 8$, so $k = 3$: cubic.'
+    - question:
+        id: predict-halving
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          count = 0
+          i = 1
+          while i < 100:
+              i = i * 2
+              count += 1
+          print(count)
+        output: "7"
+        explanation: "`i` goes 1, 2, 4, 8, 16, 32, 64 while below 100, then reaches 128 after the seventh doubling: $\\lceil \\log_2 100 \\rceil = 7$."
+    - question:
+        id: predict-triangle
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          count = 0
+          for i in range(5):
+              for j in range(i):
+                  count += 1
+          print(count)
+        output: "10"
+        explanation: The inner loop runs 0, 1, 2, 3 and 4 times, adding to 10, which is $5 \times 4/2$.
+  work:
+    - text: Slower now. For each piece of code, find the loop that runs most often, count its runs as a function of $n$, and only then think about seconds.
+    - question:
+        id: fix-predict
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `predict_time(t, n, new_n, power)` should predict the time on an input of size `new_n` for a program whose time grows like $n^{\text{power}}$ and which took `t` seconds on size `n`. The program should print `20000.0 12.0 0.0625`. It prints `1960200000000 9000 -62500.0`. Find the fault and fix it.
+        starter: |
+          def predict_time(t, n, new_n, power):
+              # A program whose running time grows like n ** power took t seconds on an input of size n.
+              # Predict its time on an input of size new_n.
+              return t * (new_n - n) ** power
+
+
+          print(predict_time(2, 10000, 1000000, 2), predict_time(3, 1000, 4000, 1), predict_time(0.5, 100, 50, 3))
+        solution: |
+          def predict_time(t, n, new_n, power):
+              # A program whose running time grows like n ** power took t seconds on an input of size n.
+              # Predict its time on an input of size new_n.
+              return t * (new_n / n) ** power
+
+
+          print(predict_time(2, 10000, 1000000, 2), predict_time(3, 1000, 4000, 1), predict_time(0.5, 100, 50, 3))
+        tests: |
+          for _t, _n, _new, _power in [(2, 10000, 1000000, 2), (3, 1000, 4000, 1), (0.5, 100, 50, 3), (1, 10, 10, 2), (4, 50, 100, 0.5), (7, 3, 6, 0)]:
+              _want = _t * (_new / _n) ** _power
+              _got = predict_time(_t, _n, _new, _power)
+              assert abs(_got - _want) <= 1e-9 * max(1, _want), "predict_time(" + str(_t) + ", " + str(_n) + ", " + str(_new) + ", " + str(_power) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "20000.0 12.0 0.0625", "The program should print 20000.0 12.0 0.0625"
+        wrong:
+          - |
+            def predict_time(t, n, new_n, power):
+                # A program whose running time grows like n ** power took t seconds on an input of size n.
+                # Predict its time on an input of size new_n.
+                return t * (n / new_n) ** power
+
+
+            print(predict_time(2, 10000, 1000000, 2), predict_time(3, 1000, 4000, 1), predict_time(0.5, 100, 50, 3))
+          - |
+            def predict_time(t, n, new_n, power):
+                # A program whose running time grows like n ** power took t seconds on an input of size n.
+                # Predict its time on an input of size new_n.
+                return t * (new_n / n) * power
+
+
+            print(predict_time(2, 10000, 1000000, 2), predict_time(3, 1000, 4000, 1), predict_time(0.5, 100, 50, 3))
+          - |
+            def predict_time(t, n, new_n, power):
+                # A program whose running time grows like n ** power took t seconds on an input of size n.
+                # Predict its time on an input of size new_n.
+                return (t * new_n / n) ** power
+
+
+            print(predict_time(2, 10000, 1000000, 2), predict_time(3, 1000, 4000, 1), predict_time(0.5, 100, 50, 3))
+        explanation: |
+          Growth is about ratios: if $T(n) \approx c\,n^k$, then $T(n_2) = T(n_1) \times (n_2/n_1)^k$, and the unknown $c$ cancels. The difference $n_2 - n_1$ means nothing here. The inverted ratio predicts a speed-up for a larger input; multiplying the ratio by the power instead of raising it treats $n^2$ like $2n$; and raising $t$ to the power as well squares the seconds.
+    - question:
+        id: write-exponent
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `estimate_exponent(n1, t1, n2, t2)`. A program took `t1` seconds on size `n1` and `t2` seconds on size `n2`. If its time grows like $n^k$, return $k$.
+        starter: |
+          import math
+
+
+          def estimate_exponent(n1, t1, n2, t2):
+              # A program took t1 seconds on size n1 and t2 seconds on size n2. If its time grows
+              # like n ** k, return k.
+              return 0
+
+
+          print(round(estimate_exponent(1000, 0.5, 2000, 2.0), 3), round(estimate_exponent(10000, 0.02, 80000, 0.17), 2))
+        solution: |
+          import math
+
+
+          def estimate_exponent(n1, t1, n2, t2):
+              # A program took t1 seconds on size n1 and t2 seconds on size n2. If its time grows
+              # like n ** k, return k.
+              return math.log(t2 / t1) / math.log(n2 / n1)
+
+
+          print(round(estimate_exponent(1000, 0.5, 2000, 2.0), 3), round(estimate_exponent(10000, 0.02, 80000, 0.17), 2))
+        tests: |
+          for _n1, _t1, _n2, _t2 in [(1000, 0.5, 2000, 2.0), (10, 1, 100, 1000), (10000, 0.02, 80000, 0.17), (5, 3, 10, 3), (100, 1, 300, 3), (64, 2, 4096, 16)]:
+              _want = math.log(_t2 / _t1) / math.log(_n2 / _n1)
+              _got = estimate_exponent(_n1, _t1, _n2, _t2)
+              assert abs(_got - _want) < 1e-9, "estimate_exponent(" + str(_n1) + ", " + str(_t1) + ", " + str(_n2) + ", " + str(_t2) + ") should be about " + str(round(_want, 6)) + ", not " + str(_got)
+          assert output.strip() == "2.0 1.03", "The program should print 2.0 1.03"
+        wrong:
+          - |
+            import math
+
+
+            def estimate_exponent(n1, t1, n2, t2):
+                # A program took t1 seconds on size n1 and t2 seconds on size n2. If its time grows
+                # like n ** k, return k.
+                return math.log2(t2 / t1)
+
+
+            print(round(estimate_exponent(1000, 0.5, 2000, 2.0), 3), round(estimate_exponent(10000, 0.02, 80000, 0.17), 2))
+          - |
+            import math
+
+
+            def estimate_exponent(n1, t1, n2, t2):
+                # A program took t1 seconds on size n1 and t2 seconds on size n2. If its time grows
+                # like n ** k, return k.
+                return (t2 / t1) / (n2 / n1)
+
+
+            print(round(estimate_exponent(1000, 0.5, 2000, 2.0), 3), round(estimate_exponent(10000, 0.02, 80000, 0.17), 2))
+          - |
+            import math
+
+
+            def estimate_exponent(n1, t1, n2, t2):
+                # A program took t1 seconds on size n1 and t2 seconds on size n2. If its time grows
+                # like n ** k, return k.
+                return math.log(t2 - t1) / math.log(n2 - n1)
+
+
+            print(round(estimate_exponent(1000, 0.5, 2000, 2.0), 3), round(estimate_exponent(10000, 0.02, 80000, 0.17), 2))
+        explanation: |
+          From $t_2/t_1 = (n_2/n_1)^k$, take logarithms: $k = \ln(t_2/t_1)/\ln(n_2/n_1)$. $\log_2$ of the time ratio alone is right only when the size doubled, as in the first case but not the second, where it grew eightfold. Dividing the ratios gives $k = 1$ only by accident, and differences of times and sizes are not powers of anything. The second case, an eightfold size giving 8.5 times the time, is close to linear.
+    - question:
+        id: write-inner-count
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `inner_count(n)`: how many times `count += 1` runs in the code in the comment, for a whole number `n` from 0 up, worked out without running the loops.
+        starter: |
+          def inner_count(n):
+              # How many times does `count += 1` run in this code, for a whole number n >= 0?
+              #
+              #     for i in range(n):
+              #         for j in range(i + 1, n):
+              #             count += 1
+              #
+              # Return the number without running the loops.
+              return 0
+
+
+          print(inner_count(4), inner_count(1000))
+        solution: |
+          def inner_count(n):
+              # How many times does `count += 1` run in this code, for a whole number n >= 0?
+              #
+              #     for i in range(n):
+              #         for j in range(i + 1, n):
+              #             count += 1
+              #
+              # Return the number without running the loops.
+              return n * (n - 1) // 2
+
+
+          print(inner_count(4), inner_count(1000))
+        tests: |
+          for _n in [0, 1, 2, 3, 4, 7, 10, 25]:
+              _count = 0
+              for _i in range(_n):
+                  for _j in range(_i + 1, _n):
+                      _count += 1
+              _got = inner_count(_n)
+              assert _got == _count, "inner_count(" + str(_n) + ") should be " + str(_count) + ", not " + str(_got)
+          assert output.strip() == "6 499500", "The program should print 6 499500"
+        wrong:
+          - |
+            def inner_count(n):
+                # How many times does `count += 1` run in this code, for a whole number n >= 0?
+                #
+                #     for i in range(n):
+                #         for j in range(i + 1, n):
+                #             count += 1
+                #
+                # Return the number without running the loops.
+                return n * n // 2
+
+
+            print(inner_count(4), inner_count(1000))
+          - |
+            def inner_count(n):
+                # How many times does `count += 1` run in this code, for a whole number n >= 0?
+                #
+                #     for i in range(n):
+                #         for j in range(i + 1, n):
+                #             count += 1
+                #
+                # Return the number without running the loops.
+                return n * (n + 1) // 2
+
+
+            print(inner_count(4), inner_count(1000))
+          - |
+            def inner_count(n):
+                # How many times does `count += 1` run in this code, for a whole number n >= 0?
+                #
+                #     for i in range(n):
+                #         for j in range(i + 1, n):
+                #             count += 1
+                #
+                # Return the number without running the loops.
+                return n * (n - 1)
+
+
+            print(inner_count(4), inner_count(1000))
+        explanation: |
+          For each `i`, the inner loop runs `n - i - 1` times, and $\sum_{i=0}^{n-1}(n - i - 1) = 0 + 1 + \cdots + (n - 1) = n(n - 1)/2$: one run for each pair $i < j$. $n^2/2$ is the right size but not exact; $n(n + 1)/2$ counts pairs with $i = j$ too; and $n(n - 1)$ counts every pair twice. A million records would need about half a trillion comparisons.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          A quadratic script takes 2 seconds on 10,000 records. About how many seconds will it take on 1,000,000 records?
+        answer: "20000"
+        explanation: |
+          The input is 100 times larger, so the time is $100^2 = 10{,}000$ times larger: $2 \times 10{,}000 = 20{,}000$ seconds, about 5.6 hours.
+    - question:
+        id: work-hidden-loop
+        type: choice
+        system: s2
+        prompt: |
+          A function removes duplicates from a list of $n$ names by building a new list: for each name, `if name not in seen: seen.append(name)`, where `seen` is a list. It takes 1 second for 20,000 names. Why does it take about 4 seconds for 40,000, and what fixes it?
+        options:
+          - "`name not in seen` checks the list item by item, so the loop is quadratic; keeping `seen` as a set makes each check constant on average and the whole function linear."
+          - "Appending to a list is quadratic; inserting at the front would be faster."
+          - "The machine was busier during the second run; timing again would give 2 seconds."
+          - "Removing duplicates always takes quadratic time."
+        answer: 0
+        explanation: |
+          The hidden loop in `in` on a list makes each check linear in the size of `seen`, so $n$ checks take about $n^2/2$ steps, and doubling $n$ quadruples the time, exactly as measured. A set's `in` hashes the name and looks in one bucket. Appending is constant on average, and the ratio of 4 is the signature of a quadratic, not of noise.
+  connections:
+    - text: |
+        About 20,000 seconds, nearly six hours. The file is 100 times larger, and a quadratic script pays 100 squared, ten thousand times the 2 seconds. A faster computer would not rescue it; a better algorithm would. Sorting the records first, or hashing them into a set, finds duplicates in close to linear time, and the same job then takes a few seconds.
+
+        [[s3.sorting]] is the first such algorithm: it puts $n$ items in order in $\Theta(n \log n)$ steps instead of $n^2$, and sorting underlies countless faster solutions. [[s3.binary-search]] then finds an item in a sorted list in $\log_2 n$ steps. [[s3.divide-and-conquer-and-the-master-theorem]] turns the counting of this lesson into a method for recursive algorithms, and [[s3.amortised-analysis]] counts the cost of operations that are usually cheap but occasionally expensive.
