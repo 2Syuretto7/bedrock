@@ -6698,6 +6698,110 @@ function ErCardinality(props: Props) {
   );
 }
 
+const FD_COLUMNS = ["pnr", "pax", "name", "train", "train_name", "date", "coach", "berth"];
+const FD_RULES: [string[], string[]][] = [
+  [["pnr"], ["train", "date"]],
+  [["train"], ["train_name"]],
+  [["pnr", "pax"], ["name", "coach", "berth"]],
+  [["train", "date", "coach", "berth"], ["pnr", "pax"]],
+];
+/** The rules applied, in order, while working out the closure of a set of columns: each with the columns it added. */
+const fdSteps = (start: string[]) => {
+  const known = new Set(start);
+  const steps: { rule: number; added: string[] }[] = [];
+  let grew = true;
+  while (grew) {
+    grew = false;
+    FD_RULES.forEach(([left, right], i) => {
+      const added = right.filter((c) => !known.has(c));
+      if (left.every((c) => known.has(c)) && added.length > 0) {
+        added.forEach((c) => known.add(c));
+        steps.push({ rule: i, added });
+        grew = true;
+      }
+    });
+  }
+  return { steps, closure: known };
+};
+
+/** Working out which columns a set of columns determines, one functional dependency at a time. */
+function FdClosure(props: Props) {
+  const initial = Array.isArray(props.start) ? FD_COLUMNS.filter((c) => (props.start as unknown[]).includes(c)) : ["pnr", "pax"];
+  const [start, setStart] = useState<string[]>(initial);
+  const { steps, closure } = fdSteps(start);
+  const [stepRaw, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, 8));
+  const step = Math.min(stepRaw, steps.length);
+  const known = new Set([...start, ...steps.slice(0, step).flatMap((s) => s.added)]);
+  const done = step === steps.length;
+  const full = closure.size === FD_COLUMNS.length;
+  const minimal = full && start.every((c) => fdSteps(start.filter((d) => d !== c)).closure.size < FD_COLUMNS.length);
+  const toggle = (c: string) => {
+    setStart(start.includes(c) ? start.filter((d) => d !== c) : FD_COLUMNS.filter((d) => d === c || start.includes(d)));
+    setStep(0);
+  };
+  const rule = (i: number) => `${FD_RULES[i][0].join(", ")} → ${FD_RULES[i][1].join(", ")}`;
+  const set = (cs: string[]) => (cs.length === 0 ? "nothing" : `{${cs.join(", ")}}`);
+  const now = step > 0 ? steps[step - 1] : null;
+  const verdict = !done
+    ? ""
+    : full
+      ? minimal
+        ? `The closure is all ${FD_COLUMNS.length} columns, so ${set(start)} is a superkey, and dropping any one of its columns loses that: a candidate key.`
+        : `The closure is all ${FD_COLUMNS.length} columns, so ${set(start)} is a superkey, but a smaller set inside it would do: not a candidate key.`
+      : `No rule adds anything more, and ${FD_COLUMNS.length - closure.size} of the ${FD_COLUMNS.length} columns are missing, so ${set(start)} is not a key.`;
+  const summary = `Start from ${set(start)}. ${now ? `Step ${step} of ${steps.length}: the rule ${rule(now.rule)} applies, adding ${now.added.join(", ")}.` : `Step 0 of ${steps.length}.`} Known so far: ${known.size} of ${FD_COLUMNS.length} columns, ${FD_COLUMNS.filter((c) => known.has(c)).join(", ")}. ${verdict}`;
+  return (
+    <Frame
+      title="The closure of a set of columns"
+      summary={summary}
+      controls={
+        <>
+          {FD_COLUMNS.map((c) => (
+            <button key={c} type="button" className="btn btn-secondary btn-small" aria-pressed={start.includes(c)} onClick={() => toggle(c)}>
+              {c}
+            </button>
+          ))}
+          <Stepper label="step" value={step} onChange={setStep} min={0} max={steps.length} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 226" role="img" aria-label={`Closure of ${set(start)}: ${known.size} of ${FD_COLUMNS.length} columns known after ${step} steps`}>
+        {FD_COLUMNS.map((c, i) => {
+          const x = 8 + (i % 4) * 106;
+          const y = 8 + Math.floor(i / 4) * 30;
+          const cls = start.includes(c) ? "fig-accent" : known.has(c) ? "fig-fill" : "fig-ghost";
+          return (
+            <g key={c}>
+              <rect x={x} y={y} width={100} height={24} className={cls} />
+              <text x={x + 50} y={y + 16} textAnchor="middle" className="fig-small" style={start.includes(c) ? { fill: "var(--bg)" } : undefined}>
+                {c}
+              </text>
+            </g>
+          );
+        })}
+        {FD_RULES.map((_, i) => {
+          const used = steps.slice(0, step).some((s) => s.rule === i);
+          const current = now?.rule === i;
+          return (
+            <g key={i}>
+              <rect x={8} y={84 + i * 24} width={424} height={20} className={current ? "fig-accent" : used ? "fig-fill" : "fig-cell"} />
+              <text x={14} y={98 + i * 24} className="fig-small" style={current ? { fill: "var(--bg)" } : undefined}>
+                {rule(i)}
+              </text>
+            </g>
+          );
+        })}
+        <text x={8} y={200} className="fig-small">
+          {`known: ${known.size} of ${FD_COLUMNS.length} columns`}
+        </text>
+        <text x={8} y={218} className="fig-small">
+          {done ? (full ? (minimal ? "superkey, and minimal: a candidate key" : "superkey, but not minimal") : "not a superkey") : ""}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -8023,6 +8127,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "transfer-crash": TransferCrash,
   "index-lookup": IndexLookup,
   "er-cardinality": ErCardinality,
+  "fd-closure": FdClosure,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
