@@ -1,0 +1,471 @@
+concept: f3.modular-arithmetic
+minutes: 90
+claim: You can compute with remainders, prove that sums, differences, products and powers may be reduced at every step while quotients may not, read Python's `%` on negative numbers, treat fixed-width machine arithmetic as arithmetic modulo a power of two, and use congruences to explain divisibility tests, check digits and hash functions.
+recalls: [f3.inclusion-and-exclusion, h0.twos-complement-and-overflow]
+uses: [f2.equivalence-relations-and-partial-orders, f2.direct-proof, f0.negative-numbers, h0.unsigned-integers-and-fixed-widths, h0.bitwise-operations-and-masks, h0.characters-unicode-and-utf-8, s2.hash-tables, s1.comprehensions-and-iterators, s0.expressions, s0.strings, s0.lists-and-tuples, s0.dictionaries-and-sets, s0.loops, s0.functions]
+leads: [f3.divisibility-and-euclids-algorithm, f8.fast-modular-exponentiation, f8.modular-inverses, f7.checksums-and-error-detection]
+bridges:
+  h0.twos-complement-and-overflow: |
+    The two's complement lesson ended with a coin counter that jumped from $2^{31} - 1$ to $-2^{31}$, and with the remark that $-1$ is simply the pattern that gives 0 when 1 is added to it. Both are facts about remainders. A register of $w$ bits keeps only the remainder of every result on division by $2^w$, so the hardware already does arithmetic in which numbers wrap round, like hours on a clock. This lesson names that arithmetic and gives its rules: which operations survive the wrap-around, which do not, and why $-1$ and $2^w - 1$ are the same number to a machine.
+starter: |
+  # Scratch space. A train leaves at 22:00 on a Friday and runs for 75 hours.
+  days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+  hours = 4 * 24 + 22 + 75
+  print(hours % 24, days[hours // 24 % 7])
+  print(-7 % 3, -7 // 3)
+parts:
+  recall:
+    - text: |
+        [[f3.inclusion-and-exclusion]] ended with arithmetic in which numbers wrap round, as hours do on a clock, and [[h0.twos-complement-and-overflow]] showed a counter that wrapped from its largest value to its smallest. Today both become one piece of mathematics. Three quick pulls first.
+  puzzle:
+    - text: |
+        Three questions that look unrelated.
+
+        A goods train leaves at 22:00 on a Friday on a run that takes 75 hours. At what time, and on what day, does it arrive?
+
+        What is the last digit of $7^{2026}$? The number has more than 1,700 digits, and you are asked for only one of them.
+
+        A program written in C prints $-7$ divided by 3 as $-2$ with remainder $-1$. The same calculation in Python gives $-3$ with remainder 2. One of the two languages must be wrong. Or must it?
+
+        Each question throws away almost everything about a number and keeps only a remainder: the hour within a day, the day within a week, the last digit, which is the remainder on division by 10. The hard part is that the numbers in between, 97 hours or $7^{2026}$, are either awkward or enormous.
+
+        **When can you compute with remainders alone, never building the big numbers, and where does it go wrong?**
+  intuition:
+    - text: |
+        A wall clock does arithmetic all day. Four hours after 10 o'clock it is 2 o'clock: the clock computes $10 + 4 = 14$ and keeps only the remainder on division by 12. That is the whole idea. Fix a number $m$, called the **modulus**, and replace every number by its remainder on division by $m$. Hours use $m = 24$ or 12, days of the week $m = 7$, last digits $m = 10$, and a 32-bit register $m = 2^{32}$.
+
+        Here is the fact that makes this useful. Start at 10 o'clock and add 4 hours, then 9 more. You can wrap after each step, $10 + 4 = 14$, which is 2, and $2 + 9 = 11$. Or you can add everything first, $10 + 4 + 9 = 23$, and wrap once at the end, which is 11 again. The clock does not care when you throw the extra twelves away. Multiplication behaves the same: seven shifts of 5 hours each, starting at midnight, end at $35$, which is 11 on a 12-hour clock, and you get 11 whether you wrap after every shift or only at the end.
+
+        The figure draws a clock with 12 positions, 0 standing for 12 o'clock. Jumps of 5 from 0 land on 5, then 10, then 15, which is 3. Step the jumps through to 12 and every position is visited before you return to 0. Now set the jump to 4.
+    - figure: mod-clock
+      props: { m: 12, step: 5, jumps: 3 }
+    - text: |
+        Jumps of 4 visit only 0, 4 and 8. Jumps of 3, 6 and 9 also miss most of the clock, while jumps of 1, 5, 7 and 11 reach every position. The jumps that reach everything are exactly those that share no factor with 12. You will see shortly why that matters: it decides when you are allowed to divide.
+  derivation:
+    - text: |
+        **Division with remainder.** For any whole number $a$, positive, zero or negative, and any modulus $m \ge 1$, there is exactly one pair $q$, $r$ with
+
+        $$a = q m + r \quad \text{and} \quad 0 \le r < m.$$
+
+        $q$ is the quotient and $r$ the remainder, written $a \bmod m$. In Python they are `a // m` and `a % m`, and Python keeps $0 \le r < m$ even when $a$ is negative. So $-7 = (-3) \cdot 3 + 2$, and `-7 // 3` is $-3$ while `-7 % 3` is 2. C rounds the quotient towards zero instead, giving $-7 = (-2) \cdot 3 + (-1)$. Both equations are true. The languages simply choose different remainders, and, as you will see, the two remainders 2 and $-1$ are interchangeable for every purpose of this lesson. The puzzle's third question has no wrong answer, only a choice to know about: in Python a remainder by a positive modulus is never negative, which is why `days[n % 7]` is safe even when `n` counts backwards.
+
+        **Congruence.** Two numbers $a$ and $b$ are **congruent modulo $m$**, written
+
+        $$a \equiv b \pmod m,$$
+
+        when $m$ divides $a - b$. So $14 \equiv 2 \pmod{12}$, $-1 \equiv 2 \pmod 3$, and $97 \equiv 1 \pmod{24}$. This says exactly that $a$ and $b$ leave the same remainder. If $a = qm + r$ and $b = q'm + r$, then $a - b = (q - q')m$. In the other direction, if $a - b = km$ and $b = q'm + r$, then $a = (q' + k)m + r$, and since remainders are unique, $a$ leaves remainder $r$ too.
+
+        Congruence modulo $m$ is the equivalence relation of [[f2.equivalence-relations-and-partial-orders]]: it splits the whole numbers into $m$ classes, one for each remainder $0, 1, \dots, m - 1$. Working modulo $m$ means working with these classes, and any member of a class can stand for it.
+
+        **Sums, differences and products survive.** Suppose $a \equiv a'$ and $b \equiv b' \pmod m$. Then
+
+        $$a + b \equiv a' + b', \qquad a - b \equiv a' - b', \qquad ab \equiv a'b' \pmod m.$$
+
+        A [[f2.direct-proof]] for the product: write $a = a' + km$ and $b = b' + lm$. Then
+
+        $$ab = a'b' + (a'l + b'k + klm)\,m,$$
+
+        so $ab - a'b'$ is a multiple of $m$. The sum and difference work the same way, with less algebra. Applying the product rule again and again gives powers: $a^n \equiv a'^n \pmod m$.
+
+        This is what the clock showed. Whenever an expression is built from $+$, $-$ and $\times$, you may replace any part of it by its remainder, at any moment, and the final remainder does not change. So you never need the big numbers.
+    - question:
+        id: derivation-why-reduce
+        type: choice
+        system: s2
+        prompt: |
+          Why does `(a * b) % m` always equal `((a % m) * (b % m)) % m` in Python?
+        options:
+          - "Because $a \\equiv a \\bmod m$ and $b \\equiv b \\bmod m$, and congruent numbers multiply to congruent products, so both sides are the remainder of the same class."
+          - "Because `%` has higher precedence than `*`."
+          - "Because the remainders are smaller, so nothing can overflow."
+          - "It is only true when $a$ and $b$ are positive."
+        answer: 0
+        explanation: |
+          Each number is congruent to its own remainder, and the product rule says congruent inputs give congruent products. Two congruent numbers have the same remainder, so the final `% m` gives the same answer on both sides. Python's `%` returns a remainder from 0 to $m - 1$ for negative numbers too, so the rule holds for every sign.
+    - text: |
+        **Powers, and the last digit of $7^{2026}$.** Modulo 10, the powers of 7 run $7, 49 \equiv 9, 9 \cdot 7 = 63 \equiv 3, 3 \cdot 7 = 21 \equiv 1$. Once a power is $\equiv 1$, the pattern repeats: $7^4 \equiv 1$, so every fourth power ends in 1. Since $2026 = 4 \cdot 506 + 2$,
+
+        $$7^{2026} = (7^4)^{506} \cdot 7^2 \equiv 1^{506} \cdot 49 \equiv 9 \pmod{10}.$$
+
+        The last digit is 9, found without ever writing the number. Python's `pow(a, n, m)` computes $a^n \bmod m$ in the same spirit, reducing as it goes, so `pow(7, 2026, 10)` is instant. How it manages even for exponents with hundreds of digits is the subject of [[f8.fast-modular-exponentiation]].
+    - question:
+        id: order-last-digit
+        type: order
+        system: s2
+        prompt: |
+          Find the last digit of $3^{2027}$. Put the steps in order.
+        steps:
+          - "The last digit is the remainder modulo 10, so work modulo 10 throughout."
+          - "List powers of 3 modulo 10: $3, 9, 27 \\equiv 7, 21 \\equiv 1$, so $3^4 \\equiv 1$."
+          - "Divide the exponent by 4: $2027 = 4 \\cdot 506 + 3$."
+          - "So $3^{2027} = (3^4)^{506} \\cdot 3^3 \\equiv 1 \\cdot 27 \\equiv 7$: the last digit is 7."
+        explanation: The powers repeat once one of them is congruent to 1, so only the exponent's remainder on division by 4 matters. Each step reduces before it multiplies, which the product rule allows.
+    - text: |
+        **Division does not survive.** $2 \cdot 3 = 6$ and $2 \cdot 8 = 16$ both end in 6, so $2 \cdot 3 \equiv 2 \cdot 8 \pmod{10}$. Cancelling the 2 would give $3 \equiv 8 \pmod{10}$, which is false. Multiplying by 2 modulo 10 sends 3 and 8 to the same place, so no division can tell them apart afterwards. That is the clock with jumps of 4 again: multiplying by 4 modulo 12 lands only on 0, 4 and 8, so twelve inputs share three outputs and cannot be undone.
+
+        Cancelling is safe when the number you cancel shares no factor with $m$. If $cx \equiv cy \pmod m$, then $m$ divides $c(x - y)$, and when $c$ and $m$ have no common factor, $m$ must divide $x - y$. That last step is a fact about divisibility proved in [[f3.divisibility-and-euclids-algorithm]]. The numbers you may divide by modulo $m$ are therefore the ones sharing no factor with $m$, the very numbers you counted for $m = 30$ by inclusion and exclusion: 1, 7, 11, 13, 17, 19, 23 and 29. How to divide by them is [[f8.modular-inverses]].
+
+        **A computer's arithmetic.** In [[h0.unsigned-integers-and-fixed-widths]] a $w$-bit register kept the low $w$ bits of every result and dropped the rest. Dropping the high bits is reduction modulo $2^w$. So unsigned machine addition and multiplication are exactly arithmetic modulo $2^w$, and by the rules above an overflowing sum of products still has the right remainder: the low bits of the answer are always correct.
+
+        Two's complement fits the same picture. It stores $-x$ as the pattern for $2^w - x$, and $2^w - x \equiv -x \pmod{2^w}$, so the stored number is a member of the right class. Signed and unsigned numbers are two ways of choosing one member from each class, $0$ to $2^w - 1$ or $-2^{w - 1}$ to $2^{w - 1} - 1$, which is why one adder serves both. C's remainder of $-1$ and Python's 2 are the same kind of choice. In Python, `x % 2 ** 32` and `x & 0xFFFFFFFF` both give a 32-bit register's unsigned contents, for negative $x$ too, using the masks of [[h0.bitwise-operations-and-masks]].
+
+        **Divisibility tests.** Since $10 \equiv 1 \pmod 9$, every power of 10 is $\equiv 1$, and a number is congruent to the sum of its digits modulo 9: $5{,}274 = 5 \cdot 1000 + 2 \cdot 100 + 7 \cdot 10 + 4 \equiv 5 + 2 + 7 + 4 = 18 \equiv 0$, so 9 divides 5,274. Since $10 \equiv -1 \pmod{11}$, the powers of 10 alternate between 1 and $-1$, and a number is congruent to the alternating sum of its digits starting from the right.
+
+        **Check digits.** An ISBN-10, the older book number, has ten characters $d_1 d_2 \dots d_{10}$ chosen so that
+
+        $$10 d_1 + 9 d_2 + 8 d_3 + \cdots + 2 d_9 + 1 \cdot d_{10} \equiv 0 \pmod{11},$$
+
+        where a final X stands for 10. For the first nine digits 812345678 the weighted sum is 236, which is $\equiv 5$, so the check digit is 6, making 8123456786. Change any one digit by $e \ne 0$ and the sum changes by $we$, where the weight $w$ is between 1 and 10. Because 11 is prime, $we$ is never a multiple of 11, so every single wrong digit is caught. Swap two neighbouring digits $a$ and $b$, with weights $w$ and $w - 1$, and the sum changes by $(a - b)$, so every swap of two different neighbours is caught too. Those are the two commonest typing mistakes, which is why the ISBN uses 11 and not 10. Card numbers use a check modulo 10 that is weaker, a story for [[f7.checksums-and-error-detection]].
+
+        **Hash functions.** The string hash of [[s2.hash-tables]], `h = (h * 31 + ord(c)) % m` for each character, computes the remainder of one huge number, $\sum_i \text{ord}(c_i) \cdot 31^{n - 1 - i}$, modulo $m$. Reducing after every character keeps `h` small, and the rules guarantee the same bucket as reducing once at the end.
+  formal:
+    - text: |
+        **Division with remainder.** For whole numbers $a$ and $m \ge 1$ there are unique $q$ and $r$ with $a = qm + r$ and $0 \le r < m$. Then $a \bmod m = r$. Python's `a // m` and `a % m` are $q$ and $r$, for negative $a$ too.
+
+        **Congruence.** $a \equiv b \pmod m$ means $m \mid (a - b)$, equivalently $a \bmod m = b \bmod m$. It is an equivalence relation with $m$ classes.
+
+        **Compatibility.** If $a \equiv a'$ and $b \equiv b' \pmod m$, then $a \pm b \equiv a' \pm b'$, $ab \equiv a'b'$ and $a^n \equiv a'^n \pmod m$ for every $n \ge 0$. Any part of an expression built from $+$, $-$, $\times$ and whole-number powers may be reduced at any time.
+
+        **Cancellation.** If $ca \equiv cb \pmod m$ and $c$ shares no factor greater than 1 with $m$, then $a \equiv b \pmod m$. Without that condition the conclusion can fail.
+
+        **Machine words.** Unsigned $w$-bit addition, subtraction and multiplication are arithmetic modulo $2^w$. Two's complement represents $-x$ by $2^w - x$, a member of the same class.
+  drill:
+    - text: Seconds each. Throw away the multiples of the modulus as early as you like.
+    - question:
+        id: drill-clock
+        type: numeric
+        system: s1
+        prompt: |
+          It is 9 o'clock. On a 12-hour clock, what time is it 50 hours later?
+        answer: "11"
+        explanation: $9 + 50 = 59 = 4 \cdot 12 + 11$.
+    - question:
+        id: drill-negative
+        type: numeric
+        system: s1
+        prompt: |
+          What is $-13 \bmod 5$, as Python's `%` computes it?
+        answer: "2"
+        explanation: $-13 = (-3) \cdot 5 + 2$, and Python picks the remainder from 0 to 4.
+    - question:
+        id: drill-congruent
+        type: choice
+        system: s1
+        prompt: |
+          Which number is congruent to 17 modulo 5?
+        options: ["$-3$", "3", "15", "19"]
+        answer: 0
+        explanation: $17 - (-3) = 20$, a multiple of 5. Both leave remainder 2.
+    - question:
+        id: drill-power
+        type: numeric
+        system: s1
+        prompt: |
+          What is the last digit of $3^{100}$?
+        answer: "1"
+        explanation: Powers of 3 end in 3, 9, 7, 1 and repeat, and 100 is a multiple of 4.
+    - question:
+        id: drill-nines
+        type: numeric
+        system: s1
+        prompt: |
+          What is the remainder when 123,456,789 is divided by 9?
+        answer: "0"
+        explanation: The digits add up to 45, and $45 \equiv 0 \pmod 9$.
+    - question:
+        id: drill-week
+        type: choice
+        system: s1
+        prompt: |
+          Today is Wednesday. What day is it 100 days from now?
+        options: ["Friday", "Wednesday", "Thursday", "Saturday"]
+        answer: 0
+        explanation: $100 = 14 \cdot 7 + 2$, so 100 days is 14 whole weeks and 2 days.
+    - question:
+        id: drill-byte
+        type: numeric
+        system: s1
+        prompt: |
+          An 8-bit unsigned counter holds 250. What does it hold after 10 is added?
+        answer: "4"
+        explanation: $260 \bmod 256 = 4$. The register keeps the remainder modulo $2^8$.
+    - question:
+        id: predict-negative
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(-7 % 3, -7 // 3, (-7 // 3) * 3 + (-7 % 3))
+        output: "2 -3 -7"
+        explanation: Python rounds the quotient down, to $-3$, so the remainder is 2. Quotient times divisor plus remainder gives back $-7$, as it always must.
+    - question:
+        id: predict-hash
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          big = 0
+          small = 0
+          for c in "chai":
+              big = big * 31 + ord(c)
+              small = (small * 31 + ord(c)) % 97
+          print(big, big % 97, small)
+        output: "3052365 66 66"
+        explanation: Reducing after every character gives the same remainder as building the whole number and reducing once, because only additions and multiplications are involved.
+  work:
+    - text: Slower now. Before reducing anything, say which operations the expression uses, and whether each one survives reduction.
+    - question:
+        id: fix-bucket
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `bucket(word, m)` should give the bucket of a word in a hash table of `m` buckets, a number from 0 to `m - 1`, using the hash $h \leftarrow 31h + \text{ord}(c)$ for each character, reduced modulo `m`. It should print `[1, 4, 6, 4]`. It stops with an `IndexError`. Find the fault and fix it.
+        starter: |
+          def bucket(word, m):
+              h = 0
+              for c in word:
+                  h = h * 31 % m + ord(c)
+              return h
+
+          buckets = [[] for _ in range(7)]
+          for word in ["chai", "dosa", "idli", "vada"]:
+              buckets[bucket(word, 7)].append(word)
+          print([bucket(word, 7) for word in ["chai", "dosa", "idli", "vada"]])
+        solution: |
+          def bucket(word, m):
+              h = 0
+              for c in word:
+                  h = (h * 31 + ord(c)) % m
+              return h
+
+          buckets = [[] for _ in range(7)]
+          for word in ["chai", "dosa", "idli", "vada"]:
+              buckets[bucket(word, 7)].append(word)
+          print([bucket(word, 7) for word in ["chai", "dosa", "idli", "vada"]])
+        tests: |
+          import random
+          random.seed(5)
+          for _trial in range(300):
+              _word = "".join(chr(random.randint(97, 122)) for _ in range(random.randint(0, 12)))
+              _m = random.randint(1, 50)
+              _whole = 0
+              for _c in _word:
+                  _whole = _whole * 31 + ord(_c)
+              _got = bucket(_word, _m)
+              assert 0 <= _got < _m, "bucket(" + repr(_word) + ", " + str(_m) + ") gave " + str(_got) + ", which is not from 0 to " + str(_m - 1)
+              assert _got == _whole % _m, "bucket(" + repr(_word) + ", " + str(_m) + ") should be " + str(_whole % _m) + ", not " + str(_got)
+          assert output.strip() == "[1, 4, 6, 4]", "The program should print [1, 4, 6, 4]"
+        wrong:
+          - |
+            def bucket(word, m):
+                h = 0
+                for c in word:
+                    h = (h + ord(c)) % m
+                return h
+
+            print([1, 4, 6, 4])
+          - |
+            def bucket(word, m):
+                h = 0
+                for c in word:
+                    h = h * 31 + ord(c) % m
+                return h
+
+            print([1, 4, 6, 4])
+        explanation: |
+          `h * 31 % m + ord(c)` reduces the product but then adds a character code of up to 122 after the reduction, so `h` is congruent to the right value but is not a remainder: it can be far larger than $m - 1$, and indexing the list of buckets fails. Reducing the whole of `h * 31 + ord(c)` keeps `h` between 0 and $m - 1$ after every character, and because only multiplication and addition are involved, the result is the remainder of the full polynomial hash. Precedence matters too: `ord(c) % m` reduces only the character code.
+    - question:
+        id: write-arrival
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `arrival(day, hour, minute, minutes)`. A train leaves on `day` (a name from `DAYS`) at `hour:minute` and runs for `minutes` minutes, which may be negative (to ask when it must have left) and may be very large. Return the arrival as a tuple `(day, hour, minute)`, with `hour` from 0 to 23 and `minute` from 0 to 59. Count everything in minutes since Monday 00:00 and reduce modulo the minutes in a week.
+        starter: |
+          DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+          DAY_NUMBER = {name: i for i, name in enumerate(DAYS)}
+
+          def arrival(day, hour, minute, minutes):
+              return (day, hour, minute)
+
+          print(arrival("Friday", 22, 0, 75 * 60))
+          print(arrival("Monday", 0, 30, -45))
+          print(arrival("Wednesday", 9, 15, 10 ** 9))
+        solution: |
+          DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+          DAY_NUMBER = {name: i for i, name in enumerate(DAYS)}
+
+          def arrival(day, hour, minute, minutes):
+              total = DAY_NUMBER[day] * 1440 + hour * 60 + minute + minutes
+              total = total % (7 * 1440)
+              return (DAYS[total // 1440], total % 1440 // 60, total % 60)
+
+          print(arrival("Friday", 22, 0, 75 * 60))
+          print(arrival("Monday", 0, 30, -45))
+          print(arrival("Wednesday", 9, 15, 10 ** 9))
+        tests: |
+          import random
+          random.seed(11)
+          for _trial in range(500):
+              _d = random.randint(0, 6)
+              _h = random.randint(0, 23)
+              _mi = random.randint(0, 59)
+              _len = random.choice([random.randint(-20000, 20000), random.randint(-10 ** 12, 10 ** 12)])
+              _t = (_d * 1440 + _h * 60 + _mi + _len) % 10080
+              _want = (DAYS[_t // 1440], _t % 1440 // 60, _t % 60)
+              _got = arrival(DAYS[_d], _h, _mi, _len)
+              assert _got == _want, "arrival(" + repr(DAYS[_d]) + ", " + str(_h) + ", " + str(_mi) + ", " + str(_len) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "('Tuesday', 1, 0)\n('Sunday', 23, 45)\n('Friday', 19, 55)", "The program should print ('Tuesday', 1, 0), then ('Sunday', 23, 45), then ('Friday', 19, 55)"
+        wrong:
+          - |
+            DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            DAY_NUMBER = {name: i for i, name in enumerate(DAYS)}
+
+            def arrival(day, hour, minute, minutes):
+                total = DAY_NUMBER[day] * 1440 + hour * 60 + minute + minutes
+                total = total - 10080 * int(total / 10080)
+                day_part = int(total / 1440)
+                hour_part = int((total - day_part * 1440) / 60)
+                return (DAYS[day_part], hour_part, total - day_part * 1440 - hour_part * 60)
+
+            print("('Tuesday', 1, 0)")
+            print("('Sunday', 23, 45)")
+            print("('Friday', 19, 55)")
+          - |
+            DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            DAY_NUMBER = {name: i for i, name in enumerate(DAYS)}
+
+            def arrival(day, hour, minute, minutes):
+                new_minute = (minute + minutes) % 60
+                new_hour = (hour + minutes // 60) % 24
+                new_day = (DAY_NUMBER[day] + minutes // 1440) % 7
+                return (DAYS[new_day], new_hour, new_minute)
+
+            print("('Tuesday', 1, 0)")
+            print("('Sunday', 23, 45)")
+            print("('Friday', 19, 55)")
+        explanation: |
+          Turning the time into one count of minutes since Monday 00:00 makes the whole problem a single reduction modulo $7 \cdot 1440 = 10{,}080$. Python's `%` returns a remainder from 0 to 10,079 even for a negative total, so 45 minutes before Monday 00:30 correctly becomes Sunday 23:45, and the day, hour and minute then come from `//` and `%` on a number that is never negative. Rounding the quotient towards zero, as `int(total / 10080)` does, leaves a negative remainder for negative totals, and the floating-point division also loses exactness for very long runs. Reducing the minutes, hours and days separately drops the carries: adding 45 minutes to 22:30 must move the hour on as well.
+    - question:
+        id: write-isbn
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `isbn_ok(code)` for a string of 10 characters, nine digits followed by a digit or `X`. Return `True` when $10 d_1 + 9 d_2 + \cdots + 2 d_9 + 1 \cdot d_{10} \equiv 0 \pmod{11}$, with `X` standing for 10, and `False` otherwise.
+        starter: |
+          def isbn_ok(code):
+              return True
+
+          print(isbn_ok("8123456786"), isbn_ok("812345676X"), isbn_ok("8123456768"), isbn_ok("8123465786"))
+        solution: |
+          def isbn_ok(code):
+              total = 0
+              for i, ch in enumerate(code):
+                  if ch == "X":
+                      value = 10
+                  else:
+                      value = int(ch)
+                  total += (10 - i) * value
+              return total % 11 == 0
+
+          print(isbn_ok("8123456786"), isbn_ok("812345676X"), isbn_ok("8123456768"), isbn_ok("8123465786"))
+        tests: |
+          import random
+          random.seed(17)
+          def _check(_nine):
+              _s = sum((10 - _i) * int(_c) for _i, _c in enumerate(_nine))
+              _r = -_s % 11
+              return _nine + ("X" if _r == 10 else str(_r))
+          for _trial in range(300):
+              _nine = "".join(str(random.randint(0, 9)) for _ in range(9))
+              _good = _check(_nine)
+              assert isbn_ok(_good) is True, repr(_good) + " is a valid ISBN-10"
+              _pos = random.randint(0, 8)
+              _new = str((int(_nine[_pos]) + random.randint(1, 9)) % 10)
+              _bad = _good[:_pos] + _new + _good[_pos + 1:]
+              assert isbn_ok(_bad) is False, repr(_bad) + " has one wrong digit, so it is not valid"
+              _j = random.randint(0, 7)
+              if _good[_j] != _good[_j + 1]:
+                  _swapped = _good[:_j] + _good[_j + 1] + _good[_j] + _good[_j + 2:]
+                  assert isbn_ok(_swapped) is False, repr(_swapped) + " has two neighbouring digits swapped, so it is not valid"
+          assert output.strip() == "True True False False", "The program should print True True False False"
+        wrong:
+          - |
+            def isbn_ok(code):
+                total = 0
+                for i, ch in enumerate(code):
+                    if ch == "X":
+                        value = 10
+                    else:
+                        value = int(ch)
+                    total += value
+                return total % 11 == 0
+
+            print(True, True, False, False)
+          - |
+            def isbn_ok(code):
+                total = 0
+                for i, ch in enumerate(code):
+                    if ch == "X":
+                        value = 10
+                    else:
+                        value = int(ch)
+                    total += (10 - i) * value
+                return total % 10 == 0
+
+            print(True, True, False, False)
+          - |
+            def isbn_ok(code):
+                total = 0
+                for i, ch in enumerate(code):
+                    if ch == "X":
+                        value = 0
+                    else:
+                        value = int(ch)
+                    total += (10 - i) * value
+                return total % 11 == 0
+
+            print(True, True, False, False)
+        explanation: |
+          Character `i`, counting from 0, has weight $10 - i$, and the code is valid when the weighted sum is a multiple of 11. The weights are what catch a swap of neighbouring digits: without them a swap leaves the sum unchanged. The modulus 11 is what catches every single wrong digit, because a change of $e$ at weight $w$ alters the sum by $we$, and 11, being prime, divides that only when it divides $w$ or $e$, which no weight from 1 to 10 or change from 1 to 9 does. Modulo 10, a change of 5 at an even weight would go unnoticed. And the final `X` must count as 10, or a quarter of the valid codes ending in it would be rejected.
+    - question:
+        id: work-power
+        type: numeric
+        system: s2
+        prompt: |
+          What is $2^{100} \bmod 7$?
+        answer: "2"
+        explanation: |
+          $2^3 = 8 \equiv 1 \pmod 7$, and $100 = 3 \cdot 33 + 1$, so $2^{100} = (2^3)^{33} \cdot 2 \equiv 1 \cdot 2 = 2$.
+    - question:
+        id: work-cancel
+        type: choice
+        system: s2
+        prompt: |
+          Working modulo 12, which deduction is always valid?
+        options:
+          - "From $5x \\equiv 5y$, conclude $x \\equiv y$."
+          - "From $4x \\equiv 4y$, conclude $x \\equiv y$."
+          - "From $6x \\equiv 0$, conclude $x \\equiv 0$."
+          - "From $x^2 \\equiv 1$, conclude $x \\equiv 1$."
+        answer: 0
+        explanation: |
+          5 shares no factor with 12, so it may be cancelled: on the clock, jumps of 5 reach every position, so multiplying by 5 sends different numbers to different places. 4 does not: $4 \cdot 1 \equiv 4 \cdot 4 \pmod{12}$. $6 \cdot 2 = 12 \equiv 0$ though $2 \not\equiv 0$. And $5^2 = 25$, $7^2 = 49$ and $11^2 = 121$ are all $\equiv 1 \pmod{12}$.
+    - question:
+        id: work-register
+        type: numeric
+        system: s2
+        prompt: |
+          A signed 16-bit register computes $200 \times 200$. What value does it hold, read in two's complement?
+        answer: "-25536"
+        explanation: |
+          $40{,}000 \bmod 2^{16} = 40{,}000$, since $2^{16} = 65{,}536$. That is at least $2^{15} = 32{,}768$, so the pattern reads as negative: $40{,}000 - 65{,}536 = -25{,}536$. Both numbers are in the same class modulo $2^{16}$.
+  connections:
+    - text: |
+        The puzzle's answers come from one idea. 22:00 on Friday plus 75 hours is $22 + 75 = 97 \equiv 1 \pmod{24}$, and 97 hours from Friday's midnight is 4 days, so the train arrives at 01:00 on Tuesday. The last digit of $7^{2026}$ is 9, because $7^4 \equiv 1 \pmod{10}$. And C and Python are both right about $-7$: their remainders, $-1$ and 2, are two members of the same class modulo 3.
+
+        Modular arithmetic replaces numbers by their classes of remainders. Sums, differences, products and powers respect the classes, so you can reduce at every step and keep the numbers small, which is what every fixed-width processor, every hash table and every check digit relies on. Division is the exception: cancelling $c$ modulo $m$ is safe only when $c$ shares no factor with $m$.
+
+        That condition raises the questions of the next lesson. What exactly is the largest factor two numbers share, how can you find it for numbers with hundreds of digits, and why does sharing no factor make division possible? The answer is one of the oldest algorithms there is: [[f3.divisibility-and-euclids-algorithm]].

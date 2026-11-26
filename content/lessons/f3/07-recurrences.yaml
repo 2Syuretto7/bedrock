@@ -1,0 +1,470 @@
+concept: f3.recurrences
+minutes: 95
+claim: You can write a recurrence for a quantity defined by its smaller cases, compute it with a loop instead of a naive recursive function, solve first-order recurrences by unrolling and prove the answer by induction, solve linear second-order recurrences such as the Fibonacci numbers with a characteristic equation, and unroll the halving recurrences that describe recursive algorithms.
+recalls: [f3.divisibility-and-euclids-algorithm]
+uses: [f2.induction-and-strong-induction, f1.arithmetic-and-geometric-series, f1.exponents-and-exponential-growth, f1.logarithms, f1.linear-equations, f0.powers-and-roots, f3.counting-with-products-and-sums, s1.recursion, s1.comprehensions-and-iterators, s0.loops, s0.functions, s0.lists-and-tuples]
+leads: [f3.asymptotic-notation, s3.divide-and-conquer-and-the-master-theorem, s3.dynamic-programming]
+starter: |
+  # Scratch space. Moves needed for a tower of n discs: twice the moves for n - 1, plus one.
+  moves = [0]
+  for n in range(1, 11):
+      moves.append(2 * moves[n - 1] + 1)
+  print(moves)
+  print([2 ** n - 1 for n in range(11)])
+parts:
+  recall:
+    - text: |
+        [[f3.divisibility-and-euclids-algorithm]] found that Euclid's algorithm is slowest on neighbouring Fibonacci numbers, each the sum of the two before, and left open how fast they grow. Today you learn to answer questions like that. Three quick pulls first.
+  puzzle:
+    - text: |
+        In 1883 a French mathematician sold a puzzle with a story attached. In a great temple at Kashi, the story went, priests move 64 golden discs between three diamond needles. The discs start stacked on one needle, largest at the bottom. A priest may move only one disc at a time, and may never put a disc on a smaller one. When the whole tower stands on another needle, the world will end.
+
+        With 1 disc the job takes 1 move. With 2 discs it takes 3: the small one aside, the big one across, the small one back on top. With 3 discs, a little thought finds 7. But nobody will think their way through 64 discs move by move.
+
+        Suppose the priests make one move every second, never pausing and never making a mistake. **How long does the world have?** And more generally, when a quantity is described by its own smaller cases, how do you get a formula for it?
+  intuition:
+    - text: |
+        Think about the largest disc. It has to move at some point, and it can move only when nothing is on top of it and nothing is on the needle it goes to. So at that moment the other discs must all be stacked on the third needle. That splits every solution into three parts:
+
+        1. move the top $n - 1$ discs out of the way, onto the spare needle;
+        2. move the largest disc across, in one move;
+        3. move the $n - 1$ discs back on top of it.
+
+        Parts 1 and 3 are the same puzzle with one disc fewer, since the largest disc never gets in anyone's way. If $T(n)$ is the fewest moves for $n$ discs, then
+
+        $$T(n) = 2\,T(n - 1) + 1, \qquad T(0) = 0.$$
+
+        That rule says nothing directly about $T(64)$, but it lets you climb: $T(1) = 1$, $T(2) = 3$, $T(3) = 7$, $T(4) = 15$, $T(5) = 31$. Each is one less than a power of two, which suggests $T(n) = 2^n - 1$. The figure plays out the moves; step through the three discs, and watch the largest disc move exactly once, at move 4, with the other two waiting on the middle needle.
+    - figure: tower
+      props: { discs: 3, move: 0 }
+    - text: |
+        Now try 4 discs. The first 7 moves are the 3-disc solution, carrying the top three to the middle. Move 8 shifts the largest disc. The last 7 moves are the 3-disc solution again, carrying the three onto it. The rule is visible in the moves themselves.
+  derivation:
+    - text: |
+        **What a recurrence is.** A **recurrence** gives each term of a sequence from earlier terms, together with **initial conditions** that fix the first few terms directly. The rule alone is not enough: $T(n) = 2T(n - 1) + 1$ is satisfied by $2^n - 1$, but also by $2^{n + 1} - 1$ and by $-1$. The initial condition $T(0) = 0$ picks one. By [[f2.induction-and-strong-induction]], a rule that uses the previous $k$ terms, with $k$ initial values, determines exactly one sequence.
+
+        The Fibonacci numbers are the most famous recurrence:
+
+        $$F(0) = 0, \quad F(1) = 1, \quad F(n) = F(n - 1) + F(n - 2),$$
+
+        giving $0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, \dots$
+
+        **Computing a recurrence.** A loop that keeps the last few terms computes $F(n)$ in $n$ steps:
+
+        ```python
+        a, b = 0, 1
+        for _ in range(n):
+            a, b = b, a + b
+        ```
+
+        A recursive function that copies the definition, as in [[s1.recursion]], is far worse. `fib(n)` calls `fib(n - 1)` and `fib(n - 2)`, which call `fib(n - 2)` and `fib(n - 3)` and `fib(n - 3)` and `fib(n - 4)`, recomputing the same values again and again. Its number of calls $C(n)$ obeys its own recurrence, $C(n) = C(n - 1) + C(n - 2) + 1$, and works out to $2F(n + 1) - 1$: over 330 million calls for `fib(40)`, against 40 steps of the loop. Remembering each value the first time it is computed is the idea behind [[s3.dynamic-programming]].
+
+        **Unrolling.** To solve $T(n) = 2T(n - 1) + 1$, substitute the rule into itself:
+
+        $$T(n) = 2T(n - 1) + 1 = 4T(n - 2) + 2 + 1 = 8T(n - 3) + 4 + 2 + 1 = \cdots = 2^k\,T(n - k) + 2^{k - 1} + \cdots + 2 + 1.$$
+
+        Take $k = n$, so that $T(0) = 0$ appears, and sum the geometric series of [[f1.arithmetic-and-geometric-series]]: $T(n) = 2^{n - 1} + \cdots + 1 = 2^n - 1$.
+
+        Unrolling suggests the answer; induction proves it. $T(0) = 0 = 2^0 - 1$. If $T(n - 1) = 2^{n - 1} - 1$, then $T(n) = 2(2^{n - 1} - 1) + 1 = 2^n - 1$.
+
+        So the priests need $2^{64} - 1 \approx 1.8 \times 10^{19}$ moves. At one a second, that is about 585 billion years, some forty times the present age of the universe.
+    - question:
+        id: derivation-initial
+        type: choice
+        system: s2
+        prompt: |
+          The sequence $a(n) = 2^{n + 1} - 1$ also satisfies $a(n) = 2a(n - 1) + 1$. Why is it not the number of moves for $n$ discs?
+        options:
+          - "It has the wrong initial condition: $a(0) = 1$, but no discs need no moves."
+          - "It grows too fast to satisfy the rule."
+          - "The rule has only one solution, so this cannot satisfy it."
+          - "It is not a whole number for every $n$."
+        answer: 0
+        explanation: |
+          Check the rule: $2(2^n - 1) + 1 = 2^{n + 1} - 1$, so it holds. A first-order rule has one solution for each starting value, and only the start $T(0) = 0$ describes the puzzle. Every sequence $c \cdot 2^n - 1$ satisfies the same rule.
+    - text: |
+        **First-order linear recurrences.** Many recurrences have the form $a_n = r\,a_{n - 1} + c$. A home loan is one. With a balance of $B_{n - 1}$ at the end of month $n - 1$, interest of 0.75 per cent a month, and an EMI of $P$ rupees, the balance a month later is
+
+        $$B_n = 1.0075\,B_{n - 1} - P.$$
+
+        The trick is to look for a value $L$ that the rule leaves alone, its **fixed point**: $L = rL + c$, so $L = c/(1 - r)$ when $r \ne 1$. Subtracting $L = rL + c$ from $a_n = r a_{n - 1} + c$ gives $a_n - L = r(a_{n - 1} - L)$. The distance from $L$ is multiplied by $r$ every step, so
+
+        $$a_n = L + r^n (a_0 - L).$$
+
+        For the towers, $r = 2$ and $c = 1$, so $L = -1$ and $T(n) = -1 + 2^n(0 + 1)$, as before. For the loan, $L = P / 0.0075$: a balance of exactly $L$ earns interest equal to the EMI and never shrinks, and the balance moves away from $L$ by a factor 1.0075 each month. A ₹20 lakh loan over 240 months needs $B_{240} = 0$, which works out to an EMI of about ₹17,995. If $r = 1$ there is no fixed point and the sequence is arithmetic, $a_n = a_0 + nc$.
+    - question:
+        id: order-unroll
+        type: order
+        system: s2
+        prompt: |
+          Solve $a_n = 3a_{n - 1} - 4$ with $a_0 = 5$. Put the steps in order.
+        steps:
+          - "Find the fixed point: $L = 3L - 4$ gives $L = 2$."
+          - "Subtract it: $a_n - 2 = 3(a_{n - 1} - 2)$, so the distance from 2 triples every step."
+          - "Start from $a_0 - 2 = 3$, so $a_n - 2 = 3 \\cdot 3^n$."
+          - "So $a_n = 2 + 3^{n + 1}$; check: $a_1 = 3 \\cdot 5 - 4 = 11 = 2 + 9$."
+        explanation: The fixed point turns a rule with a constant into pure multiplication, which gives a power. Checking one term against the rule catches slips.
+    - text: |
+        **Second-order linear recurrences.** For Fibonacci, guess that some power $F(n) = x^n$ might work. Substituting into $F(n) = F(n - 1) + F(n - 2)$ and dividing by $x^{n - 2}$ gives the **characteristic equation**
+
+        $$x^2 = x + 1.$$
+
+        Complete the square, using [[f0.powers-and-roots]]: $x^2 - x + \tfrac14 = \tfrac54$, so $x - \tfrac12 = \pm \tfrac{\sqrt 5}{2}$, and the two roots are
+
+        $$\varphi = \frac{1 + \sqrt 5}{2} \approx 1.618, \qquad \psi = \frac{1 - \sqrt 5}{2} \approx -0.618.$$
+
+        Both $\varphi^n$ and $\psi^n$ satisfy the rule, and because the rule only adds terms, so does any combination $A\varphi^n + B\psi^n$. Choose $A$ and $B$ to match the initial conditions, two [[f1.linear-equations]]: $A + B = 0$ and $A\varphi + B\psi = 1$. Since $\varphi - \psi = \sqrt 5$, $A = 1/\sqrt 5$ and $B = -1/\sqrt 5$:
+
+        $$F(n) = \frac{\varphi^n - \psi^n}{\sqrt 5}.$$
+
+        Every term is a whole number, though the formula is full of square roots. And since $|\psi| < 1$, the term $\psi^n / \sqrt 5$ is always less than a half, so $F(n)$ is simply $\varphi^n / \sqrt 5$ rounded to the nearest whole number. The Fibonacci numbers grow exponentially, by a factor of about 1.618 a step, as in [[f1.exponents-and-exponential-growth]].
+
+        That answers the last lesson's question. If Euclid's algorithm takes $k$ steps, the smaller input is at least $F(k + 1)$, so $k$ is at most about $\log_\varphi b$, which by [[f1.logarithms]] is $\log_{10} b / \log_{10} \varphi \approx 4.8 \log_{10} b$: under five steps for every decimal digit.
+
+        The same method solves any $a_n = p\,a_{n - 1} + q\,a_{n - 2}$: find the roots $r$ and $s$ of $x^2 = px + q$, write $a_n = A r^n + B s^n$, and fit $A$ and $B$ to the first two terms. If the two roots are equal, $a_n = (A + Bn) r^n$ instead.
+
+        **Counting with recurrences.** How many ways can you climb a staircase of $n$ steps, taking one or two steps at a time? Split by the first move, as the sum rule of [[f3.counting-with-products-and-sums]] allows: one step leaves $n - 1$ to climb, two steps leave $n - 2$. So $W(n) = W(n - 1) + W(n - 2)$ with $W(0) = 1$, since there is one way to climb nothing, and $W(1) = 1$. That is Fibonacci shifted by one: $W(n) = F(n + 1)$. Tiling a 2-by-$n$ verandah with 2-by-1 tiles gives the same recurrence.
+
+        **The cost of recursive algorithms.** An algorithm that does one comparison and then works on half its input, as binary search does, costs $T(n) = T(n/2) + 1$ with $T(1) = 1$. For $n = 2^k$, unrolling gives $T(n) = k + 1 = \log_2 n + 1$. An algorithm that splits its input in two halves, solves both, and spends $n$ steps combining them costs $T(n) = 2T(n/2) + n$. Unrolling, each level of halving costs $n$ in total, and there are $\log_2 n$ levels, so $T(n) = n \log_2 n + n\,T(1)$. A general rule for such recurrences is [[s3.divide-and-conquer-and-the-master-theorem]].
+  formal:
+    - text: |
+        **Recurrence.** A rule $a_n = f(a_{n - 1}, \dots, a_{n - k})$ for $n \ge k$, with initial values $a_0, \dots, a_{k - 1}$, defines exactly one sequence.
+
+        **First order.** $a_n = r a_{n - 1} + c$ with $r \ne 1$ has $a_n = L + r^n (a_0 - L)$, where $L = c / (1 - r)$. With $r = 1$, $a_n = a_0 + nc$.
+
+        **Second order.** For $a_n = p a_{n - 1} + q a_{n - 2}$, let $r$ and $s$ be the roots of $x^2 = px + q$. If $r \ne s$, then $a_n = A r^n + B s^n$; if $r = s$, then $a_n = (A + Bn) r^n$. $A$ and $B$ are fixed by $a_0$ and $a_1$.
+
+        **Fibonacci.** $F(n) = (\varphi^n - \psi^n)/\sqrt 5$ with $\varphi = (1 + \sqrt 5)/2$ and $\psi = (1 - \sqrt 5)/2$; $F(n)$ is $\varphi^n / \sqrt 5$ rounded.
+
+        **Halving.** For $n$ a power of 2: $T(n) = T(n/2) + c$ gives $T(n) = c \log_2 n + T(1)$, and $T(n) = 2T(n/2) + cn$ gives $T(n) = cn \log_2 n + n\,T(1)$.
+  drill:
+    - text: Seconds each. Climb from the initial conditions, or use the formula.
+    - question:
+        id: drill-climb
+        type: numeric
+        system: s1
+        prompt: |
+          $a_0 = 3$ and $a_n = 2a_{n - 1} - 1$. What is $a_3$?
+        answer: "17"
+        explanation: $a_1 = 5$, $a_2 = 9$, $a_3 = 17$.
+    - question:
+        id: drill-tower
+        type: numeric
+        system: s1
+        prompt: |
+          What is the fewest moves to carry a tower of 5 discs to another needle?
+        answer: "31"
+        explanation: $2^5 - 1 = 31$.
+    - question:
+        id: drill-fib
+        type: numeric
+        system: s1
+        prompt: |
+          With $F(0) = 0$ and $F(1) = 1$, what is $F(10)$?
+        answer: "55"
+        explanation: 0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55.
+    - question:
+        id: drill-stairs
+        type: numeric
+        system: s1
+        prompt: |
+          In how many ways can you climb 5 steps, taking one or two at a time?
+        answer: "8"
+        explanation: $W(n) = W(n - 1) + W(n - 2)$ from $W(0) = W(1) = 1$ gives 1, 1, 2, 3, 5, 8.
+    - question:
+        id: drill-roots
+        type: choice
+        system: s1
+        prompt: |
+          What are the roots of the characteristic equation of $a_n = 5a_{n - 1} - 6a_{n - 2}$?
+        options: ["2 and 3", "5 and $-6$", "$-2$ and $-3$", "1 and 6"]
+        answer: 0
+        explanation: $x^2 = 5x - 6$, so $x^2 - 5x + 6 = (x - 2)(x - 3) = 0$.
+    - question:
+        id: drill-halving
+        type: numeric
+        system: s1
+        prompt: |
+          $T(1) = 1$ and $T(n) = T(n/2) + 1$. What is $T(1024)$?
+        answer: "11"
+        explanation: $1024 = 2^{10}$, so ten halvings reach 1, each adding 1, on top of $T(1) = 1$.
+    - question:
+        id: drill-arithmetic
+        type: numeric
+        system: s1
+        prompt: |
+          $a_0 = 2$ and $a_n = a_{n - 1} + 3$. What is $a_{100}$?
+        answer: "302"
+        explanation: With $r = 1$ the sequence is arithmetic, $a_n = 2 + 3n$.
+    - question:
+        id: predict-calls
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          calls = [0]
+
+          def fib(n):
+              calls[0] += 1
+              if n < 2:
+                  return n
+              return fib(n - 1) + fib(n - 2)
+
+          print(fib(10), calls[0])
+        output: "55 177"
+        explanation: The calls obey $C(n) = C(n - 1) + C(n - 2) + 1$ with $C(0) = C(1) = 1$, which gives $C(10) = 2F(11) - 1 = 2 \cdot 89 - 1 = 177$. The loop would take 10 steps.
+    - question:
+        id: predict-pairs
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          a, b = 0, 1
+          for _ in range(6):
+              a, b = b, a + b
+          print(a, b)
+        output: "8 13"
+        explanation: After $k$ rounds the pair is $F(k), F(k + 1)$, so after 6 it is 8 and 13. Both names are updated at once, from the old values.
+  work:
+    - text: Slower now. Before solving anything, write the rule and the initial conditions, and check them against the smallest cases by hand.
+    - question:
+        id: fix-stairs
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `ways(n)` should count the ways to climb `n` steps taking one or two at a time, for `n` from 0 to 1,000. It should print `[1, 1, 2, 3, 5, 8, 13]`. It prints `[0, 1, 1, 2, 3, 5, 8]`. Find the fault and fix it.
+        starter: |
+          def ways(n):
+              if n <= 1:
+                  return n
+              before, now = 0, 1
+              for _ in range(n - 1):
+                  before, now = now, before + now
+              return now
+
+          print([ways(n) for n in range(7)])
+        solution: |
+          def ways(n):
+              if n <= 1:
+                  return 1
+              before, now = 1, 1
+              for _ in range(n - 1):
+                  before, now = now, before + now
+              return now
+
+          print([ways(n) for n in range(7)])
+        tests: |
+          import itertools
+          for _n in range(0, 13):
+              _count = 0
+              for _k in range(_n + 1):
+                  for _moves in itertools.product([1, 2], repeat=_k):
+                      if sum(_moves) == _n:
+                          _count += 1
+              assert ways(_n) == _count, "ways(" + str(_n) + ") should be " + str(_count) + ", not " + str(ways(_n))
+          _w = [1, 1]
+          for _n in range(2, 1001):
+              _w.append(_w[-1] + _w[-2])
+          for _n in [50, 300, 1000]:
+              assert ways(_n) == _w[_n], "ways(" + str(_n) + ") is wrong"
+          assert output.strip() == "[1, 1, 2, 3, 5, 8, 13]", "The program should print [1, 1, 2, 3, 5, 8, 13]"
+        wrong:
+          - |
+            def ways(n):
+                if n <= 1:
+                    return 1
+                before, now = 0, 1
+                for _ in range(n - 1):
+                    before, now = now, before + now
+                return now
+
+            print([1, 1, 2, 3, 5, 8, 13])
+          - |
+            def ways(n):
+                if n <= 1:
+                    return n
+                before, now = 1, 1
+                for _ in range(n - 1):
+                    before, now = now, before + now
+                return now
+
+            print([1, 1, 2, 3, 5, 8, 13])
+        explanation: |
+          The rule $W(n) = W(n - 1) + W(n - 2)$ is right, but the initial conditions are those of the Fibonacci numbers, $F(0) = 0$ and $F(1) = 1$, so the function returns $F(n)$, one place behind. There is exactly one way to climb no steps, which is to do nothing, so $W(0) = 1$, and $W(1) = 1$. Both the early return and the starting pair must use them: fixing only one leaves either $W(0)$ or $W(2)$ wrong.
+    - question:
+        id: write-tower
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `tower(n, source, target, spare)`, which returns the list of moves that carry a tower of `n` discs from needle `source` to needle `target`, as tuples `(from_needle, to_needle)`, never putting a disc on a smaller one. Use the three parts of the lesson, with recursion. For `n = 0` return an empty list.
+        starter: |
+          def tower(n, source, target, spare):
+              return []
+
+          print(len(tower(3, "A", "C", "B")), len(tower(10, "A", "C", "B")))
+          print(tower(2, "A", "C", "B"))
+        solution: |
+          def tower(n, source, target, spare):
+              if n == 0:
+                  return []
+              moves = tower(n - 1, source, spare, target)
+              moves.append((source, target))
+              moves = moves + tower(n - 1, spare, target, source)
+              return moves
+
+          print(len(tower(3, "A", "C", "B")), len(tower(10, "A", "C", "B")))
+          print(tower(2, "A", "C", "B"))
+        tests: |
+          for _n in range(0, 11):
+              _moves = tower(_n, "A", "C", "B")
+              assert len(_moves) == 2 ** _n - 1, "tower(" + str(_n) + ", ...) should make " + str(2 ** _n - 1) + " moves, not " + str(len(_moves))
+              _pegs = {"A": list(range(_n, 0, -1)), "B": [], "C": []}
+              for _number, _move in enumerate(_moves, 1):
+                  _f, _t = _move
+                  assert len(_pegs[_f]) > 0, "Move " + str(_number) + " of tower(" + str(_n) + ", ...) takes a disc from the empty needle " + _f
+                  _disc = _pegs[_f][-1]
+                  assert len(_pegs[_t]) == 0 or _pegs[_t][-1] > _disc, "Move " + str(_number) + " of tower(" + str(_n) + ", ...) puts disc " + str(_disc) + " on a smaller disc"
+                  _pegs[_f] = _pegs[_f][:-1]
+                  _pegs[_t] = _pegs[_t] + [_disc]
+              assert _pegs["C"] == list(range(_n, 0, -1)), "tower(" + str(_n) + ", ...) should end with every disc on needle C"
+          assert output.strip() == "7 1023\n[('A', 'B'), ('A', 'C'), ('B', 'C')]", "The program should print 7 1023, then [('A', 'B'), ('A', 'C'), ('B', 'C')]"
+        wrong:
+          - |
+            def tower(n, source, target, spare):
+                if n == 0:
+                    return []
+                moves = tower(n - 1, source, target, spare)
+                moves.append((source, target))
+                moves = moves + tower(n - 1, spare, target, source)
+                return moves
+
+            print(7, 1023)
+            print([("A", "B"), ("A", "C"), ("B", "C")])
+          - |
+            def tower(n, source, target, spare):
+                if n == 0:
+                    return []
+                moves = tower(n - 1, source, spare, target)
+                moves.append((source, target))
+                moves = moves + tower(n - 1, source, target, spare)
+                return moves
+
+            print(7, 1023)
+            print([("A", "B"), ("A", "C"), ("B", "C")])
+          - |
+            def tower(n, source, target, spare):
+                if n == 0:
+                    return []
+                if n == 1:
+                    return [(source, target)]
+                return [(source, spare)] + tower(n - 1, source, target, spare) + [(spare, target)]
+
+            print(7, 1023)
+            print([("A", "B"), ("A", "C"), ("B", "C")])
+        explanation: |
+          The top $n - 1$ discs go from the source to the spare needle, using the target as their spare; the largest disc goes from source to target; then the $n - 1$ go from the spare to the target, using the source as their spare. The roles of the needles change in each recursive call, and getting them wrong either stacks discs on the needle the largest one must go to, or takes discs from the wrong needle. The number of moves obeys $T(n) = 2T(n - 1) + 1$, so it is $2^n - 1$, and no correct method can do better, because the largest disc must move and every disc above it must be moved out of the way and back.
+    - question:
+        id: write-no-adjacent
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A signalling code uses strings of 0s and 1s in which two 1s are never next to each other. Write `codes(n)`, the number of such strings of length `n`, for `n` from 0 to 1,000, with a loop over a recurrence. (Think about the last character: a string ending in 0 can have any allowed string before it, and a string ending in 1 must end in 01.)
+        starter: |
+          def codes(n):
+              return 0
+
+          print([codes(n) for n in range(6)], codes(40))
+        solution: |
+          def codes(n):
+              before, now = 1, 2
+              for _ in range(n):
+                  before, now = now, before + now
+              return before
+
+          print([codes(n) for n in range(6)], codes(40))
+        tests: |
+          import itertools
+          for _n in range(0, 15):
+              _count = 0
+              for _bits in itertools.product("01", repeat=_n):
+                  if "11" not in "".join(_bits):
+                      _count += 1
+              assert codes(_n) == _count, "codes(" + str(_n) + ") should be " + str(_count) + ", not " + str(codes(_n))
+          _c = [1, 2]
+          for _n in range(2, 1001):
+              _c.append(_c[-1] + _c[-2])
+          assert codes(1000) == _c[1000], "codes(1000) is wrong"
+          assert output.strip() == "[1, 2, 3, 5, 8, 13] 267914296", "The program should print [1, 2, 3, 5, 8, 13] 267914296"
+        wrong:
+          - |
+            def codes(n):
+                before, now = 1, 1
+                for _ in range(n):
+                    before, now = now, before + now
+                return before
+
+            print([1, 2, 3, 5, 8, 13], 267914296)
+          - |
+            def codes(n):
+                total = 1
+                for _ in range(n):
+                    total = total * 2
+                return total
+
+            print([1, 2, 3, 5, 8, 13], 267914296)
+          - |
+            def codes(n):
+                before, now = 1, 2
+                for _ in range(n):
+                    before, now = now, now + now
+                return before
+
+            print([1, 2, 3, 5, 8, 13], 267914296)
+        explanation: |
+          A string of length $n$ ending in 0 is any allowed string of length $n - 1$ followed by 0, and one ending in 1 must end in 01, after any allowed string of length $n - 2$. These cases do not overlap, so by the sum rule $S(n) = S(n - 1) + S(n - 2)$. The initial conditions are $S(0) = 1$, the empty string, and $S(1) = 2$, the strings 0 and 1, so $S(n) = F(n + 2)$. Counting all $2^n$ strings ignores the rule, and starting from $S(1) = 1$ forgets that a single 1 is allowed.
+    - question:
+        id: work-closed
+        type: numeric
+        system: s2
+        prompt: |
+          $a_0 = 5$ and $a_n = 3a_{n - 1} - 4$. What is $a_{10}$?
+        answer: "177149"
+        explanation: |
+          The fixed point is $L = 2$ and $a_0 - L = 3$, so $a_n = 2 + 3 \cdot 3^n = 2 + 3^{n + 1}$. Then $a_{10} = 2 + 3^{11} = 2 + 177{,}147 = 177{,}149$.
+    - question:
+        id: work-second-order
+        type: numeric
+        system: s2
+        prompt: |
+          $a_0 = 2$, $a_1 = 5$ and $a_n = 5a_{n - 1} - 6a_{n - 2}$. What is $a_6$?
+        answer: "793"
+        explanation: |
+          The roots of $x^2 = 5x - 6$ are 2 and 3, so $a_n = A \cdot 2^n + B \cdot 3^n$. From $A + B = 2$ and $2A + 3B = 5$, $B = 1$ and $A = 1$. So $a_n = 2^n + 3^n$ and $a_6 = 64 + 729 = 793$.
+    - question:
+        id: work-split
+        type: numeric
+        system: s2
+        prompt: |
+          $T(1) = 0$ and $T(n) = 2T(n/2) + n$. What is $T(1024)$?
+        answer: "10240"
+        explanation: |
+          Each of the $\log_2 1024 = 10$ levels of halving costs 1,024 in total, and $T(1) = 0$ adds nothing, so $T(1024) = 1024 \cdot 10 = 10{,}240$.
+    - question:
+        id: work-emi
+        type: numeric
+        system: s2
+        prompt: |
+          A loan's balance follows $B_n = 1.01\,B_{n - 1} - 15{,}000$: interest of 1 per cent a month and an EMI of ₹15,000. For what starting balance, in rupees, does the balance never change?
+        answer: "1500000"
+        explanation: |
+          The fixed point solves $L = 1.01L - 15{,}000$, so $0.01L = 15{,}000$ and $L = 15{,}00{,}000$ rupees. A balance of ₹15 lakh earns exactly ₹15,000 interest a month, which the EMI just covers; a larger loan would never be repaid.
+  connections:
+    - text: |
+        The priests need $2^{64} - 1$ moves, about 585 billion years at one a second. The recurrence $T(n) = 2T(n - 1) + 1$ came from one observation about the largest disc, unrolling turned it into a geometric series, and induction proved the formula.
+
+        A recurrence and its initial conditions define a sequence. A loop computes it in as many steps as terms, while a recursive function that copies the definition can take exponentially many calls. First-order linear recurrences are solved through their fixed point, second-order ones through the roots of a characteristic equation, which for Fibonacci gives growth by the factor $\varphi \approx 1.618$ and bounds Euclid's algorithm at under five steps a digit. Halving recurrences unroll into logarithms.
+
+        Notice what the answers have in common: $2^n - 1$, $\varphi^n / \sqrt 5$, $n \log_2 n + n$. In each, one part dominates as $n$ grows and the rest hardly matters. Saying exactly what "hardly matters" means, so that you can compare $n \log_2 n$ with $n^2$ without fussing over constants, is the language of [[f3.asymptotic-notation]].

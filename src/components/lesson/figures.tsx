@@ -3050,6 +3050,769 @@ function UnionFind(props: Props) {
   );
 }
 
+const MEAL_STAGES = [
+  { name: "main", options: ["Rajma", "Kadhi", "Paneer"] },
+  { name: "drink", options: ["Lassi", "Chaas", "Nimbu pani"] },
+  { name: "sweet", options: ["Halwa", "Jalebi", "Barfi"] },
+];
+
+/** A meal chosen in three stages, drawn as a tree with one leaf for each meal, so that the leaves number the product of the choices at each stage. */
+function ChoiceTree(props: Props) {
+  const [counts, setCounts] = useState([clamp(Math.round(num(props.mains, 3)), 1, 3), clamp(Math.round(num(props.drinks, 2)), 1, 3), clamp(Math.round(num(props.sweets, 2)), 1, 3)]);
+  const total = counts[0] * counts[1] * counts[2];
+  const [pick, setPick] = useState(clamp(Math.round(num(props.pick, 1)), 1, total));
+  const chosen = Math.min(pick, total);
+  const digits = [Math.floor((chosen - 1) / (counts[1] * counts[2])), Math.floor((chosen - 1) / counts[2]) % counts[1], (chosen - 1) % counts[2]];
+  const setStage = (stage: number, value: number) => {
+    const next = counts.map((c, i) => (i === stage ? value : c));
+    setCounts(next);
+    setPick(Math.min(chosen, next[0] * next[1] * next[2]));
+  };
+  const gap = total > 1 ? 400 / (total - 1) : 0;
+  const leafX = (leaf: number) => (total > 1 ? 20 + leaf * gap : 220);
+  const levelY = [26, 90, 156, 222];
+  type Placed = { x: number; y: number; label: string; path: number[] };
+  const nodes: Placed[] = [];
+  const edges: { from: Spot; to: Spot; on: boolean }[] = [];
+  const build = (path: number[], first: number, width: number): Spot => {
+    const depth = path.length;
+    const x = (leafX(first) + leafX(first + width - 1)) / 2;
+    const at: Spot = [x, levelY[depth]];
+    nodes.push({ x, y: at[1], label: depth === 0 ? "" : MEAL_STAGES[depth - 1].options[path[depth - 1]], path });
+    if (depth < 3) {
+      const share = width / counts[depth];
+      for (let k = 0; k < counts[depth]; k++) {
+        const child = build([...path, k], first + k * share, share);
+        edges.push({ from: at, to: child, on: [...path, k].every((v, i) => v === digits[i]) });
+      }
+    }
+    return at;
+  };
+  build([], 0, total);
+  const small = total > 12;
+  const meal = digits.map((d, i) => MEAL_STAGES[i].options[d]);
+  return (
+    <Frame
+      title="Counting choices with a tree"
+      summary={`A meal is one main, then one drink, then one sweet. There ${counts[0] === 1 ? "is 1 main" : `are ${counts[0]} mains`}, each can be followed by ${plural(counts[1], "drink")}, and each of those by ${plural(counts[2], "sweet")}, so the tree branches ${counts[0]} ways, then ${counts[1]}, then ${counts[2]}, and has ${counts[0]} × ${counts[1]} × ${counts[2]} = ${total} ${total === 1 ? "leaf" : "leaves"}, one for each meal. Meal ${chosen} is ${meal.join(", ")}.`}
+      controls={
+        <>
+          {MEAL_STAGES.map((stage, i) => (
+            <Stepper key={stage.name} label={`${stage.name}s`} value={counts[i]} onChange={(v) => setStage(i, v)} min={1} max={3} />
+          ))}
+          <Stepper label="meal" value={chosen} onChange={setPick} min={1} max={total} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`A tree of choices with ${total} ${total === 1 ? "leaf" : "leaves"}, with the path to meal ${chosen} marked`}>
+        {edges.map((edge, i) => (
+          <line key={i} x1={edge.from[0]} y1={edge.from[1]} x2={edge.to[0]} y2={edge.to[1]} className={edge.on ? "fig-accent-line" : "fig-axis"} />
+        ))}
+        {nodes.map((node) => {
+          const on = node.path.every((v, i) => v === digits[i]);
+          const leaf = node.path.length === 3;
+          const r = leaf && small ? 5 : 11;
+          return (
+            <g key={"n" + node.path.join("-")}>
+              <circle cx={node.x} cy={node.y} r={r} className={on ? "fig-accent" : "fig-fill"} />
+              {leaf && small ? null : (
+                <text x={node.x} y={node.y + 4} textAnchor="middle" className="fig-small" style={{ fill: on ? "var(--bg)" : "var(--text)" }}>
+                  {node.label.slice(0, 1)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+        <text x="12" y="246" className="fig-small">
+          {`${counts[0]} × ${counts[1]} × ${counts[2]} = ${total}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** Pascal's triangle up to row n, with one entry and the two above it that add to it picked out, and the row's total. */
+function PascalTriangle(props: Props) {
+  const [rows, setRows] = useState(clamp(Math.round(num(props.n, 5)), 1, 10));
+  const [k, setK] = useState(clamp(Math.round(num(props.k, 2)), 0, rows));
+  const at = Math.min(k, rows);
+  const triangle: number[][] = [[1]];
+  for (let n = 1; n <= rows; n++) triangle.push(Array.from({ length: n + 1 }, (_, j) => (j === 0 || j === n ? 1 : triangle[n - 1][j - 1] + triangle[n - 1][j])));
+  const step = 38;
+  const spot = (n: number, j: number): Spot => [220 + (j - n / 2) * step, 22 + n * 24];
+  const value = triangle[rows][at];
+  const left = at > 0 ? triangle[rows - 1][at - 1] : 0;
+  const right = at < rows ? triangle[rows - 1][at] : 0;
+  const parents = [at > 0 ? at - 1 : -1, at < rows ? at : -1].filter((j) => j >= 0);
+  const total = 2 ** rows;
+  const reason =
+    at === 0 || at === rows
+      ? `It is at the edge of the row, where there is only one way: choose ${at === 0 ? "none" : "all"} of the ${rows}.`
+      : `It is the sum of the two entries above it, ${left} + ${right}: the choices of ${at} that include one particular item, C(${rows - 1}, ${at - 1}) = ${left}, and those that leave it out, C(${rows - 1}, ${at}) = ${right}.`;
+  return (
+    <Frame
+      title="Pascal's triangle"
+      summary={`Row ${rows} lists the number of ways to choose k items from ${rows}, for k from 0 to ${rows}: ${triangle[rows].join(", ")}. The picked entry is C(${rows}, ${at}) = ${value}. ${reason} The row adds up to ${total} = 2^${rows}, the number of subsets of ${plural(rows, "item")}.`}
+      controls={
+        <>
+          <Stepper
+            label="row n"
+            value={rows}
+            onChange={(v) => {
+              setRows(v);
+              setK(Math.min(at, v));
+            }}
+            min={1}
+            max={10}
+          />
+          <Stepper label="k" value={at} onChange={setK} min={0} max={rows} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`Pascal's triangle to row ${rows}, with C(${rows}, ${at}) = ${value} and the entries above it picked out`}>
+        {triangle.map((row, n) =>
+          row.map((entry, j) => {
+            const [x, y] = spot(n, j);
+            const on = n === rows && j === at;
+            const feeds = n === rows - 1 && parents.includes(j);
+            return (
+              <g key={`${n}-${j}`}>
+                {on || feeds ? <rect x={x - 17} y={y - 13} width="34" height="20" className={on ? "fig-accent" : "fig-fill"} /> : null}
+                <text x={x} y={y + 2} textAnchor="middle" className="fig-small" style={{ fill: on ? "var(--bg)" : n === rows || feeds ? "var(--text)" : "var(--text-secondary)" }}>
+                  {entry}
+                </text>
+              </g>
+            );
+          }),
+        )}
+        <text x="12" y="282" className="fig-small">
+          {`row ${rows} adds up to ${total}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** Items dropped into boxes, either spread as evenly as possible or scattered, with the fullest box never holding fewer than the items divided by the boxes, rounded up. */
+function Pigeonholes(props: Props) {
+  const [items, setItems] = useState(clamp(Math.round(num(props.items, 13)), 1, 24));
+  const [boxes, setBoxes] = useState(clamp(Math.round(num(props.boxes, 12)), 1, 12));
+  const [scatter, setScatter] = useState(0);
+  const mix = (i: number) => Math.floor((((scatter * 7919 + i * 104729 + 13) * 2654435761) % 4294967296) / 65536);
+  const place = Array.from({ length: items }, (_, i) => (scatter === 0 ? i % boxes : mix(i) % boxes));
+  const counts = Array.from({ length: boxes }, (_, b) => place.filter((p) => p === b).length);
+  const most = Math.max(...counts);
+  const bound = Math.ceil(items / boxes);
+  const width = 420 / boxes;
+  return (
+    <Frame
+      title="The pigeonhole principle"
+      summary={`${plural(items, "item")} in ${plural(boxes, "box", "boxes")}, ${scatter === 0 ? "spread as evenly as possible" : "dropped at random"}. The counts are ${counts.join(", ")}, so the fullest box holds ${most}. However the items are placed, some box holds at least ${items} ÷ ${boxes} rounded up, which is ${bound}${
+        bound >= 2 ? ", so at least two items always share a box" : ", so it is possible for no two items to share a box"
+      }.`}
+      controls={
+        <>
+          <Stepper label="items" value={items} onChange={setItems} min={1} max={24} />
+          <Stepper label="boxes" value={boxes} onChange={setBoxes} min={1} max={12} />
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setScatter(scatter + 1)}>
+            Drop them at random
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" disabled={scatter === 0} onClick={() => setScatter(0)}>
+            Spread them evenly
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`${plural(items, "item")} in ${plural(boxes, "box", "boxes")}, the fullest holding ${most}`}>
+        {counts.map((count, b) => {
+          const x = 10 + b * width;
+          return (
+            <g key={b}>
+              <rect x={x + 2} y={30} width={width - 4} height={190} className={count === most ? "fig-ghost" : "fig-fill"} fill="none" />
+              {Array.from({ length: count }, (_, j) => (
+                <circle key={j} cx={x + width / 2} cy={208 - j * Math.min(20, 180 / Math.max(most, 1))} r={Math.min(8, width / 2 - 4)} className={count === most ? "fig-accent" : "fig-fill"} />
+              ))}
+              <text x={x + width / 2} y={240} textAnchor="middle" className="fig-small">
+                {count}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="20" className="fig-small">
+          {`fullest box: ${most}; at least ${bound} guaranteed`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const OVERLAP_SPOTS: Record<string, Spot> = { A: [118, 92], B: [322, 92], C: [220, 252], AB: [220, 70], AC: [158, 186], BC: [282, 186], ABC: [220, 146] };
+const OVERLAP_STAGES = ["add the three sets", "subtract the three overlaps of two", "add back the overlap of all three"];
+
+/** The multiples of 2, 3 and 5 up to n as three overlapping sets, with the number of times inclusion and exclusion has counted each region after one, two or three of its steps. */
+function InclusionExclusion(props: Props) {
+  const [top, setTop] = useState(clamp(Math.round(num(props.n, 30) / 10) * 10, 10, 100));
+  const [stage, setStage] = useState(clamp(Math.round(num(props.stage, 1)), 1, 3));
+  const divisors: Record<string, number> = { A: 2, B: 3, C: 5 };
+  const region = (name: string) => {
+    let count = 0;
+    for (let x = 1; x <= top; x++) {
+      const inside = (["A", "B", "C"] as const).filter((set) => x % divisors[set] === 0).join("");
+      if (inside === name) count += 1;
+    }
+    return count;
+  };
+  const sizes = Object.fromEntries(Object.keys(OVERLAP_SPOTS).map((name) => [name, region(name)]));
+  const choose = (m: number, j: number) => (j === 1 ? m : j === 2 ? (m * (m - 1)) / 2 : m === 3 ? 1 : 0);
+  const times = (name: string) => [1, 2, 3].slice(0, stage).reduce((sum, j) => sum + (j % 2 === 1 ? 1 : -1) * choose(name.length, j), 0);
+  const single = (d: number) => Math.floor(top / d);
+  const singles = single(2) + single(3) + single(5);
+  const pairs = single(6) + single(10) + single(15);
+  const triple = single(30);
+  const running = [singles, singles - pairs, singles - pairs + triple][stage - 1];
+  const truth = Object.values(sizes).reduce((a, b) => a + b, 0);
+  const steps = [
+    `Adding the sizes of the three sets, ${single(2)} + ${single(3)} + ${single(5)}, gives ${singles}`,
+    `Subtracting the numbers in each pair of sets, ${single(6)} + ${single(10)} + ${single(15)} multiples of 6, 10 and 15, leaves ${singles - pairs}`,
+    `Adding back the ${plural(triple, "number")} in all three, the multiples of 30, gives ${singles - pairs + triple}`,
+  ];
+  const wrong = Object.keys(OVERLAP_SPOTS).filter((name) => times(name) !== 1);
+  return (
+    <Frame
+      title="Inclusion and exclusion"
+      summary={`Among 1 to ${top}, A is the multiples of 2, B of 3 and C of 5. ${steps.slice(0, stage).join(". ")}. ${
+        wrong.length === 0
+          ? `Every region is now counted exactly once, so ${running} is right: ${running} of the numbers are multiples of 2, 3 or 5.`
+          : `So far ${wrong.map((name) => `the region in ${name.split("").join(" and ")} is counted ${times(name)} ${times(name) === 1 ? "time" : "times"}`).join(", ")}, where it should be once, so ${running} is ${running > truth ? "too many" : "too few"}; the true count is ${truth}.`
+      }`}
+      controls={
+        <>
+          <Stepper label="numbers up to" value={top} onChange={(v) => setTop(v)} min={10} max={100} />
+          <Stepper label="step" value={stage} onChange={setStage} min={1} max={3} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`Three overlapping sets after the step: ${OVERLAP_STAGES[stage - 1]}`}>
+        <circle cx="170" cy="112" r="92" className="fig-ghost" fill="none" />
+        <circle cx="270" cy="112" r="92" className="fig-ghost" fill="none" />
+        <circle cx="220" cy="196" r="92" className="fig-ghost" fill="none" />
+        <text x="62" y="26" className="fig-small">
+          A: ×2
+        </text>
+        <text x="346" y="26" className="fig-small">
+          B: ×3
+        </text>
+        <text x="318" y="282" className="fig-small">
+          C: ×5
+        </text>
+        {Object.entries(OVERLAP_SPOTS).map(([name, at]) => {
+          const t = times(name);
+          return (
+            <g key={name}>
+              <rect x={at[0] - 22} y={at[1] - 14} width="44" height="34" className={t === 1 ? "fig-fill" : "fig-accent"} />
+              <text x={at[0]} y={at[1]} textAnchor="middle" className="fig-small" style={{ fill: t === 1 ? "var(--text)" : "var(--bg)" }}>
+                {sizes[name]}
+              </text>
+              <text x={at[0]} y={at[1] + 14} textAnchor="middle" className="fig-small" style={{ fill: t === 1 ? "var(--text)" : "var(--bg)" }}>
+                {`×${t}`}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="282" className="fig-small">
+          {`running total ${running}, true ${truth}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** The greatest common divisor of two whole numbers, with gcd(m, 0) = m. */
+const commonDivisor = (a: number, b: number): number => {
+  let x = Math.abs(a);
+  let y = Math.abs(b);
+  while (y !== 0) [x, y] = [y, x % y];
+  return x;
+};
+
+/** A clock with m positions: jumps of a fixed size from 0 wrap round, and reach only the multiples of gcd(m, jump). */
+function ModClock(props: Props) {
+  const [m, setM] = useState(clamp(Math.round(num(props.m, 12)), 2, 24));
+  const [jump, setJump] = useState(clamp(Math.round(num(props.step, 5)), 0, 24));
+  const [jumps, setJumps] = useState(clamp(Math.round(num(props.jumps, 3)), 0, 24));
+  const g = commonDivisor(m, jump % m);
+  const orbit = m / g;
+  const at = (k: number) => (k * jump) % m;
+  const where = at(jumps);
+  const reached = Array.from({ length: orbit }, (_, k) => (k * g) % m);
+  const spot = (k: number, r: number): Spot => [220 + r * Math.sin((2 * Math.PI * k) / m), 146 - r * Math.cos((2 * Math.PI * k) / m)];
+  const path = Array.from({ length: jumps }, (_, k) => [at(k), at(k + 1)]);
+  const reach =
+    orbit === m
+      ? `reach all ${m} positions before coming back to 0`
+      : `reach only ${plural(orbit, "position")}, ${reached.join(", ")}, the multiples of ${g}, because ${g} is the largest number dividing both ${m} and ${jump}`;
+  return (
+    <Frame
+      title="Arithmetic on a clock"
+      summary={`A clock with ${m} positions, 0 to ${m - 1}. Start at 0 and jump ${jump} each time. After ${plural(jumps, "jump")} you are at ${jumps} × ${jump} = ${jumps * jump}, which leaves the remainder ${where} on division by ${m}. Jumps of ${jump} ${reach}.`}
+      controls={
+        <>
+          <Stepper label="positions" value={m} onChange={setM} min={2} max={24} />
+          <Stepper label="jump size" value={jump} onChange={setJump} min={0} max={24} />
+          <Stepper label="jumps" value={jumps} onChange={setJumps} min={0} max={24} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`A clock of ${m} positions; ${plural(jumps, "jump")} of ${jump} from 0 end at ${where}`}>
+        <circle cx="220" cy="146" r="104" className="fig-ghost" fill="none" />
+        {path.map(([from, to], k) => {
+          const [x1, y1] = spot(from, 104);
+          const [x2, y2] = spot(to, 104);
+          return <line key={k} x1={x1} y1={y1} x2={x2} y2={y2} className="fig-accent-line" />;
+        })}
+        {Array.from({ length: m }, (_, k) => {
+          const [x, y] = spot(k, 104);
+          const [tx, ty] = spot(k, 126);
+          const visited = reached.includes(k);
+          return (
+            <g key={k}>
+              <circle cx={x} cy={y} r={k === where ? 9 : 6} className={k === where ? "fig-accent" : visited ? "fig-fill" : "fig-ghost"} />
+              <text x={tx} y={ty + 5} textAnchor="middle" className="fig-small">
+                {k}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="22" className="fig-small">
+          {`${jumps} × ${jump} = ${jumps * jump} ≡ ${where} (mod ${m})`}
+        </text>
+        <text x="12" y="282" className="fig-small">
+          {`jumps of ${jump} reach ${orbit} of ${m}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+type Tile = { x: number; y: number; side: number; step: number };
+
+/** Euclid's algorithm as cutting the largest squares off a rectangle: each division cuts squares, and the last squares to be cut tile the whole rectangle. */
+function EuclidSquares(props: Props) {
+  const [a, setA] = useState(clamp(Math.round(num(props.a, 21)), 1, 1200));
+  const [b, setB] = useState(clamp(Math.round(num(props.b, 15)), 1, 1200));
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 1)), 0, 30));
+  const tiles: Tile[] = [];
+  const divisions: { big: number; small: number; q: number; r: number }[] = [];
+  let x = 0;
+  let y = 0;
+  let w = a;
+  let h = b;
+  while (w > 0 && h > 0) {
+    const small = Math.min(w, h);
+    const big = Math.max(w, h);
+    const q = Math.floor(big / small);
+    for (let i = 0; i < q; i++) tiles.push(w >= h ? { x: x + i * small, y, side: small, step: divisions.length } : { x, y: y + i * small, side: small, step: divisions.length });
+    if (w >= h) {
+      x += q * small;
+      w -= q * small;
+    } else {
+      y += q * small;
+      h -= q * small;
+    }
+    divisions.push({ big, small, q, r: big % small });
+  }
+  const shown = Math.min(step, divisions.length);
+  const g = divisions[divisions.length - 1].small;
+  const scale = Math.min(410 / a, 220 / b);
+  const left = (440 - a * scale) / 2;
+  const top = 34 + (220 - b * scale) / 2;
+  const current = shown > 0 ? divisions[shown - 1] : null;
+  const done = shown === divisions.length;
+  const said = current
+    ? `Step ${shown}: ${current.big} = ${current.q} × ${current.small} + ${current.r}, so ${plural(current.q, "square")} of side ${current.small} ${current.q === 1 ? "is" : "are"} cut off${current.r === 0 ? " and nothing is left over" : `, leaving a ${current.r} by ${current.small} rectangle`}.`
+    : "No squares have been cut yet.";
+  const ending = done
+    ? ` The last squares have side ${g}, and squares of side ${g} tile the whole rectangle, so ${g} is the greatest common divisor of ${a} and ${b}.`
+    : " Every common divisor of the two sides also divides the sides of what is left, so the greatest common divisor has not changed.";
+  return (
+    <Frame
+      title="Euclid's algorithm as cutting squares"
+      summary={`A rectangle ${a} wide and ${b} high. ${said}${ending}`}
+      controls={
+        <>
+          <Stepper label="width" value={a} onChange={setA} min={1} max={1200} />
+          <Stepper label="height" value={b} onChange={setB} min={1} max={1200} />
+          <Stepper label="step" value={shown} onChange={setStep} min={0} max={divisions.length} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`A ${a} by ${b} rectangle after ${plural(shown, "step")} of Euclid's algorithm`}>
+        <rect x={left} y={top} width={a * scale} height={b * scale} className="fig-ghost" fill="none" />
+        {tiles
+          .filter((tile) => tile.step < shown)
+          .map((tile, k) => (
+            <g key={k}>
+              <rect x={left + tile.x * scale} y={top + tile.y * scale} width={tile.side * scale} height={tile.side * scale} className={tile.step === shown - 1 ? "fig-accent" : "fig-fill"} stroke="var(--bg)" strokeWidth="1" />
+              {tile.side * scale >= 28 ? (
+                <text x={left + (tile.x + tile.side / 2) * scale} y={top + (tile.y + tile.side / 2) * scale + 5} textAnchor="middle" className="fig-small" style={{ fill: tile.step === shown - 1 ? "var(--bg)" : "var(--text)" }}>
+                  {tile.side}
+                </text>
+              ) : null}
+            </g>
+          ))}
+        <text x="12" y="22" className="fig-small">
+          {current ? `${current.big} = ${current.q} × ${current.small} + ${current.r}` : `${a} by ${b}`}
+        </text>
+        <text x="12" y="282" className="fig-small">
+          {done ? `gcd(${a}, ${b}) = ${g}` : `step ${shown} of ${divisions.length}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const PEG_NAMES = ["left", "middle", "right"];
+
+/** The moves that carry n discs from one peg to another: n - 1 out of the way, the largest across, n - 1 back on top. */
+const towerMoves = (n: number, from: number, to: number, spare: number, out: [number, number, number][]) => {
+  if (n === 0) return;
+  towerMoves(n - 1, from, spare, to, out);
+  out.push([n, from, to]);
+  towerMoves(n - 1, spare, to, from, out);
+};
+
+/** The tower of discs: moving n discs takes twice the moves for n - 1, plus one for the largest disc. */
+function Tower(props: Props) {
+  const [discs, setDiscs] = useState(clamp(Math.round(num(props.discs, 3)), 1, 6));
+  const [move, setMove] = useState(clamp(Math.round(num(props.move, 0)), 0, 63));
+  const moves: [number, number, number][] = [];
+  towerMoves(discs, 0, 2, 1, moves);
+  const total = moves.length;
+  const shown = Math.min(move, total);
+  const pegs: number[][] = [Array.from({ length: discs }, (_, i) => discs - i), [], []];
+  for (const [disc, from, to] of moves.slice(0, shown)) {
+    pegs[from] = pegs[from].slice(0, -1);
+    pegs[to] = [...pegs[to], disc];
+  }
+  const last = shown > 0 ? moves[shown - 1] : null;
+  const middle = 2 ** (discs - 1);
+  const said = last ? `Move ${shown}: disc ${last[0]} goes from the ${PEG_NAMES[last[1]]} needle to the ${PEG_NAMES[last[2]]} needle.` : "No moves yet: every disc is on the left needle, largest at the bottom.";
+  const largest =
+    discs === 1
+      ? ""
+      : ` The largest disc moves once, at move ${middle}, and just before that the other ${discs - 1} discs sit on the middle needle, which took ${middle - 1} moves; moving them back on top takes ${middle - 1} more.`;
+  return (
+    <Frame
+      title="Moving a tower of discs"
+      summary={`${plural(discs, "disc")}, moved one at a time and never onto a smaller disc. The fewest moves is 2 to the power ${discs}, minus 1, which is ${total}. ${said}${shown === total ? " The whole tower is now on the right needle." : ""}${largest}`}
+      controls={
+        <>
+          <Stepper label="discs" value={discs} onChange={setDiscs} min={1} max={6} />
+          <Stepper label="move" value={shown} onChange={setMove} min={0} max={total} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 270" role="img" aria-label={`${plural(discs, "disc")} on three needles after ${shown} of ${total} moves`}>
+        <line x1="10" y1="236" x2="430" y2="236" className="fig-axis" />
+        {[0, 1, 2].map((peg) => {
+          const x = 76 + peg * 144;
+          return (
+            <g key={peg}>
+              <line x1={x} y1="236" x2={x} y2="96" className="fig-axis" />
+              {pegs[peg].map((disc, level) => {
+                const width = 26 + disc * 19;
+                const moved = last !== null && last[0] === disc;
+                return (
+                  <g key={disc}>
+                    <rect x={x - width / 2} y={216 - level * 20} width={width} height="18" rx="4" className={moved ? "fig-accent" : "fig-fill"} />
+                    <text x={x} y={229 - level * 20} textAnchor="middle" className="fig-small" style={{ fill: moved ? "var(--bg)" : "var(--text)" }}>
+                      {disc}
+                    </text>
+                  </g>
+                );
+              })}
+              <text x={x} y="258" textAnchor="middle" className="fig-small">
+                {PEG_NAMES[peg]}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="24" className="fig-small">
+          {`move ${shown} of ${total}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const BOUND_PAIRS: Record<string, { f: (n: number) => number; g: (n: number) => number; fName: string; gName: string; verdict: string }> = {
+  linear: {
+    f: (n) => 3 * n + 20,
+    g: (n) => n,
+    fName: "3n + 20",
+    gName: "n",
+    verdict: "In fact 3n + 20 ≤ 4n for every n from 20 on, so c = 4 and n₀ = 20 prove that 3n + 20 is O(n).",
+  },
+  log: {
+    f: (n) => 8 * Math.log2(n),
+    g: (n) => n,
+    fName: "8 log₂ n",
+    gName: "n",
+    verdict: "In fact 8 log₂ n ≤ n for every n from 44 on, so c = 1 and n₀ = 44 prove that 8 log₂ n is O(n).",
+  },
+  square: {
+    f: (n) => (n * n) / 10,
+    g: (n) => n,
+    fName: "n²/10",
+    gName: "n",
+    verdict: "No c works for ever: n²/10 ≤ c·n only while n ≤ 10c, so n²/10 is not O(n).",
+  },
+  exponential: {
+    f: (n) => 2 ** n,
+    g: (n) => n ** 3,
+    fName: "2ⁿ",
+    gName: "n³",
+    verdict: "No c works for ever: 2ⁿ eventually outgrows every multiple of n³, so 2ⁿ is not O(n³).",
+  },
+};
+const BOUND_ORDER = ["linear", "log", "square", "exponential"];
+
+/** Testing a proposed big-O bound: f(n) ≤ c·g(n) for every n from n₀ on, with the places it fails marked. */
+function BoundWitness(props: Props) {
+  const [which, setWhich] = useState(typeof props.pair === "string" && props.pair in BOUND_PAIRS ? props.pair : "linear");
+  const [c, setC] = useState(clamp(Math.round(num(props.c, 1)), 1, 20));
+  const [start, setStart] = useState(clamp(Math.round(num(props.start, 1)), 1, 100));
+  const { f, g, fName, gName, verdict } = BOUND_PAIRS[which];
+  const ns = Array.from({ length: 100 }, (_, i) => i + 1);
+  const bad = ns.filter((n) => n >= start && f(n) > c * g(n));
+  const fTop = Math.max(...ns.map(f));
+  const top = 1.15 * Math.max(c * g(100), Math.min(fTop, 2 * c * g(100)));
+  const gx = (n: number) => 40 + ((n - 1) / 99) * 384;
+  const gy = (v: number) => 250 - (Math.min(v, top) / top) * 224;
+  const line = (h: (n: number) => number) => ns.map((n) => `${gx(n).toFixed(1)},${gy(h(n)).toFixed(1)}`).join(" ");
+  const next = BOUND_ORDER[(BOUND_ORDER.indexOf(which) + 1) % BOUND_ORDER.length];
+  return (
+    <Frame
+      title="Testing a big-O bound"
+      summary={`f(n) = ${fName} against ${c} × g(n), where g(n) = ${gName}, for n from ${start} to 100. ${
+        bad.length === 0 ? `The bound f(n) ≤ ${c} × ${gName} holds at every one of these n` : `The bound f(n) ≤ ${c} × ${gName} fails at ${plural(bad.length, "of these n", "of these n")}, first at n = ${bad[0]}`
+      }. ${verdict}`}
+      controls={
+        <>
+          <Stepper label="c" value={c} onChange={setC} min={1} max={20} />
+          <Slider label="from n" value={start} onChange={setStart} min={1} max={100} />
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => {
+              setWhich(next);
+              setC(1);
+              setStart(1);
+            }}
+          >
+            {`Try ${BOUND_PAIRS[next].fName} against ${BOUND_PAIRS[next].gName}`}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 280" role="img" aria-label={`${fName} and ${c} times ${gName} for n from 1 to 100, with the bound failing at ${plural(bad.length, "point")} from n = ${start}`}>
+        <rect x="40" y="26" width={Math.max(0, gx(start) - 40)} height="224" className="fig-ghost" opacity="0.35" />
+        <line x1="40" y1="250" x2="428" y2="250" className="fig-axis" />
+        <line x1="40" y1="250" x2="40" y2="22" className="fig-axis" />
+        <line x1={gx(start)} y1="250" x2={gx(start)} y2="26" className="fig-guide" />
+        <polyline points={line((n) => c * g(n))} className="fig-line" fill="none" />
+        <polyline points={line(f)} className="fig-accent-line" fill="none" />
+        {bad.map((n) => (
+          <circle key={n} cx={gx(n)} cy={gy(f(n))} r="2.5" className="fig-accent" />
+        ))}
+        <text x="46" y="18" className="fig-small">
+          {`f(n) = ${fName}, thick; ${c} × ${gName}, thin`}
+        </text>
+        <text x={Math.min(gx(start) + 4, 372)} y="40" className="fig-small">
+          {`n₀ = ${start}`}
+        </text>
+        <text x="428" y="272" textAnchor="end" className="fig-small">
+          n = 100
+        </text>
+        <text x="40" y="272" className="fig-small">
+          n = 1
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const pentagon = (k: number): Spot => [220 + 100 * Math.sin((2 * Math.PI * k) / 5), 142 - 100 * Math.cos((2 * Math.PI * k) / 5)];
+const STROKE_SHAPES: Record<string, { name: string; spots: Record<string, Spot>; edges: string[]; trail: string[] }> = {
+  house: {
+    name: "A house with crossed walls",
+    spots: { A: [150, 232], B: [290, 232], C: [290, 126], D: [150, 126], E: [220, 44] },
+    edges: ["AB", "BC", "CD", "DA", "AC", "BD", "DE", "CE"],
+    trail: ["A", "B", "C", "D", "A", "C", "E", "D", "B"],
+  },
+  square: {
+    name: "A square with both diagonals",
+    spots: { A: [150, 226], B: [290, 226], C: [290, 86], D: [150, 86] },
+    edges: ["AB", "BC", "CD", "DA", "AC", "BD"],
+    trail: [],
+  },
+  star: {
+    name: "A star inside a pentagon",
+    spots: { A: pentagon(0), B: pentagon(1), C: pentagon(2), D: pentagon(3), E: pentagon(4) },
+    edges: ["AB", "BC", "CD", "DE", "EA", "AC", "CE", "EB", "BD", "DA"],
+    trail: ["A", "B", "C", "D", "E", "A", "C", "E", "B", "D", "A"],
+  },
+};
+const STROKE_ORDER = ["house", "square", "star"];
+
+/** Drawing a figure in one stroke: possible exactly when no more than two points have an odd number of lines. */
+function OneStroke(props: Props) {
+  const [which, setWhich] = useState(typeof props.shape === "string" && props.shape in STROKE_SHAPES ? props.shape : "house");
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, 10));
+  const { name, spots, edges, trail } = STROKE_SHAPES[which];
+  const names = Object.keys(spots);
+  const degree = (v: string) => edges.filter((e) => e.includes(v)).length;
+  const odd = names.filter((v) => degree(v) % 2 === 1);
+  const shown = trail.length === 0 ? 0 : Math.min(step, trail.length - 1);
+  const when = (edge: string) => {
+    for (let i = 0; i < shown; i++) if ((trail[i] + trail[i + 1] === edge) || (trail[i + 1] + trail[i] === edge)) return i + 1;
+    return undefined;
+  };
+  const verdict =
+    odd.length === 0
+      ? "Every degree is even, so the figure can be drawn in one stroke that ends where it began."
+      : odd.length === 2
+        ? `Exactly two degrees are odd, so the figure can be drawn in one stroke, starting at ${odd[0]} and ending at ${odd[1]}, or the other way round.`
+        : `${odd.length} degrees are odd, so no single stroke can draw it: every pass through a point uses two of its lines, so only the first and last points can have an odd number.`;
+  const progress =
+    trail.length === 0
+      ? ""
+      : shown === 0
+        ? ` Step through to draw it, starting at ${trail[0]}.`
+        : ` The stroke so far is ${trail.slice(0, shown + 1).join(", ")}: ${shown} of ${edges.length} lines.${shown === edges.length ? " Every line has been drawn exactly once." : ""}`;
+  const next = STROKE_ORDER[(STROKE_ORDER.indexOf(which) + 1) % STROKE_ORDER.length];
+  return (
+    <Frame
+      title="Drawing a figure in one stroke"
+      summary={`${name}: ${plural(names.length, "point")} and ${plural(edges.length, "line")}. The degrees, the number of lines at each point, are ${names.map((v) => `${v} ${degree(v)}`).join(", ")}. ${verdict}${progress}`}
+      controls={
+        <>
+          {trail.length > 0 ? <Stepper label="step" value={shown} onChange={setStep} min={0} max={trail.length - 1} /> : null}
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => {
+              setWhich(next);
+              setStep(0);
+            }}
+          >
+            {`Try ${STROKE_SHAPES[next].name.toLowerCase()}`}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 270" role="img" aria-label={`${name}, with ${plural(odd.length, "point")} of odd degree${trail.length > 0 ? ` and ${shown} lines drawn` : ""}`}>
+        {edges.map((edge) => {
+          const t = when(edge);
+          return <Link key={edge} from={spots[edge[0]]} to={spots[edge[1]]} hot={t !== undefined} label={t} />;
+        })}
+        {names.map((v) => (
+          <Dot key={v} at={spots[v]} name={v} mark={trail.length > 0 && v === trail[shown] ? "now" : odd.includes(v) ? "done" : "wait"} note={`deg ${degree(v)}`} above={spots[v][1] < 140} />
+        ))}
+        <text x="12" y="22" className="fig-small">
+          {`odd degree: ${odd.length === 0 ? "none" : odd.join(", ")}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const LEAF_TREES: Record<string, { name: string; spots: Record<number, Spot>; edges: [number, number][] }> = {
+  branching: {
+    name: "A branching tree",
+    spots: { 1: [56, 56], 2: [56, 138], 3: [56, 220], 4: [150, 138], 5: [240, 138], 6: [322, 138], 7: [394, 70], 8: [394, 206] },
+    edges: [[1, 4], [2, 4], [3, 4], [4, 5], [5, 6], [6, 7], [6, 8]],
+  },
+  path: {
+    name: "A path",
+    spots: { 3: [36, 100], 1: [88, 180], 7: [140, 100], 5: [192, 180], 2: [244, 100], 8: [296, 180], 4: [348, 100], 6: [400, 180] },
+    edges: [[3, 1], [1, 7], [7, 5], [5, 2], [2, 8], [8, 4], [4, 6]],
+  },
+  star: {
+    name: "A star",
+    spots: { 8: [220, 138], 1: [220, 40], 2: [296, 76], 3: [318, 160], 4: [270, 228], 5: [170, 228], 6: [122, 160], 7: [144, 76] },
+    edges: [[8, 1], [8, 2], [8, 3], [8, 4], [8, 5], [8, 6], [8, 7]],
+  },
+};
+const LEAF_ORDER = ["branching", "path", "star"];
+
+/** Stripping leaves from a tree: each removal leaves a smaller tree, and writing down each removed leaf's neighbour gives the tree's code. */
+function LeafStrip(props: Props) {
+  const [which, setWhich] = useState(typeof props.tree === "string" && props.tree in LEAF_TREES ? props.tree : "branching");
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, 6));
+  const { name, spots, edges } = LEAF_TREES[which];
+  const n = Object.keys(spots).length;
+  const removed: number[] = [];
+  const code: number[] = [];
+  const alive = (e: [number, number]) => !removed.includes(e[0]) && !removed.includes(e[1]);
+  const leafNext = () => {
+    const live = edges.filter(alive);
+    const degree = (v: number) => live.filter((e) => e[0] === v || e[1] === v).length;
+    const leaf = Math.min(...Object.keys(spots).map(Number).filter((v) => !removed.includes(v) && degree(v) === 1));
+    const edge = live.find((e) => e[0] === leaf || e[1] === leaf) as [number, number];
+    return [leaf, edge[0] === leaf ? edge[1] : edge[0]];
+  };
+  for (let k = 0; k < Math.min(step, n - 2); k++) {
+    const [leaf, neighbour] = leafNext();
+    removed.push(leaf);
+    code.push(neighbour);
+  }
+  const shown = removed.length;
+  const done = shown === n - 2;
+  const [nextLeaf, nextNeighbour] = done ? [0, 0] : leafNext();
+  const left = n - shown;
+  const next = LEAF_ORDER[(LEAF_ORDER.indexOf(which) + 1) % LEAF_ORDER.length];
+  return (
+    <Frame
+      title="Removing leaves from a tree"
+      summary={`${name} on ${n} numbered vertices, with ${n - 1} edges. ${
+        shown === 0 ? "No leaves removed yet." : `Removed ${plural(shown, "leaf", "leaves")} so far, ${removed.join(", ")}, writing down the neighbour of each: the code so far is (${code.join(", ")}).`
+      } What is left is still a tree, with ${plural(left, "vertex", "vertices")} and ${plural(left - 1, "edge")}. ${
+        done
+          ? `Two vertices remain, joined by one edge, so the code is complete: ${n - 2} numbers, each from 1 to ${n}, from which the whole tree can be rebuilt.`
+          : `The smallest leaf now is ${nextLeaf}, attached to ${nextNeighbour}.`
+      }`}
+      controls={
+        <>
+          <Stepper label="leaves removed" value={shown} onChange={setStep} min={0} max={n - 2} />
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => {
+              setWhich(next);
+              setStep(0);
+            }}
+          >
+            {`Try ${LEAF_TREES[next].name.toLowerCase()}`}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 270" role="img" aria-label={`${name} with ${shown} leaves removed and code (${code.join(", ")})`}>
+        {edges.map((e) => (
+          <Link key={`${e[0]}-${e[1]}`} from={spots[e[0]]} to={spots[e[1]]} faint={!alive(e)} hot={!done && alive(e) && (e[0] === nextLeaf || e[1] === nextLeaf)} />
+        ))}
+        {Object.keys(spots)
+          .map(Number)
+          .map((v) => (removed.includes(v) ? null : <Dot key={v} at={spots[v]} name={v} mark={v === nextLeaf ? "now" : "done"} />))}
+        <text x="12" y="262" className="fig-small">
+          {`code: (${code.join(", ")})`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -4331,6 +5094,16 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   trie: Trie,
   "graph-storage": GraphStorage,
   "union-find": UnionFind,
+  "choice-tree": ChoiceTree,
+  "pascal-triangle": PascalTriangle,
+  pigeonholes: Pigeonholes,
+  "inclusion-exclusion": InclusionExclusion,
+  "mod-clock": ModClock,
+  "euclid-squares": EuclidSquares,
+  tower: Tower,
+  "bound-witness": BoundWitness,
+  "one-stroke": OneStroke,
+  "leaf-strip": LeafStrip,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

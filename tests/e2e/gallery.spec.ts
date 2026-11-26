@@ -184,3 +184,108 @@ test("the union-find figure keeps trees short by joining the smaller under the l
   await expect(figure).toContainText("No joins yet, so each of the 8 items is a set on its own.");
   await expect(figure).toContainText("find(0) follows 0 links from 0, and reaches the root 0.");
 });
+
+test("the choice-tree figure multiplies the branches and names each meal", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="choice-tree"]').first().getByRole("figure");
+  await expect(figure).toContainText("has 3 × 2 × 2 = 12 leaves, one for each meal. Meal 1 is Rajma, Lassi, Halwa.");
+  for (let i = 0; i < 5; i++) await figure.getByRole("button", { name: "Increase meal" }).click();
+  await expect(figure).toContainText("Meal 6 is Kadhi, Lassi, Jalebi.");
+  await figure.getByRole("button", { name: "Increase sweets" }).click();
+  await expect(figure).toContainText("has 3 × 2 × 3 = 18 leaves, one for each meal. Meal 6 is Rajma, Chaas, Barfi.");
+});
+
+test("the Pascal's triangle figure builds each entry from the two above it", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="pascal-triangle"]').first().getByRole("figure");
+  await expect(figure).toContainText("Row 5 lists the number of ways to choose k items from 5, for k from 0 to 5: 1, 5, 10, 10, 5, 1. The picked entry is C(5, 2) = 10. It is the sum of the two entries above it, 4 + 6");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase k" }).click();
+  await expect(figure).toContainText("It is at the edge of the row, where there is only one way: choose all of the 5.");
+  await figure.getByRole("button", { name: "Increase row n" }).click();
+  await expect(figure).toContainText("The picked entry is C(6, 5) = 6. It is the sum of the two entries above it, 5 + 1");
+  await expect(figure).toContainText("The row adds up to 64 = 2^6");
+});
+
+test("the pigeonholes figure guarantees a shared box however the items fall", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="pigeonholes"]').first().getByRole("figure");
+  await expect(figure).toContainText("13 items in 12 boxes, spread as evenly as possible.");
+  await expect(figure).toContainText("some box holds at least 13 ÷ 12 rounded up, which is 2, so at least two items always share a box.");
+  await figure.getByRole("button", { name: "Decrease items" }).click();
+  await expect(figure).toContainText("which is 1, so it is possible for no two items to share a box.");
+  await figure.getByRole("button", { name: "Drop them at random" }).click();
+  await expect(figure).toContainText("12 items in 12 boxes, dropped at random.");
+});
+
+test("the inclusion-exclusion figure corrects the count one step at a time", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="inclusion-exclusion"]').first().getByRole("figure");
+  await expect(figure).toContainText("Adding the sizes of the three sets, 15 + 10 + 6, gives 31.");
+  await expect(figure).toContainText("so 31 is too many; the true count is 22.");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Every region is now counted exactly once, so 22 is right: 22 of the numbers are multiples of 2, 3 or 5.");
+});
+
+test("the clock figure wraps jumps round and reaches only the multiples of the common divisor", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="mod-clock"]').first().getByRole("figure");
+  await expect(figure).toContainText("After 3 jumps you are at 3 × 5 = 15, which leaves the remainder 3 on division by 12. Jumps of 5 reach all 12 positions before coming back to 0.");
+  await figure.getByRole("button", { name: "Decrease jump size" }).click();
+  await expect(figure).toContainText("After 3 jumps you are at 3 × 4 = 12, which leaves the remainder 0 on division by 12. Jumps of 4 reach only 3 positions, 0, 4, 8, the multiples of 4, because 4 is the largest number dividing both 12 and 4.");
+});
+
+test("the square-cutting figure runs Euclid's algorithm to the greatest common divisor", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="euclid-squares"]').first().getByRole("figure");
+  await expect(figure).toContainText("Step 1: 1071 = 2 × 462 + 147, so 2 squares of side 462 are cut off, leaving a 147 by 462 rectangle.");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Step 3: 147 = 7 × 21 + 0, so 7 squares of side 21 are cut off and nothing is left over. The last squares have side 21, and squares of side 21 tile the whole rectangle, so 21 is the greatest common divisor of 1071 and 462.");
+  await figure.getByRole("button", { name: "Increase width" }).click();
+  await expect(figure).toContainText("Step 3: 148 = 8 × 18 + 4, so 8 squares of side 18 are cut off, leaving a 4 by 18 rectangle.");
+});
+
+test("the tower figure moves the largest disc once, between two smaller towers", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="tower"]').first().getByRole("figure");
+  await expect(figure).toContainText("The fewest moves is 2 to the power 3, minus 1, which is 7. No moves yet: every disc is on the left needle, largest at the bottom.");
+  await expect(figure).toContainText("The largest disc moves once, at move 4, and just before that the other 2 discs sit on the middle needle, which took 3 moves");
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase move" }).click();
+  await expect(figure).toContainText("Move 4: disc 3 goes from the left needle to the right needle.");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase move" }).click();
+  await expect(figure).toContainText("Move 7: disc 1 goes from the left needle to the right needle. The whole tower is now on the right needle.");
+});
+
+test("the bound figure tests a witness for big-O and moves the starting point", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="bound-witness"]').first().getByRole("figure");
+  await expect(figure).toContainText("The bound f(n) ≤ 1 × n fails at 100 of these n, first at n = 1.");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase c" }).click();
+  await expect(figure).toContainText("The bound f(n) ≤ 4 × n fails at 19 of these n, first at n = 1.");
+  await figure.getByRole("slider", { name: "from n" }).fill("20");
+  await expect(figure).toContainText("for n from 20 to 100. The bound f(n) ≤ 4 × n holds at every one of these n.");
+  await figure.getByRole("button", { name: "Try 8 log₂ n against n" }).click();
+  await expect(figure).toContainText("The bound f(n) ≤ 1 × n fails at 42 of these n, first at n = 2.");
+});
+
+test("the one-stroke figure reads the answer off the odd degrees and draws the stroke", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="one-stroke"]').first().getByRole("figure");
+  await expect(figure).toContainText("The degrees, the number of lines at each point, are A 3, B 3, C 4, D 4, E 2. Exactly two degrees are odd, so the figure can be drawn in one stroke, starting at A and ending at B");
+  for (let i = 0; i < 8; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("The stroke so far is A, B, C, D, A, C, E, D, B: 8 of 8 lines. Every line has been drawn exactly once.");
+  await figure.getByRole("button", { name: "Try a square with both diagonals" }).click();
+  await expect(figure).toContainText("4 degrees are odd, so no single stroke can draw it");
+  await figure.getByRole("button", { name: "Try a star inside a pentagon" }).click();
+  await expect(figure).toContainText("Every degree is even, so the figure can be drawn in one stroke that ends where it began.");
+});
+
+test("the leaf-stripping figure keeps a tree and writes its code", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="leaf-strip"]').first().getByRole("figure");
+  await expect(figure).toContainText("A branching tree on 8 numbered vertices, with 7 edges. No leaves removed yet. What is left is still a tree, with 8 vertices and 7 edges. The smallest leaf now is 1, attached to 4.");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase leaves removed" }).click();
+  await expect(figure).toContainText("the code so far is (4, 4, 4). What is left is still a tree, with 5 vertices and 4 edges. The smallest leaf now is 4, attached to 5.");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase leaves removed" }).click();
+  await expect(figure).toContainText("Removed 6 leaves so far, 1, 2, 3, 4, 5, 7, writing down the neighbour of each: the code so far is (4, 4, 4, 5, 6, 6).");
+  await expect(figure).toContainText("Two vertices remain, joined by one edge, so the code is complete: 6 numbers, each from 1 to 8");
+});
