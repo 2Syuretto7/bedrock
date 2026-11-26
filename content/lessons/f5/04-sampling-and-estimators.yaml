@@ -1,0 +1,474 @@
+concept: f5.sampling-and-estimators
+minutes: 90
+claim: You can tell a population from a sample and a parameter from an estimate, describe an estimator by its bias and its standard error, show why the sample mean has standard error σ/√n and why the sample variance divides by n − 1, explain why tail percentiles need large samples, recognise samples biased by how they were taken, including the inspection paradox, and simulate the sampling distribution of an estimate in Python.
+recalls: [f5.histograms]
+uses: [f5.summaries-mean-median-and-percentiles, f5.distributions-of-latency-and-heavy-tails, f4.the-law-of-large-numbers-and-the-central-limit-theorem, f4.expectation-and-linearity, f4.variance, f4.independence, f4.random-variables, f4.simulation-and-pseudo-random-numbers, s1.modules-and-imports, s1.comprehensions-and-iterators, s0.functions, s0.loops, s0.lists-and-tuples]
+leads: [f5.confidence-intervals, f5.hypothesis-tests, f5.the-bootstrap, f5.comparing-two-systems-a-b-tests, f5.noise-in-measurements-and-benchmarks]
+starter: |
+  # Scratch space. Draw samples of 5 from a small population and compare their means.
+  import random
+
+  population = [10, 20, 30, 40, 50, 60, 70, 80, 90, 1000]
+  random.seed(0)
+  for _ in range(3):
+      sample = [random.choice(population) for _ in range(5)]
+      print(sample, sum(sample) / 5)
+parts:
+  recall:
+    - text: |
+        [[f5.histograms]] described the measurements in hand. Usually those are not what anyone cares about. A load test runs a few thousand requests to learn how the service treats millions; a survey asks a thousand households to learn about a city. The question changes from "what are these numbers?" to "what do these numbers say about the ones we did not measure?". Three quick pulls first.
+  puzzle:
+    - text: |
+        A worker process handles jobs one after another, with no idle time between them. Half of its jobs take 10 ms and half take 90 ms, in no particular order, so the average job takes 50 ms.
+
+        An engineer attaches a profiler that wakes up at random moments, looks at whichever job is running at that moment, and records that job's full duration. After a long run, the profiler has recorded many thousands of durations. **What is the average of the durations the profiler records?**
+  intuition:
+    - text: |
+        A cook tastes one spoonful to judge a whole pot of dal. That works because the pot was stirred: every spoonful is like every other, so one stands for all. Skip the stirring and taste from the top, and the spoonful says more about where the spoon went than about the dal.
+
+        Statistics names the parts. The whole pot is the **population**: every request the service will ever answer, or every household in the city. A number describing it, such as its mean response time, is a **parameter**, fixed but unknown. The spoonful is the **sample**, the measurements actually taken, and a rule that turns a sample into a guess for the parameter, such as "average the sample", is an **estimator**. Its output is an **estimate**.
+
+        An estimate is random: a different sample would have given a different number. So an estimator is judged not by one estimate but by the spread of all the estimates it could have produced, its **sampling distribution**. Two questions matter. Does it centre on the truth, or is it off on average, which is **bias**? And how widely does it scatter, which is its **standard error**?
+
+        The figure takes a population of 2,000 response times, draws 500 samples from it, and estimates from each. Start with the mean from samples of 10 and grow the sample. Then switch estimators, and look closely at the two ways of estimating the variance at the smallest size.
+    - figure: estimator-spread
+      props: { estimator: mean, n: 10 }
+    - text: |
+        The sample means centre on the true mean, about 26 ms, at every size, and their spread shrinks: about 7 ms for samples of 10, about 2 ms for 100. Ten times the data bought about a third of the spread, not a tenth. The variance dividing by $n$ centres about a fifth too low for samples of 5, while dividing by $n - 1$ centres on the truth. The 90th percentile from small samples is too low on average and very scattered. Two different things went wrong there, and they have different cures.
+  derivation:
+    - text: |
+        **The sample mean.** Let $X_1, \ldots, X_n$ be drawn independently from a population with mean $\mu$ and variance $\sigma^2$, and let $\bar{X} = \frac{1}{n}\sum X_i$. By [[f4.expectation-and-linearity]],
+
+        $$E[\bar{X}] = \frac{1}{n}\sum E[X_i] = \mu,$$
+
+        so the sample mean is **unbiased**. By [[f4.independence]] the variances of independent draws add, and scaling by $1/n$ scales variance by $1/n^2$, as in [[f4.variance]]:
+
+        $$\operatorname{Var}(\bar{X}) = \frac{1}{n^2} \cdot n\sigma^2 = \frac{\sigma^2}{n}, \qquad \operatorname{SE}(\bar{X}) = \frac{\sigma}{\sqrt{n}}.$$
+
+        The standard error falls like $1/\sqrt{n}$: halving it takes four times the data. And by [[f4.the-law-of-large-numbers-and-the-central-limit-theorem]], for large $n$ the sampling distribution of $\bar{X}$ is close to normal, a fact the next lesson builds on, though [[f5.distributions-of-latency-and-heavy-tails]] showed that a heavy tail can make "large" very large indeed.
+    - question:
+        id: derivation-se
+        type: numeric
+        system: s2
+        prompt: |
+          Response times have standard deviation 40 ms. What is the standard error of the mean of 400 of them, in milliseconds?
+        answer: "2"
+        explanation: |
+          $\sigma/\sqrt{n} = 40/\sqrt{400} = 40/20 = 2$ ms.
+    - text: |
+        **Bias and error.** An estimator $\hat{\theta}$ of a parameter $\theta$ has bias $E[\hat{\theta}] - \theta$ and standard error $\sqrt{\operatorname{Var}(\hat{\theta})}$. The two combine in the **mean squared error**,
+
+        $$E[(\hat{\theta} - \theta)^2] = \operatorname{bias}^2 + \operatorname{Var}(\hat{\theta}),$$
+
+        which follows by writing $\hat{\theta} - \theta = (\hat{\theta} - E[\hat{\theta}]) + (E[\hat{\theta}] - \theta)$ and expanding the square; the cross term has expectation zero. More data shrinks the variance. It does not, in general, fix the bias, and it never fixes a sample drawn the wrong way. An estimator whose error goes to zero as $n$ grows is called **consistent**.
+
+        **The sample variance.** The obvious estimate of $\sigma^2$ is $\frac{1}{n}\sum (X_i - \bar{X})^2$. It is too small on average, because the deviations are measured from $\bar{X}$, which sits in the middle of this particular sample, rather than from $\mu$. Exactly,
+
+        $$\sum (X_i - \bar{X})^2 = \sum (X_i - \mu)^2 - n(\bar{X} - \mu)^2,$$
+
+        and taking expectations gives $n\sigma^2 - n \cdot \frac{\sigma^2}{n} = (n - 1)\sigma^2$. So dividing by $n - 1$ instead of $n$ gives an unbiased estimate,
+
+        $$S^2 = \frac{1}{n - 1}\sum (X_i - \bar{X})^2,$$
+
+        called the **sample variance**. The fix is **Bessel's correction**. It matters for small samples and hardly at all for large ones, where $n$ and $n - 1$ are nearly equal.
+    - question:
+        id: derivation-variance
+        type: numeric
+        system: s2
+        prompt: |
+          A sample is 1, 3 and 5. What is its sample variance, dividing by $n - 1$?
+        answer: "4"
+        explanation: |
+          The mean is 3, the squared deviations are 4, 0 and 4, adding to 8, and $8/(3 - 1) = 4$. Dividing by $n$ would give $8/3 \approx 2.67$.
+    - text: |
+        **Proportions.** The fraction of failed requests is a mean too: score each request 1 if it failed and 0 if not. So the sample proportion $\hat{p}$ is unbiased, with standard error $\sqrt{p(1 - p)/n}$, the variance of a 0 or 1 draw being $p(1 - p)$.
+
+        **Percentiles.** A sample percentile is not a mean, and its error depends on how crowded the population is near it. For the $q$-quantile, with $q = p/100$, a standard approximation is
+
+        $$\operatorname{SE}(\hat{t}_q) \approx \frac{\sqrt{q(1 - q)/n}}{f(t_q)},$$
+
+        where $f(t_q)$ is the density there. The numerator is the standard error of the *fraction* of values below $t_q$; dividing by the density turns a wobble in that fraction into a wobble in time. In the tail the density is tiny, so the error is large. There is a plainer way to see it: with $n = 1{,}000$ requests, only 10 lie above the sample p99, and the p99 estimate is decided by those few. To see p99.9 at all takes well over a thousand requests; to pin it down, tens of thousands. Small samples also bias tail percentiles low, as the figure showed, because the rare large values are usually missing from a small sample.
+    - question:
+        id: derivation-quadruple
+        type: numeric
+        system: s2
+        prompt: |
+          A load test of 500 requests gives a mean with standard error 4 ms. How many times as many requests are needed to bring the standard error down to 1 ms?
+        answer: "16"
+        explanation: |
+          The standard error is proportional to $1/\sqrt{n}$. Cutting it by a factor of 4 needs $\sqrt{n}$ four times as large, so $n$ sixteen times as large: 8,000 requests.
+    - text: |
+        **How the sample was taken.** The formulas above assume each measurement is an independent draw from the population of interest, every member equally likely. Real samples often are not, and the error that results does not shrink with more data. Three traps are common in systems work.
+
+        The first is **survivorship**: a dashboard that computes latency only over successful requests leaves out the ones that timed out, which are exactly the slowest, so it reports a tail lighter than users feel. The second is sampling by **time instead of by request**. A long job is running for more of the time, so a random moment is more likely to land in it. If durations are $T$, a random moment finds a job of duration $t$ with chance proportional to $t$ times how common such jobs are, and the average duration found is
+
+        $$\frac{E[T^2]}{E[T]} = E[T] + \frac{\operatorname{Var}(T)}{E[T]},$$
+
+        always at least the true mean, and much more when durations vary a lot. This is the **inspection paradox**: the bus you wait for is more likely to be in a long gap, and the class a student is in is more likely to be a large one. The third is **convenience**: timing the first hundred requests of each minute, or only from the office network, or only from clients patient enough to send their timings back.
+
+        **Sampling on purpose.** A busy service often keeps detailed records for a random 1% of requests. If each request is kept independently with chance $1\%$, the kept ones are a fair sample, and a count among them, multiplied by 100, is an unbiased estimate of the full count. Deciding *by request*, with a coin flip that ignores the request's speed, is what keeps it fair.
+    - question:
+        id: order-simulate
+        type: order
+        system: s2
+        prompt: |
+          Put the steps for seeing an estimator's sampling distribution by simulation in order.
+        steps:
+          - "Draw a random sample of $n$ values from the population."
+          - "Compute the estimate from that sample."
+          - "Repeat the first two steps many times, keeping every estimate."
+          - "Compare the estimates' average with the true value, and measure their spread."
+        explanation: |
+          Each repetition gives one estimate; only the collection of many estimates shows the bias, through its average, and the standard error, through its spread. This is what the figure did, with 500 repetitions, and what [[f4.simulation-and-pseudo-random-numbers]] makes cheap.
+  formal:
+    - text: |
+        **Setting.** A population with parameter $\theta$; a sample $X_1, \ldots, X_n$; an estimator $\hat{\theta} = g(X_1, \ldots, X_n)$.
+
+        **Bias, standard error, mean squared error.** $\operatorname{bias} = E[\hat{\theta}] - \theta$; $\operatorname{SE} = \sqrt{\operatorname{Var}(\hat{\theta})}$; $E[(\hat{\theta} - \theta)^2] = \operatorname{bias}^2 + \operatorname{SE}^2$. Unbiased: bias $= 0$. Consistent: $\hat{\theta} \to \theta$ as $n \to \infty$.
+
+        **Sample mean.** For independent draws with mean $\mu$ and variance $\sigma^2$: $E[\bar{X}] = \mu$, $\operatorname{SE}(\bar{X}) = \sigma/\sqrt{n}$.
+
+        **Sample variance.** $S^2 = \frac{1}{n - 1}\sum (X_i - \bar{X})^2$ has $E[S^2] = \sigma^2$; dividing by $n$ instead has expectation $\frac{n - 1}{n}\sigma^2$.
+
+        **Proportion.** $\operatorname{SE}(\hat{p}) = \sqrt{p(1 - p)/n}$.
+
+        **Quantile.** $\operatorname{SE}(\hat{t}_q) \approx \sqrt{q(1 - q)/n}\,/\,f(t_q)$ for large $n$.
+
+        **Inspection.** Sampling by time finds durations with average $E[T^2]/E[T] = E[T] + \operatorname{Var}(T)/E[T]$.
+  drill:
+    - text: Seconds each. Square roots for standard errors; $n - 1$ for variances.
+    - question:
+        id: drill-se
+        type: numeric
+        system: s1
+        prompt: |
+          $\sigma = 10$ ms and $n = 100$. What is the standard error of the sample mean, in milliseconds?
+        answer: "1"
+        explanation: $10/\sqrt{100} = 10/10 = 1$.
+    - question:
+        id: drill-divisor
+        type: numeric
+        system: s1
+        prompt: |
+          The unbiased sample variance of 5 values divides the sum of squared deviations by what?
+        answer: "4"
+        explanation: By $n - 1 = 4$.
+    - question:
+        id: drill-proportion
+        type: numeric
+        system: s1
+        prompt: |
+          30 of 1,000 sampled requests failed. What is the estimated failure rate, as a decimal?
+        answer: "0.03"
+        explanation: $30/1000 = 0.03$.
+    - question:
+        id: drill-scale
+        type: numeric
+        system: s1
+        prompt: |
+          Each request is kept with chance 1%, independently. The kept requests include 250 errors. What is the estimated total number of errors?
+        answer: "25000"
+        explanation: Each kept error stands for 100, so $250 \times 100 = 25{,}000$.
+    - question:
+        id: drill-tail-count
+        type: numeric
+        system: s1
+        prompt: |
+          A sample has 1,000 response times. By the nearest-rank rule, how many of them lie above the sample p99?
+        answer: "10"
+        explanation: The p99 is the 990th smallest, so 10 values lie above it, and the estimate rests on how those few fell.
+    - question:
+        id: drill-unbiased
+        type: choice
+        system: s1
+        prompt: |
+          An estimator's estimates, averaged over all possible samples, equal the true value. What is the estimator called?
+        options:
+          - "Unbiased"
+          - "Consistent"
+          - "Exact"
+          - "Robust"
+        answer: 0
+        explanation: Unbiased means centred on the truth. It says nothing about the spread, so a single estimate can still be far off.
+    - question:
+        id: predict-variance
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          xs = [3, 5]
+          m = sum(xs) / len(xs)
+          ss = sum((x - m) ** 2 for x in xs)
+          print(ss / len(xs), ss / (len(xs) - 1))
+        output: "1.0 2.0"
+        explanation: The mean is 4 and the squared deviations are 1 and 1, so the sum is 2. Dividing by $n = 2$ gives 1.0; dividing by $n - 1 = 1$ gives 2.0.
+    - question:
+        id: predict-inspection
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          durations = [10, 90]
+          print(sum(d * d for d in durations) / sum(durations))
+        output: "82.0"
+        explanation: $(100 + 8{,}100)/100 = 82$. The 90 ms job occupies 90% of the time, so a random moment usually finds it.
+  work:
+    - text: Slower now. For each estimate, ask what it would be on average over many samples, and whether the way the sample was taken favours some values over others.
+    - question:
+        id: fix-variance
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `sample_variance(xs)` should return an unbiased estimate of the population variance from a sample of at least two values. The program should print `4.5714 2.0`. It prints `4.0 1.0`. Find the fault and fix it.
+        starter: |
+          def sample_variance(xs):
+              # An unbiased estimate of the population variance from a sample of at least two values.
+              m = sum(xs) / len(xs)
+              return sum((x - m) ** 2 for x in xs) / len(xs)
+
+
+          print(round(sample_variance([2, 4, 4, 4, 5, 5, 7, 9]), 4), sample_variance([1, 3]))
+        solution: |
+          def sample_variance(xs):
+              # An unbiased estimate of the population variance from a sample of at least two values.
+              m = sum(xs) / len(xs)
+              return sum((x - m) ** 2 for x in xs) / (len(xs) - 1)
+
+
+          print(round(sample_variance([2, 4, 4, 4, 5, 5, 7, 9]), 4), sample_variance([1, 3]))
+        tests: |
+          _cases = [[1, 3], [5, 5], [2, 4, 4, 4, 5, 5, 7, 9], [10, 20, 60], [0.5, 1.5, 2.5, 3.5], [100, 101, 99, 100, 250]]
+          for _xs in _cases:
+              _m = sum(_xs) / len(_xs)
+              _want = sum((_x - _m) ** 2 for _x in _xs) / (len(_xs) - 1)
+              _got = sample_variance(_xs)
+              assert abs(_got - _want) <= 1e-9 * max(1, _want), "sample_variance(" + str(_xs) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "4.5714 2.0", "The program should print 4.5714 2.0"
+        wrong:
+          - |
+            def sample_variance(xs):
+                # An unbiased estimate of the population variance from a sample of at least two values.
+                m = sum(xs) / len(xs)
+                return sum((x - m) ** 2 for x in xs) / (len(xs) + 1)
+
+
+            print(round(sample_variance([2, 4, 4, 4, 5, 5, 7, 9]), 4), sample_variance([1, 3]))
+          - |
+            def sample_variance(xs):
+                # An unbiased estimate of the population variance from a sample of at least two values.
+                m = sum(xs) / len(xs)
+                return sum(x ** 2 for x in xs) / (len(xs) - 1)
+
+
+            print(round(sample_variance([2, 4, 4, 4, 5, 5, 7, 9]), 4), sample_variance([1, 3]))
+          - |
+            def sample_variance(xs):
+                # An unbiased estimate of the population variance from a sample of at least two values.
+                m = sum(xs) / len(xs)
+                return sum(abs(x - m) for x in xs) / (len(xs) - 1)
+
+
+            print(round(sample_variance([2, 4, 4, 4, 5, 5, 7, 9]), 4), sample_variance([1, 3]))
+        explanation: |
+          Deviations from the sample's own mean are smaller on average than deviations from the population mean, by exactly one value's worth, so the unbiased estimate divides by $n - 1$. Dividing by $n + 1$ goes the wrong way; squaring the values instead of their deviations measures distance from 0, not spread; and absolute deviations give a different measure of spread altogether.
+    - question:
+        id: write-sample-means
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `sample_means(population, n, repeats, seed)`. Call `random.seed(seed)` once, then return a list of `repeats` sample means, each the mean of `n` values drawn one at a time with `random.choice(population)`.
+        starter: |
+          import random
+          import statistics
+
+
+          def sample_means(population, n, repeats, seed):
+              # Seed the generator once, then return a list of `repeats` sample means,
+              # each the mean of n values drawn with random.choice(population).
+              return [0]
+
+
+          population = [10, 20, 30, 40, 50, 60, 70, 80, 90, 1000]
+          means = sample_means(population, 25, 400, 1)
+          print(len(means), round(statistics.mean(means), 1), round(statistics.pstdev(means), 1))
+        solution: |
+          import random
+          import statistics
+
+
+          def sample_means(population, n, repeats, seed):
+              # Seed the generator once, then return a list of `repeats` sample means,
+              # each the mean of n values drawn with random.choice(population).
+              random.seed(seed)
+              means = []
+              for _ in range(repeats):
+                  sample = [random.choice(population) for _ in range(n)]
+                  means.append(sum(sample) / n)
+              return means
+
+
+          population = [10, 20, 30, 40, 50, 60, 70, 80, 90, 1000]
+          means = sample_means(population, 25, 400, 1)
+          print(len(means), round(statistics.mean(means), 1), round(statistics.pstdev(means), 1))
+        tests: |
+          def _reference(_population, _n, _repeats, _seed):
+              random.seed(_seed)
+              _means = []
+              for _r in range(_repeats):
+                  _sample = [random.choice(_population) for _i in range(_n)]
+                  _means.append(sum(_sample) / _n)
+              return _means
+
+
+          for _population, _n, _repeats, _seed in [([1, 2, 3], 1, 5, 0), ([1, 2, 3], 4, 6, 3), ([5, 7, 9, 11, 200], 10, 20, 42), ([4], 3, 2, 9)]:
+              _want = _reference(_population, _n, _repeats, _seed)
+              _got = sample_means(_population, _n, _repeats, _seed)
+              _call = "sample_means(" + str(_population) + ", " + str(_n) + ", " + str(_repeats) + ", " + str(_seed) + ")"
+              assert len(_got) == len(_want), _call + " should return " + str(len(_want)) + " means, not " + str(len(_got))
+              for _a, _b in zip(_got, _want):
+                  assert abs(_a - _b) < 1e-9, _call + " should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "400 144.9 54.7", "The program should print 400 144.9 54.7"
+        wrong:
+          - |
+            import random
+            import statistics
+
+
+            def sample_means(population, n, repeats, seed):
+                # Seed the generator once, then return a list of `repeats` sample means,
+                # each the mean of n values drawn with random.choice(population).
+                means = []
+                for _ in range(repeats):
+                    random.seed(seed)
+                    sample = [random.choice(population) for _ in range(n)]
+                    means.append(sum(sample) / n)
+                return means
+
+
+            population = [10, 20, 30, 40, 50, 60, 70, 80, 90, 1000]
+            means = sample_means(population, 25, 400, 1)
+            print(len(means), round(statistics.mean(means), 1), round(statistics.pstdev(means), 1))
+          - |
+            import random
+            import statistics
+
+
+            def sample_means(population, n, repeats, seed):
+                # Seed the generator once, then return a list of `repeats` sample means,
+                # each the mean of n values drawn with random.choice(population).
+                random.seed(seed)
+                sample = [random.choice(population) for _ in range(n)]
+                return [sum(sample) / n for _ in range(repeats)]
+
+
+            population = [10, 20, 30, 40, 50, 60, 70, 80, 90, 1000]
+            means = sample_means(population, 25, 400, 1)
+            print(len(means), round(statistics.mean(means), 1), round(statistics.pstdev(means), 1))
+          - |
+            import random
+            import statistics
+
+
+            def sample_means(population, n, repeats, seed):
+                # Seed the generator once, then return a list of `repeats` sample means,
+                # each the mean of n values drawn with random.choice(population).
+                random.seed(seed)
+                means = []
+                for _ in range(repeats):
+                    sample = [random.choice(population) for _ in range(n)]
+                    means.append(sum(sample) / len(population))
+                return means
+
+
+            population = [10, 20, 30, 40, 50, 60, 70, 80, 90, 1000]
+            means = sample_means(population, 25, 400, 1)
+            print(len(means), round(statistics.mean(means), 1), round(statistics.pstdev(means), 1))
+        explanation: |
+          Seed once, then draw a fresh sample for every repetition. Seeding inside the loop restarts the generator each time, so every sample is the same; drawing one sample and repeating its mean does the same thing more directly; and dividing by the population's size instead of `n` shrinks every mean. The program's population has mean 145 and standard deviation about 286, so samples of 25 should give means centred near 145 with standard error about $286/5 \approx 57$; the simulation gives 144.9 and 54.7.
+    - question:
+        id: write-inspection
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `inspection_mean(durations)`. Jobs with these durations run one after another with no gaps. Return the average duration of the job that a random moment finds running.
+        starter: |
+          def inspection_mean(durations):
+              # Jobs with these durations run one after another with no gaps.
+              # Return the average duration of the job found running at a random moment.
+              return 0
+
+
+          print(inspection_mean([10, 90]), inspection_mean([50, 50]), round(inspection_mean([1, 1, 1, 97]), 2))
+        solution: |
+          def inspection_mean(durations):
+              # Jobs with these durations run one after another with no gaps.
+              # Return the average duration of the job found running at a random moment.
+              return sum(d * d for d in durations) / sum(durations)
+
+
+          print(inspection_mean([10, 90]), inspection_mean([50, 50]), round(inspection_mean([1, 1, 1, 97]), 2))
+        tests: |
+          _cases = [[10, 90], [50, 50], [1, 1, 1, 97], [5], [2, 4, 6], [30, 10, 20, 40]]
+          for _d in _cases:
+              _want = sum(_x * _x for _x in _d) / sum(_d)
+              _got = inspection_mean(_d)
+              assert abs(_got - _want) < 1e-9, "inspection_mean(" + str(_d) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "82.0 50.0 94.12", "The program should print 82.0 50.0 94.12"
+        wrong:
+          - |
+            def inspection_mean(durations):
+                # Jobs with these durations run one after another with no gaps.
+                # Return the average duration of the job found running at a random moment.
+                return sum(durations) / len(durations)
+
+
+            print(inspection_mean([10, 90]), inspection_mean([50, 50]), round(inspection_mean([1, 1, 1, 97]), 2))
+          - |
+            def inspection_mean(durations):
+                # Jobs with these durations run one after another with no gaps.
+                # Return the average duration of the job found running at a random moment.
+                return sum(d * d for d in durations) / len(durations)
+
+
+            print(inspection_mean([10, 90]), inspection_mean([50, 50]), round(inspection_mean([1, 1, 1, 97]), 2))
+          - |
+            def inspection_mean(durations):
+                # Jobs with these durations run one after another with no gaps.
+                # Return the average duration of the job found running at a random moment.
+                return max(durations)
+
+
+            print(inspection_mean([10, 90]), inspection_mean([50, 50]), round(inspection_mean([1, 1, 1, 97]), 2))
+        explanation: |
+          A random moment lands in a job with chance equal to its share of the total time, $d / \sum d$, so the average found is $\sum d \cdot (d/\sum d) = \sum d^2 / \sum d$. The plain mean weights every job equally, which is what sampling by job would give, not by time. Dividing the squares by the count forgets to turn them back into a duration, and the longest job is only what a moment finds when it dominates completely.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          A worker runs jobs back to back; half take 10 ms and half take 90 ms. A profiler records the full duration of whichever job is running at random moments. What is the average recorded duration, in milliseconds?
+        answer: "82"
+        explanation: |
+          In each pair of jobs, 10 of the 100 ms are spent on the short one and 90 on the long one. So the profiler finds a 90 ms job 90% of the time: $0.1 \times 10 + 0.9 \times 90 = 82$ ms. Equivalently, $E[T] + \operatorname{Var}(T)/E[T] = 50 + 1{,}600/50 = 82$.
+    - question:
+        id: work-survivor
+        type: choice
+        system: s2
+        prompt: |
+          A dashboard computes p99 response time over successful requests only. Requests that hit the 5-second timeout are counted as errors and left out of the latency figures. What does this do to the reported p99?
+        options:
+          - "It biases the p99 low, because the left-out requests are the slowest ones, and more data does not fix it."
+          - "Nothing, because errors are a separate figure."
+          - "It biases the p99 high, because errors slow the server."
+          - "It adds random noise that averages out over a day."
+        answer: 0
+        explanation: |
+          Every left-out request took at least 5 seconds, so removing them takes away the top of the distribution and pulls every high percentile down. The bias comes from how the sample was chosen, so a larger sample chosen the same way has the same bias. Counting a timed-out request as taking at least 5 seconds keeps it in.
+  connections:
+    - text: |
+        The profiler averages 82 ms, not 50. The long jobs fill 90% of the time, so a moment chosen at random usually finds one, and the profiler sees the long jobs far more often than they occur. Nothing about the jobs is random in the usual sense; the bias comes entirely from sampling moments instead of jobs. A profiler that wants the average job, rather than the average moment, must record each job once, when it finishes.
+
+        An estimate with no measure of its uncertainty is half an answer. [[f5.confidence-intervals]] turns the standard error into a range that catches the truth with a known chance, [[f5.hypothesis-tests]] asks whether a difference between two estimates could be noise, and [[f5.the-bootstrap]] estimates standard errors for estimators, such as p99, that have no neat formula. [[f5.comparing-two-systems-a-b-tests]] and [[f5.noise-in-measurements-and-benchmarks]] apply all of this to choosing between two versions of a system.

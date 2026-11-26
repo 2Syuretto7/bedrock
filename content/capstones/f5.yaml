@@ -1,0 +1,283 @@
+cluster: F5
+title: Signing off a release of a food-delivery app
+minutes: 100
+claim: You will have taken a release of a food-delivery app's order service from dashboard to sign-off with statistics, reading its latency summaries and what a page of many calls feels, merging histograms from its servers, bounding the failure rate of a clean canary, testing an A/B result and sizing the test it needed, judging which estimates a sample can support, and catching a load test that hid a pause.
+brief: |
+  This cluster turned probability around: from known chances to data, and from data to honest claims. Summaries for skewed numbers, heavy tails, histograms, estimators and their standard errors, intervals, tests, the bootstrap, A/B tests and benchmarks all meet in one ordinary event in an engineering team's week: deciding whether a release is good enough to ship.
+
+  **The project.** A food-delivery company is releasing a new version of its order service, the one that takes an order from the app, checks the restaurant and the payment, and confirms it. The release has run on three servers, as a canary on a slice of traffic, in an A/B test of a new checkout screen, and in a load test. The release manager has the numbers and must decide.
+
+  Each stage below is one of those sources of evidence, with its own questions. Nothing here is new: each stage applies a lesson of this cluster, and often two at once. The task in every stage is the same: say what the numbers support, and what they do not.
+starter: |
+  # Scratch space for the release review.
+  import math
+
+  times = [38, 41, 42, 44, 45, 46, 47, 48, 50, 51, 52, 54, 55, 57, 60, 63, 68, 75, 90, 410]
+  ordered = sorted(times)
+  print(sum(times) / len(times), (ordered[9] + ordered[10]) / 2, ordered[math.ceil(0.95 * len(times)) - 1])
+stages:
+  - title: The dashboard
+    blocks:
+      - text: |
+          The dashboard shows 20 response times from the new version, in milliseconds, sampled across an hour: 38, 41, 42, 44, 45, 46, 47, 48, 50, 51, 52, 54, 55, 57, 60, 63, 68, 75, 90 and 410. The release notes quote the mean, 71.8 ms, as "typical".
+      - question:
+          id: dashboard-p95
+          type: numeric
+          system: s1
+          concepts: [f5.summaries-mean-median-and-percentiles]
+          prompt: |
+            By the nearest-rank rule, what is the 95th percentile of these 20 times, in milliseconds?
+          answer: "90"
+          explanation: |
+            The rank is $\lceil 0.95 \times 20 \rceil = 19$, and the 19th smallest time is 90 ms. The median is 51.5 ms; the mean, 71.8 ms, is larger than 17 of the 20 times, pulled up by the one request at 410 ms, so "typical" is the wrong word for it.
+      - question:
+          id: dashboard-page
+          type: numeric
+          system: s2
+          tolerance: "0.005"
+          concepts: [f5.distributions-of-latency-and-heavy-tails, f5.summaries-mean-median-and-percentiles]
+          prompt: |
+            The app's order-tracking page calls this service 30 times at once and waits for all of them. If each call independently lands in the service's slowest 1%, beyond its p99, with chance 0.01, on what fraction of page loads does at least one call land there? Give a decimal to two places.
+          answer: "0.26"
+          explanation: |
+            $1 - 0.99^{30} \approx 0.26$. A quarter of page loads meet the service's p99 tail, so the page's typical experience is set by the service's tail, not by its median. That is why the release must be judged on p99 and beyond, not on the mean.
+  - title: Three servers
+    blocks:
+      - text: |
+          Each of the three servers keeps a histogram of response times in buckets with upper edges 10, 20, 50, 100, 200, 500 and 1,000 ms. Each reports its own p99, and the dashboard averages the three p99s into one number, 300 ms.
+      - question:
+          id: merged-percentile
+          type: code
+          mode: write
+          system: s2
+          concepts: [f5.histograms, f5.summaries-mean-median-and-percentiles]
+          prompt: |
+            Write `merged_percentile(servers, edges, p)`. `servers` is a list of bucket-count lists, one per server, all with the same upper `edges`. Return the upper edge of the bucket holding the nearest-rank `p`th percentile of all the servers' requests together.
+          starter: |
+            import math
+
+
+            def merged_percentile(servers, edges, p):
+                # servers is a list of bucket-count lists, one per server, all using the same upper edges.
+                # Return the upper edge of the bucket holding the nearest-rank p-th percentile of all
+                # the servers' requests together.
+                return 0
+
+
+            edges = [10, 20, 50, 100, 200, 500, 1000]
+            servers = [[400, 300, 200, 60, 30, 8, 2], [100, 300, 350, 150, 70, 25, 5], [500, 250, 150, 60, 30, 9, 1]]
+            print(merged_percentile(servers, edges, 50), merged_percentile(servers, edges, 99))
+          solution: |
+            import math
+
+
+            def merged_percentile(servers, edges, p):
+                # servers is a list of bucket-count lists, one per server, all using the same upper edges.
+                # Return the upper edge of the bucket holding the nearest-rank p-th percentile of all
+                # the servers' requests together.
+                merged = [0] * len(edges)
+                for counts in servers:
+                    for j in range(len(edges)):
+                        merged[j] += counts[j]
+                rank = math.ceil(p * sum(merged) / 100)
+                seen = 0
+                for edge, count in zip(edges, merged):
+                    seen += count
+                    if seen >= rank:
+                        return edge
+
+
+            edges = [10, 20, 50, 100, 200, 500, 1000]
+            servers = [[400, 300, 200, 60, 30, 8, 2], [100, 300, 350, 150, 70, 25, 5], [500, 250, 150, 60, 30, 9, 1]]
+            print(merged_percentile(servers, edges, 50), merged_percentile(servers, edges, 99))
+          tests: |
+            for _servers, _edges in [([[1, 2, 3]], [10, 20, 30]), ([[5, 0, 0], [0, 0, 5]], [1, 2, 4]), ([[400, 300, 200, 60, 30, 8, 2], [100, 300, 350, 150, 70, 25, 5], [500, 250, 150, 60, 30, 9, 1]], [10, 20, 50, 100, 200, 500, 1000]), ([[0, 3], [2, 0], [0, 1]], [5, 50])]:
+                _values = []
+                for _counts in _servers:
+                    for _e, _c in zip(_edges, _counts):
+                        _values = _values + [_e] * _c
+                _values = sorted(_values)
+                for _p in range(1, 101):
+                    _want = _values[math.ceil(_p * len(_values) / 100) - 1]
+                    _got = merged_percentile(_servers, _edges, _p)
+                    assert _got == _want, "merged_percentile(" + str(_servers) + ", " + str(_edges) + ", " + str(_p) + ") should be " + str(_want) + ", not " + str(_got)
+            assert output.strip() == "20 500", "The program should print 20 500"
+          wrong:
+            - |
+              import math
+
+
+              def merged_percentile(servers, edges, p):
+                  # servers is a list of bucket-count lists, one per server, all using the same upper edges.
+                  # Return the upper edge of the bucket holding the nearest-rank p-th percentile of all
+                  # the servers' requests together.
+                  total = 0
+                  for counts in servers:
+                      rank = math.ceil(p * sum(counts) / 100)
+                      seen = 0
+                      for edge, count in zip(edges, counts):
+                          seen += count
+                          if seen >= rank:
+                              total += edge
+                              break
+                  return total / len(servers)
+
+
+              edges = [10, 20, 50, 100, 200, 500, 1000]
+              servers = [[400, 300, 200, 60, 30, 8, 2], [100, 300, 350, 150, 70, 25, 5], [500, 250, 150, 60, 30, 9, 1]]
+              print(merged_percentile(servers, edges, 50), merged_percentile(servers, edges, 99))
+            - |
+              import math
+
+
+              def merged_percentile(servers, edges, p):
+                  # servers is a list of bucket-count lists, one per server, all using the same upper edges.
+                  # Return the upper edge of the bucket holding the nearest-rank p-th percentile of all
+                  # the servers' requests together.
+                  counts = servers[0]
+                  rank = math.ceil(p * sum(counts) / 100)
+                  seen = 0
+                  for edge, count in zip(edges, counts):
+                      seen += count
+                      if seen >= rank:
+                          return edge
+
+
+              edges = [10, 20, 50, 100, 200, 500, 1000]
+              servers = [[400, 300, 200, 60, 30, 8, 2], [100, 300, 350, 150, 70, 25, 5], [500, 250, 150, 60, 30, 9, 1]]
+              print(merged_percentile(servers, edges, 50), merged_percentile(servers, edges, 99))
+            - |
+              import math
+
+
+              def merged_percentile(servers, edges, p):
+                  # servers is a list of bucket-count lists, one per server, all using the same upper edges.
+                  # Return the upper edge of the bucket holding the nearest-rank p-th percentile of all
+                  # the servers' requests together.
+                  merged = [0] * len(edges)
+                  for counts in servers:
+                      for j in range(len(edges)):
+                          merged[j] += counts[j]
+                  rank = math.ceil(p * sum(merged) / 100)
+                  seen = 0
+                  for edge, count in zip(edges, merged):
+                      seen += count
+                      if seen > rank:
+                          return edge
+                  return edges[-1]
+
+
+              edges = [10, 20, 50, 100, 200, 500, 1000]
+              servers = [[400, 300, 200, 60, 30, 8, 2], [100, 300, 350, 150, 70, 25, 5], [500, 250, 150, 60, 30, 9, 1]]
+              print(merged_percentile(servers, edges, 50), merged_percentile(servers, edges, 99))
+          explanation: |
+            Add the counts bucket by bucket, then walk the merged counts to the rank $\lceil pn/100 \rceil$. The servers' own p99s are 200, 500 and 200 ms; their average, 300 ms, is not even a bucket edge, and the true p99 of all requests is 500 ms, because the second server sends far more of its traffic into the slow buckets. Using one server's counts ignores the others, and a strict `>` overshoots whenever a bucket ends exactly at the rank.
+  - title: The canary
+    blocks:
+      - text: |
+          The new version served 3,000 orders as a canary with no failures. The release channel says, "Zero failures. The new version is perfect."
+      - question:
+          id: canary-bound
+          type: numeric
+          system: s2
+          tolerance: "0.00005"
+          concepts: [f5.confidence-intervals]
+          prompt: |
+            Assuming orders fail independently with the same chance $p$, what is the 95% upper limit on $p$, the largest $p$ for which no failures in 3,000 still has a chance of at least 5%? Give four decimal places.
+          answer: "0.0010"
+          explanation: |
+            $1 - 0.05^{1/3000} \approx 0.0010$, the rule of three's $3/3{,}000$. The honest statement is "below about one failure in a thousand orders, with 95% confidence". At 20 lakh orders a day, that still allows up to about 2,000 failed orders a day.
+  - title: The new checkout screen
+    blocks:
+      - text: |
+          Users were randomised between the old checkout screen, A, and the new one, B, 12,000 each. A converted 960 users, 8.0%, and B converted 1,032, 8.6%. The product manager wants to declare B the winner.
+      - question:
+          id: checkout-z
+          type: numeric
+          system: s2
+          tolerance: "0.02"
+          concepts: [f5.comparing-two-systems-a-b-tests, f5.hypothesis-tests]
+          prompt: |
+            What is the two-proportion $z$-statistic for B minus A, using the pooled rate? Give two decimal places.
+          answer: "1.68"
+          explanation: |
+            The pooled rate is $1{,}992/24{,}000 = 0.083$, and the standard error is $\sqrt{0.083 \times 0.917 \times 2/12{,}000} \approx 0.00356$. The difference, 0.006, gives $z \approx 1.68$ and a two-sided p-value of about 0.09: not significant at 5%. The data are consistent with a real 7.5% relative lift and with none.
+      - question:
+          id: checkout-size
+          type: numeric
+          system: s2
+          tolerance: "300"
+          concepts: [f5.comparing-two-systems-a-b-tests]
+          prompt: |
+            How many users per screen would the test have needed to detect a change from 8.0% to 8.6% with 80% power at the 5% level? Use $(1.96 + 0.84)^2$ times the sum of the two rates' variances $p(1 - p)$, divided by the squared difference. Round to the nearest hundred.
+          answer: "33100"
+          explanation: |
+            $(2.8)^2 \times (0.08 \times 0.92 + 0.086 \times 0.914)/0.006^2 = 7.84 \times 0.1522/0.000036 \approx 33{,}100$. The test had 12,000 per screen, about a third of what it needed, so a non-significant result says little either way.
+      - question:
+          id: checkout-peek
+          type: choice
+          system: s1
+          concepts: [f5.comparing-two-systems-a-b-tests]
+          prompt: |
+            The product manager proposes to keep the test running and check every morning, stopping as soon as $p < 0.05$. What is the problem?
+          options:
+            - "Each daily look is another chance for noise to cross 0.05, so the real false-alarm rate climbs well above 5%."
+            - "There is no problem, since more data can only help."
+            - "Checking daily lowers the power."
+          answer: 0
+          explanation: |
+            Peeking with a fixed threshold manufactures winners. The honest plan is to fix the size, here about 33,000 users per screen, and look once, or to use stricter thresholds at each planned look.
+  - title: What the sample can say
+    blocks:
+      - text: |
+          The load test produced 2,000 response times from the new version. Their standard deviation is 120 ms. The release manager wants the mean with its standard error, a bootstrap interval for the p99, and the p99.9.
+      - question:
+          id: sample-se
+          type: numeric
+          system: s1
+          concepts: [f5.sampling-and-estimators]
+          prompt: |
+            What is the standard error of the mean of the 2,000 times, in milliseconds? Give one decimal place.
+          answer: "2.7"
+          explanation: |
+            $120/\sqrt{2{,}000} \approx 120/44.7 \approx 2.7$ ms.
+      - question:
+          id: sample-p999
+          type: choice
+          system: s2
+          concepts: [f5.the-bootstrap, f5.sampling-and-estimators]
+          prompt: |
+            A bootstrap of the p99 from 2,000 resamples gives a reasonable interval. Bootstrapping the p99.9 the same way gives a narrow one. Should the release manager trust it?
+          options:
+            - "No: only 2 of the 2,000 times lie above the sample p99.9, and resamples cannot contain anything slower than the sample's slowest, so the interval cannot show how much slower the true p99.9 might be."
+            - "Yes: a narrow bootstrap interval always means a precise estimate."
+            - "Yes, because 2,000 resamples is plenty."
+            - "No, because the bootstrap only works for means."
+          answer: 0
+          explanation: |
+            The p99 rests on the 20 slowest times, enough for resampling to show its spread. The p99.9 rests on about 2, and the bootstrap can only reshuffle those. Estimating it needs tens of thousands of requests.
+  - title: The load test's pause
+    blocks:
+      - text: |
+          The load tester was set to send an order every 5 ms. It sends a request, waits for the answer, then sends the next. During the test the new version paused once for 1 second to collect garbage, and the tester recorded one slow request.
+      - question:
+          id: pause-hidden
+          type: numeric
+          system: s2
+          concepts: [f5.noise-in-measurements-and-benchmarks]
+          prompt: |
+            Counting the request in flight, how many scheduled orders should have been waiting through the 1-second pause?
+          answer: "200"
+          explanation: |
+            One every 5 ms for 1,000 ms is 200 orders, with waits of 1,000, 995, …, 5 ms. The tester recorded one of them, so its tail is far too good. The load test must be rerun with requests sent on schedule, or its recording corrected, before its p99 means anything.
+review: |
+  The release review is done, and each judgement came from a lesson of this cluster:
+
+  - The dashboard's mean was the wrong summary for skewed times, from [[f5.summaries-mean-median-and-percentiles]], and a page of 30 calls lives in the service's tail, as [[f5.distributions-of-latency-and-heavy-tails]] predicted.
+  - Averaged p99s understated the true p99 by 200 ms; merging the servers' [[f5.histograms]] gave the right one.
+  - The clean canary bounded the failure rate rather than proving it zero, using [[f5.confidence-intervals]].
+  - The checkout test was not significant by [[f5.hypothesis-tests]], and [[f5.comparing-two-systems-a-b-tests]] showed it was a third of the size it needed, and that peeking would only manufacture a winner.
+  - The standard error came from [[f5.sampling-and-estimators]], and [[f5.the-bootstrap]] gave an interval for the p99 but could not rescue a p99.9 resting on two values.
+  - The load test's tail was hidden by coordinated omission, from [[f5.noise-in-measurements-and-benchmarks]].
+
+  Notice the pattern. Every number on the review was true, and almost every claim made from it was not: typical, perfect, average p99, winner, precise, fast. Statistics did not supply new numbers so much as the right questions to ask of the ones already there. The next cluster takes these tools to algorithms, measuring running time as inputs grow and checking it against a prediction.

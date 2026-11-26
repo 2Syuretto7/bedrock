@@ -4624,6 +4624,627 @@ function MonteCarlo(props: Props) {
   );
 }
 
+/** 1st, 2nd, 3rd, 4th, 11th, 12th, 13th, 21st and so on. */
+const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th")}`;
+
+const SUMMARY_TIMES = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95];
+
+/** Twenty response times on a line, with their mean, median and a chosen percentile marked. */
+function SummaryMarks(props: Props) {
+  const [slowest, setSlowest] = useState(clamp(Math.round(num(props.slowest, 120) / 20) * 20, 100, 5000));
+  const [p, setP] = useState(clamp(Math.round(num(props.percentile, 90)), 1, 100));
+  const values = [...SUMMARY_TIMES, slowest];
+  const n = values.length;
+  const mean = values.reduce((a, b) => a + b, 0) / n;
+  const median = (values[n / 2 - 1] + values[n / 2]) / 2;
+  const rank = Math.ceil((p * n) / 100);
+  const pick = values[rank - 1];
+  const top = Math.max(200, slowest);
+  const sx = (v: number) => 30 + (v / top) * 390;
+  const mark = (v: number, label: string, y: number, className: string) => (
+    <g key={label}>
+      <line x1={sx(v)} y1={y + 6} x2={sx(v)} y2="120" className={className} />
+      <text x={sx(v)} y={y} textAnchor="middle" className="fig-small">
+        {label}
+      </text>
+    </g>
+  );
+  return (
+    <Frame
+      title="Mean, median and percentile"
+      summary={`20 response times in milliseconds, the slowest ${group(slowest)} ms. The mean is ${dp(mean, 2)} ms: the total, ${group(Math.round(mean * n))} ms, shared equally. The median is ${dp(median, 1)} ms, halfway between the 10th and 11th of the sorted times. The ${ordinal(p)} percentile is ${group(pick)} ms, the ${rank === n ? "slowest" : `${ordinal(rank)} of the 20 sorted times`}, because at least ${p}% of the times must be at or below it. Moving the slowest request changes the mean but not the median${rank === n ? ", and this percentile is the slowest request itself" : ""}.`}
+      controls={
+        <>
+          <Slider label="slowest request" value={slowest} onChange={setSlowest} min={100} max={5000} step={20} text={`${group(slowest)} ms`} />
+          <Slider label="percentile" value={p} onChange={setP} min={1} max={100} text={ordinal(p)} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 160" role="img" aria-label={`20 response times on a line from 0 to ${group(top)} milliseconds, with the mean, the median and the ${ordinal(p)} percentile marked`}>
+        <line x1="30" y1="120" x2="420" y2="120" className="fig-axis" />
+        {values.map((v, i) => (
+          <circle key={i} cx={sx(v)} cy="120" r="4" className="fig-accent" />
+        ))}
+        {mark(median, "median", 30, "fig-line")}
+        {mark(mean, "mean", 52, "fig-accent-line")}
+        {mark(pick, `p${p}`, 74, "fig-guide")}
+        <text x="30" y="142" textAnchor="middle" className="fig-small">
+          0
+        </text>
+        <text x="420" y="142" textAnchor="middle" className="fig-small">
+          {`${group(top)} ms`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** The chance that a response takes longer than t, on logarithmic axes: an exponential tail bends away, a power-law tail is a straight line. */
+function TailPlot(props: Props) {
+  const [tenths, setTenths] = useState(clamp(Math.round(num(props.alpha, 2) * 10), 10, 30));
+  const alpha = tenths / 10;
+  const floor = Math.pow(2, -1 / alpha) * 20;
+  const sx = (logT: number) => 50 + ((logT - 1) / 4) * 370;
+  const sy = (logP: number) => 20 + (Math.min(6, -logP) / 6) * 200;
+  const logs = Array.from({ length: 201 }, (_, i) => 1 + (4 * i) / 200);
+  const exponential = logs.map((x) => `${dp(sx(x), 2)},${dp(sy(-(10 ** x / 20) * Math.log10(2)), 2)}`).join(" ");
+  const power = logs.map((x) => `${dp(sx(x), 2)},${dp(sy(Math.min(0, alpha * (Math.log10(floor) - x))), 2)}`).join(" ");
+  const paretoAt = (p: number) => floor * Math.pow(p, -1 / alpha);
+  const expAt = (p: number) => 20 * Math.log2(1 / p);
+  const ms = (t: number) => group(Math.round(t));
+  const mean = alpha > 1 ? `${ms((alpha * floor) / (alpha - 1))} ms` : "infinite: the tail falls too slowly for an average to settle";
+  const ticks: [number, string][] = [
+    [1, "10 ms"],
+    [2, "100 ms"],
+    [3, "1 s"],
+    [4, "10 s"],
+    [5, "100 s"],
+  ];
+  const levels: [number, string][] = [
+    [0, "1"],
+    [-2, "1 in 100"],
+    [-4, "1 in 10⁴"],
+    [-6, "1 in 10⁶"],
+  ];
+  return (
+    <Frame
+      title="How fast a tail falls"
+      summary={`Both curves give the chance that a response takes longer than a time, and both have a median of 20 ms. The exponential tail bends down and away: every extra 20 ms halves the chance, so its p99 is ${ms(expAt(0.01))} ms, its p99.9 ${ms(expAt(0.001))} ms and its p99.99 ${ms(expAt(0.0001))} ms, and its mean is 29 ms. The power-law tail with exponent ${dp(alpha, 1)} is a straight line of slope −${dp(alpha, 1)} on these logarithmic axes: every doubling of the time divides the chance by ${dp(2 ** alpha, 2)}, so its p99 is ${ms(paretoAt(0.01))} ms, its p99.9 ${ms(paretoAt(0.001))} ms and its p99.99 ${ms(paretoAt(0.0001))} ms. Its mean is ${mean}.`}
+      controls={<Slider label="tail exponent" value={tenths} onChange={setTenths} min={10} max={30} text={dp(alpha, 1)} />}
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`Two falling curves on logarithmic axes, time from 10 milliseconds to 100 seconds and chance from 1 down to 1 in a million: an exponential tail that bends down steeply and a power-law tail of exponent ${dp(alpha, 1)} that falls in a straight line`}>
+        {levels.map(([logP, label]) => (
+          <g key={label}>
+            <line x1="50" y1={sy(logP)} x2="420" y2={sy(logP)} className="fig-guide" />
+            <text x="46" y={sy(logP) + 4} textAnchor="end" className="fig-small">
+              {label}
+            </text>
+          </g>
+        ))}
+        {ticks.map(([logT, label]) => (
+          <text key={label} x={sx(logT)} y="240" textAnchor="middle" className="fig-small">
+            {label}
+          </text>
+        ))}
+        <line x1="50" y1="220" x2="420" y2="220" className="fig-axis" />
+        <line x1="50" y1="20" x2="50" y2="220" className="fig-axis" />
+        <polyline points={exponential} className="fig-line" />
+        <polyline points={power} className="fig-accent-line" />
+        <text x={sx(Math.log10(expAt(0.0001)))} y={sy(-4.6)} className="fig-small">
+          exponential
+        </text>
+        <text x={sx(Math.min(4.3, Math.log10(paretoAt(0.001))))} y={sy(alpha * (Math.log10(floor) - Math.min(4.3, Math.log10(paretoAt(0.001))))) - 8} className="fig-small">
+          power law
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const HIST_TIMES = draws(3, 400, true).map((z) => 20 * Math.exp(0.75 * z));
+const HIST_TOP = 250;
+
+/** Four hundred response times counted in buckets: too few hide the shape, too many show noise, and logarithmic buckets suit a long right tail. */
+function HistogramBins(props: Props) {
+  const [k, setK] = useState(clamp(Math.round(num(props.buckets, 12)), 2, 60));
+  const [log, setLog] = useState(props.log === true);
+  const edge = (j: number) => (log ? HIST_TOP ** (j / k) : (HIST_TOP * j) / k);
+  const counts = Array.from({ length: k }, () => 0);
+  for (const t of HIST_TIMES) {
+    const at = log ? Math.floor((Math.log(Math.max(t, 1)) / Math.log(HIST_TOP)) * k) : Math.floor((t / HIST_TOP) * k);
+    counts[clamp(at, 0, k - 1)]++;
+  }
+  const tallest = Math.max(...counts);
+  const peak = counts.indexOf(tallest);
+  const empty = counts.filter((c) => c === 0).length;
+  const sorted = [...HIST_TIMES].sort((a, b) => a - b);
+  const median = (sorted[199] + sorted[200]) / 2;
+  const ms = (t: number) => (t < 10 ? dp(t, 1) : group(Math.round(t)));
+  const sy = (c: number) => 200 - (c / tallest) * 170;
+  const ticks = log ? [1, 10, 100, 250] : [0, 50, 100, 150, 200, 250];
+  const tx = (t: number) => 40 + (log ? Math.log(t) / Math.log(HIST_TOP) : t / HIST_TOP) * 380;
+  const width = log ? `whose edges grow by a factor of ${dp(HIST_TOP ** (1 / k), 2)}` : `each ${dp(HIST_TOP / k, 1)} ms wide`;
+  return (
+    <Frame
+      title="Counting times in buckets"
+      summary={`400 response times, from ${ms(sorted[0])} to ${ms(sorted[399])} ms with median ${ms(median)} ms, counted in ${k} buckets ${width}. The tallest bucket, from ${ms(edge(peak))} to ${ms(edge(peak + 1))} ms, holds ${tallest} of them. ${empty === 0 ? "No bucket is empty." : `${plural(empty, "bucket is", "buckets are")} empty.`}${log ? " On logarithmic buckets the long right tail is spread out and the bulk is no longer squeezed against zero." : " On equal-width buckets the bulk is squeezed to the left and the tail is a few thin bars."}`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={log} onClick={() => setLog(!log)}>
+            Use logarithmic buckets
+          </button>
+          <Slider label="buckets" value={k} onChange={setK} min={2} max={60} text={`${k}`} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 240" role="img" aria-label={`A histogram of 400 response times in ${k} ${log ? "logarithmic" : "equal-width"} buckets`}>
+        {counts.map((c, j) => (
+          <rect key={j} x={40 + (j * 380) / k + 0.5} y={sy(c)} width={Math.max(380 / k - 1, 0.5)} height={200 - sy(c)} className="fig-accent" opacity={0.75} />
+        ))}
+        <line x1="40" y1="200" x2="420" y2="200" className="fig-axis" />
+        {ticks.map((t) => (
+          <text key={t} x={tx(t)} y="218" textAnchor="middle" className="fig-small">
+            {group(t)}
+          </text>
+        ))}
+        <text x="420" y="234" textAnchor="end" className="fig-small">
+          milliseconds
+        </text>
+        <text x="40" y="22" className="fig-small">
+          {`tallest bucket: ${tallest}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const EST_POPULATION = draws(7, 2000, true).map((z) => 20 * Math.exp(0.75 * z));
+const EST_SIZES = [5, 10, 20, 50, 100, 200, 500];
+type EstKind = "mean" | "median" | "p90" | "varn" | "var1";
+const EST_KINDS: EstKind[] = ["mean", "median", "p90", "varn", "var1"];
+const EST_NAMES: Record<EstKind, string> = { mean: "mean", median: "median", p90: "90th percentile", varn: "variance, dividing by n", var1: "variance, dividing by n − 1" };
+const estimateOf = (kind: EstKind, xs: number[]) => {
+  const n = xs.length;
+  const mean = xs.reduce((a, b) => a + b, 0) / n;
+  if (kind === "mean") return mean;
+  if (kind === "varn" || kind === "var1") return xs.reduce((a, b) => a + (b - mean) ** 2, 0) / (kind === "varn" ? n : n - 1);
+  const sorted = [...xs].sort((a, b) => a - b);
+  if (kind === "median") return n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+  return sorted[Math.ceil((90 * n) / 100) - 1];
+};
+const EST_TRUE: Record<EstKind, number> = {
+  mean: estimateOf("mean", EST_POPULATION),
+  median: estimateOf("median", EST_POPULATION),
+  p90: estimateOf("p90", EST_POPULATION),
+  varn: estimateOf("varn", EST_POPULATION),
+  var1: estimateOf("varn", EST_POPULATION),
+};
+
+/** Five hundred samples from one population: each gives an estimate, and their spread is the estimator's standard error. */
+function EstimatorSpread(props: Props) {
+  const [kind, setKind] = useState<EstKind>(typeof props.estimator === "string" && (EST_KINDS as string[]).includes(props.estimator) ? (props.estimator as EstKind) : "mean");
+  const [sizeAt, setSizeAt] = useState(Math.max(0, EST_SIZES.indexOf(num(props.n, 10))));
+  const n = EST_SIZES[sizeAt];
+  const repeats = 500;
+  const picks = draws(11, repeats * n, false);
+  const estimates = Array.from({ length: repeats }, (_, r) => estimateOf(kind, Array.from({ length: n }, (_, i) => EST_POPULATION[Math.floor(picks[r * n + i] * EST_POPULATION.length)])));
+  const truth = EST_TRUE[kind];
+  const centre = estimates.reduce((a, b) => a + b, 0) / repeats;
+  const spread = Math.sqrt(estimates.reduce((a, b) => a + (b - centre) ** 2, 0) / repeats);
+  const top = 2.5 * truth;
+  const bins = 40;
+  const counts = Array.from({ length: bins }, () => 0);
+  for (const e of estimates) counts[clamp(Math.floor((e / top) * bins), 0, bins - 1)]++;
+  const tallest = Math.max(...counts);
+  const sx = (v: number) => 40 + (Math.min(v, top) / top) * 380;
+  const sy = (c: number) => 200 - (c / tallest) * 160;
+  const variance = kind === "varn" || kind === "var1";
+  const unit = variance ? " ms²" : " ms";
+  const show = (v: number) => `${dp(v, 1)}${unit}`;
+  const bias = centre - truth;
+  const nextKind = EST_KINDS[(EST_KINDS.indexOf(kind) + 1) % EST_KINDS.length];
+  return (
+    <Frame
+      title="The spread of an estimate"
+      summary={`${group(repeats)} samples, each of ${n} response times drawn at random from a population of 2,000 whose ${variance ? "variance" : EST_NAMES[kind]} is ${show(truth)}. Each sample gives one estimate, the ${EST_NAMES[kind]}. The estimates average ${show(centre)}, ${Math.abs(bias) < 0.02 * truth ? "close to the truth" : `${bias < 0 ? "below" : "above"} the truth by ${show(Math.abs(bias))}`}, and spread with a standard deviation of ${show(spread)}: that spread is the standard error of this estimator for samples of ${n}.`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setKind(nextKind)}>
+            {`Estimate the ${EST_NAMES[nextKind]}`}
+          </button>
+          <Slider label="sample size" value={sizeAt} onChange={setSizeAt} min={0} max={EST_SIZES.length - 1} text={`${n}`} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 240" role="img" aria-label={`A histogram of ${repeats} estimates of the ${EST_NAMES[kind]} from samples of ${n}, with the true value marked`}>
+        {counts.map((c, j) => (
+          <rect key={j} x={40 + (j * 380) / bins + 0.5} y={sy(c)} width={380 / bins - 1} height={200 - sy(c)} className="fig-accent" opacity={0.75} />
+        ))}
+        <line x1="40" y1="200" x2="420" y2="200" className="fig-axis" />
+        <line x1={sx(truth)} y1="30" x2={sx(truth)} y2="200" className="fig-line" />
+        <text x={sx(truth)} y="24" textAnchor="middle" className="fig-small">
+          {`true ${dp(truth, 1)}`}
+        </text>
+        <text x="40" y="218" textAnchor="middle" className="fig-small">
+          0
+        </text>
+        <text x="420" y="218" textAnchor="middle" className="fig-small">
+          {dp(top, 0)}
+        </text>
+        <text x="230" y="234" textAnchor="middle" className="fig-small">
+          {`estimates of the ${EST_NAMES[kind]}${unit === " ms²" ? ", ms²" : ", ms"}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const IV_SIZES = [5, 10, 20, 50, 100, 200];
+const IV_LEVELS = [80, 90, 95, 99];
+const IV_Z: Record<number, number> = { 80: 1.2816, 90: 1.6449, 95: 1.96, 99: 2.5758 };
+
+/** A hundred samples, each with its confidence interval for the mean: about the stated share of them catch the true value. */
+function IntervalCatch(props: Props) {
+  const [sizeAt, setSizeAt] = useState(Math.max(0, IV_SIZES.indexOf(num(props.n, 20))));
+  const [levelAt, setLevelAt] = useState(Math.max(0, IV_LEVELS.indexOf(num(props.level, 95))));
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const n = IV_SIZES[sizeAt];
+  const level = IV_LEVELS[levelAt];
+  const z = IV_Z[level];
+  const truth = EST_TRUE.mean;
+  const picks = draws(20 + seed, 100 * n, false);
+  const intervals = Array.from({ length: 100 }, (_, r) => {
+    const xs = Array.from({ length: n }, (_, i) => EST_POPULATION[Math.floor(picks[r * n + i] * EST_POPULATION.length)]);
+    const mean = xs.reduce((a, b) => a + b, 0) / n;
+    const s = Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1));
+    const half = (z * s) / Math.sqrt(n);
+    return { low: mean - half, high: mean + half, caught: mean - half <= truth && truth <= mean + half };
+  });
+  const caught = intervals.filter((i) => i.caught).length;
+  const width = intervals.reduce((a, i) => a + (i.high - i.low), 0) / 100;
+  const top = 60;
+  const sx = (v: number) => 40 + (clamp(v, 0, top) / top) * 380;
+  return (
+    <Frame
+      title="How often an interval catches the truth"
+      summary={`100 samples of ${n} response times, each with its ${level}% interval for the mean, the sample mean plus or minus ${dp(z, 2)} standard errors. The true mean is ${dp(truth, 1)} ms. ${caught} of the 100 intervals catch it and ${100 - caught} miss, against ${level} expected. The intervals are ${dp(width, 1)} ms wide on average.${n <= 10 ? " With samples this small and times this skewed, the standard error is itself badly estimated, and fewer intervals catch the truth than promised." : ""}`}
+      controls={
+        <>
+          <Slider label="sample size" value={sizeAt} onChange={setSizeAt} min={0} max={IV_SIZES.length - 1} text={`${n}`} />
+          <Slider label="confidence" value={levelAt} onChange={setLevelAt} min={0} max={IV_LEVELS.length - 1} text={`${level}%`} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`100 horizontal intervals stacked one above another, with a vertical line at the true mean; ${caught} of them cross it`}>
+        {intervals.map((iv, r) => (
+          <line key={r} x1={sx(iv.low)} y1={20 + r * 2.2} x2={sx(iv.high)} y2={20 + r * 2.2} className={iv.caught ? "fig-line" : "fig-accent-line"} style={{ strokeWidth: 1.6 }} />
+        ))}
+        <line x1={sx(truth)} y1="14" x2={sx(truth)} y2="242" className="fig-guide" />
+        <line x1="40" y1="242" x2="420" y2="242" className="fig-axis" />
+        {[0, 20, 40, 60].map((t) => (
+          <text key={t} x={sx(t)} y="256" textAnchor="middle" className="fig-small">
+            {`${t} ms`}
+          </text>
+        ))}
+        <text x={sx(truth) + 4} y="12" className="fig-small">
+          {`true mean ${dp(truth, 1)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const NULL_SIZES = [10, 20, 50, 100, 200];
+
+/** A permutation test: shuffle the labels of two groups many times, and see how often chance alone gives a difference as large as the one observed. */
+function NullTest(props: Props) {
+  const [effect, setEffect] = useState(clamp(Math.round(num(props.effect, 5)), 0, 15));
+  const [sizeAt, setSizeAt] = useState(Math.max(0, NULL_SIZES.indexOf(num(props.n, 50))));
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const n = NULL_SIZES[sizeAt];
+  const picks = draws(40 + seed, 2 * n, false);
+  const values = picks.map((u, i) => EST_POPULATION[Math.floor(u * EST_POPULATION.length)] + (i >= n ? effect : 0));
+  const meanOf = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const observed = meanOf(values.slice(n)) - meanOf(values.slice(0, n));
+  const shuffles = 1000;
+  const coins = draws(60 + seed, shuffles * 2 * n, false);
+  const total = values.reduce((a, b) => a + b, 0);
+  const diffs = Array.from({ length: shuffles }, (_, s) => {
+    const pool = [...values];
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(coins[s * 2 * n + i] * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const first = pool.slice(0, n).reduce((a, b) => a + b, 0);
+    return (total - first) / n - first / n;
+  });
+  const extreme = diffs.filter((d) => Math.abs(d) >= Math.abs(observed)).length;
+  const span = Math.max(15, Math.abs(observed) * 1.2, ...diffs.map((d) => Math.abs(d)));
+  const bins = 40;
+  const counts = Array.from({ length: bins }, () => 0);
+  for (const d of diffs) counts[clamp(Math.floor(((d + span) / (2 * span)) * bins), 0, bins - 1)]++;
+  const tallest = Math.max(...counts);
+  const sx = (v: number) => 40 + ((v + span) / (2 * span)) * 380;
+  const sy = (c: number) => 200 - (c / tallest) * 160;
+  const binMid = (j: number) => -span + ((j + 0.5) * 2 * span) / bins;
+  const p = extreme / shuffles;
+  return (
+    <Frame
+      title="Could it be chance?"
+      summary={`Two groups of ${n} response times from the same population, with ${effect} ms added to every time in group B. The observed difference of means, B minus A, is ${dp(observed, 2)} ms. Shuffling the ${2 * n} times between the groups at random ${group(shuffles)} times, as if the labels meant nothing, gave a difference at least that large in size ${group(extreme)} times, so the p-value is about ${dp(p, 3)}. ${p < 0.05 ? "That is below 0.05: chance alone rarely does this, and the difference is called significant at the 5% level." : "That is not below 0.05: chance alone does this often enough that the data cannot rule it out."}`}
+      controls={
+        <>
+          <Slider label="added to group B" value={effect} onChange={setEffect} min={0} max={15} text={`${effect} ms`} />
+          <Slider label="group size" value={sizeAt} onChange={setSizeAt} min={0} max={NULL_SIZES.length - 1} text={`${n}`} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 240" role="img" aria-label={`A histogram of ${group(shuffles)} differences from shuffled labels, centred on zero, with the observed difference of ${dp(observed, 1)} milliseconds marked`}>
+        {counts.map((c, j) => (
+          <rect key={j} x={40 + (j * 380) / bins + 0.5} y={sy(c)} width={380 / bins - 1} height={200 - sy(c)} className={Math.abs(binMid(j)) >= Math.abs(observed) ? "fig-accent" : "fig-fill"} />
+        ))}
+        <line x1="40" y1="200" x2="420" y2="200" className="fig-axis" />
+        <line x1={sx(observed)} y1="30" x2={sx(observed)} y2="200" className="fig-line" />
+        <text x={sx(observed)} y="24" textAnchor="middle" className="fig-small">
+          {`observed ${dp(observed, 1)}`}
+        </text>
+        <text x={sx(0)} y="218" textAnchor="middle" className="fig-small">
+          0
+        </text>
+        <text x="40" y="218" textAnchor="middle" className="fig-small">
+          {`−${dp(span, 0)}`}
+        </text>
+        <text x="420" y="218" textAnchor="middle" className="fig-small">
+          {dp(span, 0)}
+        </text>
+        <text x="230" y="234" textAnchor="middle" className="fig-small">
+          difference of means after shuffling, ms
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const BOOT_SIZES = [10, 20, 50, 100, 200];
+const BOOT_KINDS: EstKind[] = ["mean", "median", "p90"];
+
+/** One sample, resampled with replacement a thousand times: the spread of the resampled estimates stands in for the spread over real samples. */
+function Bootstrap(props: Props) {
+  const [kind, setKind] = useState<EstKind>(typeof props.estimator === "string" && (BOOT_KINDS as string[]).includes(props.estimator) ? (props.estimator as EstKind) : "median");
+  const [sizeAt, setSizeAt] = useState(Math.max(0, BOOT_SIZES.indexOf(num(props.n, 50))));
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const n = BOOT_SIZES[sizeAt];
+  const sample = draws(80 + seed, n, false).map((u) => EST_POPULATION[Math.floor(u * EST_POPULATION.length)]);
+  const resamples = 1000;
+  const picks = draws(90 + seed, resamples * n, false);
+  const stats = Array.from({ length: resamples }, (_, r) => estimateOf(kind, Array.from({ length: n }, (_, i) => sample[Math.floor(picks[r * n + i] * n)]))).sort((a, b) => a - b);
+  const low = stats[25];
+  const high = stats[resamples - 26];
+  const centre = stats.reduce((a, b) => a + b, 0) / resamples;
+  const se = Math.sqrt(stats.reduce((a, b) => a + (b - centre) ** 2, 0) / resamples);
+  const estimate = estimateOf(kind, sample);
+  const truth = EST_TRUE[kind];
+  const caught = low <= truth && truth <= high;
+  const top = 2.5 * truth;
+  const bins = 40;
+  const counts = Array.from({ length: bins }, () => 0);
+  for (const s of stats) counts[clamp(Math.floor((s / top) * bins), 0, bins - 1)]++;
+  const tallest = Math.max(...counts);
+  const sx = (v: number) => 40 + (clamp(v, 0, top) / top) * 380;
+  const sy = (c: number) => 220 - (c / tallest) * 120;
+  const dotTop = 150;
+  const dx = (v: number) => 40 + (clamp(v, 0, dotTop) / dotTop) * 380;
+  const nextKind = BOOT_KINDS[(BOOT_KINDS.indexOf(kind) + 1) % BOOT_KINDS.length];
+  return (
+    <Frame
+      title="Resampling one sample"
+      summary={`One sample of ${n} response times, whose ${EST_NAMES[kind]} is ${dp(estimate, 1)} ms. Drawing ${n} values from it with replacement, ${group(resamples)} times, gives ${group(resamples)} resampled ${EST_NAMES[kind]}s with a standard deviation of ${dp(se, 1)} ms: the bootstrap standard error. Dropping the lowest and highest 25 leaves the 95% interval ${dp(low, 1)} to ${dp(high, 1)} ms. The population's true ${EST_NAMES[kind]}, ${dp(truth, 1)} ms, which a real analyst never sees, is ${caught ? "inside" : "outside"} it.`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setKind(nextKind)}>
+            {`Resample the ${EST_NAMES[nextKind]}`}
+          </button>
+          <Slider label="sample size" value={sizeAt} onChange={setSizeAt} min={0} max={BOOT_SIZES.length - 1} text={`${n}`} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`Above, the ${n} sampled times as dots; below, a histogram of ${group(resamples)} resampled ${EST_NAMES[kind]}s with the 95% interval marked`}>
+        <text x="40" y="14" className="fig-small">
+          {`the sample, ${n} times (0 to ${dotTop} ms)`}
+        </text>
+        <line x1="40" y1="40" x2="420" y2="40" className="fig-axis" />
+        {sample.map((v, i) => (
+          <circle key={i} cx={dx(v)} cy={34 - (i % 3) * 5} r="2.5" className="fig-accent" opacity={0.7} />
+        ))}
+        <text x="40" y="78" className="fig-small">
+          {`resampled ${EST_NAMES[kind]}s (0 to ${dp(top, 0)} ms)`}
+        </text>
+        <rect x={sx(low)} y="90" width={Math.max(sx(high) - sx(low), 1)} height="130" className="fig-fill" opacity={0.5} />
+        {counts.map((c, j) => (
+          <rect key={j} x={40 + (j * 380) / bins + 0.5} y={sy(c)} width={380 / bins - 1} height={220 - sy(c)} className="fig-accent" opacity={0.75} />
+        ))}
+        <line x1="40" y1="220" x2="420" y2="220" className="fig-axis" />
+        <line x1={sx(truth)} y1="90" x2={sx(truth)} y2="220" className="fig-guide" />
+        <text x={sx(truth)} y="238" textAnchor="middle" className="fig-small">
+          {`true ${dp(truth, 1)}`}
+        </text>
+        <text x={sx(low)} y="254" textAnchor="end" className="fig-small">
+          {dp(low, 1)}
+        </text>
+        <text x={sx(high)} y="254" textAnchor="start" className="fig-small">
+          {dp(high, 1)}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const AB_LOOKS = [1, 2, 3, 5, 10, 15, 30];
+const AB_DAYS = 30;
+const AB_USERS = 1000;
+const AB_BASE = 0.05;
+const phi = (z: number) => {
+  // The standard normal distribution function, from the error function by a rational approximation.
+  const t = 1 / (1 + 0.3275911 * (Math.abs(z) / Math.SQRT2));
+  const erf = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-(z * z) / 2);
+  return z >= 0 ? (1 + erf) / 2 : (1 - erf) / 2;
+};
+
+/** One A/B test, run for 30 days and looked at along the way, and how often stopping at the first significant look declares a winner by chance. */
+function AbTest(props: Props) {
+  const [lift, setLift] = useState(clamp(Math.round(num(props.lift, 0)), 0, 20));
+  const [looksAt, setLooksAt] = useState(Math.max(0, AB_LOOKS.indexOf(num(props.looks, 30))));
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const looks = AB_LOOKS[looksAt];
+  const rateB = AB_BASE * (1 + lift / 100);
+  const lookDays = Array.from({ length: looks }, (_, i) => Math.round(((i + 1) * AB_DAYS) / looks));
+  const run = (noise: number[]) => {
+    let a = 0;
+    let b = 0;
+    return Array.from({ length: AB_DAYS }, (_, d) => {
+      a += AB_USERS * AB_BASE + Math.sqrt(AB_USERS * AB_BASE * (1 - AB_BASE)) * noise[2 * d];
+      b += AB_USERS * rateB + Math.sqrt(AB_USERS * rateB * (1 - rateB)) * noise[2 * d + 1];
+      const n = AB_USERS * (d + 1);
+      const pooled = (a + b) / (2 * n);
+      const z = (b / n - a / n) / Math.sqrt((2 * pooled * (1 - pooled)) / n);
+      return 2 * (1 - phi(Math.abs(z)));
+    });
+  };
+  const tests = 400;
+  const noise = draws(100 + seed, tests * 2 * AB_DAYS, true);
+  const paths = Array.from({ length: tests }, (_, t) => run(noise.slice(t * 2 * AB_DAYS, (t + 1) * 2 * AB_DAYS)));
+  const firstHit = (path: number[]) => lookDays.find((day) => path[day - 1] < 0.05);
+  const declared = paths.filter((path) => firstHit(path) !== undefined).length;
+  // With no true difference, show a test whose p-value dips below 0.05 along the way but not at the end: the one a peeker is fooled by.
+  const fooling = lift === 0 ? paths.findIndex((path) => path.some((p) => p < 0.05) && path[AB_DAYS - 1] >= 0.05) : -1;
+  const shown = paths[Math.max(0, fooling)];
+  const hit = firstHit(shown);
+  const dip = shown.findIndex((p) => p < 0.05);
+  const sx = (day: number) => 40 + ((day - 1) / (AB_DAYS - 1)) * 380;
+  const sy = (p: number) => 20 + (Math.min(3, -Math.log10(Math.max(p, 1e-3))) / 3) * 190;
+  const line = shown.map((p, d) => `${dp(sx(d + 1), 2)},${dp(sy(p), 2)}`).join(" ");
+  return (
+    <Frame
+      title="Peeking at an A/B test"
+      summary={`Version B's true conversion rate is ${lift === 0 ? "the same as A's, 5%" : `${lift}% higher than A's 5%, ${dp(rateB * 100, 2)}%`}, with ${group(AB_USERS)} users a day on each version for ${AB_DAYS} days. The test is looked at ${looks === 1 ? "once, at the end" : looks === AB_DAYS ? `${looks} times, every day` : `${looks} times, every ${dp(AB_DAYS / looks, 1)} days`}. The test drawn ${dip < 0 ? "never dips below 0.05" : `dips below 0.05 on day ${dip + 1}`} and ${hit === undefined ? "is not below 0.05 at any look, so it is reported as no difference" : `is below 0.05 at the look on day ${hit}, so stopping there declares a difference`}. Over ${tests} tests like it, stopping at the first look with p below 0.05 declares the versions different in ${dp((declared / tests) * 100, 1)}% of them${lift === 0 ? ", every one a false alarm" : ""}.`}
+      controls={
+        <>
+          <Slider label="true lift" value={lift} onChange={setLift} min={0} max={20} text={`${lift}%`} />
+          <Slider label="looks" value={looksAt} onChange={setLooksAt} min={0} max={AB_LOOKS.length - 1} text={`${looks}`} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`The p-value of one A/B test day by day over ${AB_DAYS} days, on a logarithmic scale, with a line at 0.05 and the ${looks} looks marked`}>
+        <line x1="40" y1={sy(0.05)} x2="420" y2={sy(0.05)} className="fig-guide" />
+        <text x="420" y={sy(0.05) - 4} textAnchor="end" className="fig-small">
+          0.05
+        </text>
+        {[1, 0.1, 0.01, 0.001].map((p) => (
+          <text key={p} x="36" y={sy(p) + 4} textAnchor="end" className="fig-small">
+            {p}
+          </text>
+        ))}
+        <line x1="40" y1="20" x2="40" y2="210" className="fig-axis" />
+        <line x1="40" y1="210" x2="420" y2="210" className="fig-axis" />
+        <polyline points={line} className="fig-line" />
+        {lookDays.map((day) => (
+          <circle key={day} cx={sx(day)} cy={sy(shown[day - 1])} r={day === hit ? 5 : 3} className="fig-accent" />
+        ))}
+        <text x="40" y="228" textAnchor="middle" className="fig-small">
+          day 1
+        </text>
+        <text x="420" y="228" textAnchor="middle" className="fig-small">
+          {`day ${AB_DAYS}`}
+        </text>
+        <text x="230" y="244" textAnchor="middle" className="fig-small">
+          p-value so far, at each day
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const BENCH_RUNS = 80;
+
+/** Eighty timed runs of two versions on one machine, with warm-up, drift and the odd interruption: the order of the runs and the summary chosen decide what the comparison says. */
+function BenchmarkRuns(props: Props) {
+  const [diff, setDiff] = useState(clamp(Math.round(num(props.difference, 0)), -10, 10));
+  const [interleave, setInterleave] = useState(props.interleave === true);
+  const [dropWarm, setDropWarm] = useState(props.dropWarmup === true);
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const noise = draws(120 + seed, BENCH_RUNS * 2, false);
+  const runs = Array.from({ length: BENCH_RUNS }, (_, k) => {
+    const version = interleave ? (k % 2 === 0 ? "A" : "B") : k < BENCH_RUNS / 2 ? "A" : "B";
+    const base = version === "A" ? 100 : 100 * (1 + diff / 100);
+    const warm = k < 5 ? 0.4 * (1 - k / 5) : 0;
+    const drift = (0.08 * k) / (BENCH_RUNS - 1);
+    const jitter = 0.03 * -Math.log(1 - noise[2 * k]);
+    const spike = noise[2 * k + 1] < 0.05 ? 0.3 : 0;
+    return { k, version, time: base * (1 + warm + drift + jitter + spike) };
+  });
+  const kept = runs.filter((r) => !dropWarm || r.k >= 5);
+  const times = (v: string) => kept.filter((r) => r.version === v).map((r) => r.time);
+  const median = (xs: number[]) => {
+    const s = [...xs].sort((a, b) => a - b);
+    return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+  };
+  const a = times("A");
+  const b = times("B");
+  const ratio = median(b) / median(a);
+  const minRatio = Math.min(...b) / Math.min(...a);
+  const meanRatio = b.reduce((s, x) => s + x, 0) / b.length / (a.reduce((s, x) => s + x, 0) / a.length);
+  const truth = 1 + diff / 100;
+  const sx = (k: number) => 40 + (k / (BENCH_RUNS - 1)) * 380;
+  const sy = (t: number) => 210 - ((clamp(t, 90, 170) - 90) / 80) * 190;
+  const pct = (r: number) => (Math.abs(r - 1) < 0.0005 ? "0%" : `${r > 1 ? "+" : "−"}${dp(Math.abs(r - 1) * 100, 1)}%`);
+  return (
+    <Frame
+      title="Timing two versions"
+      summary={`80 timed runs on one machine, ${interleave ? "alternating A and B" : "all 40 of A first, then all 40 of B"}, ${dropWarm ? "with the first 5 runs dropped as warm-up" : "keeping every run"}. B is truly ${diff === 0 ? "exactly as fast as A" : `${Math.abs(diff)}% ${diff > 0 ? "slower" : "faster"} than A`}. The machine warms up over the first few runs and drifts about 8% slower over the session, and about one run in twenty is interrupted. Measured B against A: median ${pct(ratio)}, minimum ${pct(minRatio)}, mean ${pct(meanRatio)}, against a true ${pct(truth)}.`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={interleave} onClick={() => setInterleave(!interleave)}>
+            Interleave the runs
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={dropWarm} onClick={() => setDropWarm(!dropWarm)}>
+            Drop the first 5 runs
+          </button>
+          <Slider label="true difference" value={diff} onChange={setDiff} min={-10} max={10} text={`${diff > 0 ? "+" : diff < 0 ? "−" : ""}${Math.abs(diff)}%`} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`80 run times in the order they were taken, A as filled dots and B as rings, ${interleave ? "alternating" : "A first, then B"}`}>
+        {[100, 120, 140, 160].map((t) => (
+          <g key={t}>
+            <line x1="40" y1={sy(t)} x2="420" y2={sy(t)} className="fig-grid" />
+            <text x="36" y={sy(t) + 4} textAnchor="end" className="fig-small">
+              {t}
+            </text>
+          </g>
+        ))}
+        <line x1="40" y1="210" x2="420" y2="210" className="fig-axis" />
+        {runs.map((r) => (
+          <circle key={r.k} cx={sx(r.k)} cy={sy(r.time)} r="3.5" className={r.version === "A" ? "fig-accent" : "fig-line"} opacity={dropWarm && r.k < 5 ? 0.25 : 1} />
+        ))}
+        <text x="40" y="228" textAnchor="middle" className="fig-small">
+          run 1
+        </text>
+        <text x="420" y="228" textAnchor="middle" className="fig-small">
+          run 80
+        </text>
+        <text x="230" y="244" textAnchor="middle" className="fig-small">
+          filled: A, rings: B, time in ms
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5924,6 +6545,15 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "tail-bounds": TailBounds,
   "sample-means": SampleMeans,
   "monte-carlo": MonteCarlo,
+  "summary-marks": SummaryMarks,
+  "tail-plot": TailPlot,
+  "histogram-bins": HistogramBins,
+  "estimator-spread": EstimatorSpread,
+  "interval-catch": IntervalCatch,
+  "null-test": NullTest,
+  "bootstrap": Bootstrap,
+  "ab-test": AbTest,
+  "benchmark-runs": BenchmarkRuns,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

@@ -1,0 +1,435 @@
+concept: f5.distributions-of-latency-and-heavy-tails
+minutes: 90
+claim: You can describe the shape of measured response times, tell a light tail from a heavy one by how its tail chance falls, read percentiles and means off an exponential and a power-law tail, explain why a heavy tail makes the mean unstable and the slowest few requests take much of the total time, draw heavy-tailed times by inverse transform in Python, and explain why a request that is already slow is likely to stay slow.
+recalls: [f5.summaries-mean-median-and-percentiles]
+uses: [f4.continuous-distributions-and-densities, f4.the-law-of-large-numbers-and-the-central-limit-theorem, f4.tail-bounds, f4.simulation-and-pseudo-random-numbers, f4.conditional-probability, f4.expectation-and-linearity, f4.variance, f1.logarithms, s1.modules-and-imports, s1.comprehensions-and-iterators, s0.functions, s0.lists-and-tuples]
+leads: [f5.histograms, f5.sampling-and-estimators, f5.the-bootstrap, f5.noise-in-measurements-and-benchmarks]
+starter: |
+  # Scratch space. Ten response times in milliseconds, with a long right tail.
+  heavy = [10, 11, 13, 15, 20, 30, 60, 150, 400, 1300]
+  ordered = sorted(heavy)
+  print(sum(heavy) / len(heavy), (ordered[4] + ordered[5]) / 2, ordered[-1] / sum(heavy))
+parts:
+  recall:
+    - text: |
+        [[f5.summaries-mean-median-and-percentiles]] described a pile of response times by a few numbers, and found that one slow request out of twenty could pull the mean up nearly five-fold while the median did not move. That was not bad luck with one sample. Response times are built that way, and this lesson looks at the shape that makes them so. Three quick pulls first.
+  puzzle:
+    - text: |
+        A payments app calls a service whose response times have a long tail of a particular shape: beyond 10 ms, the chance that a request takes longer than $t$ milliseconds is
+
+        $$P(T > t) = \left(\frac{10}{t}\right)^{2}.$$
+
+        So 1 request in 100 takes longer than 100 ms, and 1 in 10,000 longer than a second.
+
+        One request has now been running for a full second, and the app must decide whether to keep waiting or give up and try again. **Given that it has already taken a second, what is the chance that it is still running at two seconds?**
+  intuition:
+    - text: |
+        Think of the drive to work. On an empty road at dawn it takes 25 minutes, and it can never take less: that is the floor. Most days it takes 30 to 40 minutes: that is the bulk. And a few days a year it takes two hours, because an underpass flooded in the monsoon, or a procession closed the main road, or a lorry broke down on the flyover: that is the tail. Nobody would describe this with a symmetric bell around 35 minutes. The floor is close to the bulk, and the tail stretches far away on one side only.
+
+        Response times have the same shape, for the same reasons. A request cannot finish faster than the work it has to do, so there is a floor. Most requests meet no trouble. A few meet a garbage-collection pause, a cache miss that goes to disk, a lost packet that waits for a retransmission, or a queue behind another slow request, and delays like these pile up. A distribution with a long tail on the right is called **right-skewed**, and for right-skewed data the mean lies above the median, pulled out by the tail.
+
+        The question that matters most is how fast the tail falls. Write $S(t) = P(T > t)$ for the chance that a response takes longer than $t$. Two families cover most of what engineers meet. In an **exponential** tail, every extra fixed amount of time multiplies the chance by the same factor: say, every extra 20 ms halves it. In a **power-law** tail, every *doubling* of the time multiplies the chance by the same factor: say, every doubling divides it by four. Halving per 20 ms soon becomes astronomically small; dividing by four per doubling does not.
+
+        The figure draws both tails with the same median, 20 ms, on logarithmic axes: time across, from 10 ms to 100 seconds, and chance down, from 1 to one in a million. Each step along an axis multiplies by ten. Move the tail exponent, which sets how steep the power law is, and read off the 99th, 99.9th and 99.99th percentiles below the picture.
+    - figure: tail-plot
+      props: { alpha: 2 }
+    - text: |
+        At the 99th percentile the two tails barely differ, about 133 ms against 141 ms. At the 99.99th, one request in ten thousand, the exponential gives 266 ms and the power law over 1.4 seconds. Lower the exponent towards 1 and the power law's far percentiles run into tens of seconds and its mean grows without limit. None of this shows in the median, and little of it in the p99. A heavy tail lives where only a few requests in thousands are, and a busy service makes millions of requests a day.
+  derivation:
+    - text: |
+        **The tail function.** For a response time $T$ with distribution function $F(t) = P(T \le t)$ from [[f4.continuous-distributions-and-densities]], the **tail function**, or survival function, is $S(t) = P(T > t) = 1 - F(t)$. It starts at 1 and falls towards 0. Percentiles are read off it: the $p$th percentile is the time $t_p$ at which $S(t_p) = 1 - p/100$, so p99 is where the tail chance has fallen to $0.01$.
+
+        **The exponential tail.** An exponential time with mean $\mu$ has $S(t) = e^{-t/\mu}$. Adding a fixed $h$ to the time multiplies the tail by $e^{-h/\mu}$, wherever you start, so $\log S(t)$ falls in a straight line as $t$ grows. Its tail is **light**: the chance of a time ten means long is $e^{-10} \approx 0.00005$, and the bounds of [[f4.tail-bounds]] squeeze it hard. It is also memoryless: given that a request has already taken $s$, the chance it takes another $h$ is
+
+        $$P(T > s + h \mid T > s) = \frac{S(s + h)}{S(s)} = e^{-h/\mu} = S(h),$$
+
+        by the rule for [[f4.conditional-probability]]. An exponential request that has waited a long time is no worse off than a new one.
+
+        **The power-law tail.** The simplest heavy tail is the **Pareto** distribution, with a minimum $m$ and an exponent $\alpha > 0$:
+
+        $$S(t) = \left(\frac{m}{t}\right)^{\alpha} \quad \text{for } t \ge m.$$
+
+        Take logarithms, as in [[f1.logarithms]]: $\log S(t) = \alpha \log m - \alpha \log t$. Against $\log t$, that is a straight line of slope $-\alpha$, which is why the power law in the figure is straight. Doubling $t$ multiplies $S$ by $2^{-\alpha}$, at every scale. Setting $S(t_p) = 1 - p/100$ and solving gives the percentiles:
+
+        $$t_p = m \left(1 - \frac{p}{100}\right)^{-1/\alpha}.$$
+
+        The median is $m \cdot 2^{1/\alpha}$, and each extra nine in the percentile, p99 to p99.9 to p99.99, multiplies the time by $10^{1/\alpha}$. For $\alpha = 2$ that is a factor of about 3.16 per nine; for the exponential it is a fixed number of milliseconds added per nine.
+    - question:
+        id: derivation-percentile
+        type: numeric
+        system: s2
+        prompt: |
+          A Pareto tail has minimum $m = 10$ ms and exponent $\alpha = 2$. What is its 99th percentile, in milliseconds?
+        answer: "100"
+        explanation: |
+          Set $(10/t)^2 = 0.01$, so $10/t = 0.1$ and $t = 100$. By the formula, $t_{99} = 10 \times 0.01^{-1/2} = 10 \times 10 = 100$.
+    - text: |
+        **The mean, or its absence.** For a time that is never negative, the mean is the area under the tail function, $E[T] = \int_0^\infty S(t)\,dt$: slice the time into thin strips of width $dt$, and each strip contributes $dt$ to $T$ exactly when $T$ is longer than it, which happens with chance $S(t)$. Adding the expectations of the strips, by [[f4.expectation-and-linearity]], gives the area. For the Pareto, $S(t) = 1$ up to $m$, so
+
+        $$E[T] = m + \int_m^\infty \left(\frac{m}{t}\right)^{\alpha} dt = m + \frac{m}{\alpha - 1} = \frac{\alpha m}{\alpha - 1} \quad \text{for } \alpha > 1.$$
+
+        For $\alpha \le 1$ the integral never stops growing, and the mean is **infinite**. In the same way the variance of [[f4.variance]] is finite only for $\alpha > 2$. That is the formal meaning of heavy: the tail falls so slowly that the moments that the mean and standard deviation rely on stop existing.
+    - question:
+        id: derivation-mean
+        type: numeric
+        system: s2
+        prompt: |
+          A Pareto tail has minimum $m = 10$ ms and exponent $\alpha = 1.5$. What is its mean, in milliseconds?
+        answer: "30"
+        explanation: |
+          $\alpha m / (\alpha - 1) = 1.5 \times 10 / 0.5 = 30$. Its median is only $10 \times 2^{1/1.5} \approx 15.9$ ms: the mean is nearly twice the median, held up by the tail.
+    - text: |
+        **What a heavy tail does to averages.** The [[f4.the-law-of-large-numbers-and-the-central-limit-theorem]] promised that the mean of $n$ draws settles near the true mean, with a spread that shrinks like $\sigma/\sqrt{n}$, and that its shape becomes a bell. Both halves need care here. The central limit theorem needs a finite variance; with $1 < \alpha \le 2$ the sample mean still drifts towards the true mean, but slowly and in lurches, each lurch a single huge value arriving. With $\alpha \le 1$ there is no true mean to settle to, and the running average keeps climbing as the sample grows.
+
+        **Where the total time goes.** In a Pareto population the slowest fraction $f$ of requests takes a share
+
+        $$f^{\,1 - 1/\alpha}$$
+
+        of the total time, for $\alpha > 1$. With $\alpha = 1.5$, the slowest 1% take $0.01^{1/3} \approx 22\%$ of all the time spent. With $\alpha \approx 1.16$, the slowest 20% take 80%, the familiar eighty-twenty rule. With an exponential tail, the slowest 1% take under 6%. So in heavy-tailed data a few values dominate the sum, and any summary built on the sum, the mean and the standard deviation above all, mostly reports those few values.
+
+        **The longer it has run, the longer it will run.** Given that a Pareto request has already taken $s \ge m$, the rest of its time is again Pareto, now with minimum $s$:
+
+        $$P(T > s + h \mid T > s) = \left(\frac{s}{s + h}\right)^{\alpha}, \qquad E[T - s \mid T > s] = \frac{s}{\alpha - 1}.$$
+
+        The expected extra wait, the **mean excess**, grows in proportion to the time already waited. Compare the exponential, whose mean excess is always $\mu$, and a bounded distribution such as a fixed amount of work plus a little noise, whose mean excess shrinks as the request nears its end. The mean excess is therefore a practical test of the tail: compute it from data at a few thresholds and see whether it rises, stays flat or falls.
+    - question:
+        id: derivation-excess
+        type: numeric
+        system: s2
+        prompt: |
+          A service's times have a Pareto tail with exponent $\alpha = 3$. A request has already taken 400 ms. What is its expected extra wait, in milliseconds?
+        answer: "200"
+        explanation: |
+          $E[T - s \mid T > s] = s/(\alpha - 1) = 400/2 = 200$. A request that had taken 4,000 ms would expect another 2,000.
+    - question:
+        id: order-excess
+        type: order
+        system: s2
+        prompt: |
+          Put the steps for testing a pile of measured times for a heavy tail by its mean excess in order.
+        steps:
+          - "Choose a threshold, say 100 ms."
+          - "Keep only the requests that took longer than the threshold."
+          - "Subtract the threshold from each of those times."
+          - "Average the differences, then repeat at larger thresholds and see whether the average rises."
+        explanation: |
+          The mean excess is an average over the requests beyond the threshold only, of the part beyond it. If it rises as the threshold rises, waiting longer predicts waiting longer still, the mark of a heavy tail; flat suggests an exponential, and falling a bounded tail.
+    - text: |
+        **Drawing heavy-tailed times.** [[f4.simulation-and-pseudo-random-numbers]] turned uniform draws into other distributions by inverting the distribution function. For the Pareto, solve $u = S(t) = (m/t)^\alpha$ for $t$: $t = m\,u^{-1/\alpha}$. If $U$ is uniform on $(0, 1]$, then $P(m\,U^{-1/\alpha} > t) = P(U < (m/t)^\alpha) = (m/t)^\alpha$, which is the tail we wanted. Small values of $u$ give the huge times: one draw in a thousand has $u < 0.001$, and with $\alpha = 1$ that gives a time over a thousand times the minimum.
+
+        **Other shapes.** If the logarithm of a time is normally distributed, the time is **lognormal**. That happens when a time is the product of many independent factors, each layer of a system multiplying the delay a little. A lognormal has all its moments, but with a wide spread its tail on logarithmic axes bends down only slowly, and over the range anyone can measure it can look much like a power law. Measured latency often looks lognormal in the bulk and power-law-like in the far tail. Another common shape has two humps: cache hits at 2 ms and misses at 50 ms. With 90% hits the mean is $0.9 \times 2 + 0.1 \times 50 = 6.8$ ms, a time that no request ever takes. A single summary of a mixture describes neither part, and the cure is to split the data, by cache hit and miss, before summarising.
+  formal:
+    - text: |
+        **Tail function.** $S(t) = P(T > t) = 1 - F(t)$. The $p$th percentile $t_p$ satisfies $S(t_p) = 1 - p/100$. For $T \ge 0$, $E[T] = \int_0^\infty S(t)\,dt$.
+
+        **Exponential.** $S(t) = e^{-t/\mu}$ for $t \ge 0$, mean $\mu$, median $\mu \ln 2$. Memoryless: $P(T > s + h \mid T > s) = S(h)$, and $E[T - s \mid T > s] = \mu$.
+
+        **Pareto.** With minimum $m > 0$ and exponent $\alpha > 0$, $S(t) = (m/t)^\alpha$ for $t \ge m$. Percentile $t_p = m(1 - p/100)^{-1/\alpha}$; median $m\,2^{1/\alpha}$. Mean $\alpha m/(\alpha - 1)$ for $\alpha > 1$, infinite for $\alpha \le 1$; variance finite only for $\alpha > 2$. Mean excess $E[T - s \mid T > s] = s/(\alpha - 1)$ for $s \ge m$ and $\alpha > 1$. The slowest fraction $f$ takes the share $f^{1 - 1/\alpha}$ of the total, for $\alpha > 1$. Inverse transform: $T = m\,U^{-1/\alpha}$ with $U$ uniform on $(0, 1]$.
+
+        **Light and heavy.** A tail is light if it falls at least as fast as some exponential, $S(t) \le c\,e^{-t/\mu}$, and heavy if it falls more slowly than every exponential. A power law is heavy; the lognormal is heavy though all its moments are finite.
+  drill:
+    - text: Seconds each. For a power law, think in doublings and powers of ten; for an exponential, in fixed steps of time.
+    - question:
+        id: drill-pareto-tail
+        type: numeric
+        system: s1
+        prompt: |
+          $P(T > t) = (10/t)^2$ for $t \ge 10$. What is $P(T > 100)$?
+        answer: "0.01"
+        explanation: $(10/100)^2 = 0.1^2 = 0.01$.
+    - question:
+        id: drill-doubling
+        type: numeric
+        system: s1
+        prompt: |
+          A power-law tail has exponent $\alpha = 3$. Doubling the time multiplies the tail chance by what?
+        answer: "0.125"
+        explanation: $2^{-3} = 1/8 = 0.125$, whatever time you start from.
+    - question:
+        id: drill-exponential
+        type: numeric
+        system: s1
+        prompt: |
+          $P(T > t) = 2^{-t/20}$, with $t$ in milliseconds. What is $P(T > 60)$?
+        answer: "0.125"
+        explanation: 60 ms is three steps of 20 ms, each halving the chance, so $2^{-3} = 0.125$.
+    - question:
+        id: drill-pareto-mean
+        type: numeric
+        system: s1
+        prompt: |
+          A Pareto tail has minimum $m = 10$ and exponent $\alpha = 2$. What is its mean?
+        answer: "20"
+        explanation: $\alpha m/(\alpha - 1) = 2 \times 10/1 = 20$.
+    - question:
+        id: drill-infinite
+        type: choice
+        system: s1
+        prompt: |
+          A Pareto tail has exponent $\alpha = 1$. What is its mean?
+        options:
+          - "Infinite"
+          - "Equal to the minimum $m$"
+          - "Equal to the median"
+          - "Twice the minimum"
+        answer: 0
+        explanation: The formula $\alpha m/(\alpha - 1)$ needs $\alpha > 1$. At $\alpha = 1$ the area under $m/t$ grows without limit, so there is no finite mean.
+    - question:
+        id: drill-skew
+        type: choice
+        system: s1
+        prompt: |
+          For a typical set of response times, with a floor and a long right tail, which is larger?
+        options:
+          - "The mean"
+          - "The median"
+          - "They are equal"
+        answer: 0
+        explanation: The long right tail pulls the mean up; the median only counts how many values are on each side.
+    - question:
+        id: predict-inverse
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print([round(10 * u ** -0.5) for u in [1, 0.25, 0.01]])
+        output: "[10, 20, 100]"
+        explanation: This is the Pareto draw $m\,u^{-1/\alpha}$ with $m = 10$ and $\alpha = 2$. The powers $u^{-1/2}$ are 1, 2 and 10.
+    - question:
+        id: predict-mixture
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import statistics
+
+          times = [2] * 9 + [50]
+          print(statistics.mean(times), statistics.median(times))
+        output: "6.8 2.0"
+        explanation: Nine cache hits at 2 ms and one miss at 50 ms total 68 ms, so the mean is 6.8 ms, a time no request took. The two middle values are both 2, so the median is 2.0.
+  work:
+    - text: Slower now. For each tail, ask what a doubling of the time does to the chance, and whether a request that has already waited is better or worse off than a new one.
+    - question:
+        id: fix-pareto
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `pareto_time(m, alpha, u)` should turn a uniform draw `u` in $(0, 1]$ into a time $T$ with $P(T > t) = (m/t)^\alpha$ for $t \ge m$. The program should print `20.0 100.0 10000.0`. It prints `160.0 100000.0 10000.0`. Find the fault and fix it.
+        starter: |
+          def pareto_time(m, alpha, u):
+              # u is a uniform draw in (0, 1]. The result T should have P(T > t) = (m / t) ** alpha for t >= m.
+              return m * u ** -alpha
+
+
+          print(round(pareto_time(10, 2, 0.25), 6), round(pareto_time(10, 2, 0.01), 6), round(pareto_time(10, 1, 0.001), 6))
+        solution: |
+          def pareto_time(m, alpha, u):
+              # u is a uniform draw in (0, 1]. The result T should have P(T > t) = (m / t) ** alpha for t >= m.
+              return m * u ** (-1 / alpha)
+
+
+          print(round(pareto_time(10, 2, 0.25), 6), round(pareto_time(10, 2, 0.01), 6), round(pareto_time(10, 1, 0.001), 6))
+        tests: |
+          for _m in [1, 10, 25]:
+              for _alpha in [0.5, 1, 1.5, 2, 3]:
+                  for _u in [1, 0.5, 0.25, 0.1, 0.01, 0.001]:
+                      _want = _m * _u ** (-1 / _alpha)
+                      _got = pareto_time(_m, _alpha, _u)
+                      assert abs(_got - _want) <= 1e-9 * _want, "pareto_time(" + str(_m) + ", " + str(_alpha) + ", " + str(_u) + ") should be about " + str(round(_want, 4)) + ", not " + str(_got)
+          assert output.strip() == "20.0 100.0 10000.0", "The program should print 20.0 100.0 10000.0"
+        wrong:
+          - |
+            def pareto_time(m, alpha, u):
+                # u is a uniform draw in (0, 1]. The result T should have P(T > t) = (m / t) ** alpha for t >= m.
+                return m * u ** (1 / alpha)
+
+
+            print(round(pareto_time(10, 2, 0.25), 6), round(pareto_time(10, 2, 0.01), 6), round(pareto_time(10, 1, 0.001), 6))
+          - |
+            def pareto_time(m, alpha, u):
+                # u is a uniform draw in (0, 1]. The result T should have P(T > t) = (m / t) ** alpha for t >= m.
+                return (m / u) ** (1 / alpha)
+
+
+            print(round(pareto_time(10, 2, 0.25), 6), round(pareto_time(10, 2, 0.01), 6), round(pareto_time(10, 1, 0.001), 6))
+          - |
+            import math
+
+            def pareto_time(m, alpha, u):
+                # u is a uniform draw in (0, 1]. The result T should have P(T > t) = (m / t) ** alpha for t >= m.
+                return -m * math.log(u) / alpha
+
+
+            print(round(pareto_time(10, 2, 0.25), 6), round(pareto_time(10, 2, 0.01), 6), round(pareto_time(10, 1, 0.001), 6))
+        explanation: |
+          Solving $u = (m/t)^\alpha$ for $t$ gives $t = m\,u^{-1/\alpha}$, so the power is $-1/\alpha$, not $-\alpha$. The two agree only when $\alpha = 1$, which is why the last number was already right. A positive power $1/\alpha$ gives times below the minimum; putting $m$ inside the root changes the minimum; and $-m \ln u / \alpha$ draws from an exponential, whose tail is light.
+    - question:
+        id: write-top-share
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `top_share(times, k)`: the fraction of the total time taken by the `k` slowest requests, for `k` from 0 to the number of requests. Do not change the list you are given.
+        starter: |
+          def top_share(times, k):
+              # The fraction of the total time taken by the k slowest requests, for k from 0 to len(times).
+              return 0
+
+
+          times = [12, 15, 11, 14, 900, 13, 16, 19]
+          print(top_share(times, 1), top_share(times, 2), top_share(times, 8))
+        solution: |
+          def top_share(times, k):
+              # The fraction of the total time taken by the k slowest requests, for k from 0 to len(times).
+              ordered = sorted(times)
+              return sum(ordered[len(ordered) - k:]) / sum(times)
+
+
+          times = [12, 15, 11, 14, 900, 13, 16, 19]
+          print(top_share(times, 1), top_share(times, 2), top_share(times, 8))
+        tests: |
+          _cases = [[5], [3, 7], [1, 2, 3, 4], [40, 10, 30, 20], [12, 15, 11, 14, 900, 13, 16, 19], [2, 2, 9, 1, 9, 5]]
+          for _times in _cases:
+              for _k in range(len(_times) + 1):
+                  _want = sum(sorted(_times, reverse=True)[:_k]) / sum(_times)
+                  _got = top_share(_times, _k)
+                  assert abs(_got - _want) < 1e-12, "top_share(" + str(_times) + ", " + str(_k) + ") should be " + str(_want) + ", not " + str(_got)
+          _t = [4, 1, 3]
+          top_share(_t, 2)
+          assert _t == [4, 1, 3], "top_share should not change the list it is given"
+          assert output.strip() == "0.9 0.919 1.0", "The program should print 0.9 0.919 1.0"
+        wrong:
+          - |
+            def top_share(times, k):
+                # The fraction of the total time taken by the k slowest requests, for k from 0 to len(times).
+                return sum(sorted(times)[-k:]) / sum(times)
+
+
+            times = [12, 15, 11, 14, 900, 13, 16, 19]
+            print(top_share(times, 1), top_share(times, 2), top_share(times, 8))
+          - |
+            def top_share(times, k):
+                # The fraction of the total time taken by the k slowest requests, for k from 0 to len(times).
+                return sum(sorted(times)[:k]) / sum(times)
+
+
+            times = [12, 15, 11, 14, 900, 13, 16, 19]
+            print(top_share(times, 1), top_share(times, 2), top_share(times, 8))
+          - |
+            def top_share(times, k):
+                # The fraction of the total time taken by the k slowest requests, for k from 0 to len(times).
+                return sum(times[len(times) - k:]) / sum(times)
+
+
+            times = [12, 15, 11, 14, 900, 13, 16, 19]
+            print(top_share(times, 1), top_share(times, 2), top_share(times, 8))
+        explanation: |
+          Sort a copy, take the last `k`, and divide their sum by the total. The slice `ordered[len(ordered) - k:]` is empty when `k` is 0; the shorter `ordered[-k:]` is not, because `-0` is `0` and the slice from 0 is the whole list. Taking the first `k` of the sorted list gives the fastest requests, and taking the last `k` of the unsorted list gives whichever came last. In the program, one request of the eight takes 90% of the total time.
+    - question:
+        id: write-mean-excess
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `mean_excess(times, t)`: over the requests that took longer than `t`, the average of how much longer than `t` they took. Return `None` if no request took longer than `t`.
+        starter: |
+          def mean_excess(times, t):
+              # Over the requests that took longer than t, the average of how much longer than t they took.
+              # None if no request took longer than t.
+              return 0
+
+
+          heavy = [10, 11, 13, 15, 20, 30, 60, 150, 400, 1300]
+          print(mean_excess(heavy, 20), round(mean_excess(heavy, 100), 1), mean_excess(heavy, 2000))
+        solution: |
+          def mean_excess(times, t):
+              # Over the requests that took longer than t, the average of how much longer than t they took.
+              # None if no request took longer than t.
+              over = [x - t for x in times if x > t]
+              if len(over) == 0:
+                  return None
+              return sum(over) / len(over)
+
+
+          heavy = [10, 11, 13, 15, 20, 30, 60, 150, 400, 1300]
+          print(mean_excess(heavy, 20), round(mean_excess(heavy, 100), 1), mean_excess(heavy, 2000))
+        tests: |
+          _cases = [([], 5), ([5], 5), ([5], 4), ([1, 2, 3, 4], 2), ([1, 2, 3, 4], 0), ([10, 20, 30, 40], 25), ([7, 7, 7, 9], 7), ([10, 11, 13, 15, 20, 30, 60, 150, 400, 1300], 20)]
+          for _times, _t in _cases:
+              _over = [_x - _t for _x in _times if _x > _t]
+              _want = sum(_over) / len(_over) if _over else None
+              _got = mean_excess(_times, _t)
+              if _want is None:
+                  assert _got is None, "mean_excess(" + str(_times) + ", " + str(_t) + ") should be None, not " + str(_got)
+              else:
+                  assert _got is not None and abs(_got - _want) < 1e-9, "mean_excess(" + str(_times) + ", " + str(_t) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "368.0 516.7 None", "The program should print 368.0 516.7 None"
+        wrong:
+          - |
+            def mean_excess(times, t):
+                # Over the requests that took longer than t, the average of how much longer than t they took.
+                # None if no request took longer than t.
+                over = [x for x in times if x > t]
+                if len(over) == 0:
+                    return None
+                return sum(over) / len(over)
+
+
+            heavy = [10, 11, 13, 15, 20, 30, 60, 150, 400, 1300]
+            print(mean_excess(heavy, 20), round(mean_excess(heavy, 100), 1), mean_excess(heavy, 2000))
+          - |
+            def mean_excess(times, t):
+                # Over the requests that took longer than t, the average of how much longer than t they took.
+                # None if no request took longer than t.
+                over = [x - t for x in times if x >= t]
+                if len(over) == 0:
+                    return None
+                return sum(over) / len(over)
+
+
+            heavy = [10, 11, 13, 15, 20, 30, 60, 150, 400, 1300]
+            print(mean_excess(heavy, 20), round(mean_excess(heavy, 100), 1), mean_excess(heavy, 2000))
+          - |
+            def mean_excess(times, t):
+                # Over the requests that took longer than t, the average of how much longer than t they took.
+                # None if no request took longer than t.
+                over = [x - t for x in times if x > t]
+                if len(over) == 0:
+                    return None
+                return sum(over) / len(times)
+
+
+            heavy = [10, 11, 13, 15, 20, 30, 60, 150, 400, 1300]
+            print(mean_excess(heavy, 20), round(mean_excess(heavy, 100), 1), mean_excess(heavy, 2000))
+        explanation: |
+          Keep only the requests strictly longer than `t`, subtract `t` from each, and average over those requests alone. Averaging the whole times, not the excess, counts the `t` they all share; `>=` lets in requests that took exactly `t` and so have no excess; dividing by the number of all requests spreads the excess over requests that had none. In the program the mean excess rises from 368 ms past 20 ms to about 517 ms past 100 ms, the signature of a heavy tail.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        tolerance: "0.001"
+        prompt: |
+          A service has $P(T > t) = (10/t)^2$ for $t \ge 10$, in milliseconds. A request has been running for 1,000 ms. What is the chance that it is still running at 2,000 ms?
+        answer: "0.25"
+        explanation: |
+          $P(T > 2000 \mid T > 1000) = S(2000)/S(1000) = (1000/2000)^2 = 0.25$. It is the same as the chance that a request still running at 10 ms lasts to 20 ms: a power law looks the same at every scale.
+    - question:
+        id: work-hedge
+        type: choice
+        system: s2
+        prompt: |
+          A service's times have a power-law tail. A client sends a request, and if no answer has come by the service's p95, it sends a second copy to another replica and uses whichever answer arrives first. This cuts the client's p99.9 sharply while adding only about 5% more requests. Why?
+        options:
+          - "Only the 5% of requests still waiting at p95 send a copy, and under a heavy tail a request that is already slow expects to stay slow, while a fresh copy is most likely fast."
+          - "The second replica is always faster than the first."
+          - "Sending a second copy halves the time of every request."
+          - "A request still running at p95 is about to finish, so the copy rarely matters."
+        answer: 0
+        explanation: |
+          With a power-law tail the mean excess grows with the time already waited, so a request past p95 is likely to take much longer still. A fresh copy is a new draw, which usually lands in the fast bulk. Since only requests that reach p95 send a copy, the extra load is about 5%. With a bounded tail the last option would be closer to the truth, and copies would be wasted.
+  connections:
+    - text: |
+        The chance is $(1000/2000)^2 = 0.25$: one in four. And a request that has run for 10 ms reaches 20 ms with the same chance, one in four. A power-law tail has no natural scale, so waiting does not bring the end closer; the expected extra wait grows with the wait already spent. That is why systems that call heavy-tailed services set timeouts, retry, and send hedged copies of slow requests, rather than wait patiently: a request that is already slow is the one most likely to stay slow.
+
+        [[f5.histograms]] turns a pile of response times into a picture, and shows why logarithmic buckets suit long tails. [[f5.sampling-and-estimators]] asks how well a sample's mean or percentile estimates the true one, a question with an uncomfortable answer for heavy tails. [[f5.the-bootstrap]] estimates that uncertainty from the data alone, and [[f5.noise-in-measurements-and-benchmarks]] uses the skew of measured times to choose between medians, minimums and means when timing programs.

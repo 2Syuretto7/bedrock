@@ -1,0 +1,411 @@
+concept: f5.summaries-mean-median-and-percentiles
+minutes: 90
+claim: You can summarise a pile of measurements by its mean, median and percentiles, compute each by hand and in Python with the nearest-rank rule for percentiles, explain which summary an outlier moves and why, describe spread by range, interquartile range and standard deviation, work out how often a page that waits for many backend calls meets one slow call, and explain why percentiles from different machines cannot simply be averaged.
+recalls: [f4.simulation-and-pseudo-random-numbers]
+uses: [f4.expectation-and-linearity, f4.variance, f4.independence, f4.random-variables, f4.sample-spaces-and-events, s1.modules-and-imports, s0.lists-and-tuples, s0.functions, s0.loops]
+leads: [f5.distributions-of-latency-and-heavy-tails, f5.histograms, f5.sampling-and-estimators, f5.the-bootstrap, f5.noise-in-measurements-and-benchmarks]
+starter: |
+  # Scratch space. Twenty response times, in milliseconds.
+  times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 1240]
+  ordered = sorted(times)
+  print(sum(times) / len(times), (ordered[9] + ordered[10]) / 2)
+parts:
+  recall:
+    - text: |
+        Probability started from known chances and worked out what data would look like. Statistics runs the other way: it starts from the data, measured from a real system, and asks what it says. The first job is the plainest one, describing a pile of numbers in a few numbers. [[f4.simulation-and-pseudo-random-numbers]] ended with simulations that produce such piles. Three quick pulls first.
+  puzzle:
+    - text: |
+        A train-ticket booking page is built from 50 backend services: seat availability, fares, the passenger's saved details, offers, and so on. The page calls all 50 at the same moment and shows itself when the last one answers.
+
+        Each service is fast. Its median response is 20 ms, and its 99th percentile is 1 second: 99 calls in 100 finish within a second, and the slowest 1 in 100 take longer. The engineers are proud of that number. "Only 1% of our calls are slow," they say.
+
+        Assume the 50 services are slow independently of each other. **On what fraction of page loads does the passenger wait more than a second?**
+  intuition:
+    - text: |
+        Ask a cricket fan how a batter is doing and you hear an average: runs per innings. Ask a commuter how long the bus takes and you hear something else: "usually twenty minutes, but some days an hour". The commuter is describing a distribution with two numbers, a typical value and a bad day, and for a commuter, and for anyone waiting on a computer, the bad day matters more than the average.
+
+        Three summaries do most of the work. The **mean** is the total shared out equally: add the numbers and divide by how many there are. The **median** is the middle one when they are sorted: half are at or below it, half at or above. A **percentile** generalises the median: the 90th percentile, written p90, is the value that at least 90% of the numbers are at or below. The median is p50.
+
+        The figure shows 20 response times from a web server, with these three marked. Drag the slowest request from 120 ms out to 5 seconds and watch. The mean chases it, because the extra milliseconds are shared among all 20. The median does not move at all: the slowest request was above the middle before and is still above it. Then move the percentile slider to 95 and to 100.
+    - figure: summary-marks
+      props: { slowest: 120, percentile: 90 }
+    - text: |
+        One slow request out of twenty pulled the mean from about 62 ms to over 300 ms while the median stayed at 57. Neither is wrong. The mean answers "how much time in total?", which is what a capacity planner needs. The median answers "what does a typical request feel like?". And the high percentiles answer "how bad is a bad request?", which is what a user remembers.
+  derivation:
+    - text: |
+        **The mean.** For numbers $x_1, \dots, x_n$, the mean is
+
+        $$\bar{x} = \frac{x_1 + x_2 + \cdots + x_n}{n}.$$
+
+        It is the expectation of [[f4.expectation-and-linearity]] for a variable that takes each of the $n$ values with chance $1/n$, so everything proved there applies: the mean of a sum is the sum of the means, and multiplying every value by a constant multiplies the mean by it. The mean is also the balance point: the deviations $x_i - \bar{x}$ add up to zero, and $\bar{x}$ is the single number $c$ that makes the total squared error $\sum (x_i - c)^2$ as small as possible. That is why a single huge value drags it: a value 1,000 ms away contributes a million to the squared error, and the mean moves to reduce it.
+    - question:
+        id: derivation-mean
+        type: numeric
+        system: s2
+        prompt: |
+          Five requests take 40, 50, 60, 70 and 780 ms. What is their mean, in milliseconds?
+        answer: "200"
+        explanation: |
+          The total is 1,000 ms, and $1{,}000/5 = 200$. Four of the five requests took 70 ms or less, yet the mean is 200: one slow request supplied most of the total. The median is 60.
+    - text: |
+        **The median.** Sort the values. If $n$ is odd, the median is the middle one, in position $(n + 1)/2$. If $n$ is even, there are two middle values, and the usual convention takes the average of them. The median minimises the total absolute error $\sum \lvert x_i - c \rvert$: move $c$ to the right of the middle and more values are to its left than to its right, so the error grows. Changing the largest value, however much, leaves the median where it is. It takes half of the values to move the median arbitrarily far, so it is called **robust**; the mean can be moved arbitrarily far by one value.
+
+        **Percentiles.** The definition used by most monitoring systems is the **nearest-rank** rule: the $p$th percentile of $n$ values, for $0 < p \le 100$, is the value at position
+
+        $$r = \left\lceil \frac{p \, n}{100} \right\rceil$$
+
+        in sorted order, counting from 1. It is the smallest value with at least $p\%$ of the values at or below it. For 20 values, p90 is the 18th smallest and p95 the 19th; p100 is the largest. Other definitions interpolate between neighbouring values, and spreadsheet functions and Python's `statistics.quantiles` each pick one. They differ only slightly for large samples, but for small ones they can disagree, so a report should say which it uses. Two more words: the 25th, 50th and 75th percentiles are the **quartiles**, and the stretch between the first and third, $Q_3 - Q_1$, is the **interquartile range**, a robust measure of spread.
+
+        **Spread.** The **range**, largest minus smallest, depends on the two most extreme values only. The **standard deviation** of [[f4.variance]], $\sqrt{\frac{1}{n}\sum (x_i - \bar{x})^2}$, uses every value but squares the deviations, so like the mean it is dominated by outliers. The interquartile range ignores the top and bottom quarters and so describes the bulk of the values.
+    - question:
+        id: order-percentile
+        type: order
+        system: s2
+        prompt: |
+          Put the steps for finding the 90th percentile of 30 response times by the nearest-rank rule in order.
+        steps:
+          - "Sort the 30 times from fastest to slowest."
+          - "Compute the rank $\\lceil 90 \\times 30/100 \\rceil = 27$."
+          - "Take the 27th time in sorted order."
+          - "Report it as p90: at least 27 of the 30 times, 90%, are at or below it."
+        explanation: |
+          Percentiles are positions in sorted order, so sorting comes first. The rank is $\lceil pn/100 \rceil$, here exactly 27, and the value at that position is the percentile.
+    - text: |
+        **Why the tail rules.** A single user action often waits for many requests. With $k$ independent calls, each slow with chance $q$, the action is slow unless every call is fast, which by [[f4.independence]] has chance $(1 - q)^k$. So
+
+        $$P(\text{some call is slow}) = 1 - (1 - q)^k.$$
+
+        With $q = 0.01$, the 1% beyond p99, and $k = 100$ calls, that is $1 - 0.99^{100} \approx 0.63$: most actions meet a call from the slow 1%. A service's p99 is its users' median experience once a page waits for a hundred calls. Turned around: to keep a page that waits for $k$ calls slow at most a fraction $t$ of the time, each call may be slow at most $1 - (1 - t)^{1/k}$ of the time, about $t/k$. For 100 calls and $t = 1\%$, that is about 0.01% per call: the page's p99 needs every service's p99.99.
+
+        **Percentiles do not average.** Two servers report their p99. The p99 of all their requests together lies somewhere between the two numbers, but where depends on the shapes of both lists, not on the two summaries, so averaging them can be far off. A percentile depends on the whole sorted list, so combining machines needs the raw times, or a summary that can be merged, such as the counts in buckets of [[f5.histograms]]. The mean does combine, by weighting each machine's mean by its number of requests.
+
+        **In Python.** `statistics.mean` and `statistics.median` compute the first two. For percentiles, the nearest-rank rule is two lines:
+
+        ```python
+        import math
+
+        times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 1240]
+        ordered = sorted(times)
+        print([ordered[math.ceil(p * len(ordered) / 100) - 1] for p in [50, 90, 99]])
+        ```
+
+        This prints `[56, 82, 1240]`. Notice that the nearest-rank p50 is 56, one of the values, while the median by the averaging convention is 57: they are different conventions for an even count.
+    - question:
+        id: derivation-fanout
+        type: numeric
+        system: s2
+        tolerance: "0.002"
+        prompt: |
+          A page waits for 100 independent calls, each slow with chance 0.01. What is the chance that the page is slow? Give a decimal to three places.
+        answer: "0.634"
+        explanation: |
+          $1 - 0.99^{100} \approx 1 - 0.366 = 0.634$. A 1-in-100 event per call becomes a better-than-even event per page.
+  formal:
+    - text: |
+        **Mean.** $\bar{x} = \frac{1}{n}\sum_{i=1}^n x_i$. It minimises $\sum (x_i - c)^2$ over $c$, and $\sum (x_i - \bar{x}) = 0$.
+
+        **Median.** With $x_{(1)} \le \cdots \le x_{(n)}$ the sorted values, the median is $x_{((n+1)/2)}$ for odd $n$ and $\frac{1}{2}\bigl(x_{(n/2)} + x_{(n/2+1)}\bigr)$ for even $n$. It minimises $\sum \lvert x_i - c \rvert$.
+
+        **Nearest-rank percentile.** For $0 < p \le 100$, $P_p = x_{(r)}$ with $r = \lceil pn/100 \rceil$: the smallest value $v$ among the data with $\#\{i : x_i \le v\} \ge pn/100$.
+
+        **Spread.** Range $x_{(n)} - x_{(1)}$; interquartile range $P_{75} - P_{25}$; standard deviation $\sqrt{\frac{1}{n}\sum (x_i - \bar{x})^2}$.
+
+        **Fan-out.** For $k$ independent calls each slow with chance $q$, $P(\text{at least one slow}) = 1 - (1 - q)^k$.
+  drill:
+    - text: Seconds each. Sort first for medians and percentiles; add first for means.
+    - question:
+        id: drill-median-odd
+        type: numeric
+        system: s1
+        prompt: |
+          What is the median of 7, 3 and 9?
+        answer: "7"
+        explanation: Sorted, they are 3, 7, 9, and the middle one is 7.
+    - question:
+        id: drill-mean
+        type: numeric
+        system: s1
+        prompt: |
+          What is the mean of 2, 4 and 9?
+        answer: "5"
+        explanation: $(2 + 4 + 9)/3 = 15/3 = 5$.
+    - question:
+        id: drill-median-even
+        type: numeric
+        system: s1
+        prompt: |
+          What is the median of 1, 2, 3 and 4, by the averaging convention?
+        answer: "2.5"
+        explanation: The two middle values are 2 and 3, and their average is 2.5.
+    - question:
+        id: drill-rank
+        type: numeric
+        system: s1
+        prompt: |
+          By the nearest-rank rule, the 90th percentile of 20 values is the value in which position of the sorted list?
+        answer: "18"
+        explanation: $\lceil 90 \times 20/100 \rceil = 18$.
+    - question:
+        id: drill-iqr
+        type: numeric
+        system: s1
+        prompt: |
+          A set of response times has first quartile 50 ms and third quartile 80 ms. What is its interquartile range, in milliseconds?
+        answer: "30"
+        explanation: $Q_3 - Q_1 = 80 - 50 = 30$.
+    - question:
+        id: drill-robust
+        type: choice
+        system: s1
+        prompt: |
+          The slowest of 101 response times changes from 100 ms to 10,000 ms. Which summary is certain not to change?
+        options:
+          - "The median"
+          - "The mean"
+          - "The standard deviation"
+          - "The range"
+        answer: 0
+        explanation: The slowest value is above the middle before and after, so the 51st of the sorted times is unchanged. The other three all use the largest value.
+    - question:
+        id: predict-percentiles
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import math
+
+          ordered = sorted([30, 10, 50, 20, 40])
+          print([ordered[math.ceil(p * 5 / 100) - 1] for p in [20, 50, 100]])
+        output: "[10, 30, 50]"
+        explanation: The ranks are $\lceil 1 \rceil = 1$, $\lceil 2.5 \rceil = 3$ and $\lceil 5 \rceil = 5$ in the sorted list 10, 20, 30, 40, 50.
+    - question:
+        id: predict-outlier
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import statistics
+
+          times = [10, 11, 12, 13, 954]
+          print(statistics.mean(times), statistics.median(times))
+        output: "200 12"
+        explanation: The total is 1,000, so the mean is 200, while the middle of the sorted list is 12.
+  work:
+    - text: Slower now. For each summary, decide whether one extreme value can move it, and for each percentile, which position in sorted order it names.
+    - question:
+        id: fix-percentile
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `percentile(values, p)` should return the nearest-rank `p`th percentile of a list of numbers, for a whole number `p` from 1 to 100: the smallest value that at least `p`% of the values are at or below. The program should print `56 82 95`. It prints `58 95 1240`, and it crashes for `p = 100`. Find the fault and fix it.
+        starter: |
+          import math
+
+          def percentile(values, p):
+              ordered = sorted(values)
+              return ordered[int(p / 100 * len(ordered))]
+
+          times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 1240]
+          print(percentile(times, 50), percentile(times, 90), percentile(times, 95))
+        solution: |
+          import math
+
+          def percentile(values, p):
+              ordered = sorted(values)
+              return ordered[math.ceil(p * len(ordered) / 100) - 1]
+
+          times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 1240]
+          print(percentile(times, 50), percentile(times, 90), percentile(times, 95))
+        tests: |
+          _cases = [[7], [3, 1], [5, 5, 2], [10, 20, 30, 40, 50], [9, 1, 8, 2, 7, 3, 6, 4, 5, 10], [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 1240], [4, 4, 4, 1, 1, 9, 9, 9, 9, 2, 2, 2, 2, 2, 2, 7, 7, 7, 7, 7]]
+          for _values in _cases:
+              for _p in range(1, 101):
+                  _want = min(_v for _v in _values if sum(1 for _x in _values if _x <= _v) * 100 >= _p * len(_values))
+                  _got = percentile(_values, _p)
+                  assert _got == _want, "percentile(" + str(_values) + ", " + str(_p) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "56 82 95", "The program should print 56 82 95"
+        wrong:
+          - |
+            import math
+
+            def percentile(values, p):
+                ordered = sorted(values)
+                return ordered[math.ceil(p * len(ordered) / 100)]
+
+            times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 1240]
+            print("56 82 95")
+          - |
+            import math
+
+            def percentile(values, p):
+                ordered = sorted(values)
+                return ordered[int(p * len(ordered) / 100) - 1]
+
+            times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 1240]
+            print("56 82 95")
+          - |
+            import math
+
+            def percentile(values, p):
+                ordered = sorted(values)
+                return ordered[round(p * len(ordered) / 100) - 1]
+
+            times = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 1240]
+            print("56 82 95")
+        explanation: |
+          The rank is $\lceil pn/100 \rceil$, counted from 1, and Python counts list positions from 0, so the value is `ordered[rank - 1]`. Using `int(p / 100 * n)` as a position is one place too far whenever $pn/100$ is a whole number, and runs off the end at `p = 100`. Rounding down, or to the nearest, instead of up, picks a value that fewer than $p\%$ of the values are at or below: for two values and `p = 1`, it gives position 0 minus 1, the last element.
+    - question:
+        id: write-median
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `median(values)` without the `statistics` module. For an odd count, return the middle value of the sorted list; for an even count, the average of the two middle values. Do not change the list you are given.
+        starter: |
+          def median(values):
+              return 0
+
+          print(median([31, 18, 25]), median([4, 1, 3, 2]), median([60, 55, 58, 62, 900, 57]))
+        solution: |
+          def median(values):
+              ordered = sorted(values)
+              middle = len(ordered) // 2
+              if len(ordered) % 2 == 1:
+                  return ordered[middle]
+              return (ordered[middle - 1] + ordered[middle]) / 2
+
+          print(median([31, 18, 25]), median([4, 1, 3, 2]), median([60, 55, 58, 62, 900, 57]))
+        tests: |
+          import statistics
+          _cases = [[5], [2, 8], [3, 1, 2], [10, 40, 20, 30], [7, 7, 7, 1], [1, 2, 3, 4, 100], [9, 1, 8, 2, 7, 3, 6, 4, 5, 10], [60, 55, 58, 62, 900, 57], [-3, -1, -2], [0.5, 0.25, 0.75, 1.0]]
+          for _values in _cases:
+              _copy = list(_values)
+              _want = statistics.median(_values)
+              _got = median(_values)
+              assert _got == _want, "median(" + str(_copy) + ") should be " + str(_want) + ", not " + str(_got)
+              assert _values == _copy, "median should not change the list it is given, but it reordered " + str(_copy)
+          assert output.strip() == "25 2.5 59.0", "The program should print 25 2.5 59.0"
+        wrong:
+          - |
+            def median(values):
+                ordered = values
+                middle = len(ordered) // 2
+                if len(ordered) % 2 == 1:
+                    return ordered[middle]
+                return (ordered[middle - 1] + ordered[middle]) / 2
+
+            print("25 2.5 59.0")
+          - |
+            def median(values):
+                ordered = sorted(values)
+                middle = len(ordered) // 2
+                if len(ordered) % 2 == 1:
+                    return ordered[middle]
+                return ordered[middle]
+
+            print("25 2.5 59.0")
+          - |
+            def median(values):
+                values.sort()
+                ordered = values
+                middle = len(ordered) // 2
+                if len(ordered) % 2 == 1:
+                    return ordered[middle]
+                return (ordered[middle - 1] + ordered[middle]) / 2
+
+            print("25 2.5 59.0")
+        explanation: |
+          `sorted` returns a new sorted list and leaves the original alone; `values.sort()` sorts the caller's list in place, which the caller did not ask for. For an even count the convention needs both middle values, at positions `n // 2 - 1` and `n // 2`. Forgetting to sort at all takes the middle of the list as it arrived, which means nothing.
+    - question:
+        id: write-budget
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write two functions. `page_slow(slow, calls)` returns the chance that a page waiting for `calls` independent backend calls, each slow with chance `slow`, is slow. `per_call_budget(calls, page_target)` returns the largest per-call chance of being slow that keeps the page slow with chance exactly `page_target`.
+        starter: |
+          def page_slow(slow, calls):
+              return 0.0
+
+          def per_call_budget(calls, page_target):
+              return 0.0
+
+          print(round(page_slow(0.01, 50), 3), round(per_call_budget(1, 0.01), 4), round(per_call_budget(100, 0.01), 7))
+        solution: |
+          def page_slow(slow, calls):
+              return 1 - (1 - slow) ** calls
+
+          def per_call_budget(calls, page_target):
+              return 1 - (1 - page_target) ** (1 / calls)
+
+          print(round(page_slow(0.01, 50), 3), round(per_call_budget(1, 0.01), 4), round(per_call_budget(100, 0.01), 7))
+        tests: |
+          for _q in [0, 0.001, 0.01, 0.05, 0.5, 1]:
+              for _k in [1, 2, 10, 50, 100]:
+                  _want = 1 - (1 - _q) ** _k
+                  _got = page_slow(_q, _k)
+                  assert abs(_got - _want) < 1e-12, "page_slow(" + str(_q) + ", " + str(_k) + ") should be about " + str(round(_want, 6)) + ", not " + str(_got)
+          for _k in [1, 2, 10, 50, 100, 1000]:
+              for _t in [0.001, 0.01, 0.05, 0.5]:
+                  _got = per_call_budget(_k, _t)
+                  assert abs(page_slow(_got, _k) - _t) < 1e-9, "With " + str(_k) + " calls, a per-call budget of " + str(_got) + " makes the page slow with chance " + str(page_slow(_got, _k)) + ", not " + str(_t)
+          assert output.strip() == "0.395 0.01 0.0001005", "The program should print 0.395 0.01 0.0001005"
+        wrong:
+          - |
+            def page_slow(slow, calls):
+                return slow * calls
+
+            def per_call_budget(calls, page_target):
+                return 1 - (1 - page_target) ** (1 / calls)
+
+            print("0.395 0.01 0.0001005")
+          - |
+            def page_slow(slow, calls):
+                return 1 - (1 - slow) ** calls
+
+            def per_call_budget(calls, page_target):
+                return page_target / calls
+
+            print("0.395 0.01 0.0001005")
+          - |
+            def page_slow(slow, calls):
+                return 1 - slow ** calls
+
+            def per_call_budget(calls, page_target):
+                return 1 - (1 - page_target) ** (1 / calls)
+
+            print("0.395 0.01 0.0001005")
+        explanation: |
+          The page is fast only if every call is fast, with chance $(1 - q)^k$, so it is slow with chance $1 - (1 - q)^k$. Solving $1 - (1 - q)^k = t$ gives $q = 1 - (1 - t)^{1/k}$. Multiplying $q$ by $k$ is the union bound, which overestimates; dividing $t$ by $k$ is close for small $t$ but not exact; and $1 - q^k$ is the chance that not every call is slow. The program prints `0.395 0.01 0.0001005`: with 100 calls, each service must keep its slow fraction near 0.01%, its p99.99.
+    - question:
+        id: work-booking
+        type: numeric
+        system: s2
+        tolerance: "0.002"
+        prompt: |
+          In the puzzle, on what fraction of page loads does the passenger wait more than a second? Give a decimal to three places.
+        answer: "0.395"
+        explanation: |
+          The page is fast only if all 50 calls are within a second: $0.99^{50} \approx 0.605$. So about $1 - 0.605 = 0.395$ of page loads, two in five, wait more than a second.
+    - question:
+        id: work-merge
+        type: choice
+        system: s2
+        prompt: |
+          Server A handled 9,000 requests with p99 = 200 ms. Server B handled 1,000 requests with p99 = 2,000 ms. What can be said about the p99 of all 10,000 requests together?
+        options:
+          - "It cannot be found from these two numbers; it needs the raw times or mergeable bucket counts from both servers."
+          - "It is the average, 1,100 ms."
+          - "It is the weighted average, $0.9 \\times 200 + 0.1 \\times 2{,}000 = 380$ ms."
+          - "It is the larger of the two, 2,000 ms."
+        answer: 0
+        explanation: |
+          The combined p99 is the 9,900th of the 10,000 sorted times, and which time that is depends on how the two lists interleave. If B's requests are mostly slow, the combined p99 could be near 2,000 ms; if B has only a few slow ones, it could be near 200 ms. Averages of percentiles, weighted or not, are not percentiles. Means do combine with weights; percentiles need the data or a histogram.
+  connections:
+    - text: |
+        The passenger waits more than a second on about 40% of page loads, not 1%. The page is fast only if all 50 services are fast at once, which happens with chance $0.99^{50} \approx 0.605$. A service's p99 describes one call; a page that waits for fifty calls lives in that service's tail. This is why large services measure p99 and p99.9 rather than the mean, and why a team that owns one of many services must hold its tail to a stricter standard than its users feel.
+
+        The mean is the total shared equally: it adds across machines and days, and it minimises squared error, which is why one outlier drags it. The median is the middle of the sorted values, robust to any single value. A percentile is a position in sorted order, $\lceil pn/100 \rceil$ by the nearest-rank rule. Spread is the range, the interquartile range or the standard deviation, of which only the interquartile range ignores extremes. And percentiles cannot be averaged across machines.
+
+        Response times are not just occasionally large; their whole distribution has a long right tail, which changes which tools work. [[f5.distributions-of-latency-and-heavy-tails]] looks at that shape and at what it does to means and to the central limit theorem. [[f5.histograms]] turns a pile of measurements into a picture whose buckets can be merged, [[f5.sampling-and-estimators]] asks how far a summary computed from a sample can be trusted, and [[f5.noise-in-measurements-and-benchmarks]] uses medians and percentiles to compare programs fairly.

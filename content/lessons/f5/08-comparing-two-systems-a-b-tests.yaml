@@ -1,0 +1,483 @@
+concept: f5.comparing-two-systems-a-b-tests
+minutes: 90
+claim: You can design an A/B test that compares two versions of a system on live traffic, randomise by the right unit, test a difference in conversion rates with a two-proportion z-test, work out how many users a test needs before it starts, check that the split itself worked, explain why peeking and stopping early manufacture false winners, and recognise when comparing totals across unequal mixes of traffic gives the wrong answer.
+recalls: [f5.the-bootstrap]
+uses: [f5.hypothesis-tests, f5.confidence-intervals, f5.sampling-and-estimators, f5.summaries-mean-median-and-percentiles, f4.continuous-distributions-and-densities, f4.common-discrete-distributions, f4.independence, f4.conditional-probability, s1.modules-and-imports, s1.comprehensions-and-iterators, s0.functions, s0.lists-and-tuples]
+leads: [f5.noise-in-measurements-and-benchmarks]
+starter: |
+  # Scratch space. A two-proportion z-test.
+  import math
+  from statistics import NormalDist
+
+  conv_a, n_a = 500, 10000
+  conv_b, n_b = 560, 10000
+  p = (conv_a + conv_b) / (n_a + n_b)
+  z = (conv_b / n_b - conv_a / n_a) / math.sqrt(p * (1 - p) * (1 / n_a + 1 / n_b))
+  print(z, 2 * (1 - NormalDist().cdf(abs(z))))
+parts:
+  recall:
+    - text: |
+        [[f5.the-bootstrap]] finished the toolkit: summaries, intervals, tests, and a way to get standard errors for anything. This lesson uses all of it on the most common question in running a live system: we have changed something, so is the new version better? It is also where the tools are most often misused. Three quick pulls first.
+  puzzle:
+    - text: |
+        A team rolls out version B of its search service to the mobile app first and to a few desktop users, while version A serves everyone else. A week's latency figures:
+
+        | | Mobile | Desktop |
+        |---|---|---|
+        | A | 200 requests, mean 200 ms | 800 requests, mean 50 ms |
+        | B | 800 requests, mean 180 ms | 200 requests, mean 45 ms |
+
+        B is faster than A on mobile and faster on desktop. **What is B's mean latency over all 1,000 of its requests, in milliseconds?** Then compare it with A's.
+  intuition:
+    - text: |
+        Two chai stalls stand on the same street, and one owner wants to know whether a new recipe sells more. Selling the new recipe on Monday and the old one on Tuesday proves little: Monday might have been a festival, or Tuesday rainy. Selling both on the same days, and letting a coin toss decide which recipe each customer gets, makes the two groups alike in everything except the recipe. Any difference large enough to beat the noise is then the recipe's doing.
+
+        That is an **A/B test**, a randomised controlled experiment on live traffic. Users are split at random between version A, the **control**, and version B, the **treatment**. Randomisation is what makes it work. Because the split ignores everything about the user, the two groups have, on average, the same mix of phones, cities, times of day and moods, measured or not. The puzzle's comparison had no such protection: B served mostly mobile traffic, which is slower, so its overall mean says more about its traffic than about B.
+
+        A test must be planned before it starts: what to measure, how big a change matters, and how many users that needs. Then it must be left alone until it has them. The figure shows why. It runs a 30-day test between two versions with the same true conversion rate and computes the p-value every day. An impatient team looks along the way and stops at the first look where $p < 0.05$. Move the number of looks from 1 to 30.
+    - figure: ab-test
+      props: { lift: 0, looks: 1, seed: 0 }
+    - text: |
+        With one look at the end, only a handful of the 400 simulated tests declare a difference, close to the 5% a 5% test should give. With 30 daily looks, more than a quarter do, although every one of them compares two identical versions. The p-value wanders as data arrive, and a path that is checked often enough will usually dip below 0.05 somewhere. Give B a true lift of 10% and most tests find it within the 30 days, whichever way they look.
+  derivation:
+    - text: |
+        **The unit.** Randomise by the unit that the change affects and that the analysis treats as independent, usually the user. If requests are randomised instead, one user meets both versions, and a change that warms a per-user cache in B helps that user's A requests too. If users are randomised but the analysis counts requests as independent, a few heavy users contribute thousands of correlated measurements, and the standard errors from [[f5.sampling-and-estimators]] come out far too small.
+
+        **Comparing rates.** A **conversion rate** is the fraction of users who do something: buy, sign up, click. With $c_A$ of $n_A$ users converting in A and $c_B$ of $n_B$ in B, the rates are $\hat{p}_A = c_A/n_A$ and $\hat{p}_B = c_B/n_B$. Under the null hypothesis of [[f5.hypothesis-tests]] that both have the same rate, the best estimate of it is the **pooled** rate $\hat{p} = (c_A + c_B)/(n_A + n_B)$, and each group's rate has variance $\hat{p}(1 - \hat{p})/n$, the variance of a 0-or-1 value from [[f4.common-discrete-distributions]] divided by the group's size. The variances add for independent groups, so
+
+        $$z = \frac{\hat{p}_B - \hat{p}_A}{\sqrt{\hat{p}(1 - \hat{p})\left(\dfrac{1}{n_A} + \dfrac{1}{n_B}\right)}}$$
+
+        is close to a standard normal when nothing changed. The confidence interval for the difference uses the unpooled form $\sqrt{\hat{p}_A(1 - \hat{p}_A)/n_A + \hat{p}_B(1 - \hat{p}_B)/n_B}$, as in [[f5.confidence-intervals]], since it no longer assumes the rates are equal.
+    - question:
+        id: derivation-z
+        type: numeric
+        system: s2
+        tolerance: "0.02"
+        prompt: |
+          A converts 500 of 10,000 users and B converts 560 of 10,000. What is the two-proportion $z$-statistic, B minus A, with the pooled rate?
+        answer: "1.89"
+        explanation: |
+          The pooled rate is $1{,}060/20{,}000 = 0.053$. The standard error is $\sqrt{0.053 \times 0.947 \times (2/10{,}000)} \approx 0.00317$, and the difference is $0.006$, so $z \approx 1.89$. The two-sided p-value is about 0.058: a 12% relative lift, and still not significant at 5% with 10,000 users each.
+    - text: |
+        **How many users.** A test needs enough users to have a good chance, its **power**, of detecting the smallest change worth caring about, $\delta$. For a two-sided test at level $\alpha$ with power $1 - \beta$, each group needs about
+
+        $$n = \frac{(z_{\alpha/2} + z_{\beta})^2\,\bigl(\sigma_A^2 + \sigma_B^2\bigr)}{\delta^2},$$
+
+        where $z_{\alpha/2} = 1.96$ for 5% and $z_\beta = 0.84$ for 80% power. The reasoning: the observed difference must land beyond $1.96$ standard errors to be significant, and to do that 80% of the time, the true difference must sit $1.96 + 0.84$ standard errors from zero. With equal variances $\sigma^2$, $(1.96 + 0.84)^2 \times 2 \approx 16$, giving the handy rule
+
+        $$n \approx \frac{16\,\sigma^2}{\delta^2} \text{ per group}.$$
+
+        For a rate, $\sigma^2 = p(1 - p)$. Raising a 5% conversion rate by a tenth, to 5.5%, gives $\delta = 0.005$ and needs about $16 \times 0.0475/0.000025 = 30{,}400$ users in each group. Small improvements on small rates need large tests, and halving the detectable change quadruples the size.
+    - question:
+        id: derivation-size
+        type: numeric
+        system: s2
+        prompt: |
+          Response times have standard deviation 100 ms. By the rule $n \approx 16\sigma^2/\delta^2$, how many requests per group does a test need to detect a 10 ms change in the mean?
+        answer: "1600"
+        explanation: |
+          $16 \times 100^2/10^2 = 16 \times 100 = 1{,}600$ per group. To detect 5 ms would take 6,400.
+    - text: |
+        **Peeking.** The size formula assumes one look, at the end. Each extra look is another chance for noise to cross the line, and as the figure showed, 30 looks at a 5% threshold give a false-alarm rate of well over 20%. There are two honest ways out: fix the sample size in advance and look once, or use a **sequential** method whose thresholds are stricter at each look, so that the total false-alarm rate stays at 5%. The simplest, by Bonferroni's reasoning from [[f5.hypothesis-tests]], is to test at $0.05/k$ at each of $k$ planned looks; better methods spend less, but none is free.
+
+        **Checking the split.** Before reading any result, check that the randomisation did what it was told. If users were meant to be split 50/50, A's count among $N$ users is binomial with mean $N/2$ and standard deviation $\sqrt{N/4}$. A **sample ratio mismatch**, a $z$ beyond about 3, means something filtered users unevenly, such as a crash in B that stopped some users from being logged, and then the groups are no longer alike and the comparison cannot be trusted, however significant. An **A/A test**, two identical versions run through the whole pipeline, checks the same machinery: it should declare a difference about 5% of the time, and no more.
+    - question:
+        id: derivation-srm
+        type: numeric
+        system: s2
+        prompt: |
+          A 50/50 test has 10,000 users in total, and 5,150 of them landed in A. What is the $z$-statistic for A's count against its expected 5,000?
+        answer: "3"
+        explanation: |
+          The standard deviation is $\sqrt{10{,}000/4} = 50$, so $z = 150/50 = 3$. A split that far off happens by chance only about 3 times in 1,000; look for a bug in the assignment or the logging before reading the results.
+    - text: |
+        **Mixes and Simpson's paradox.** The puzzle is an example of **Simpson's paradox**: B is better within every segment yet worse overall, because the two versions served different mixes of segments. An overall mean is a weighted average of the segment means, weighted by each segment's share of the traffic, so a version that serves more of a slow segment looks slower even if it is faster everywhere. Randomisation prevents this in expectation, since both groups get the same mix. Without it, compare segment by segment, or reweight both versions to the same mix, before believing a total. The same warning applies the other way: slicing a randomised test into many segments after the fact and reporting the one that looks significant is the multiple-testing trap again.
+    - question:
+        id: order-test
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of a well-run A/B test in order.
+        steps:
+          - "Choose the metric and the smallest change worth detecting."
+          - "Work out the number of users each group needs."
+          - "Randomise users between A and B until both groups reach that size."
+          - "Check the split for a sample ratio mismatch."
+          - "Test the difference and report it with a confidence interval."
+        explanation: |
+          The size depends on the metric and the change worth detecting, so both come first; the run must reach the planned size without stopping early; and a broken split invalidates everything after it, so it is checked before the result is read.
+  formal:
+    - text: |
+        **Two-proportion test.** With $\hat{p} = (c_A + c_B)/(n_A + n_B)$, $z = (\hat{p}_B - \hat{p}_A)/\sqrt{\hat{p}(1 - \hat{p})(1/n_A + 1/n_B)}$, approximately standard normal under $p_A = p_B$. Interval for the difference: $(\hat{p}_B - \hat{p}_A) \pm z_{\alpha/2}\sqrt{\hat{p}_A(1 - \hat{p}_A)/n_A + \hat{p}_B(1 - \hat{p}_B)/n_B}$.
+
+        **Sample size.** Per group, $n = (z_{\alpha/2} + z_\beta)^2(\sigma_A^2 + \sigma_B^2)/\delta^2$; with $\alpha = 0.05$ two-sided, power 0.8 and equal variances, $n \approx 16\sigma^2/\delta^2$.
+
+        **Sample ratio check.** For a planned split with share $s$ to A among $N$ users, $z = (n_A - sN)/\sqrt{N s(1 - s)}$.
+
+        **Repeated looks.** With $k$ looks at level $\alpha$ each, the false-alarm rate exceeds $\alpha$; testing at $\alpha/k$ at each look keeps it at most $\alpha$.
+
+        **Weighted means.** $\bar{x} = \sum_g w_g \bar{x}_g$ with $w_g$ the share of segment $g$; comparing $\bar{x}$ across versions with different $w_g$ confounds the version with the mix.
+  drill:
+    - text: Seconds each. Randomise users, plan the size, look once.
+    - question:
+        id: drill-rule
+        type: numeric
+        system: s1
+        prompt: |
+          By $n \approx 16\sigma^2/\delta^2$, how many users per group detect $\delta = 2$ when $\sigma = 20$?
+        answer: "1600"
+        explanation: $16 \times 400/4 = 1{,}600$.
+    - question:
+        id: drill-difference
+        type: numeric
+        system: s1
+        tolerance: "0.0001"
+        prompt: |
+          A converts 500 of 10,000 users and B converts 520 of 10,000. What is B's rate minus A's, as a decimal?
+        answer: "0.002"
+        explanation: $0.052 - 0.050 = 0.002$, a fifth of a percentage point.
+    - question:
+        id: drill-unit
+        type: choice
+        system: s1
+        prompt: |
+          A change adds a per-user cache. What should the test randomise?
+        options:
+          - "Users"
+          - "Requests"
+          - "Days"
+          - "Servers"
+        answer: 0
+        explanation: Randomising requests would let one user's cache, warmed by B, speed up that user's A requests too.
+    - question:
+        id: drill-peeking
+        type: choice
+        system: s1
+        prompt: |
+          A team checks its A/B test every morning and stops the first day $p < 0.05$. What happens to its false-alarm rate?
+        options:
+          - "It rises well above 5%."
+          - "It stays at 5%."
+          - "It falls below 5%."
+        answer: 0
+        explanation: Each look is another chance for noise to cross the line; with daily looks over a month, more than a fifth of no-difference tests declare a winner.
+    - question:
+        id: drill-aa
+        type: choice
+        system: s1
+        prompt: |
+          An A/A test, with two identical versions, is run many times and declares a difference in 30% of runs at the 5% level. What does that show?
+        options:
+          - "The experiment pipeline is broken"
+          - "Version A is slightly better than itself"
+          - "The tests are too strict"
+        answer: 0
+        explanation: Identical versions should differ significantly about 5% of the time. Much more means the assignment, the logging or the analysis is wrong.
+    - question:
+        id: drill-weighted
+        type: numeric
+        system: s1
+        prompt: |
+          100 requests average 10 ms and 300 requests average 30 ms. What is the mean over all 400?
+        answer: "25"
+        explanation: $(100 \times 10 + 300 \times 30)/400 = 10{,}000/400 = 25$.
+    - question:
+        id: predict-size
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(round(16 * 0.05 * 0.95 / 0.005 ** 2))
+        output: "30400"
+        explanation: The rule $16\,p(1 - p)/\delta^2$ for a 5% rate and a change of half a percentage point gives 30,400 users per group.
+    - question:
+        id: predict-weighted
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          segments = [(200, 200), (800, 50)]
+          print(sum(n * m for n, m in segments) / sum(n for n, m in segments))
+        output: "80.0"
+        explanation: Each pair is a count and a mean. The total time is $40{,}000 + 40{,}000 = 80{,}000$ ms over 1,000 requests, so 80.0 ms. This is version A from the puzzle.
+  work:
+    - text: Slower now. For each comparison, ask whether the two groups were made alike by randomisation, and how many looks were taken.
+    - question:
+        id: fix-pooled
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `two_proportion_z(conv_a, n_a, conv_b, n_b)` should return the $z$-statistic for B's conversion rate minus A's, using the pooled rate for the standard error. The program should print `1.894`. It prints `3.788`. Find the fault and fix it.
+        starter: |
+          import math
+
+
+          def two_proportion_z(conv_a, n_a, conv_b, n_b):
+              # The z-statistic for B's conversion rate minus A's, using the pooled rate
+              # for the standard error, as a test of "the two rates are equal".
+              p_a = conv_a / n_a
+              p_b = conv_b / n_b
+              p = (conv_a + conv_b) / (n_a + n_b)
+              se = math.sqrt(p * (1 - p) / (n_a + n_b))
+              return (p_b - p_a) / se
+
+
+          print(round(two_proportion_z(500, 10000, 560, 10000), 3))
+        solution: |
+          import math
+
+
+          def two_proportion_z(conv_a, n_a, conv_b, n_b):
+              # The z-statistic for B's conversion rate minus A's, using the pooled rate
+              # for the standard error, as a test of "the two rates are equal".
+              p_a = conv_a / n_a
+              p_b = conv_b / n_b
+              p = (conv_a + conv_b) / (n_a + n_b)
+              se = math.sqrt(p * (1 - p) * (1 / n_a + 1 / n_b))
+              return (p_b - p_a) / se
+
+
+          print(round(two_proportion_z(500, 10000, 560, 10000), 3))
+        tests: |
+          for _ca, _na, _cb, _nb in [(500, 10000, 560, 10000), (50, 1000, 50, 1000), (30, 400, 45, 900), (120, 2000, 100, 3000), (9, 100, 21, 100)]:
+              _pa = _ca / _na
+              _pb = _cb / _nb
+              _p = (_ca + _cb) / (_na + _nb)
+              _want = (_pb - _pa) / math.sqrt(_p * (1 - _p) * (1 / _na + 1 / _nb))
+              _got = two_proportion_z(_ca, _na, _cb, _nb)
+              assert abs(_got - _want) < 1e-9, "two_proportion_z(" + str(_ca) + ", " + str(_na) + ", " + str(_cb) + ", " + str(_nb) + ") should be about " + str(round(_want, 4)) + ", not " + str(_got)
+          assert output.strip() == "1.894", "The program should print 1.894"
+        wrong:
+          - |
+            import math
+
+
+            def two_proportion_z(conv_a, n_a, conv_b, n_b):
+                # The z-statistic for B's conversion rate minus A's, using the pooled rate
+                # for the standard error, as a test of "the two rates are equal".
+                p_a = conv_a / n_a
+                p_b = conv_b / n_b
+                p = (conv_a + conv_b) / (n_a + n_b)
+                se = p * (1 - p) * (1 / n_a + 1 / n_b)
+                return (p_b - p_a) / se
+
+
+            print(round(two_proportion_z(500, 10000, 560, 10000), 3))
+          - |
+            import math
+
+
+            def two_proportion_z(conv_a, n_a, conv_b, n_b):
+                # The z-statistic for B's conversion rate minus A's, using the pooled rate
+                # for the standard error, as a test of "the two rates are equal".
+                p_a = conv_a / n_a
+                p_b = conv_b / n_b
+                p = (conv_a + conv_b) / (n_a + n_b)
+                se = math.sqrt(p * (1 - p) * (1 / n_a + 1 / n_b))
+                return (p_a - p_b) / se
+
+
+            print(round(two_proportion_z(500, 10000, 560, 10000), 3))
+          - |
+            import math
+
+
+            def two_proportion_z(conv_a, n_a, conv_b, n_b):
+                # The z-statistic for B's conversion rate minus A's, using the pooled rate
+                # for the standard error, as a test of "the two rates are equal".
+                p_a = conv_a / n_a
+                p_b = conv_b / n_b
+                p = (conv_a + conv_b) / (n_a + n_b)
+                se = math.sqrt(p * (1 - p) / n_a + p * (1 - p) / n_a)
+                return (p_b - p_a) / se
+
+
+            print(round(two_proportion_z(500, 10000, 560, 10000), 3))
+        explanation: |
+          Each rate has variance $p(1 - p)/n$ for its own group, and the variances add: $p(1 - p)(1/n_A + 1/n_B)$. Dividing by the total $n_A + n_B$ treats the difference as if it were one rate from all the users, which halves the variance here and doubles $z$, turning a non-significant result into an apparently strong one. Leaving out the square root, or reversing the subtraction, or using $n_A$ for both groups, are all wrong in other ways.
+    - question:
+        id: write-sample-size
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `sample_size_per_group(p, lift, z_alpha, z_power)`: the users needed in each group to detect a change in conversion rate from `p` to `p * (1 + lift)`. Compute $(z_\alpha + z_{\text{power}})^2$ times the sum of the two rates' variances $p(1 - p)$, divided by the squared difference of the rates, and round up.
+        starter: |
+          import math
+
+
+          def sample_size_per_group(p, lift, z_alpha, z_power):
+              # Users needed in each group to detect a change in conversion rate from p to
+              # p * (1 + lift): (z_alpha + z_power) squared, times the sum of the two rates'
+              # variances p(1 - p), divided by the squared difference of the rates, rounded up.
+              return 0
+
+
+          print(sample_size_per_group(0.05, 0.1, 1.96, 0.8416), sample_size_per_group(0.5, 0.2, 1.96, 0.8416))
+        solution: |
+          import math
+
+
+          def sample_size_per_group(p, lift, z_alpha, z_power):
+              # Users needed in each group to detect a change in conversion rate from p to
+              # p * (1 + lift): (z_alpha + z_power) squared, times the sum of the two rates'
+              # variances p(1 - p), divided by the squared difference of the rates, rounded up.
+              q = p * (1 + lift)
+              return math.ceil((z_alpha + z_power) ** 2 * (p * (1 - p) + q * (1 - q)) / (q - p) ** 2)
+
+
+          print(sample_size_per_group(0.05, 0.1, 1.96, 0.8416), sample_size_per_group(0.5, 0.2, 1.96, 0.8416))
+        tests: |
+          for _p, _lift, _za, _zp in [(0.05, 0.1, 1.96, 0.8416), (0.1, 0.5, 1.96, 0.8416), (0.02, 0.25, 2.576, 1.2816), (0.3, -0.1, 1.96, 0.8416)]:
+              _q = _p * (1 + _lift)
+              _want = math.ceil((_za + _zp) ** 2 * (_p * (1 - _p) + _q * (1 - _q)) / (_q - _p) ** 2)
+              _got = sample_size_per_group(_p, _lift, _za, _zp)
+              assert _got == _want, "sample_size_per_group(" + str(_p) + ", " + str(_lift) + ", " + str(_za) + ", " + str(_zp) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "31232 385", "The program should print 31232 385"
+        wrong:
+          - |
+            import math
+
+
+            def sample_size_per_group(p, lift, z_alpha, z_power):
+                # Users needed in each group to detect a change in conversion rate from p to
+                # p * (1 + lift): (z_alpha + z_power) squared, times the sum of the two rates'
+                # variances p(1 - p), divided by the squared difference of the rates, rounded up.
+                q = p * (1 + lift)
+                return math.ceil((z_alpha + z_power) * (p * (1 - p) + q * (1 - q)) / (q - p) ** 2)
+
+
+            print(sample_size_per_group(0.05, 0.1, 1.96, 0.8416), sample_size_per_group(0.5, 0.2, 1.96, 0.8416))
+          - |
+            import math
+
+
+            def sample_size_per_group(p, lift, z_alpha, z_power):
+                # Users needed in each group to detect a change in conversion rate from p to
+                # p * (1 + lift): (z_alpha + z_power) squared, times the sum of the two rates'
+                # variances p(1 - p), divided by the squared difference of the rates, rounded up.
+                q = p + lift
+                return math.ceil((z_alpha + z_power) ** 2 * (p * (1 - p) + q * (1 - q)) / (q - p) ** 2)
+
+
+            print(sample_size_per_group(0.05, 0.1, 1.96, 0.8416), sample_size_per_group(0.5, 0.2, 1.96, 0.8416))
+          - |
+            import math
+
+
+            def sample_size_per_group(p, lift, z_alpha, z_power):
+                # Users needed in each group to detect a change in conversion rate from p to
+                # p * (1 + lift): (z_alpha + z_power) squared, times the sum of the two rates'
+                # variances p(1 - p), divided by the squared difference of the rates, rounded up.
+                q = p * (1 + lift)
+                return math.ceil((z_alpha + z_power) ** 2 * (p * (1 - p) + q * (1 - q)) / (q - p))
+
+
+            print(sample_size_per_group(0.05, 0.1, 1.96, 0.8416), sample_size_per_group(0.5, 0.2, 1.96, 0.8416))
+        explanation: |
+          The lift is relative, so the new rate is `p * (1 + lift)`, not `p + lift`, which would be a jump from 5% to 15%. The multiplier is squared, because standard errors shrink with $\sqrt{n}$, and the difference is squared for the same reason. The first case needs 31,232 users in each group to detect 5% becoming 5.5% with 80% power.
+    - question:
+        id: write-srm
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `srm_z(n_a, n_b)`. Users were meant to be split 50/50 between A and B. Return the $z$-statistic for A's count against its expected half of the total, positive if A got more.
+        starter: |
+          import math
+
+
+          def srm_z(n_a, n_b):
+              # Users were meant to be split 50/50 between A and B. Return the z-statistic for
+              # A's count against its expected half of the total: positive if A got more.
+              return 0
+
+
+          print(round(srm_z(50000, 48500), 2), srm_z(5000, 5000), round(srm_z(4900, 5100), 2))
+        solution: |
+          import math
+
+
+          def srm_z(n_a, n_b):
+              # Users were meant to be split 50/50 between A and B. Return the z-statistic for
+              # A's count against its expected half of the total: positive if A got more.
+              total = n_a + n_b
+              return (n_a - total / 2) / math.sqrt(total / 4)
+
+
+          print(round(srm_z(50000, 48500), 2), srm_z(5000, 5000), round(srm_z(4900, 5100), 2))
+        tests: |
+          for _a, _b in [(50000, 48500), (5000, 5000), (4900, 5100), (10, 30), (1, 0), (123456, 120000)]:
+              _total = _a + _b
+              _want = (_a - _total / 2) / math.sqrt(_total * 0.25)
+              _got = srm_z(_a, _b)
+              assert abs(_got - _want) < 1e-9, "srm_z(" + str(_a) + ", " + str(_b) + ") should be about " + str(round(_want, 4)) + ", not " + str(_got)
+          assert output.strip() == "4.78 0.0 -2.0", "The program should print 4.78 0.0 -2.0"
+        wrong:
+          - |
+            import math
+
+
+            def srm_z(n_a, n_b):
+                # Users were meant to be split 50/50 between A and B. Return the z-statistic for
+                # A's count against its expected half of the total: positive if A got more.
+                total = n_a + n_b
+                return (n_a - total / 2) / (total / 4)
+
+
+            print(round(srm_z(50000, 48500), 2), srm_z(5000, 5000), round(srm_z(4900, 5100), 2))
+          - |
+            import math
+
+
+            def srm_z(n_a, n_b):
+                # Users were meant to be split 50/50 between A and B. Return the z-statistic for
+                # A's count against its expected half of the total: positive if A got more.
+                total = n_a + n_b
+                return (n_a - n_b) / math.sqrt(total / 4)
+
+
+            print(round(srm_z(50000, 48500), 2), srm_z(5000, 5000), round(srm_z(4900, 5100), 2))
+          - |
+            import math
+
+
+            def srm_z(n_a, n_b):
+                # Users were meant to be split 50/50 between A and B. Return the z-statistic for
+                # A's count against its expected half of the total: positive if A got more.
+                total = n_a + n_b
+                return (n_a - total / 2) / math.sqrt(n_a / 4)
+
+
+            print(round(srm_z(50000, 48500), 2), srm_z(5000, 5000), round(srm_z(4900, 5100), 2))
+        explanation: |
+          A's count among $N$ is binomial with mean $N/2$ and variance $N \times \frac{1}{2} \times \frac{1}{2} = N/4$, so $z = (n_A - N/2)/\sqrt{N/4}$. Dividing by the variance instead of its square root shrinks $z$ to almost nothing; comparing $n_A$ with $n_B$ doubles the deviation; and $n_A/4$ is not the variance of anything here. The first split, 50,000 against 48,500, is almost 5 standard deviations off: something is losing B's users.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Version B served 800 mobile requests averaging 180 ms and 200 desktop requests averaging 45 ms. What is its mean latency over all 1,000 requests, in milliseconds?
+        answer: "153"
+        explanation: |
+          $(800 \times 180 + 200 \times 45)/1{,}000 = (144{,}000 + 9{,}000)/1{,}000 = 153$ ms. A's is $(200 \times 200 + 800 \times 50)/1{,}000 = 80$ ms. B is faster on each device but nearly twice as slow overall, because four-fifths of its traffic is mobile.
+    - question:
+        id: work-heavy-users
+        type: choice
+        system: s2
+        prompt: |
+          A test randomises 2,000 users and records 400,000 page loads. The analyst computes the standard error of the mean load time as $s/\sqrt{400{,}000}$. What is wrong?
+        options:
+          - "Page loads from the same user are correlated, so there are far fewer than 400,000 independent measurements; the standard error should be computed per user, for example from each user's mean."
+          - "Nothing; more measurements always mean a smaller standard error."
+          - "The standard error should use $n - 1$."
+          - "Page loads should have been randomised instead of users."
+        answer: 0
+        explanation: |
+          A user on a slow phone is slow on every load. The independent units are the 2,000 users, so the effective sample size is near 2,000, not 400,000, and the true standard error is many times larger. Summarising each user first, or bootstrapping users rather than loads, gives honest error bars. Randomising loads would bring the cache problem back.
+  connections:
+    - text: |
+        B's mean is 153 ms against A's 80 ms, so on the totals B looks almost twice as slow, though it is faster on both mobile and desktop. The totals compare traffic mixes, not versions: B was rolled out to the slow segment first. A randomised split would have given both versions the same mix, and the overall comparison would then have been fair. When a comparison cannot be randomised, compare like with like, segment by segment.
+
+        [[f5.noise-in-measurements-and-benchmarks]] turns from users to machines: comparing two versions of a program on one computer, where the noise comes from caches, clock speeds and the other programs running, and where the same ideas, randomising order, planning the number of runs and not stopping when the result looks good, keep the comparison honest.

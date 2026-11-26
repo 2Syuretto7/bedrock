@@ -1,0 +1,542 @@
+concept: f5.hypothesis-tests
+minutes: 90
+claim: You can set up a null hypothesis and test it with a z-statistic or a permutation test, compute and read a p-value, say what it is and what it is not, connect tests to confidence intervals, tell the two kinds of error apart and explain power, work out how many false alarms many tests produce and correct for them, and explain why a significant result can still be more likely false than a reader assumes.
+recalls: [f5.confidence-intervals]
+uses: [f3.permutations-and-combinations, f5.sampling-and-estimators, f5.summaries-mean-median-and-percentiles, f4.continuous-distributions-and-densities, f4.common-discrete-distributions, f4.bayes-rule, f4.conditional-probability, f4.independence, f4.simulation-and-pseudo-random-numbers, s1.modules-and-imports, s1.comprehensions-and-iterators, s0.functions, s0.loops, s0.lists-and-tuples]
+leads: [f5.the-bootstrap, f5.comparing-two-systems-a-b-tests, f5.noise-in-measurements-and-benchmarks]
+starter: |
+  # Scratch space. A two-sided p-value for a difference of two means.
+  from statistics import NormalDist
+
+  mean_a, se_a = 100, 2
+  mean_b, se_b = 106, 2
+  z = (mean_b - mean_a) / (se_a ** 2 + se_b ** 2) ** 0.5
+  print(z, 2 * (1 - NormalDist().cdf(abs(z))))
+parts:
+  recall:
+    - text: |
+        [[f5.confidence-intervals]] gave a range for an unknown value. Often the question is narrower: did the change make things faster, or is the difference in the numbers just the noise that two samples always show? Hypothesis testing answers that with a single, carefully defined number. Three quick pulls first.
+  puzzle:
+    - text: |
+        After every release, a team's dashboard compares 20 metrics with the previous release: latency, error rate, memory, CPU and so on. For each metric it runs a test that, when nothing has really changed, wrongly flags a change only 5% of the time. Suppose the 20 tests are independent.
+
+        Today's release changed only a comment in the code, so nothing has really changed. **What is the chance that the dashboard flags at least one metric as changed?** Give two decimal places.
+  intuition:
+    - text: |
+        In a court, the accused is presumed innocent, and the prosecution must show evidence that would be very surprising if that presumption were true. The verdict "not guilty" does not mean "proven innocent"; it means the evidence was not surprising enough.
+
+        A hypothesis test has the same shape. The **null hypothesis** is the presumption of no effect: the new version is no faster, the coin is fair, the two groups come from the same population. The test asks: *if the null hypothesis were true, how surprising would data like ours be?* That surprise is measured by the **p-value**: the chance, computed as if the null were true, of a result at least as extreme as the one observed. A small p-value means the data would be rare under the null, so we doubt the null. A large one means the data are unremarkable under the null, which is not the same as proving it.
+
+        There is a direct way to compute that chance for two groups. If the labels "old" and "new" made no difference, then any shuffling of the measurements between the two groups was as likely as the actual one. So shuffle them, many times, and see how often a shuffled split gives a difference as large as the real one. That is a **permutation test**.
+
+        In the figure, group B's times have a few milliseconds added. The histogram shows the differences from a thousand shuffles, and the highlighted bars are those at least as extreme as the observed difference. Their share is the p-value. Change the group size, then set the added time to 0 and step through seeds.
+    - figure: null-test
+      props: { effect: 5, n: 50, seed: 3 }
+    - text: |
+        With 5 ms added and groups of 50, the observed difference is about 4.7 ms, and about one shuffle in five does as well: not significant, though the effect is real. With groups of 200 the shuffled differences crowd closer to zero, and the same kind of effect stands out clearly. With nothing added, the p-value wanders from seed to seed, and is below 0.05 for about one seed in twenty: that is what the 5% means.
+  derivation:
+    - text: |
+        **The recipe.** A test has four parts. A null hypothesis $H_0$, such as "the mean response times are equal". A **test statistic**, a number computed from the data that tends to be larger when $H_0$ is false. Its distribution when $H_0$ is true, the **null distribution**. And the p-value, the chance under that distribution of a statistic at least as extreme as the one observed. Before looking, one fixes a **significance level** $\alpha$, commonly 0.05, and calls the result **significant** if $p \le \alpha$.
+
+        **A z-test for two means.** Two independent samples have means $\bar{x}_A$ and $\bar{x}_B$ with standard errors $\mathrm{SE}_A$ and $\mathrm{SE}_B$. By [[f5.sampling-and-estimators]], their difference has standard error $\sqrt{\mathrm{SE}_A^2 + \mathrm{SE}_B^2}$, because variances of independent quantities add. The statistic
+
+        $$z = \frac{\bar{x}_B - \bar{x}_A}{\sqrt{\mathrm{SE}_A^2 + \mathrm{SE}_B^2}}$$
+
+        is, under $H_0$ and for large samples, close to a standard normal. If the question is "different in either direction", the test is **two-sided**, and the p-value counts both tails: $p = 2\,(1 - \Phi(\lvert z \rvert))$, with $\Phi$ the normal distribution function of [[f4.continuous-distributions-and-densities]]. So $\lvert z \rvert = 1.96$ gives $p = 0.05$ exactly.
+    - question:
+        id: derivation-z
+        type: numeric
+        system: s2
+        tolerance: "0.01"
+        prompt: |
+          Version A's mean is 100 ms with standard error 2 ms; version B's is 106 ms with standard error 2 ms; the samples are independent. What is the $z$-statistic for the difference?
+        answer: "2.12"
+        explanation: |
+          The difference is 6 ms with standard error $\sqrt{4 + 4} \approx 2.83$ ms, so $z = 6/2.83 \approx 2.12$, and the two-sided p-value is about 0.034.
+    - text: |
+        **Tests and intervals are one calculation.** A two-sided test at level 0.05 rejects "the difference is zero" exactly when the 95% confidence interval for the difference, $(\bar{x}_B - \bar{x}_A) \pm 1.96\sqrt{\mathrm{SE}_A^2 + \mathrm{SE}_B^2}$, leaves out zero. The interval says more: it gives the size of the effect, not only whether it is there. When both are available, report the interval.
+
+        **The permutation test.** The z-test needs large samples and a roughly normal mean. The permutation test needs only that, under $H_0$, the labels are exchangeable. Pool the $n_A + n_B$ values, shuffle, call the first $n_A$ group A and the rest group B, and record the difference of means. Repeat many times. The fraction of shuffles with a difference at least as large in size as the observed one estimates the p-value. With small groups one can even list every split, counted as in [[f3.permutations-and-combinations]]; with large ones, a few thousand random shuffles with [[f4.simulation-and-pseudo-random-numbers]] are plenty.
+
+        **A test from counting.** Ten paired runs compare an old and a new build, and the new build is faster in 9 of the 10. If the builds were equally fast, each run would be a fair coin, and the number of wins out of 10 would be binomial with $p = 1/2$, as in [[f4.common-discrete-distributions]]. The chance of 9 or more wins is
+
+        $$\frac{\binom{10}{9} + \binom{10}{10}}{2^{10}} = \frac{11}{1024} \approx 0.011,$$
+
+        so the one-sided p-value is about 0.011. This is the **sign test**: it ignores by how much each run was faster, and so works whatever the shape of the times.
+    - question:
+        id: derivation-sign
+        type: numeric
+        system: s2
+        tolerance: "0.0005"
+        prompt: |
+          In 10 paired runs, the new build is faster in 9. If the builds were equally fast, what is the chance of 9 or more wins out of 10? Give three decimal places.
+        answer: "0.011"
+        explanation: |
+          $(10 + 1)/1024 = 11/1024 \approx 0.0107$. There are 10 ways to win exactly 9 and one way to win all 10, out of $2^{10} = 1{,}024$ equally likely patterns.
+    - text: |
+        **Two kinds of error.** Rejecting a true null is a **type I error**, a false alarm; its chance is $\alpha$, by construction. Failing to reject a false null is a **type II error**, a missed effect. The chance of *detecting* a real effect of a given size is the test's **power**. Power grows with the size of the effect and with the sample, and falls as $\alpha$ is made stricter. A test with low power usually reports "not significant" even when there is an effect, so "not significant" is weak evidence of no effect unless the power was high.
+
+        **Many tests.** Each test at level $\alpha$ raises a false alarm with chance $\alpha$ when nothing changed. With $m$ independent tests, the chance of at least one false alarm is
+
+        $$1 - (1 - \alpha)^m,$$
+
+        which grows fast. The simplest cure is the **Bonferroni correction**: run each test at level $\alpha/m$. Then the chance of any false alarm is at most $m \cdot \alpha/m = \alpha$, whether or not the tests are independent.
+    - question:
+        id: derivation-family
+        type: numeric
+        system: s2
+        tolerance: "0.002"
+        prompt: |
+          Ten independent tests are each run at level 0.05 on data where nothing changed. What is the chance that at least one is significant? Give three decimal places.
+        answer: "0.401"
+        explanation: |
+          $1 - 0.95^{10} \approx 1 - 0.599 = 0.401$. Running each at $0.05/10 = 0.005$ would bring it down to about 0.049.
+    - text: |
+        **What a p-value is not.** A p-value is $P(\text{data this extreme} \mid H_0)$. It is not $P(H_0 \mid \text{data})$, the chance that the null is true, and the two can be far apart, as [[f4.bayes-rule]] warns. Suppose only 10% of the changes a team tries really help, its tests have power 80%, and it uses $\alpha = 0.05$. Out of 1,000 changes, 100 really help and 80 of those are detected; 900 do not help and 45 of those are flagged anyway. So among the 125 significant results, only 80 are real, 64%: more than a third of the "wins" are noise, although every one has $p \le 0.05$. The rarer real effects are, the worse this gets.
+
+        Finally, **significant is not the same as important**. With a million requests, a difference of 0.1 ms can be highly significant and of no interest to anyone. The p-value says whether an effect is distinguishable from noise; the confidence interval says whether it is big enough to matter.
+    - question:
+        id: order-permutation
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of a permutation test for two groups in order.
+        steps:
+          - "Compute the observed difference of the two groups' means."
+          - "Pool all the values into one list."
+          - "Shuffle the pool, split it into two groups of the original sizes, and record their difference of means; repeat many times."
+          - "Report the fraction of shuffles whose difference is at least as large in size as the observed one."
+        explanation: |
+          The observed difference must come from the real labels, before any shuffling destroys them. The shuffles build the null distribution, and the p-value is the share of it at least as extreme as the observation.
+  formal:
+    - text: |
+        **Test.** Null hypothesis $H_0$; statistic $T$; observed value $t$. Two-sided p-value $P_{H_0}(\lvert T \rvert \ge \lvert t \rvert)$; one-sided $P_{H_0}(T \ge t)$. Reject at level $\alpha$ when $p \le \alpha$.
+
+        **Errors.** Type I: reject a true $H_0$, chance $\alpha$. Type II: keep a false $H_0$, chance $\beta$. Power $= 1 - \beta$.
+
+        **Two-sample z-test.** $z = (\bar{x}_B - \bar{x}_A)/\sqrt{s_A^2/n_A + s_B^2/n_B}$; two-sided $p = 2(1 - \Phi(\lvert z \rvert))$. Rejecting at level $\alpha$ is equivalent to the $1 - \alpha$ interval for the difference excluding 0.
+
+        **Permutation test.** Under $H_0$ every assignment of the pooled values to groups of sizes $n_A, n_B$ is equally likely; the p-value is the share of assignments whose statistic is at least as extreme as the observed one.
+
+        **Sign test.** With $n$ paired comparisons and $W$ wins, under $H_0$ $W$ is binomial$(n, 1/2)$.
+
+        **Multiple tests.** For $m$ independent tests at level $\alpha$, $P(\text{any false alarm}) = 1 - (1 - \alpha)^m$. Bonferroni: level $\alpha/m$ each keeps it at most $\alpha$ for any dependence.
+  drill:
+    - text: Seconds each. Small p means surprising under the null; it is not the chance the null is true.
+    - question:
+        id: drill-reject
+        type: choice
+        system: s1
+        prompt: |
+          A test at the 5% level gives $p = 0.03$. What is the decision?
+        options:
+          - "Reject the null hypothesis"
+          - "Accept the null hypothesis as proven"
+          - "Reject the alternative hypothesis"
+          - "Nothing can be decided"
+        answer: 0
+        explanation: $0.03 \le 0.05$, so the result is significant and the null is rejected.
+    - question:
+        id: drill-meaning
+        type: choice
+        system: s1
+        prompt: |
+          What is a p-value?
+        options:
+          - "The chance, if the null were true, of data at least as extreme as observed"
+          - "The chance that the null hypothesis is true"
+          - "The chance that the result will replicate"
+          - "The size of the effect"
+        answer: 0
+        explanation: It is computed assuming the null, about the data. The chance that the null is true needs prior information, through Bayes' rule.
+    - question:
+        id: drill-bonferroni
+        type: numeric
+        system: s1
+        tolerance: "0.0001"
+        prompt: |
+          Ten tests should together have at most a 5% chance of any false alarm. What level should each use, by Bonferroni?
+        answer: "0.005"
+        explanation: $0.05/10 = 0.005$.
+    - question:
+        id: drill-two-sided
+        type: numeric
+        system: s1
+        tolerance: "0.0005"
+        prompt: |
+          A symmetric test statistic gives a one-sided p-value of 0.02. What is the two-sided p-value?
+        answer: "0.04"
+        explanation: The two-sided p-value counts both tails, so it doubles.
+    - question:
+        id: drill-type-one
+        type: choice
+        system: s1
+        prompt: |
+          A test flags a speed-up that is not really there. Which error is that?
+        options:
+          - "Type I"
+          - "Type II"
+          - "Low power"
+        answer: 0
+        explanation: Rejecting a true null is a type I error, a false alarm.
+    - question:
+        id: drill-expected-alarms
+        type: numeric
+        system: s1
+        prompt: |
+          100 tests at the 5% level are run on data where nothing changed. How many false alarms are expected?
+        answer: "5"
+        explanation: Each has chance 0.05, and expectations add, so $100 \times 0.05 = 5$.
+    - question:
+        id: predict-two-sided
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          from statistics import NormalDist
+
+          print(round(2 * (1 - NormalDist().cdf(1.96)), 3))
+        output: "0.05"
+        explanation: 2.5% of a standard normal lies above 1.96 and 2.5% below −1.96, so the two-sided p-value is 0.05.
+    - question:
+        id: predict-family
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(round(1 - 0.95 ** 20, 2))
+        output: "0.64"
+        explanation: $0.95^{20} \approx 0.358$ is the chance that none of 20 independent tests raises a false alarm, so the chance of at least one is about 0.64.
+  work:
+    - text: Slower now. For each test, write down the null hypothesis first, then ask which results would be at least as extreme as the one observed.
+    - question:
+        id: fix-two-sided
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `two_sided_p(z)` should return the chance that a standard normal lands at least as far from 0 as `z`, on either side. The program should print `0.05 0.05 1.0`. It prints `0.025 0.975 0.5`. Find the fault and fix it.
+        starter: |
+          from statistics import NormalDist
+
+
+          def two_sided_p(z):
+              # The chance that a standard normal lands at least as far from 0 as z, on either side.
+              return 1 - NormalDist().cdf(z)
+
+
+          print(round(two_sided_p(1.96), 3), round(two_sided_p(-1.96), 3), two_sided_p(0))
+        solution: |
+          from statistics import NormalDist
+
+
+          def two_sided_p(z):
+              # The chance that a standard normal lands at least as far from 0 as z, on either side.
+              return 2 * (1 - NormalDist().cdf(abs(z)))
+
+
+          print(round(two_sided_p(1.96), 3), round(two_sided_p(-1.96), 3), two_sided_p(0))
+        tests: |
+          for _z in [0, 0.5, -0.5, 1, 1.645, -1.96, 1.96, 2.576, -3, 4]:
+              _want = 2 * (1 - NormalDist().cdf(abs(_z)))
+              _got = two_sided_p(_z)
+              assert abs(_got - _want) < 1e-9, "two_sided_p(" + str(_z) + ") should be about " + str(round(_want, 5)) + ", not " + str(_got)
+          assert output.strip() == "0.05 0.05 1.0", "The program should print 0.05 0.05 1.0"
+        wrong:
+          - |
+            from statistics import NormalDist
+
+
+            def two_sided_p(z):
+                # The chance that a standard normal lands at least as far from 0 as z, on either side.
+                return 2 * (1 - NormalDist().cdf(z))
+
+
+            print(round(two_sided_p(1.96), 3), round(two_sided_p(-1.96), 3), two_sided_p(0))
+          - |
+            from statistics import NormalDist
+
+
+            def two_sided_p(z):
+                # The chance that a standard normal lands at least as far from 0 as z, on either side.
+                return 1 - NormalDist().cdf(abs(z))
+
+
+            print(round(two_sided_p(1.96), 3), round(two_sided_p(-1.96), 3), two_sided_p(0))
+          - |
+            from statistics import NormalDist
+
+
+            def two_sided_p(z):
+                # The chance that a standard normal lands at least as far from 0 as z, on either side.
+                return 2 * NormalDist().cdf(abs(z))
+
+
+            print(round(two_sided_p(1.96), 3), round(two_sided_p(-1.96), 3), two_sided_p(0))
+        explanation: |
+          "At least as far from 0" means $\lvert Z \rvert \ge \lvert z \rvert$, which is two tails of equal size: $2(1 - \Phi(\lvert z \rvert))$. Without `abs`, a negative `z` gives a chance above 1; without the factor of 2 the answer is one-sided; and $2\Phi(\lvert z \rvert)$ doubles the wrong part of the curve.
+    - question:
+        id: write-permutation
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `permutation_p(a, b, shuffles, seed)`. Call `random.seed(seed)` once. Pool `a + b` into one list, and `shuffles` times: shuffle it in place with `random.shuffle`, call its first `len(a)` values group A and the rest group B, and compare their difference of means, B minus A, with the observed one. Return the fraction of shuffles whose difference is at least as large in size as the observed difference.
+        starter: |
+          import random
+
+
+          def permutation_p(a, b, shuffles, seed):
+              # Seed once. Pool a + b into one list; each time, shuffle it in place with random.shuffle,
+              # call its first len(a) values group A and the rest group B, and count the shuffles whose
+              # difference of means (B minus A) is at least as large in size as the observed one.
+              # Return that count divided by shuffles.
+              return 0
+
+
+          old = [52, 48, 61, 55, 50, 47, 58, 53]
+          new = [45, 49, 44, 51, 46, 43, 48, 50]
+          print(permutation_p(old, new, 2000, 1), permutation_p([1, 2, 3], [1, 2, 3], 100, 0))
+        solution: |
+          import random
+
+
+          def permutation_p(a, b, shuffles, seed):
+              # Seed once. Pool a + b into one list; each time, shuffle it in place with random.shuffle,
+              # call its first len(a) values group A and the rest group B, and count the shuffles whose
+              # difference of means (B minus A) is at least as large in size as the observed one.
+              # Return that count divided by shuffles.
+              random.seed(seed)
+              observed = sum(b) / len(b) - sum(a) / len(a)
+              pool = a + b
+              count = 0
+              for _ in range(shuffles):
+                  random.shuffle(pool)
+                  first = pool[:len(a)]
+                  rest = pool[len(a):]
+                  diff = sum(rest) / len(rest) - sum(first) / len(first)
+                  if abs(diff) >= abs(observed):
+                      count += 1
+              return count / shuffles
+
+
+          old = [52, 48, 61, 55, 50, 47, 58, 53]
+          new = [45, 49, 44, 51, 46, 43, 48, 50]
+          print(permutation_p(old, new, 2000, 1), permutation_p([1, 2, 3], [1, 2, 3], 100, 0))
+        tests: |
+          def _reference(_a, _b, _shuffles, _seed):
+              random.seed(_seed)
+              _observed = sum(_b) / len(_b) - sum(_a) / len(_a)
+              _pool = _a + _b
+              _count = 0
+              for _s in range(_shuffles):
+                  random.shuffle(_pool)
+                  _first = _pool[:len(_a)]
+                  _rest = _pool[len(_a):]
+                  if abs(sum(_rest) / len(_rest) - sum(_first) / len(_first)) >= abs(_observed):
+                      _count += 1
+              return _count / _shuffles
+
+
+          for _a, _b, _shuffles, _seed in [([1, 2, 3], [4, 5, 6], 200, 0), ([5, 1, 4], [3, 2], 300, 7), ([10, 10, 10], [10, 10, 10], 50, 2), ([52, 48, 61, 55, 50, 47, 58, 53], [45, 49, 44, 51, 46, 43, 48, 50], 500, 3), ([9, 1], [2, 8, 3, 7], 400, 11)]:
+              _want = _reference(list(_a), list(_b), _shuffles, _seed)
+              _a_copy = list(_a)
+              _got = permutation_p(_a, _b, _shuffles, _seed)
+              assert _a == _a_copy, "permutation_p should not change the list a it is given"
+              assert abs(_got - _want) < 1e-12, "permutation_p(" + str(_a) + ", " + str(_b) + ", " + str(_shuffles) + ", " + str(_seed) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "0.0055 1.0", "The program should print 0.0055 1.0"
+        wrong:
+          - |
+            import random
+
+
+            def permutation_p(a, b, shuffles, seed):
+                # Seed once. Pool a + b into one list; each time, shuffle it in place with random.shuffle,
+                # call its first len(a) values group A and the rest group B, and count the shuffles whose
+                # difference of means (B minus A) is at least as large in size as the observed one.
+                # Return that count divided by shuffles.
+                random.seed(seed)
+                observed = sum(b) / len(b) - sum(a) / len(a)
+                pool = a + b
+                count = 0
+                for _ in range(shuffles):
+                    random.shuffle(pool)
+                    first = pool[:len(a)]
+                    rest = pool[len(a):]
+                    diff = sum(rest) / len(rest) - sum(first) / len(first)
+                    if diff >= observed:
+                        count += 1
+                return count / shuffles
+
+
+            old = [52, 48, 61, 55, 50, 47, 58, 53]
+            new = [45, 49, 44, 51, 46, 43, 48, 50]
+            print(permutation_p(old, new, 2000, 1), permutation_p([1, 2, 3], [1, 2, 3], 100, 0))
+          - |
+            import random
+
+
+            def permutation_p(a, b, shuffles, seed):
+                # Seed once. Pool a + b into one list; each time, shuffle it in place with random.shuffle,
+                # call its first len(a) values group A and the rest group B, and count the shuffles whose
+                # difference of means (B minus A) is at least as large in size as the observed one.
+                # Return that count divided by shuffles.
+                observed = sum(b) / len(b) - sum(a) / len(a)
+                pool = a + b
+                count = 0
+                for _ in range(shuffles):
+                    random.seed(seed)
+                    random.shuffle(pool)
+                    first = pool[:len(a)]
+                    rest = pool[len(a):]
+                    diff = sum(rest) / len(rest) - sum(first) / len(first)
+                    if abs(diff) >= abs(observed):
+                        count += 1
+                return count / shuffles
+
+
+            old = [52, 48, 61, 55, 50, 47, 58, 53]
+            new = [45, 49, 44, 51, 46, 43, 48, 50]
+            print(permutation_p(old, new, 2000, 1), permutation_p([1, 2, 3], [1, 2, 3], 100, 0))
+          - |
+            import random
+
+
+            def permutation_p(a, b, shuffles, seed):
+                # Seed once. Pool a + b into one list; each time, shuffle it in place with random.shuffle,
+                # call its first len(a) values group A and the rest group B, and count the shuffles whose
+                # difference of means (B minus A) is at least as large in size as the observed one.
+                # Return that count divided by shuffles.
+                random.seed(seed)
+                observed = sum(b) / len(b) - sum(a) / len(a)
+                pool = a + b
+                count = 0
+                for _ in range(shuffles):
+                    random.shuffle(pool)
+                    first = pool[:len(a)]
+                    rest = pool[len(a):]
+                    diff = sum(rest) / len(rest) - sum(first) / len(first)
+                    if abs(diff) > abs(observed):
+                        count += 1
+                return count / shuffles
+
+
+            old = [52, 48, 61, 55, 50, 47, 58, 53]
+            new = [45, 49, 44, 51, 46, 43, 48, 50]
+            print(permutation_p(old, new, 2000, 1), permutation_p([1, 2, 3], [1, 2, 3], 100, 0))
+        explanation: |
+          "At least as large in size" compares absolute values with `>=`, which makes the test two-sided and counts ties. Comparing signed differences gives a one-sided test in the wrong direction here, since the new build is faster and its difference negative; re-seeding inside the loop repeats the same shuffle; and a strict `>` drops ties, so two identical groups get a p-value of 0 instead of 1. The program finds that only about 0.5% of shuffles separate the builds as well as the real labels do.
+    - question:
+        id: write-family
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `family_false_alarm(alpha, tests)`, the chance that at least one of `tests` independent tests at level `alpha` raises a false alarm when nothing changed, and `bonferroni(alpha, tests)`, the level each test should use so that the chance of any false alarm is at most `alpha`.
+        starter: |
+          def family_false_alarm(alpha, tests):
+              # The chance that at least one of `tests` independent tests, each at level alpha,
+              # flags a change when nothing changed.
+              return 0
+
+
+          def bonferroni(alpha, tests):
+              # The level each test should use so that the chance of any false alarm is at most alpha.
+              return 0
+
+
+          print(round(family_false_alarm(0.05, 20), 4), bonferroni(0.05, 20), round(family_false_alarm(bonferroni(0.05, 20), 20), 4))
+        solution: |
+          def family_false_alarm(alpha, tests):
+              # The chance that at least one of `tests` independent tests, each at level alpha,
+              # flags a change when nothing changed.
+              return 1 - (1 - alpha) ** tests
+
+
+          def bonferroni(alpha, tests):
+              # The level each test should use so that the chance of any false alarm is at most alpha.
+              return alpha / tests
+
+
+          print(round(family_false_alarm(0.05, 20), 4), bonferroni(0.05, 20), round(family_false_alarm(bonferroni(0.05, 20), 20), 4))
+        tests: |
+          for _alpha in [0.01, 0.05, 0.1]:
+              for _tests in [1, 2, 5, 20, 100]:
+                  _got = family_false_alarm(_alpha, _tests)
+                  _want = 1 - (1 - _alpha) ** _tests
+                  assert abs(_got - _want) < 1e-12, "family_false_alarm(" + str(_alpha) + ", " + str(_tests) + ") should be about " + str(round(_want, 6)) + ", not " + str(_got)
+                  _got = bonferroni(_alpha, _tests)
+                  assert abs(_got - _alpha / _tests) < 1e-15, "bonferroni(" + str(_alpha) + ", " + str(_tests) + ") should be " + str(_alpha / _tests) + ", not " + str(_got)
+                  assert family_false_alarm(bonferroni(_alpha, _tests), _tests) <= _alpha + 1e-12, "With the Bonferroni level, the chance of any false alarm should be at most " + str(_alpha)
+          assert output.strip() == "0.6415 0.0025 0.0488", "The program should print 0.6415 0.0025 0.0488"
+        wrong:
+          - |
+            def family_false_alarm(alpha, tests):
+                # The chance that at least one of `tests` independent tests, each at level alpha,
+                # flags a change when nothing changed.
+                return alpha * tests
+
+
+            def bonferroni(alpha, tests):
+                # The level each test should use so that the chance of any false alarm is at most alpha.
+                return alpha / tests
+
+
+            print(round(family_false_alarm(0.05, 20), 4), bonferroni(0.05, 20), round(family_false_alarm(bonferroni(0.05, 20), 20), 4))
+          - |
+            def family_false_alarm(alpha, tests):
+                # The chance that at least one of `tests` independent tests, each at level alpha,
+                # flags a change when nothing changed.
+                return 1 - (1 - alpha) ** tests
+
+
+            def bonferroni(alpha, tests):
+                # The level each test should use so that the chance of any false alarm is at most alpha.
+                return alpha * tests
+
+
+            print(round(family_false_alarm(0.05, 20), 4), bonferroni(0.05, 20), round(family_false_alarm(bonferroni(0.05, 20), 20), 4))
+          - |
+            def family_false_alarm(alpha, tests):
+                # The chance that at least one of `tests` independent tests, each at level alpha,
+                # flags a change when nothing changed.
+                return (1 - alpha) ** tests
+
+
+            def bonferroni(alpha, tests):
+                # The level each test should use so that the chance of any false alarm is at most alpha.
+                return alpha / tests
+
+
+            print(round(family_false_alarm(0.05, 20), 4), bonferroni(0.05, 20), round(family_false_alarm(bonferroni(0.05, 20), 20), 4))
+        explanation: |
+          No false alarm in any test has chance $(1 - \alpha)^m$, so at least one has $1 - (1 - \alpha)^m$. Multiplying $\alpha$ by $m$ is the union bound: close when $\alpha m$ is small, but for 20 tests at 0.05 it gives 1, a certainty, when the true chance is 0.64. $(1 - \alpha)^m$ alone is the chance of no alarm at all. Bonferroni divides the level by the number of tests, it does not multiply.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        tolerance: "0.005"
+        prompt: |
+          20 independent tests, each with a 5% chance of a false alarm, are run on a release that changed nothing. What is the chance that at least one flags a change? Give two decimal places.
+        answer: "0.64"
+        explanation: |
+          $1 - 0.95^{20} \approx 1 - 0.358 = 0.64$. Most releases, even ones that change nothing, will light up some metric.
+    - question:
+        id: work-power
+        type: choice
+        system: s2
+        prompt: |
+          A team tests a caching change on 30 requests per version and gets $p = 0.4$. A manager concludes that the cache makes no difference. What is wrong with that?
+        options:
+          - "A large p-value only says the data are not surprising under no effect; with 30 requests the test has little power, so a real effect could easily have been missed."
+          - "Nothing: $p = 0.4$ means a 40% chance that the cache helps."
+          - "The p-value should have been one-sided, which would make it significant."
+          - "The test proves the cache is harmful."
+        answer: 0
+        explanation: |
+          Failing to reject is not evidence of no effect unless the test could have detected an effect of the size that matters. The confidence interval for the difference shows this directly: with 30 requests it is likely wide enough to include both zero and a useful speed-up. Choosing a one-sided test after seeing the data is a way to manufacture significance, not a fix.
+  connections:
+    - text: |
+        The chance is $1 - 0.95^{20} \approx 0.64$. Nearly two releases in three, even ones that change nothing, will turn some metric red. Teams that react to every flag chase noise; teams that learn to ignore the dashboard miss real regressions. The cures are the ones above: fewer, chosen metrics; corrected levels such as Bonferroni's $0.05/20 = 0.0025$; and intervals that show the size of a change rather than a bare verdict.
+
+        [[f5.the-bootstrap]] builds intervals and tests for statistics that have no formula, such as a p99, by resampling the data itself. [[f5.comparing-two-systems-a-b-tests]] puts tests to work on live traffic and adds the traps of peeking and stopping early, and [[f5.noise-in-measurements-and-benchmarks]] applies them to benchmarks, where the noise comes from the machine rather than from the users.
