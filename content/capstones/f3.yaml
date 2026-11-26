@@ -1,0 +1,457 @@
+cluster: F3
+title: Running a district cricket league
+minutes: 100
+claim: You will have planned a district cricket league end to end, a round-robin fixture list built with modular arithmetic, a knockout stage sized as a tree, ticket and lucky-draw counts by the product rule, the pigeonhole principle and inclusion and exclusion, an exact count of the ways to reach a score by a recurrence, and a check of whether the groundsman can inspect every walkway in one round.
+brief: |
+  This cluster gave you tools for counting without listing, for arithmetic that wraps round, for sequences defined by their own past, for the growth of costs, and for networks. A sports league uses every one of them, often without noticing.
+
+  **The project.** A district cricket association is starting a league for its village teams. The league stage needs a fixture list in which every pair of teams meets once and nobody plays twice on the same day. The best teams then go into a knockout. Tickets carry codes and PINs, and the association has promised a lucky draw. The commentators want to know in how many ways a batting side could have reached its score. And before the final, the groundsman must walk every walkway of the ground to check it, ideally without going over any walkway twice.
+
+  Each stage is one of these jobs, with its own questions. Nothing here is new: each job is a lesson of this cluster applied to a real decision, and often two lessons at once. Where a stage asks for code, the numbers involved are too large to list, so the counting has to be done by reasoning.
+starter: |
+  # Scratch space for the league office.
+  teams = 10
+  print(teams * (teams - 1) // 2, "league matches")
+  for r in range(teams - 1):
+      print(r, [(i, (r - i) % (teams - 1)) for i in range(teams - 1)][:3])
+stages:
+  - title: Fixtures for the league stage
+    blocks:
+      - text: |
+          In the league stage every team plays every other team once. Matches are played in rounds, one round a weekend, and in each round every team plays exactly one match. With an even number $n$ of teams, that means $n - 1$ rounds of $n/2$ matches.
+
+          Drawing up such a list by hand is fiddly: it is easy to reach the last weekend and find that the only teams left to pair have already met. In graph terms, the matches are the edges of the complete graph on $n$ teams, and each round must be a set of edges that touches every team exactly once.
+
+          There is a neat way that never gets stuck. Number the teams $0, 1, \dots, n - 1$. Put teams $0$ to $n - 2$ on a clock with $n - 1$ positions, and keep team $n - 1$ aside. In round $r$, two clock teams $i$ and $j$ play each other when $i + j \equiv r \pmod{n - 1}$, and the one clock team $i$ with $2i \equiv r \pmod{n - 1}$ plays team $n - 1$.
+      - question:
+          id: league-matches
+          type: numeric
+          system: s1
+          concepts: [f3.permutations-and-combinations]
+          prompt: |
+            How many league matches are there for 10 teams, each pair meeting once?
+          answer: "45"
+          explanation: |
+            One match for each choice of 2 teams from 10: $C(10, 2) = 10 \cdot 9 / 2 = 45$. That is 9 rounds of 5 matches.
+      - question:
+          id: round-robin
+          type: code
+          mode: write
+          system: s2
+          concepts: [f3.modular-arithmetic, f3.graph-theory-basics]
+          prompt: |
+            Write `round_robin(n)` for an even number of teams $n \ge 2$. Return a list of $n - 1$ rounds, where round $r$ (counting from 0) is a list of pairs `(a, b)` with `a < b`, listed in increasing order of `a`. Use the clock method above: for each clock team `i` from 0 to $n - 2$, let `j = (r - i) % (n - 1)`; if `i < j`, they play; if `i == j`, team `i` plays team $n - 1$.
+          starter: |
+            def round_robin(n):
+                return []
+
+            print(round_robin(4))
+            rounds = round_robin(10)
+            print(len(rounds), all(len(games) == 5 for games in rounds))
+          solution: |
+            def round_robin(n):
+                rounds = []
+                for r in range(n - 1):
+                    games = []
+                    for i in range(n - 1):
+                        j = (r - i) % (n - 1)
+                        if i < j:
+                            games.append((i, j))
+                        elif i == j:
+                            games.append((i, n - 1))
+                    rounds.append(games)
+                return rounds
+
+            print(round_robin(4))
+            rounds = round_robin(10)
+            print(len(rounds), all(len(games) == 5 for games in rounds))
+          tests: |
+            for _n in range(2, 31, 2):
+                _rounds = round_robin(_n)
+                assert len(_rounds) == _n - 1, "round_robin(" + str(_n) + ") should have " + str(_n - 1) + " rounds"
+                _met = set()
+                for _r, _games in enumerate(_rounds):
+                    _playing = []
+                    for _a, _b in _games:
+                        assert 0 <= _a < _b < _n, "In round_robin(" + str(_n) + "), round " + str(_r) + " has the pair " + str((_a, _b)) + "; pairs should be (a, b) with a < b"
+                        _playing += [_a, _b]
+                        _met.add((_a, _b))
+                    assert sorted(_playing) == list(range(_n)), "In round_robin(" + str(_n) + "), round " + str(_r) + " should have every team playing exactly once"
+                assert len(_met) == _n * (_n - 1) // 2, "In round_robin(" + str(_n) + "), every pair of teams should meet exactly once"
+            assert output.strip() == "[[(0, 3), (1, 2)], [(0, 1), (2, 3)], [(0, 2), (1, 3)]]\n9 True", "The program should print [[(0, 3), (1, 2)], [(0, 1), (2, 3)], [(0, 2), (1, 3)]], then 9 True"
+          wrong:
+            - |
+              def round_robin(n):
+                  pairs = []
+                  for a in range(n):
+                      for b in range(a + 1, n):
+                          pairs.append((a, b))
+                  half = n // 2
+                  return [pairs[k * half:(k + 1) * half] for k in range(n - 1)]
+
+              print([[(0, 3), (1, 2)], [(0, 1), (2, 3)], [(0, 2), (1, 3)]])
+              print(9, True)
+            - |
+              def round_robin(n):
+                  rounds = []
+                  for r in range(n - 1):
+                      games = []
+                      for i in range(n - 1):
+                          j = (r - i) % (n - 1)
+                          if i < j:
+                              games.append((i, j))
+                      rounds.append(games)
+                  return rounds
+
+              print([[(0, 3), (1, 2)], [(0, 1), (2, 3)], [(0, 2), (1, 3)]])
+              print(9, True)
+            - |
+              def round_robin(n):
+                  rounds = []
+                  for r in range(n - 1):
+                      games = []
+                      for i in range(n - 1):
+                          j = (r + i) % (n - 1)
+                          if i < j:
+                              games.append((i, j))
+                          elif i == j:
+                              games.append((i, n - 1))
+                      rounds.append(games)
+                  return rounds
+
+              print([[(0, 3), (1, 2)], [(0, 1), (2, 3)], [(0, 2), (1, 3)]])
+              print(9, True)
+          explanation: |
+            In round $r$, each clock team $i$ has exactly one partner $j \equiv r - i \pmod{n - 1}$, and the relation is symmetric, since $i + j \equiv r$ reads the same both ways, so the clock teams pair off, except the one whose partner is itself, which plays the team kept aside. Two clock teams $i$ and $j$ meet only in the round $r \equiv i + j$, so every pair meets exactly once over the $n - 1$ rounds, and team $n - 1$ meets each clock team in the round $r \equiv 2i$. Taking the pairs in dictionary order fills early rounds with team 0 several times. Leaving out the team kept aside leaves one clock team idle every round. Using $r + i$ pairs teams whose difference is $r$, which is not symmetric and does not split them into matches.
+      - question:
+          id: why-one-bye
+          type: choice
+          system: s2
+          concepts: [f3.divisibility-and-euclids-algorithm, f3.modular-arithmetic]
+          prompt: |
+            Why is there exactly one clock team $i$ with $2i \equiv r \pmod{n - 1}$ in every round?
+          options:
+            - "Because $n - 1$ is odd, so 2 and $n - 1$ are coprime, and multiplying by 2 sends the $n - 1$ positions to $n - 1$ different positions."
+            - "Because $r$ is always even."
+            - "Because 2 divides $n - 1$."
+            - "Because every number has a remainder on division by $n - 1$."
+          answer: 0
+          explanation: |
+            $n$ is even, so $n - 1$ is odd and $\gcd(2, n - 1) = 1$. By the cancellation rule, $2i \equiv 2i' \pmod{n - 1}$ forces $i \equiv i'$, so the $n - 1$ doubled positions are all different and each value $r$ is hit exactly once. With an odd number of teams this fails, which is why a league with an odd number of teams gives one team a rest each round instead.
+  - title: The knockout stage
+    blocks:
+      - text: |
+          The top 20 teams go into a knockout. In each round, teams are paired; losers go home, and if the number of teams is odd, one team gets a bye into the next round. The association must book grounds for every match and needs to know how many weekends the knockout will take, one round a weekend.
+
+          Draw the knockout as a tree: each match is a vertex whose two children are the matches, or teams, that fed into it, and the final is the root.
+      - question:
+          id: knockout-matches
+          type: numeric
+          system: s1
+          concepts: [f3.trees-and-their-properties]
+          prompt: |
+            How many matches does a knockout of 20 teams need?
+          answer: "19"
+          explanation: |
+            Each match sends exactly one team home, and 19 teams must go home. In the tree, the 20 teams are leaves and each match has two children, so there is one fewer match than teams.
+      - question:
+          id: knockout-rounds
+          type: numeric
+          system: s2
+          concepts: [f3.trees-and-their-properties]
+          prompt: |
+            What is the fewest number of rounds in which a knockout of 20 teams can be completed?
+          answer: "5"
+          explanation: |
+            Each round at most halves the number of teams left, rounding up for a bye: 20, 10, 5, 3, 2, 1, which is 5 rounds. In the tree, the rounds are the height, and a binary tree with 20 leaves has height at least $\log_2 20 \approx 4.3$, so at least 5. Four rounds could decide at most $2^4 = 16$ teams.
+  - title: Tickets, PINs and the lucky draw
+    blocks:
+      - text: |
+          Every ticket has a code made of a stand letter, a row and a seat. To enter, a spectator also types a four-digit PIN printed on the ticket, which the gate checks against the code. And the association has promised a prize to every ticket number from 1 to 50,000 that is a multiple of 7, 11 or 13, numbers chosen for being lucky in different households.
+      - question:
+          id: ticket-codes
+          type: numeric
+          system: s1
+          concepts: [f3.counting-with-products-and-sums]
+          prompt: |
+            A ticket code is one of 8 stand letters, a row from 1 to 40, and a seat from 1 to 250. How many codes are there?
+          answer: "80000"
+          explanation: |
+            Three successive choices, so by the product rule $8 \cdot 40 \cdot 250 = 80{,}000$.
+      - question:
+          id: shared-pins
+          type: numeric
+          system: s2
+          concepts: [f3.the-pigeonhole-principle]
+          prompt: |
+            85,000 tickets are sold for the final, each with a four-digit PIN from 0000 to 9999. Whatever PINs are chosen, at least how many tickets must share one PIN?
+          answer: "9"
+          explanation: |
+            There are 10,000 PINs, the boxes, and 85,000 tickets, the items. Some box holds at least $\lceil 85{,}000 / 10{,}000 \rceil = 9$. So a PIN alone can never identify a ticket; the gate must check it together with the code.
+      - question:
+          id: lucky-draw
+          type: numeric
+          system: s2
+          concepts: [f3.inclusion-and-exclusion, f3.divisibility-and-euclids-algorithm]
+          prompt: |
+            How many ticket numbers from 1 to 50,000 are multiples of 7, 11 or 13?
+          answer: "14035"
+          explanation: |
+            Add the three sets and correct for the overlaps, which are the multiples of the least common multiples. 7, 11 and 13 are primes, so these are the products: $7142 + 4545 + 3846 - 649 - 549 - 349 + 49 = 14{,}035$. That is about 28 per cent of the tickets, a generous draw.
+  - title: Ways to reach a score
+    blocks:
+      - text: |
+          The commentators like a statistic: in how many different orders of scoring shots could the batting side have reached its total? Count only shots that score, worth 1, 2, 4 or 6 runs, and count two sequences as different if the shots come in a different order. A total of 4 can be reached as 4, as 2 and 2, as 1, 1 and 2 in three orders, and so on.
+
+          For a real total such as 287 the count has dozens of digits, so it must be computed exactly, and quickly.
+      - question:
+          id: ways-to-score
+          type: code
+          mode: write
+          system: s2
+          concepts: [f3.recurrences, f3.counting-with-products-and-sums]
+          prompt: |
+            Write `ways_to_score(n)`, the number of ordered sequences of scoring shots worth 1, 2, 4 or 6 runs that add up to exactly `n`, for `n` from 0 to 500. Split by the last shot to get a recurrence, and compute it with a loop that stores every value from 0 up to `n`. `ways_to_score(0)` is 1, the empty sequence.
+          starter: |
+            def ways_to_score(n):
+                return 0
+
+            print([ways_to_score(n) for n in range(11)])
+            print(len(str(ways_to_score(287))))
+          solution: |
+            def ways_to_score(n):
+                ways = [1]
+                for total in range(1, n + 1):
+                    count = 0
+                    for shot in [1, 2, 4, 6]:
+                        if total - shot >= 0:
+                            count += ways[total - shot]
+                    ways.append(count)
+                return ways[n]
+
+            print([ways_to_score(n) for n in range(11)])
+            print(len(str(ways_to_score(287))))
+          tests: |
+            import itertools
+            for _n in range(0, 13):
+                _count = 0
+                for _k in range(_n + 1):
+                    for _shots in itertools.product([1, 2, 4, 6], repeat=_k):
+                        if sum(_shots) == _n:
+                            _count += 1
+                assert ways_to_score(_n) == _count, "ways_to_score(" + str(_n) + ") should be " + str(_count) + ", not " + str(ways_to_score(_n))
+            _w = [1]
+            for _t in range(1, 501):
+                _w.append(sum(_w[_t - _s] for _s in [1, 2, 4, 6] if _t - _s >= 0))
+            for _n in [100, 287, 500]:
+                assert ways_to_score(_n) == _w[_n], "ways_to_score(" + str(_n) + ") is wrong"
+            assert output.strip() == "[1, 1, 2, 3, 6, 10, 19, 33, 60, 106, 191]\n73", "The program should print [1, 1, 2, 3, 6, 10, 19, 33, 60, 106, 191], then 73"
+          wrong:
+            - |
+              def ways_to_score(n):
+                  ways = [1]
+                  for total in range(1, n + 1):
+                      count = 0
+                      for shot in [1, 2, 3, 4, 6]:
+                          if total - shot >= 0:
+                              count += ways[total - shot]
+                      ways.append(count)
+                  return ways[n]
+
+              print([1, 1, 2, 3, 6, 10, 19, 33, 60, 106, 191])
+              print(73)
+            - |
+              def ways_to_score(n):
+                  ways = [0]
+                  for total in range(1, n + 1):
+                      count = 0
+                      for shot in [1, 2, 4, 6]:
+                          if total - shot == 0:
+                              count += 1
+                          elif total - shot > 0:
+                              count += ways[total - shot]
+                      ways.append(count)
+                  return ways[n]
+
+              print([1, 1, 2, 3, 6, 10, 19, 33, 60, 106, 191])
+              print(73)
+            - |
+              def ways_to_score(n):
+                  ways = [1]
+                  for total in range(1, n + 1):
+                      count = 0
+                      for shot in [1, 2, 4, 6]:
+                          if total - shot >= 0:
+                              count += ways[total - shot]
+                      ways.append(count)
+                  return ways[n - 1]
+
+              print([1, 1, 2, 3, 6, 10, 19, 33, 60, 106, 191])
+              print(73)
+          explanation: |
+            Every sequence reaching $n$ ends with one last shot of 1, 2, 4 or 6, and before it is a sequence reaching $n - 1$, $n - 2$, $n - 4$ or $n - 6$. These cases do not overlap, so by the sum rule $W(n) = W(n - 1) + W(n - 2) + W(n - 4) + W(n - 6)$, with $W(0) = 1$ and no terms for negative totals. The loop computes each value once, $\Theta(n)$ additions, where a recursive function copying the recurrence would recompute the same totals exponentially often. The initial condition matters: $W(0) = 1$, not 0, because a single shot of exactly $n$ runs is one sequence, the empty sequence followed by that shot.
+      - question:
+          id: score-growth
+          type: choice
+          system: s2
+          concepts: [f3.recurrences, f3.asymptotic-notation]
+          prompt: |
+            How does `ways_to_score(n)` grow as $n$ grows?
+          options:
+            - "Exponentially: it is $\\Theta(c^n)$ for a constant $c$ a little below 1.8, the largest root of the recurrence's characteristic equation."
+            - "Linearly, since each total adds four terms."
+            - "Like $n^4$, since there are four kinds of shot."
+            - "Like $n \\log n$, since the shots get longer."
+          answer: 0
+          explanation: |
+            The recurrence is linear, so its solutions are combinations of $x^n$ for the roots of $x^6 = x^5 + x^4 + x^2 + 1$. The largest root is about 1.79, and it dominates, so each extra run multiplies the count by about 1.79 in the long run. The table confirms it: 106 to 191 is a factor of 1.8, and the count for 287 runs has 73 digits.
+  - title: Inspecting the walkways
+    blocks:
+      - text: |
+          Before the final, the groundsman walks every walkway between the gates, stands and pavilion to check it. Going over a walkway twice wastes time, so the office wants a quick test: can every walkway be walked in one continuous round, each exactly once, starting and ending anywhere? Some gates are closed for repairs and have no open walkways at all; they do not matter.
+      - question:
+          id: can-inspect
+          type: code
+          mode: find-bug
+          system: s2
+          concepts: [f3.graph-theory-basics]
+          prompt: |
+            `can_inspect(gates, walkways)` should say whether every walkway can be walked exactly once in one continuous round. For a house-shaped layout, two separate triangles of walkways, and a square with both diagonals, it should print `True False False`. It prints `True True False`. Find the fault and fix it.
+          starter: |
+            def can_inspect(gates, walkways):
+                degree = {g: 0 for g in gates}
+                for a, b in walkways:
+                    degree[a] += 1
+                    degree[b] += 1
+                odd = len([g for g in gates if degree[g] % 2 == 1])
+                return odd == 0 or odd == 2
+
+            house = [("A", "B"), ("B", "C"), ("C", "D"), ("D", "A"), ("A", "C"), ("B", "D"), ("D", "E"), ("C", "E")]
+            triangles = [("A", "B"), ("B", "C"), ("C", "A"), ("D", "E"), ("E", "F"), ("F", "D")]
+            square = [("A", "B"), ("B", "C"), ("C", "D"), ("D", "A"), ("A", "C"), ("B", "D")]
+            print(can_inspect(list("ABCDEG"), house), can_inspect(list("ABCDEF"), triangles), can_inspect(list("ABCD"), square))
+          solution: |
+            def can_inspect(gates, walkways):
+                degree = {g: 0 for g in gates}
+                neighbours = {g: [] for g in gates}
+                for a, b in walkways:
+                    degree[a] += 1
+                    degree[b] += 1
+                    neighbours[a].append(b)
+                    neighbours[b].append(a)
+                used = [g for g in gates if degree[g] > 0]
+                if used:
+                    seen = {used[0]}
+                    stack = [used[0]]
+                    while stack:
+                        g = stack.pop()
+                        for h in neighbours[g]:
+                            if h not in seen:
+                                seen.add(h)
+                                stack.append(h)
+                    if len(seen) < len(used):
+                        return False
+                odd = len([g for g in gates if degree[g] % 2 == 1])
+                return odd == 0 or odd == 2
+
+            house = [("A", "B"), ("B", "C"), ("C", "D"), ("D", "A"), ("A", "C"), ("B", "D"), ("D", "E"), ("C", "E")]
+            triangles = [("A", "B"), ("B", "C"), ("C", "A"), ("D", "E"), ("E", "F"), ("F", "D")]
+            square = [("A", "B"), ("B", "C"), ("C", "D"), ("D", "A"), ("A", "C"), ("B", "D")]
+            print(can_inspect(list("ABCDEG"), house), can_inspect(list("ABCDEF"), triangles), can_inspect(list("ABCD"), square))
+          tests: |
+            import random
+            random.seed(71)
+            def _reference(_gs, _ws):
+                _deg = {_g: 0 for _g in _gs}
+                _nb = {_g: [] for _g in _gs}
+                for _a, _b in _ws:
+                    _deg[_a] += 1
+                    _deg[_b] += 1
+                    _nb[_a].append(_b)
+                    _nb[_b].append(_a)
+                _used = [_g for _g in _gs if _deg[_g] > 0]
+                if _used:
+                    _seen = {_used[0]}
+                    _stack = [_used[0]]
+                    while _stack:
+                        _x = _stack.pop()
+                        for _y in _nb[_x]:
+                            if _y not in _seen:
+                                _seen.add(_y)
+                                _stack.append(_y)
+                    if len(_seen) < len(_used):
+                        return False
+                return sum(1 for _g in _gs if _deg[_g] % 2 == 1) <= 2
+            for _trial in range(500):
+                _n = random.randint(1, 8)
+                _gs = list(range(_n))
+                _ws = []
+                for _k in range(random.randint(0, 9)):
+                    _a = random.randint(0, _n - 1)
+                    _b = random.randint(0, _n - 1)
+                    if _a != _b:
+                        _ws.append((_a, _b))
+                _want = _reference(_gs, _ws)
+                assert can_inspect(_gs, _ws) == _want, "can_inspect(" + str(_gs) + ", " + str(_ws) + ") should be " + str(_want)
+            assert can_inspect([0, 1, 2, 3], [(1, 2), (2, 3), (3, 1)]) is True, "A closed gate with no walkways should not matter"
+            assert output.strip() == "True False False", "The program should print True False False"
+          wrong:
+            - |
+              def can_inspect(gates, walkways):
+                  degree = {g: 0 for g in gates}
+                  neighbours = {g: [] for g in gates}
+                  for a, b in walkways:
+                      degree[a] += 1
+                      degree[b] += 1
+                      neighbours[a].append(b)
+                      neighbours[b].append(a)
+                  seen = {gates[0]}
+                  stack = [gates[0]]
+                  while stack:
+                      g = stack.pop()
+                      for h in neighbours[g]:
+                          if h not in seen:
+                              seen.add(h)
+                              stack.append(h)
+                  if len(seen) < len(gates):
+                      return False
+                  odd = len([g for g in gates if degree[g] % 2 == 1])
+                  return odd == 0 or odd == 2
+
+              print(True, False, False)
+            - |
+              def can_inspect(gates, walkways):
+                  degree = {g: 0 for g in gates}
+                  neighbours = {g: [] for g in gates}
+                  for a, b in walkways:
+                      degree[a] += 1
+                      degree[b] += 1
+                      neighbours[a].append(b)
+                      neighbours[b].append(a)
+                  used = [g for g in gates if degree[g] > 0]
+                  if used:
+                      seen = {used[0]}
+                      stack = [used[0]]
+                      while stack:
+                          g = stack.pop()
+                          for h in neighbours[g]:
+                              if h not in seen:
+                                  seen.add(h)
+                                  stack.append(h)
+                      if len(seen) < len(used):
+                          return False
+                  return True
+
+              print(True, False, False)
+          explanation: |
+            Euler's theorem has two conditions, and the code checked only the degrees. Two separate triangles have every degree even, yet no single round covers both, because nothing joins them. The walkways must form one connected piece, so search from one gate that has a walkway and check that every such gate is reached. Gates with no walkways must be left out of that check: a closed gate is not part of the round, and demanding that it be reached would wrongly reject a perfectly good layout. Connectivity alone is not enough either: the square with diagonals is connected, but its four odd corners rule out a single round.
+review: |
+  The league is planned, and each decision came from a lesson of this cluster:
+
+  - The fixtures used [[f3.modular-arithmetic]]: pairing $i$ with $r - i$ on a clock of $n - 1$ positions splits the complete graph of [[f3.graph-theory-basics]] into $n - 1$ rounds, and the team left over is unique because 2 is coprime to the odd number $n - 1$, the cancellation rule of [[f3.divisibility-and-euclids-algorithm]]. The number of matches, $C(n, 2)$, came from [[f3.permutations-and-combinations]].
+  - The knockout is a tree, from [[f3.trees-and-their-properties]]: one match fewer than teams, and at least $\log_2 n$ rounds, the height of a binary tree with $n$ leaves.
+  - The ticket codes multiplied, by [[f3.counting-with-products-and-sums]]; the PINs had to be shared, by [[f3.the-pigeonhole-principle]]; and the lucky draw was counted without listing, by [[f3.inclusion-and-exclusion]] over least common multiples.
+  - The commentators' statistic was a recurrence, from [[f3.recurrences]], split by the last shot and computed with a loop, and its exponential growth, from [[f3.asymptotic-notation]], is why no one could list the sequences.
+  - The groundsman's round needed both of Euler's conditions: connected walkways, and at most two gates with an odd number of them.
+
+  Notice the pattern. In every stage the direct method, listing fixtures, matches, tickets or sequences, was either error-prone or impossible, and a structural fact turned it into a short calculation. That is what discrete mathematics is for. The next cluster turns these counts into probabilities: if a ticket is drawn at random, how likely is it to win?
