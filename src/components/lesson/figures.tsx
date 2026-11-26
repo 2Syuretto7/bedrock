@@ -6367,6 +6367,80 @@ function ThreeValued(props: Props) {
   );
 }
 
+/** A ₹500 transfer between two wallets, with or without a transaction, and with or without a power cut between its two updates. */
+function TransferCrash(props: Props) {
+  const [inTx, setInTx] = useState(props.transaction !== false);
+  const [crash, setCrash] = useState(props.crash === true);
+  const statements = [
+    ...(inTx ? ["begin"] : []),
+    "update wallets set balance = balance - 500 where name = 'Asha'",
+    ...(crash ? ["power cut, then restart"] : ["update wallets set balance = balance + 500 where name = 'Bilal'", ...(inTx ? ["commit"] : [])]),
+  ];
+  const last = statements.length;
+  const [stepRaw, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, 4));
+  const step = Math.min(stepRaw, last);
+  // Replay the statements up to this step, keeping what this connection sees apart from what is safely on disk.
+  let seen = { Asha: 1000, Bilal: 200 };
+  let disk = { ...seen };
+  for (const s of statements.slice(0, step)) {
+    if (s.includes("- 500")) seen = { ...seen, Asha: seen.Asha - 500 };
+    else if (s.includes("+ 500")) seen = { ...seen, Bilal: seen.Bilal + 500 };
+    else if (s === "commit") disk = { ...seen };
+    else if (s.startsWith("power")) seen = { ...disk };
+    if (!inTx && s.startsWith("update")) disk = { ...seen };
+  }
+  const total = disk.Asha + disk.Bilal;
+  const money = (n: number) => `₹${group(n)}`;
+  const pending = inTx && step >= 1 && !statements.slice(0, step).some((s) => s === "commit" || s.startsWith("power"));
+  const verdict =
+    step < last
+      ? pending
+        ? "Inside the transaction: changes are visible here but not yet committed."
+        : "Each statement is committed on its own as soon as it runs."
+      : crash
+        ? inTx
+          ? "The half-done transaction is undone: no money lost."
+          : `The debit was already saved and the credit never ran: ${money(1200 - total)} lost.`
+        : "Both updates are saved: the money has moved.";
+  const summary = `${inTx ? "A transaction wraps the two updates." : "No transaction: each update is committed by itself."} ${crash ? "The power fails between the debit and the credit." : "Nothing fails."} Step ${step} of ${last}${step > 0 ? `, after: ${statements[step - 1]}` : ", before anything runs"}. This connection sees Asha ${money(seen.Asha)} and Bilal ${money(seen.Bilal)}; on disk, Asha ${money(disk.Asha)} and Bilal ${money(disk.Bilal)}, ${money(total)} in all. ${verdict}`;
+  return (
+    <Frame
+      title="A transfer and a power cut"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={inTx} onClick={() => setInTx(!inTx)}>
+            inside a transaction
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={crash} onClick={() => setCrash(!crash)}>
+            power cut after the debit
+          </button>
+          <Stepper label="step" value={step} onChange={setStep} min={0} max={last} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 236" role="img" aria-label={`Wallet transfer, step ${step} of ${last}; on disk Asha ${money(disk.Asha)}, Bilal ${money(disk.Bilal)}`}>
+        {statements.map((s, i) => (
+          <g key={s}>
+            <rect x={8} y={8 + i * 24} width={424} height={20} className={i === step - 1 ? "fig-accent" : i < step ? "fig-fill" : "fig-ghost"} />
+            <text x={14} y={22 + i * 24} className="fig-small" style={i === step - 1 ? { fill: "var(--bg)" } : undefined}>
+              {s.startsWith("update") ? s.replace("update wallets set ", "").replace(" where name =", ", where name =") : s}
+            </text>
+          </g>
+        ))}
+        <SqlTable x={8} y={132} widths={[60, 70]} head={["name", "balance"]} rows={[["Asha", money(seen.Asha)], ["Bilal", money(seen.Bilal)]]} title="what this connection sees" mark={() => (pending ? "fill" : undefined)} />
+        <SqlTable x={230} y={132} widths={[60, 70]} head={["name", "balance"]} rows={[["Asha", money(disk.Asha)], ["Bilal", money(disk.Bilal)]]} title="committed, safe on disk" />
+        <text x={230} y={210} className="fig-small">
+          {`total on disk ${money(total)}`}
+        </text>
+        <text x={8} y={230} className="fig-small">
+          {verdict}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -7689,6 +7763,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "subquery-steps": SubquerySteps,
   "window-frame": WindowFrame,
   "three-valued": ThreeValued,
+  "transfer-crash": TransferCrash,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
