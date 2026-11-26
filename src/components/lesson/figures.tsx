@@ -4763,7 +4763,7 @@ function HistogramBins(props: Props) {
   const sy = (c: number) => 200 - (c / tallest) * 170;
   const ticks = log ? [1, 10, 100, 250] : [0, 50, 100, 150, 200, 250];
   const tx = (t: number) => 40 + (log ? Math.log(t) / Math.log(HIST_TOP) : t / HIST_TOP) * 380;
-  const width = log ? `edges that grow by a factor of ${dp(HIST_TOP ** (1 / k), 2)} each` : `each ${dp(HIST_TOP / k, 1)} ms wide`;
+  const width = log ? `whose edges grow by a factor of ${dp(HIST_TOP ** (1 / k), 2)}` : `each ${dp(HIST_TOP / k, 1)} ms wide`;
   return (
     <Frame
       title="Counting times in buckets"
@@ -5118,8 +5118,9 @@ function AbTest(props: Props) {
   const paths = Array.from({ length: tests }, (_, t) => run(noise.slice(t * 2 * AB_DAYS, (t + 1) * 2 * AB_DAYS)));
   const firstHit = (path: number[]) => lookDays.find((day) => path[day - 1] < 0.05);
   const declared = paths.filter((path) => firstHit(path) !== undefined).length;
-  // Show the first test whose p-value ever dips below 0.05, if any does, since that is the one a peeker could be fooled by.
-  const shown = paths[Math.max(0, paths.findIndex((path) => path.some((p) => p < 0.05)))];
+  // With no true difference, show a test whose p-value dips below 0.05 along the way but not at the end: the one a peeker is fooled by.
+  const fooling = lift === 0 ? paths.findIndex((path) => path.some((p) => p < 0.05) && path[AB_DAYS - 1] >= 0.05) : -1;
+  const shown = paths[Math.max(0, fooling)];
   const hit = firstHit(shown);
   const dip = shown.findIndex((p) => p < 0.05);
   const sx = (day: number) => 40 + ((day - 1) / (AB_DAYS - 1)) * 380;
@@ -5128,7 +5129,7 @@ function AbTest(props: Props) {
   return (
     <Frame
       title="Peeking at an A/B test"
-      summary={`Version B's true conversion rate is ${lift === 0 ? "the same as A's, 5%" : `${lift}% higher than A's 5%, ${dp(rateB * 100, 2)}%`}, with ${group(AB_USERS)} users a day on each version for ${AB_DAYS} days. The test is looked at ${looks === 1 ? "once, at the end" : `${looks} times, every ${dp(AB_DAYS / looks, 1)} days`}. The test drawn ${dip < 0 ? "never dips below 0.05" : `dips below 0.05 on day ${dip + 1}`} and ${hit === undefined ? "is not below 0.05 at any look, so it is reported as no difference" : `is below 0.05 at the look on day ${hit}, so stopping there declares a difference`}. Over ${tests} tests like it, stopping at the first look with p below 0.05 declares the versions different in ${dp((declared / tests) * 100, 1)}% of them${lift === 0 ? ", every one a false alarm" : ""}.`}
+      summary={`Version B's true conversion rate is ${lift === 0 ? "the same as A's, 5%" : `${lift}% higher than A's 5%, ${dp(rateB * 100, 2)}%`}, with ${group(AB_USERS)} users a day on each version for ${AB_DAYS} days. The test is looked at ${looks === 1 ? "once, at the end" : looks === AB_DAYS ? `${looks} times, every day` : `${looks} times, every ${dp(AB_DAYS / looks, 1)} days`}. The test drawn ${dip < 0 ? "never dips below 0.05" : `dips below 0.05 on day ${dip + 1}`} and ${hit === undefined ? "is not below 0.05 at any look, so it is reported as no difference" : `is below 0.05 at the look on day ${hit}, so stopping there declares a difference`}. Over ${tests} tests like it, stopping at the first look with p below 0.05 declares the versions different in ${dp((declared / tests) * 100, 1)}% of them${lift === 0 ? ", every one a false alarm" : ""}.`}
       controls={
         <>
           <Slider label="true lift" value={lift} onChange={setLift} min={0} max={20} text={`${lift}%`} />
@@ -5199,7 +5200,7 @@ function BenchmarkRuns(props: Props) {
   const truth = 1 + diff / 100;
   const sx = (k: number) => 40 + (k / (BENCH_RUNS - 1)) * 380;
   const sy = (t: number) => 210 - ((clamp(t, 90, 170) - 90) / 80) * 190;
-  const pct = (r: number) => `${r >= 1 ? "+" : "−"}${dp(Math.abs(r - 1) * 100, 1)}%`;
+  const pct = (r: number) => (Math.abs(r - 1) < 0.0005 ? "0%" : `${r > 1 ? "+" : "−"}${dp(Math.abs(r - 1) * 100, 1)}%`);
   return (
     <Frame
       title="Timing two versions"

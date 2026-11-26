@@ -396,3 +396,90 @@ test("the Monte Carlo figure estimates π, and the poor generator gets stuck on 
   await figure.getByRole("button", { name: "Increase seed" }).click();
   await expect(figure).toContainText("seed 1, each made of two draws. 7,724 land inside the quarter circle, so the estimate of π is 4 × 7,724/10,000 = 3.09");
 });
+
+test("the summary marks show the mean chasing one slow request while the median stays", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="summary-marks"]').first().getByRole("figure");
+  await expect(figure).toContainText("20 response times in milliseconds, the slowest 120 ms. The mean is 62.45 ms");
+  await slide(figure, "slowest request", "5000", "the slowest 5,000 ms. The mean is 306.45 ms: the total, 6,129 ms, shared equally. The median is 57 ms");
+  await slide(figure, "percentile", "100", "The 100th percentile is 5,000 ms, the slowest, because at least 100% of the times must be at or below it.");
+});
+
+test("the tail plot sets an exponential tail against a power law", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="tail-plot"]').first().getByRole("figure");
+  await expect(figure).toContainText("so its p99 is 141 ms, its p99.9 447 ms and its p99.99 1,414 ms. Its mean is 28 ms.");
+  await slide(figure, "tail exponent", "10", "every doubling of the time divides the chance by 2, so its p99 is 1,000 ms, its p99.9 10,000 ms and its p99.99 1,00,000 ms. Its mean is infinite");
+  await slide(figure, "tail exponent", "30", "so its p99 is 74 ms, its p99.9 159 ms and its p99.99 342 ms. Its mean is 24 ms.");
+});
+
+test("the histogram changes shape with the number and kind of buckets", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="histogram-bins"]').first().getByRole("figure");
+  await expect(figure).toContainText("counted in 12 buckets each 20.8 ms wide. The tallest bucket, from 0 to 21 ms, holds 215 of them. 3 buckets are empty.");
+  const log = figure.getByRole("button", { name: "Use logarithmic buckets" });
+  await log.click();
+  await expect(log).toHaveAttribute("aria-pressed", "true");
+  await expect(figure).toContainText("counted in 12 buckets whose edges grow by a factor of 1.58. The tallest bucket, from 16 to 25 ms, holds 97 of them. 1 bucket is empty.");
+  await slide(figure, "buckets", "60", "counted in 60 buckets whose edges grow by a factor of 1.1. The tallest bucket, from 13 to 14 ms, holds 24 of them. 15 buckets are empty.");
+});
+
+test("the estimator figure shows standard error shrinking and the biased variance", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="estimator-spread"]').first().getByRole("figure");
+  await expect(figure).toContainText("The estimates average 26.3 ms, close to the truth, and spread with a standard deviation of 6.8 ms");
+  await figure.getByRole("button", { name: "Estimate the median" }).click();
+  await slide(figure, "sample size", "4", "each of 100 response times drawn at random from a population of 2,000 whose median is 20.3 ms. Each sample gives one estimate, the median. The estimates average 20.5 ms, close to the truth, and spread with a standard deviation of 1.9 ms");
+  await figure.getByRole("button", { name: "Estimate the 90th percentile" }).click();
+  await figure.getByRole("button", { name: "Estimate the variance, dividing by n" }).click();
+  await slide(figure, "sample size", "0", "The estimates average 392.3 ms², below the truth by 84.3 ms²");
+});
+
+test("the interval figure counts how many intervals catch the true mean", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="interval-catch"]').first().getByRole("figure");
+  await expect(figure).toContainText("96 of the 100 intervals catch it and 4 miss, against 95 expected. The intervals are 8.5 ms wide on average.");
+  await slide(figure, "sample size", "0", "86 of the 100 intervals catch it and 14 miss, against 95 expected. The intervals are 34.3 ms wide on average. With samples this small");
+  await slide(figure, "sample size", "4", "96 of the 100 intervals catch it");
+  await slide(figure, "confidence", "3", "each with its 99% interval for the mean, the sample mean plus or minus 2.58 standard errors. The true mean is 26.3 ms. 99 of the 100 intervals catch it and 1 miss");
+});
+
+test("the permutation test finds a real difference once the groups are large", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="null-test"]').first().getByRole("figure");
+  await expect(figure).toContainText("The observed difference of means, B minus A, is 4.73 ms.");
+  await expect(figure).toContainText("194 times, so the p-value is about 0.194. That is not below 0.05");
+  await slide(figure, "group size", "4", "is 6.72 ms. Shuffling the 400 times between the groups at random 1,000 times, as if the labels meant nothing, gave a difference at least that large in size 3 times, so the p-value is about 0.003. That is below 0.05");
+  await slide(figure, "added to group B", "0", "444 times, so the p-value is about 0.444.");
+});
+
+test("the bootstrap resamples one sample into an interval", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="bootstrap"]').first().getByRole("figure");
+  await expect(figure).toContainText("1,000 resampled medians with a standard deviation of 1.9 ms: the bootstrap standard error. Dropping the lowest and highest 25 leaves the 95% interval 18.2 to 26.2 ms.");
+  await figure.getByRole("button", { name: "Resample the 90th percentile" }).click();
+  await expect(figure).toContainText("One sample of 50 response times, whose 90th percentile is 57 ms.");
+  await slide(figure, "sample size", "0", "1,000 resampled 90th percentiles with a standard deviation of 20.4 ms: the bootstrap standard error. Dropping the lowest and highest 25 leaves the 95% interval 34.7 to 101.2 ms.");
+});
+
+test("peeking at an A/B test declares false winners", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="ab-test"]').first().getByRole("figure");
+  await expect(figure).toContainText("The test drawn dips below 0.05 on day 9 and is not below 0.05 at any look, so it is reported as no difference.");
+  await expect(figure).toContainText("declares the versions different in 6.8% of them, every one a false alarm.");
+  await slide(figure, "looks", "6", "The test is looked at 30 times, every day. The test drawn dips below 0.05 on day 9 and is below 0.05 at the look on day 9, so stopping there declares a difference. Over 400 tests like it, stopping at the first look with p below 0.05 declares the versions different in 27.8% of them");
+  await slide(figure, "true lift", "10", "declares the versions different in 88.3% of them.");
+});
+
+test("the benchmark figure shows drift posing as a difference until the runs are interleaved", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="benchmark-runs"]').first().getByRole("figure");
+  await expect(figure).toContainText("Measured B against A: median +3.1%, minimum +5%, mean +0.2%, against a true 0%.");
+  const interleave = figure.getByRole("button", { name: "Interleave the runs" });
+  await interleave.click();
+  await expect(interleave).toHaveAttribute("aria-pressed", "true");
+  await expect(figure).toContainText("Measured B against A: median −0.9%, minimum 0%, mean −1.1%, against a true 0%.");
+  await figure.getByRole("button", { name: "Drop the first 5 runs" }).click();
+  await slide(figure, "true difference", "-5", "B is truly 5% faster than A.");
+  await expect(figure).toContainText("Measured B against A: median −5.5%, minimum −5%, mean −6.5%, against a true −5%.");
+});

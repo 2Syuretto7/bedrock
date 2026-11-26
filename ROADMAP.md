@@ -4,7 +4,7 @@ What is built, what comes next and in what order. The curriculum itself, every c
 
 ## Lessons
 
-Written: F0, number sense for engineers (nine lessons), S0, first programs (ten lessons), H0, bits and data representation (eight lessons), F1, algebra and functions (ten lessons), S1, Python proper (ten lessons), F2, logic, sets and proof (ten lessons), S2, data structures (ten lessons), F3, discrete mathematics (ten lessons), and F4, probability (thirteen lessons), each with its mini-capstone: 90 of 583 lessons in all. Next: F5, statistics for engineers.
+Written: F0, number sense for engineers (nine lessons), S0, first programs (ten lessons), H0, bits and data representation (eight lessons), F1, algebra and functions (ten lessons), S1, Python proper (ten lessons), F2, logic, sets and proof (ten lessons), S2, data structures (ten lessons), F3, discrete mathematics (ten lessons), F4, probability (thirteen lessons), and F5, statistics for engineers (nine lessons), each with its mini-capstone: 99 of 583 lessons in all. Next: S3, algorithms.
 
 Content is written one whole cluster at a time, in the order Learn walks the clusters, each batch with its mini-capstone and any new figures. The lessons written must always be the start of this route, so no cluster is merged before the one it follows.
 
@@ -19,7 +19,7 @@ Content is written one whole cluster at a time, in the order Learn walks the clu
 | 7 | S2 Data structures | 10, written |
 | 8 | F3 Discrete mathematics | 10, written |
 | 9 | F4 Probability | 13, written |
-| 10 | F5 Statistics for engineers | 9 |
+| 10 | F5 Statistics for engineers | 9, written |
 | 11 | S3 Algorithms | 13 |
 | 12 | Q0 Relational model and SQL | 10 |
 | 13 | Q1 Data modelling | 7 |
@@ -83,7 +83,7 @@ Each phase ends with a deployed version that can be used from the first lesson t
 | Phase | Engine | Content | State |
 | --- | --- | --- | --- |
 | P0 The engine | Axiom's engine copied and renamed; the 65-cluster graph; four fresh migrations; the copper theme; CI and the production check; server-recorded Start for timed questions; typed figure props; the `log-scale` figure; the preview-only figure gallery, checked at three sizes in CI | F0 | Built; waiting on the live site check |
-| P1 Program and reason | The era 1 figures, starting with `step-through` (a short program run a line at a time, with every name's value and the output so far) | S0, H0, F1, S1, F2, S2, F3, F4, F5, S3 | In progress: S0, H0, F1, S1, F2, S2, F3 and F4 written, with `binary-counter`, `struct-padding`, `triangle-sum`, `full-adder`, `search-tree`, `trie`, `graph-storage`, `union-find`, `choice-tree`, `pascal-triangle`, `pigeonholes`, `inclusion-exclusion`, `mod-clock`, `euclid-squares`, `tower`, `bound-witness`, `one-stroke`, `leaf-strip`, `dice-grid`, `bayes-square`, `variable-bars`, `distribution-bars`, `density-area`, `birthday-curve`, `tail-bounds`, `sample-means` and `monte-carlo` |
+| P1 Program and reason | The era 1 figures, starting with `step-through` (a short program run a line at a time, with every name's value and the output so far) | S0, H0, F1, S1, F2, S2, F3, F4, F5, S3 | In progress: S0, H0, F1, S1, F2, S2, F3, F4 and F5 written, with `binary-counter`, `struct-padding`, `triangle-sum`, `full-adder`, `search-tree`, `trie`, `graph-storage`, `union-find`, `choice-tree`, `pascal-triangle`, `pigeonholes`, `inclusion-exclusion`, `mod-clock`, `euclid-squares`, `tower`, `bound-witness`, `one-stroke`, `leaf-strip`, `dice-grid`, `bayes-square`, `variable-bars`, `distribution-bars`, `density-area`, `birthday-curve`, `tail-bounds`, `sample-means`, `monte-carlo`, `summary-marks`, `tail-plot`, `histogram-bins`, `estimator-spread`, `interval-catch`, `null-test`, `bootstrap`, `ab-test` and `benchmark-runs` |
 | P2 SQL and the machine | `sql` and `asm` runtimes; the `bedrock` simulator core (event loop, threads, caches, queues); the Trace tab | Q0, Q1, S4, S5, S6, S7, H1, H2, D0, F6 | Not started |
 | P3 Networks and storage | Network, node and checking simulators; the seed-sweep check; the larger-capstone engine | D1, D2, F7, Q2, Q3, Q4, capstone C1 | Not started |
 | P4 Distributed data | Linearisability checking and fault shrinking at full strength | D3, D4, D5, D6, capstones C2 and C3 | Not started |
