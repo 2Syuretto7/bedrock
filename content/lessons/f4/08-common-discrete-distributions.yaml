@@ -1,0 +1,429 @@
+concept: f4.common-discrete-distributions
+minutes: 90
+claim: You can recognise the Bernoulli, binomial, geometric and Poisson distributions from the story that produces them, write down and compute their pmfs, derive their means and variances, use the memoryless property of the geometric distribution and the coupon collector's sum of geometric waits, approximate a binomial with many rare trials by a Poisson, and compute their chances exactly or with floats in Python.
+recalls: [f4.variance]
+uses: [f4.variance, f4.expectation-and-linearity, f4.random-variables, f4.independence, f4.conditional-probability, f3.permutations-and-combinations, f1.exponents-and-exponential-growth, f1.arithmetic-and-geometric-series, s1.modules-and-imports, s1.comprehensions-and-iterators, s0.functions, s0.loops]
+leads: [f4.continuous-distributions-and-densities, f4.the-birthday-problem-and-collisions, f4.tail-bounds, f4.the-law-of-large-numbers-and-the-central-limit-theorem, f4.simulation-and-pseudo-random-numbers]
+starter: |
+  # Scratch space. 1,000 disks, each failing today with chance 0.002, independently.
+  import math
+
+  n, p = 1000, 0.002
+  for k in range(8):
+      print(k, math.comb(n, k) * p ** k * (1 - p) ** (n - k))
+parts:
+  recall:
+    - text: |
+        [[f4.variance]] ended by promising named distributions for the stories that keep coming back: counting successes, waiting for the first one, and counting rare events. Three quick pulls first.
+  puzzle:
+    - text: |
+        A data centre in Navi Mumbai runs 1,000 disks. On any given day each disk fails with chance 0.002, independently of the others, so about 2 fail on an average day. Failed disks must be replaced the same day, and the operations team keeps 5 spare disks on site, restocked every night.
+
+        The manager asks a simple question: **on how many days a year will the team need more spares than it has?** "Never," says one engineer, "we only lose 2 a day." "Most days, eventually," says another, "with a thousand disks anything can happen." Neither has done the calculation.
+  intuition:
+    - text: |
+        The number of disks that fail today is a count of successes, if "success" is allowed to mean a failure: 1,000 independent trials, each succeeding with chance 0.002. The same shape of question comes up everywhere. How many of 20 customers who see an advert click on it? How many of 50 packets are lost? Each is a count of successes in a fixed number of independent trials with the same chance, and its distribution, worked out once, is called the **binomial**.
+
+        A second story is waiting. How many times must you dial a busy helpline until you get through? How many packets of biscuits until you find the card you want? Each attempt is an independent trial, and you count trials until the first success. That distribution is the **geometric**.
+
+        A third is the count of rare events: disk failures in a day, typing errors on a page, calls to a helpline in a minute. There are a huge number of opportunities and each one rarely comes off. That is the **Poisson** distribution, and it turns out to be what the binomial becomes when the trials are many and the chance is small.
+
+        The figure draws all three. Start with the binomial: set 20 trials and a chance of 0.1, and see the bars pile up around 2. Then switch to the Poisson with an average count of 2. The two pictures are nearly the same, and that is the key to the disks.
+    - figure: distribution-bars
+      props: { family: binomial, n: 20, p: 0.1 }
+    - text: |
+        Each distribution has its mean and a bracket of one standard deviation either side. Move the chance of success in the geometric distribution down to 0.1 and watch the bars stretch out to the right: a wait that averages 10 trials often takes 20 or more.
+  derivation:
+    - text: |
+        **Bernoulli.** A random variable that is 1 with chance $p$ and 0 otherwise has the **Bernoulli($p$)** distribution. It is the indicator of a single trial, with mean $p$ and variance $p(1 - p)$, from the last two lessons.
+
+        **Binomial.** Let $X$ count the successes in $n$ independent trials, each succeeding with chance $p$. A particular sequence with $k$ successes and $n - k$ failures, such as SSFSF…, has chance $p^k (1 - p)^{n - k}$ by independence, whatever the order. There are $\binom{n}{k}$ such sequences, one for each choice of which $k$ trials succeed, by [[f3.permutations-and-combinations]]. The sequences are disjoint, so
+
+        $$P(X = k) = \binom{n}{k} p^k (1 - p)^{n - k}, \qquad k = 0, 1, \dots, n.$$
+
+        This is the **Binomial($n$, $p$)** distribution. Its chances add to $\bigl(p + (1 - p)\bigr)^n = 1$ by the binomial theorem, which is where the name comes from. As a sum of $n$ independent Bernoulli indicators, its mean is $np$ and its variance $np(1 - p)$, with no further work.
+
+        For the disks, $n = 1{,}000$ and $p = 0.002$: mean 2, variance $1.996$, standard deviation about $1.41$.
+    - question:
+        id: derivation-binomial
+        type: numeric
+        system: s2
+        prompt: |
+          A batsman hits a boundary on each ball with chance $0.2$, independently. In an over of 6 balls, what is the probability of exactly 2 boundaries? Give a decimal to three places.
+        tolerance: "0.0005"
+        answer: "0.246"
+        explanation: |
+          $\binom{6}{2}\,0.2^2\,0.8^4 = 15 \times 0.04 \times 0.4096 = 0.24576$. Two is the most likely number, though it happens in only about one over in four.
+    - text: |
+        **Geometric.** Let $X$ count the independent trials up to and including the first success, each succeeding with chance $p$. $X = k$ means $k - 1$ failures and then a success, so
+
+        $$P(X = k) = (1 - p)^{k - 1} p, \qquad k = 1, 2, 3, \dots$$
+
+        The chances form a geometric series, from [[f1.arithmetic-and-geometric-series]], which adds to $p / \bigl(1 - (1 - p)\bigr) = 1$. The tail is simpler still: $X > k$ means the first $k$ trials all failed, so $P(X > k) = (1 - p)^k$. By the tail sum of [[f4.expectation-and-linearity]],
+
+        $$E[X] = \sum_{k \ge 0} P(X > k) = \sum_{k \ge 0} (1 - p)^k = \frac{1}{p},$$
+
+        and a longer calculation gives $\operatorname{Var}(X) = (1 - p)/p^2$. A helpline that answers each call with chance $1/5$ takes 5 calls on average, with a standard deviation of about $4.5$.
+
+        **No memory.** Given that the first $j$ trials have failed, the chance of waiting more than $k$ further trials is
+
+        $$P(X > j + k \mid X > j) = \frac{(1 - p)^{j + k}}{(1 - p)^j} = (1 - p)^k = P(X > k).$$
+
+        Past failures do not bring success closer, the same fact as the gambler's fallacy, now as a formula. The geometric is the only distribution on $1, 2, 3, \dots$ with this property.
+
+        **Collecting a set.** Biscuit packets each contain one of $n$ cricket cards, every card equally likely. How many packets, on average, until you have all $n$? Once you hold $i$ different cards, each new packet brings a new one with chance $(n - i)/n$, so the wait for the next new card is geometric with mean $n/(n - i)$. Adding the waits by linearity,
+
+        $$E[\text{packets}] = \frac{n}{n} + \frac{n}{n - 1} + \cdots + \frac{n}{1} = n\Bigl(1 + \frac12 + \cdots + \frac1n\Bigr).$$
+
+        For 10 cards that is about 29.3 packets, and almost a third of them are spent waiting for the last card.
+    - question:
+        id: order-geometric
+        type: order
+        system: s2
+        prompt: |
+          Put the steps showing that a geometric wait with chance $p$ has mean $1/p$ in order.
+        steps:
+          - "The wait is more than $k$ trials exactly when the first $k$ trials all fail."
+          - "So $P(X > k) = (1 - p)^k$, by independence."
+          - "By the tail sum, $E[X] = \\sum_{k \\ge 0} P(X > k) = 1 + (1 - p) + (1 - p)^2 + \\cdots$."
+          - "That geometric series adds to $1 / \\bigl(1 - (1 - p)\\bigr) = 1/p$."
+        explanation: |
+          Tails are often easier than the pmf. Each step uses a tool from an earlier lesson: independence for the tail, the tail sum for the mean, and the geometric series for the total.
+    - text: |
+        **Poisson.** Let the number of trials $n$ grow and the chance $p$ shrink, keeping the mean $np = \lambda$ fixed. Then for each fixed $k$,
+
+        $$\binom{n}{k} p^k (1 - p)^{n - k} = \frac{n (n - 1) \cdots (n - k + 1)}{n^k} \cdot \frac{\lambda^k}{k!} \cdot \Bigl(1 - \frac{\lambda}{n}\Bigr)^{n} \Bigl(1 - \frac{\lambda}{n}\Bigr)^{-k}.$$
+
+        As $n$ grows, the first fraction tends to 1, the last factor tends to 1, and $(1 - \lambda/n)^n$ tends to $e^{-\lambda}$, the compound-interest limit of [[f1.exponents-and-exponential-growth]] run in reverse. What is left is
+
+        $$P(X = k) = e^{-\lambda} \frac{\lambda^k}{k!}, \qquad k = 0, 1, 2, \dots,$$
+
+        the **Poisson($\lambda$)** distribution. Its mean and its variance are both $\lambda$, the limits of $np$ and $np(1 - p)$. It needs only the average count, not $n$ or $p$ separately, which is why it fits counts of calls, failures, arrivals and typos so well: there are many tiny chances, and nobody knows exactly how many.
+
+        **The disks.** The number of failures is Binomial(1,000, 0.002), close to Poisson(2). The team runs short when more than 5 fail:
+
+        $$P(X > 5) = 1 - e^{-2}\Bigl(1 + 2 + \frac{2^2}{2!} + \frac{2^3}{3!} + \frac{2^4}{4!} + \frac{2^5}{5!}\Bigr) \approx 1 - 0.1353 \times 7.267 \approx 0.0166.$$
+
+        The exact binomial gives $0.0165$. So the team runs short on about $0.0165 \times 365 \approx 6$ days a year: not never, and far from most days.
+
+        **In Python.** `math.comb` gives the binomial coefficient, `math.exp` and `math.factorial` the Poisson chances:
+
+        ```python
+        import math
+
+        binomial = math.comb(1000, 3) * 0.002 ** 3 * 0.998 ** 997
+        poisson = math.exp(-2) * 2 ** 3 / math.factorial(3)
+        print(round(binomial, 4), round(poisson, 4))
+        ```
+
+        This prints `0.1806 0.1804`: the chance of exactly 3 failures, two ways.
+  formal:
+    - text: |
+        | Name | Story | pmf | Mean | Variance |
+        |---|---|---|---|---|
+        | Bernoulli($p$) | one trial | $P(1) = p$, $P(0) = 1 - p$ | $p$ | $p(1 - p)$ |
+        | Binomial($n$, $p$) | successes in $n$ independent trials | $\binom{n}{k} p^k (1 - p)^{n - k}$ | $np$ | $np(1 - p)$ |
+        | Geometric($p$) | trials up to the first success | $(1 - p)^{k - 1} p$, $k \ge 1$ | $1/p$ | $(1 - p)/p^2$ |
+        | Poisson($\lambda$) | count of rare events | $e^{-\lambda} \lambda^k / k!$, $k \ge 0$ | $\lambda$ | $\lambda$ |
+
+        **Geometric tail and memory.** $P(X > k) = (1 - p)^k$, and $P(X > j + k \mid X > j) = P(X > k)$.
+
+        **Poisson limit.** If $n \to \infty$ and $p \to 0$ with $np = \lambda$ fixed, then $\binom{n}{k} p^k (1 - p)^{n - k} \to e^{-\lambda} \lambda^k / k!$ for each $k$.
+
+        **Coupon collector.** The expected number of draws to see all $n$ equally likely types is $n \sum_{i=1}^{n} 1/i$.
+  drill:
+    - text: Seconds each. Name the story, then use its formula.
+    - question:
+        id: drill-binomial-zero
+        type: numeric
+        system: s1
+        prompt: |
+          Three independent packets are each lost with chance $0.1$. What is the chance that none is lost?
+        answer: "0.729"
+        explanation: $0.9^3 = 0.729$, the binomial chance of 0 successes.
+    - question:
+        id: drill-binomial-mean
+        type: numeric
+        system: s1
+        prompt: |
+          $X$ is Binomial(100, 0.2). What is its variance?
+        answer: "16"
+        explanation: $np(1 - p) = 100 \times 0.2 \times 0.8 = 16$, a standard deviation of 4 around a mean of 20.
+    - question:
+        id: drill-geometric-mean
+        type: numeric
+        system: s1
+        prompt: |
+          Each call to a helpline gets through with chance $0.25$, independently. On average, how many calls does it take to get through?
+        answer: "4"
+        explanation: A geometric wait has mean $1/p = 4$.
+    - question:
+        id: drill-geometric-tail
+        type: numeric
+        system: s1
+        prompt: |
+          A fair coin is tossed until the first head. What is the chance that more than 3 tosses are needed? Give a fraction.
+        answer: "1/8"
+        explanation: The first three must all be tails, $(1/2)^3$.
+    - question:
+        id: drill-poisson-var
+        type: numeric
+        system: s1
+        prompt: |
+          A server gets an average of 3 errors an hour, and the count is Poisson. What is the variance of the count in an hour?
+        answer: "3"
+        explanation: A Poisson count has variance equal to its mean.
+    - question:
+        id: drill-which
+        type: choice
+        system: s1
+        prompt: |
+          Which distribution fits the number of rolls of a die until the first six?
+        options: ["Geometric", "Binomial", "Poisson", "Bernoulli"]
+        answer: 0
+        explanation: It counts independent trials up to the first success, with $p = 1/6$, so its mean is 6.
+    - question:
+        id: predict-binomial
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import math
+          from fractions import Fraction
+
+          p = Fraction(1, 2)
+          pmf = [math.comb(4, k) * p ** k * (1 - p) ** (4 - k) for k in range(5)]
+          print(" ".join(str(c) for c in pmf), sum(pmf))
+        output: "1/16 1/4 3/8 1/4 1/16 1"
+        explanation: Binomial(4, 1/2) has chances $\binom{4}{k}/16$, which are 1, 4, 6, 4, 1 sixteenths, adding to 1.
+    - question:
+        id: predict-poisson
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import math
+
+          rate = 2
+          pmf = [math.exp(-rate) * rate ** k / math.factorial(k) for k in range(4)]
+          print([round(c, 3) for c in pmf])
+        output: "[0.135, 0.271, 0.271, 0.18]"
+        explanation: Poisson(2) gives $e^{-2} \approx 0.135$ to 0, and $0.271$ to both 1 and 2, since $2^1/1! = 2^2/2!$. Then $e^{-2} \times 8/6 \approx 0.180$.
+  work:
+    - text: Slower now. Before using any formula, say which story the situation tells, and check that the trials are independent with the same chance.
+    - question:
+        id: fix-binomial
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `binomial_pmf(n, k, p)` should give the chance of exactly `k` successes in `n` independent trials, each a success with chance `p`. The program should print `3/8 27/64 1/32`. It prints `1/16 9/64 1/32`. Find the fault and fix it.
+        starter: |
+          from fractions import Fraction
+
+          def binomial_pmf(n, k, p):
+              return p ** k * (1 - p) ** (n - k)
+
+          print(binomial_pmf(4, 2, Fraction(1, 2)), binomial_pmf(3, 1, Fraction(1, 4)), binomial_pmf(5, 0, Fraction(1, 2)))
+        solution: |
+          import math
+          from fractions import Fraction
+
+          def binomial_pmf(n, k, p):
+              return math.comb(n, k) * p ** k * (1 - p) ** (n - k)
+
+          print(binomial_pmf(4, 2, Fraction(1, 2)), binomial_pmf(3, 1, Fraction(1, 4)), binomial_pmf(5, 0, Fraction(1, 2)))
+        tests: |
+          import itertools
+          from fractions import Fraction
+          for _n in range(0, 7):
+              for _num in range(0, 5):
+                  _p = Fraction(_num, 4)
+                  for _k in range(0, _n + 1):
+                      _want = Fraction(0)
+                      for _seq in itertools.product([0, 1], repeat=_n):
+                          if sum(_seq) == _k:
+                              _c = Fraction(1)
+                              for _b in _seq:
+                                  _c *= _p if _b else 1 - _p
+                              _want += _c
+                      _got = binomial_pmf(_n, _k, _p)
+                      assert _got == _want, "binomial_pmf(" + str(_n) + ", " + str(_k) + ", " + str(_p) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "3/8 27/64 1/32", "The program should print 3/8 27/64 1/32"
+        wrong:
+          - |
+            import math
+
+            def binomial_pmf(n, k, p):
+                return math.comb(n, k) * p ** k * (1 - p) ** n
+
+            print("3/8 27/64 1/32")
+          - |
+            import math
+
+            def binomial_pmf(n, k, p):
+                return math.comb(n, k) * p ** k
+
+            print("3/8 27/64 1/32")
+        explanation: |
+          One sequence with $k$ successes has chance $p^k (1 - p)^{n - k}$, but there are $\binom{n}{k}$ such sequences, one for each choice of where the successes fall, and they are disjoint, so their chances add. The fixed function multiplies by `math.comb(n, k)`. Raising $1 - p$ to the power $n$ counts the successful trials as failures too, and leaving out the failures altogether gives chances that add to more than 1.
+    - question:
+        id: write-coupons
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Each packet holds one of `n` cards, all equally likely, independently. Write `expected_packets(n)`, the exact expected number of packets needed to collect all `n` cards, as a `Fraction`. Add the means of the geometric waits for each new card.
+        starter: |
+          from fractions import Fraction
+
+          def expected_packets(n):
+              return Fraction(0)
+
+          print(expected_packets(1), expected_packets(2), expected_packets(6))
+        solution: |
+          from fractions import Fraction
+
+          def expected_packets(n):
+              total = Fraction(0)
+              for have in range(n):
+                  total += Fraction(n, n - have)
+              return total
+
+          print(expected_packets(1), expected_packets(2), expected_packets(6))
+        tests: |
+          from fractions import Fraction
+          for _n in range(1, 40):
+              _want = _n * sum(Fraction(1, _i) for _i in range(1, _n + 1))
+              _got = expected_packets(_n)
+              assert _got == _want, "expected_packets(" + str(_n) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "1 3 147/10", "The program should print 1 3 147/10"
+        wrong:
+          - |
+            from fractions import Fraction
+
+            def expected_packets(n):
+                total = Fraction(0)
+                for have in range(n):
+                    total += Fraction(n - have, n)
+                return total
+
+            print("1 3 147/10")
+          - |
+            from fractions import Fraction
+
+            def expected_packets(n):
+                return Fraction(n * n)
+
+            print("1 3 147/10")
+          - |
+            from fractions import Fraction
+
+            def expected_packets(n):
+                total = Fraction(0)
+                for have in range(1, n):
+                    total += Fraction(n, n - have)
+                return total
+
+            print("1 3 147/10")
+        explanation: |
+          With `have` different cards already, a packet brings a new card with chance $(n - \text{have})/n$, so the wait is geometric with mean $n/(n - \text{have})$. By linearity, the expected total is the sum of these for $\text{have} = 0, \dots, n - 1$, which is $n(1 + \tfrac12 + \cdots + \tfrac1n)$. Adding the chances instead of their reciprocals gives a count smaller than $n$, which is impossible. Starting the loop at 1 forgets the first packet, which always brings a new card.
+    - question:
+        id: write-poisson-tail
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `more_than(rate, k)`, the chance that a Poisson count with mean `rate` is more than `k`, as a float. Use the complement: one minus the chances of 0 to `k`.
+        starter: |
+          import math
+
+          def more_than(rate, k):
+              return 0.0
+
+          print(round(more_than(2, 5), 4), round(more_than(1, 0), 4), round(more_than(10, 20), 4))
+        solution: |
+          import math
+
+          def more_than(rate, k):
+              term = math.exp(-rate)
+              total = term
+              for j in range(1, k + 1):
+                  term = term * rate / j
+                  total += term
+              return 1 - total
+
+          print(round(more_than(2, 5), 4), round(more_than(1, 0), 4), round(more_than(10, 20), 4))
+        tests: |
+          import math
+          for _r in [0.5, 1, 2, 3.5, 7, 10, 20]:
+              for _k in range(0, 40):
+                  _want = 1 - sum(math.exp(-_r) * _r ** _j / math.factorial(_j) for _j in range(_k + 1))
+                  _got = more_than(_r, _k)
+                  assert abs(_got - _want) < 1e-9, "more_than(" + str(_r) + ", " + str(_k) + ") should be about " + str(round(_want, 6)) + ", not " + str(_got)
+          assert output.strip() == "0.0166 0.6321 0.0016", "The program should print 0.0166 0.6321 0.0016"
+        wrong:
+          - |
+            import math
+
+            def more_than(rate, k):
+                return 1 - sum(math.exp(-rate) * rate ** j / math.factorial(j) for j in range(k))
+
+            print("0.0166 0.6321 0.0016")
+          - |
+            import math
+
+            def more_than(rate, k):
+                return math.exp(-rate) * rate ** (k + 1) / math.factorial(k + 1)
+
+            print("0.0166 0.6321 0.0016")
+          - |
+            import math
+
+            def more_than(rate, k):
+                return 1 - sum(rate ** j / math.factorial(j) for j in range(k + 1))
+
+            print("0.0166 0.6321 0.0016")
+        explanation: |
+          "More than $k$" is the complement of "0 to $k$", so add the chances $e^{-\lambda} \lambda^j / j!$ for $j = 0, \dots, k$ and subtract from 1. Each term is the previous one times $\lambda / j$, which avoids huge factorials. Stopping at $k - 1$ leaves out the chance of exactly $k$; the chance of exactly $k + 1$ is only the first of the values above $k$; and forgetting $e^{-\lambda}$ gives chances that are not chances at all.
+    - question:
+        id: work-days
+        type: numeric
+        system: s2
+        tolerance: "0.5"
+        prompt: |
+          In the puzzle, the team runs short of spares on a day with chance about $0.0165$. On about how many days in a year of 365 days does it run short? Give a whole number.
+        answer: "6"
+        explanation: |
+          $0.0165 \times 365 \approx 6.0$, by linearity: the expected number of short days is the sum of 365 daily chances. Keeping 6 spares would bring it down to under 2 days a year, and 7 to about one day every two or three years.
+    - question:
+        id: work-cards
+        type: numeric
+        system: s2
+        tolerance: "0.01"
+        prompt: |
+          A series of biscuit packets has 10 different cricket cards, one per packet, equally likely. What is the expected number of packets needed to collect all 10? Give a decimal to two places.
+        answer: "29.29"
+        explanation: |
+          $10 \times (1 + \tfrac12 + \cdots + \tfrac1{10}) = 10 \times 2.929 \approx 29.29$. The last card alone takes 10 packets on average, a geometric wait with $p = 1/10$.
+    - question:
+        id: work-poisson-when
+        type: choice
+        system: s2
+        prompt: |
+          When is a Binomial($n$, $p$) distribution well approximated by a Poisson with mean $np$?
+        options:
+          - "When $n$ is large and $p$ is small, so that $1 - p$ is close to 1 and the variance $np(1 - p)$ is close to the mean."
+          - "Whenever $n$ is large, whatever $p$ is."
+          - "When $p$ is close to $1/2$."
+          - "Only when $n = 1$."
+        answer: 0
+        explanation: |
+          The Poisson has variance equal to its mean, while the binomial has variance $np(1 - p)$. They match only when $1 - p$ is near 1, and the limit needs many trials. With $n = 100$ and $p = 1/2$, the binomial has variance 25 but the Poisson with mean 50 would have variance 50.
+  connections:
+    - text: |
+        The team runs short on about 6 days a year. The number of failures is binomial, 1,000 trials with chance 0.002, and that is almost exactly Poisson with mean 2, whose tail above 5 is about $0.0165$. Neither "never" nor "most days" survives the calculation.
+
+        Four distributions cover a great many stories. Bernoulli is one trial. Binomial counts successes in $n$ independent trials, with mean $np$ and variance $np(1 - p)$. Geometric waits for the first success, with mean $1/p$ and no memory, and sums of geometric waits collect a full set. Poisson counts rare events, with mean and variance both $\lambda$, as the limit of binomials with many trials and tiny chances.
+
+        All four take whole-number values. Waiting times, heights, voltages and response times can take any value in a range, and their chances cannot sit on single points. They need [[f4.continuous-distributions-and-densities]], where probability is spread out like paint, and measured by area.

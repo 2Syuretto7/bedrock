@@ -1,5 +1,18 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
+
+/**
+ * React replays a click made before the page hydrates, but not a slider moved before then: the slider keeps its
+ * new value and the figure never hears of it. So move the slider away and back until the read-out follows.
+ */
+async function slide(figure: Locator, name: string, value: string, readOut: string) {
+  const slider = figure.getByRole("slider", { name });
+  await expect(async () => {
+    await slider.fill((await slider.getAttribute("min")) ?? "0");
+    await slider.fill(value);
+    await expect(figure).toContainText(readOut, { timeout: 1_000 });
+  }).toPass();
+}
 
 /*
  * The gallery shows every figure placed in the real course content, not the test fixtures,
@@ -288,4 +301,98 @@ test("the leaf-stripping figure keeps a tree and writes its code", async ({ page
   for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase leaves removed" }).click();
   await expect(figure).toContainText("Removed 6 leaves so far, 1, 2, 3, 4, 5, 7, writing down the neighbour of each: the code so far is (4, 4, 4, 5, 6, 6).");
   await expect(figure).toContainText("Two vertices remain, joined by one edge, so the code is complete: 6 numbers, each from 1 to 8");
+});
+
+test("the dice grid counts an event, then conditions on another", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="dice-grid"]').first().getByRole("figure");
+  await expect(figure).toContainText("The event that the total is 7 contains 6 of them, so its probability is 6/36 = 1/6.");
+  await figure.getByRole("button", { name: "Event: the two dice match" }).click();
+  await expect(figure).toContainText("The event that the two dice match contains 6 of them, so its probability is 6/36 = 1/6.");
+  await figure.getByRole("button", { name: "Given: the total is 7" }).click();
+  await expect(figure).toContainText("0 of them also have the two dice match, so the chance that the two dice match, given that the total is 7, is 0/6.");
+  await expect(figure).toContainText("Knowing the condition makes it less likely.");
+});
+
+test("the Bayes square splits ten thousand people by condition and by test", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="bayes-square"]').first().getByRole("figure");
+  await expect(figure).toContainText("given a positive test, the chance of having it is 90/585, about 15%, against 1% before the test.");
+  await slide(figure, "have the condition", "6", "given a positive test, the chance of having it is 900/1,350, about 67%, against 10% before the test.");
+  await slide(figure, "positive if they do not", "1", "So 990 people test positive, and 900 of them have the condition");
+});
+
+test("the variable bars show a distribution and add up its chances", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="variable-bars"]').first().getByRole("figure");
+  await expect(figure).toContainText("the larger of the two numbers takes 6 values: 1 in 1, 2 in 3, 3 in 5, 4 in 7, 5 in 9, 6 in 11. The most likely value is 6, with chance 11/36.");
+  await figure.getByRole("button", { name: "Show the total of the two dice" }).click();
+  await expect(figure).toContainText("The most likely value is 7, with chance 1/6.");
+  const add = figure.getByRole("button", { name: "Add up the chances" });
+  await add.click();
+  await expect(add).toHaveAttribute("aria-pressed", "true");
+  await expect(figure).toContainText("6: 15/36, 7: 21/36, 8: 26/36");
+  await expect(figure).toContainText("the last reaches 36/36 = 1.");
+});
+
+test("the distribution bars change trials, chance and family", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="distribution-bars"]').first().getByRole("figure");
+  await expect(figure).toContainText("the number of successes in 20 independent trials, each a success with chance 0.1. Its mean is np = 2");
+  for (let i = 0; i < 10; i++) await figure.getByRole("button", { name: "Increase trials" }).click();
+  await expect(figure).toContainText("in 30 independent trials, each a success with chance 0.1. Its mean is np = 3 and its standard deviation is about 1.64.");
+  await slide(figure, "chance of success", "0.5", "Its mean is np = 15 and its standard deviation is about 2.74. The most likely value is 15, with chance 0.144.");
+  await figure.getByRole("button", { name: "Show the geometric distribution" }).click();
+  await expect(figure).toContainText("The geometric distribution: the number of independent trials up to and including the first success, each a success with chance 0.5. Its mean is 1/p = 2");
+});
+
+test("the density figure shades a chance as an area", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="density-area"]').first().getByRole("figure");
+  await expect(figure).toContainText("The chance that it lands between 4 and 6 minutes is the shaded area, about 0.2. The height of the curve at 5 minutes is 0.1 per minute: a density, not a chance.");
+  await slide(figure, "to", "10", "The chance that it lands between 4 and 10 minutes is the shaded area, about 0.6.");
+  await figure.getByRole("button", { name: "Show the triangular distribution" }).click();
+  await expect(figure).toContainText("a triangular distribution. The chance that it lands between 4 and 10 minutes is the shaded area, about 0.68.");
+});
+
+test("the birthday curve finds where a shared value becomes likely", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="birthday-curve"]').first().getByRole("figure");
+  await expect(figure).toContainText("23 people, each with one of 365 birthdays picked at random. The chance that at least two share one is 50.7%");
+  await slide(figure, "people", "40", "The chance that at least two share one is 89.1%");
+  await figure.getByRole("button", { name: "Use four-digit PINs" }).click();
+  await expect(figure).toContainText("The chance first reaches one half at 119 customers, close to 1.18 × √10,000 ≈ 118 and far fewer than 10,000.");
+});
+
+test("the tail bounds sit above the true chance, loosest first", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="tail-bounds"]').first().getByRole("figure");
+  await expect(figure).toContainText("the chance of 70 heads or more is 3.9 × 10^−5. Markov's inequality, which knows only the mean, promises at most 0.7143.");
+  await slide(figure, "at least", "60", "the chance of 60 heads or more is 0.0284. Markov's inequality, which knows only the mean, promises at most 0.8333. Chebyshev's, which also knows the standard deviation, promises at most 0.25.");
+  await figure.getByRole("button", { name: "Show requests in a second" }).click();
+  await expect(figure).toContainText("For requests in a second, Poisson with mean 4");
+  await expect(figure).toContainText("Every bound is at least the true chance, as a guarantee must be.");
+});
+
+test("the sample means turn into a bell as each average takes more draws", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="sample-means"]').first().getByRole("figure");
+  await expect(figure).toContainText("2,000 averages, each of 1 draw from throws of a fair die.");
+  await slide(figure, "draws in each average", "3", "2,000 averages, each of 10 draws from throws of a fair die. The averages centre on 3.481, against a true mean of 3.5. Their standard deviation is 0.539, close to σ/√n = 1.708/√10 = 0.54.");
+  await figure.getByRole("button", { name: "Average exponential waits with mean 1 minute" }).click();
+  await expect(figure).toContainText("each of 10 draws from exponential waits with mean 1 minute.");
+});
+
+test("the Monte Carlo figure estimates π, and the poor generator gets stuck on five lines", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="monte-carlo"]').first().getByRole("figure");
+  await expect(figure).toContainText("1,000 points from a good generator, seed 0, each made of two draws. 780 land inside the quarter circle, so the estimate of π is 4 × 780/1,000 = 3.12, with a standard error of about 0.052.");
+  await slide(figure, "points", "4", "so the estimate of π is 4 × 7,912/10,000 = 3.165, with a standard error of about 0.016.");
+  await expect(figure).toContainText("The picture shows the first 2,000 points.");
+  const poor = figure.getByRole("button", { name: "Use the poor generator" });
+  await poor.click();
+  await expect(poor).toHaveAttribute("aria-pressed", "true");
+  await expect(figure).toContainText("Only 1,024 of the points are different, because the generator repeats after 2,048 draws, and every pair lies on one of five lines.");
+  await figure.getByRole("button", { name: "Increase seed" }).click();
+  await expect(figure).toContainText("seed 1, each made of two draws. 7,724 land inside the quarter circle, so the estimate of π is 4 × 7,724/10,000 = 3.09");
 });

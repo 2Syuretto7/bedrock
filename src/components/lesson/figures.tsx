@@ -42,11 +42,12 @@ function Stepper({ label, value, onChange, min, max }: { label: string; value: n
   );
 }
 
-function Slider({ label, value, onChange, min, max, step = 1 }: { label: string; value: number; onChange: (v: number) => void; min: number; max: number; step?: number }) {
+function Slider({ label, value, onChange, min, max, step = 1, text }: { label: string; value: number; onChange: (v: number) => void; min: number; max: number; step?: number; text?: string }) {
   return (
     <label className="fig-slider">
       <span className="label">{label}</span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input type="range" min={min} max={max} step={step} value={value} aria-valuetext={text} onChange={(event) => onChange(Number(event.target.value))} />
+      {text === undefined ? null : <output className="fig-value">{text}</output>}
     </label>
   );
 }
@@ -3813,6 +3814,816 @@ function LeafStrip(props: Props) {
   );
 }
 
+const DICE_EVENTS: Record<string, { name: string; holds: (a: number, b: number) => boolean }> = {
+  seven: { name: "the total is 7", holds: (a, b) => a + b === 7 },
+  doubles: { name: "the two dice match", holds: (a, b) => a === b },
+  six: { name: "at least one die shows 6", holds: (a, b) => a === 6 || b === 6 },
+  ten: { name: "the total is at least 10", holds: (a, b) => a + b >= 10 },
+  "first-even": { name: "the first die is even", holds: (a) => a % 2 === 0 },
+  "first-six": { name: "the first die shows 6", holds: (a) => a === 6 },
+};
+const DICE_ORDER = ["seven", "doubles", "six", "ten", "first-even", "first-six"];
+
+/** A fraction in lowest terms, written n/d, or a whole number. */
+const lowest = (n: number, d: number) => {
+  const g = commonDivisor(n, d) || 1;
+  return d / g === 1 ? `${n / g}` : `${n / g}/${d / g}`;
+};
+
+/** The 36 outcomes of two dice, an event among them, and optionally an event it is conditioned on. */
+function DiceGrid(props: Props) {
+  const [which, setWhich] = useState(typeof props.event === "string" && props.event in DICE_EVENTS ? props.event : "seven");
+  const [given, setGiven] = useState(typeof props.given === "string" && props.given in DICE_EVENTS ? props.given : "none");
+  const event = DICE_EVENTS[which];
+  const condition = given === "none" ? null : DICE_EVENTS[given];
+  const faces = [1, 2, 3, 4, 5, 6];
+  const cells = faces.flatMap((a) => faces.map((b) => [a, b] as [number, number]));
+  const inEvent = cells.filter(([a, b]) => event.holds(a, b)).length;
+  const room = condition ? cells.filter(([a, b]) => condition.holds(a, b)) : cells;
+  const both = room.filter(([a, b]) => event.holds(a, b)).length;
+  const nextEvent = DICE_ORDER[(DICE_ORDER.indexOf(which) + 1) % DICE_ORDER.length];
+  const givens = ["none", ...DICE_ORDER];
+  const nextGiven = givens[(givens.indexOf(given) + 1) % givens.length];
+  const same = both * 36 === inEvent * room.length;
+  const summary = condition
+    ? `Given that ${condition.name}, only the ${room.length} outcomes where that is true remain, and they are still equally likely. ${both} of them also have ${event.name}, so the chance that ${event.name}, given that ${condition.name}, is ${both}/${room.length}${both === 0 ? "" : ` = ${lowest(both, room.length)}`}. Without the condition it is ${inEvent}/36 = ${lowest(inEvent, 36)}. ${
+        same ? "Knowing the condition does not change the chance." : both * 36 > inEvent * room.length ? "Knowing the condition makes it more likely." : "Knowing the condition makes it less likely."
+      }`
+    : `Two dice, first and second, give 36 equally likely outcomes. The event that ${event.name} contains ${plural(inEvent, "of them", "of them")}, so its probability is ${inEvent}/36 = ${lowest(inEvent, 36)}.`;
+  return (
+    <Frame
+      title="Outcomes of two dice"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setWhich(nextEvent)}>
+            {`Event: ${DICE_EVENTS[nextEvent].name}`}
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setGiven(nextGiven)}>
+            {nextGiven === "none" ? "Remove the condition" : `Given: ${DICE_EVENTS[nextGiven].name}`}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 290" role="img" aria-label={`A 6 by 6 grid of outcomes of two dice, ${condition ? `${room.length} kept by the condition, ` : ""}${both} in the event`}>
+        <text x="250" y="18" textAnchor="middle" className="fig-small">
+          first die
+        </text>
+        <text x="40" y="160" textAnchor="middle" className="fig-small" transform="rotate(-90 40 160)">
+          second die
+        </text>
+        {faces.map((f) => (
+          <g key={f}>
+            <text x={130 + (f - 1) * 40 + 20} y="38" textAnchor="middle" className="fig-small">
+              {f}
+            </text>
+            <text x="116" y={46 + (f - 1) * 40 + 24} textAnchor="middle" className="fig-small">
+              {f}
+            </text>
+          </g>
+        ))}
+        {cells.map(([a, b]) => {
+          const kept = !condition || condition.holds(a, b);
+          const hit = event.holds(a, b);
+          const x = 130 + (a - 1) * 40;
+          const y = 46 + (b - 1) * 40;
+          return (
+            <g key={`${a}-${b}`}>
+              <rect x={x + 2} y={y + 2} width="36" height="36" className={kept && hit ? "fig-accent" : kept ? "fig-fill" : "fig-ghost"} opacity={kept ? 1 : 0.35} />
+              <text x={x + 20} y={y + 25} textAnchor="middle" className="fig-small" style={{ fill: kept && hit ? "var(--bg)" : "var(--text)" }}>
+                {a + b}
+              </text>
+            </g>
+          );
+        })}
+        <text x="12" y="284" className="fig-small">
+          {condition ? `${both} of ${room.length} kept outcomes` : `${inEvent} of 36 outcomes`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const BAYES_RATES = [1, 2, 5, 10, 20, 50, 100, 200, 300, 500];
+
+/** Ten thousand people split by a condition and by a test, drawn as areas, so the chance of the condition given a positive test can be seen. */
+function BayesSquare(props: Props) {
+  const start = num(props.prevalence, 10);
+  const nearest = BAYES_RATES.reduce((best, rate, i) => (Math.abs(rate - start) < Math.abs(BAYES_RATES[best] - start) ? i : best), 0);
+  const [rateAt, setRateAt] = useState(nearest);
+  const [sensitivity, setSensitivity] = useState(clamp(Math.round(num(props.sensitivity, 90)), 50, 100));
+  const [falsePositive, setFalsePositive] = useState(clamp(Math.round(num(props.falsePositive, 5)), 0, 30));
+  const perThousand = BAYES_RATES[rateAt];
+  const people = 10000;
+  const sick = perThousand * 10;
+  const well = people - sick;
+  const caught = Math.round((sick * sensitivity) / 100);
+  const alarms = Math.round((well * falsePositive) / 100);
+  const positives = caught + alarms;
+  const share = positives === 0 ? 0 : caught / positives;
+  const left = Math.max(4, (360 * sick) / people);
+  const right = 360 - left;
+  const top = 34;
+  const tall = 180;
+  const caughtHeight = (tall * sensitivity) / 100;
+  const alarmHeight = (tall * falsePositive) / 100;
+  const barTrue = positives === 0 ? 0 : 360 * share;
+  const percent = (value: number) => `${dp(value * 100, value * 100 < 10 ? 1 : 0)}%`;
+  return (
+    <Frame
+      title="Ten thousand people and one test"
+      summary={`Out of ${group(people)} people, ${group(sick)} have the condition and ${group(well)} do not. The test is positive for ${sensitivity}% of those who have it, which is ${group(caught)} people, and for ${falsePositive}% of those who do not, which is ${group(alarms)} more. ${
+        positives === 0
+          ? "Nobody tests positive."
+          : `So ${group(positives)} people test positive, and ${group(caught)} of them have the condition: given a positive test, the chance of having it is ${group(caught)}/${group(positives)}, about ${percent(share)}, against ${percent(sick / people)} before the test.`
+      }`}
+      controls={
+        <>
+          <Slider label="have the condition" value={rateAt} onChange={setRateAt} min={0} max={BAYES_RATES.length - 1} text={`${perThousand} in 1,000`} />
+          <Slider label="positive if they have it" value={sensitivity} onChange={setSensitivity} min={50} max={100} text={`${sensitivity}%`} />
+          <Slider label="positive if they do not" value={falsePositive} onChange={setFalsePositive} min={0} max={30} text={`${falsePositive}%`} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 300" role="img" aria-label={`A square of ${group(people)} people: ${group(caught)} true positives and ${group(alarms)} false positives`}>
+        <text x="40" y="22" className="fig-small">
+          {`have it: ${group(sick)}`}
+        </text>
+        <text x="400" y="22" textAnchor="end" className="fig-small">
+          {`do not: ${group(well)}`}
+        </text>
+        <rect x="40" y={top} width={left} height={caughtHeight} className="fig-accent" />
+        <rect x="40" y={top + caughtHeight} width={left} height={tall - caughtHeight} className="fig-fill" />
+        <rect x={40 + left} y={top} width={right} height={alarmHeight} className="fig-accent" opacity={0.45} />
+        <rect x={40 + left} y={top} width={right} height={tall} className="fig-ghost" />
+        <rect x="40" y={top} width="360" height={tall} className="fig-cell" />
+        <line x1={40 + left} y1={top} x2={40 + left} y2={top + tall} className="fig-axis" />
+        <text x="408" y={top + Math.max(alarmHeight / 2, 6) + 4} className="fig-small">
+          +
+        </text>
+        <text x="408" y={top + tall - 4} className="fig-small">
+          −
+        </text>
+        <text x="40" y="240" className="fig-small">
+          {`everyone who tests positive: ${group(positives)}`}
+        </text>
+        <rect x="40" y="248" width={barTrue} height="20" className="fig-accent" />
+        <rect x={40 + barTrue} y="248" width={360 - barTrue} height="20" className="fig-accent" opacity={positives === 0 ? 0 : 0.45} />
+        <rect x="40" y="248" width="360" height="20" className="fig-cell" />
+        <text x="40" y="288" className="fig-small">
+          {positives === 0 ? "no positive tests" : `${group(caught)} have it, ${group(alarms)} do not: ${percent(share)} have it`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const DICE_VARIABLES: Record<string, { name: string; of: (a: number, b: number) => number }> = {
+  max: { name: "the larger of the two numbers", of: (a, b) => Math.max(a, b) },
+  total: { name: "the total of the two dice", of: (a, b) => a + b },
+  gap: { name: "the gap between the two numbers", of: (a, b) => Math.abs(a - b) },
+  sixes: { name: "the number of sixes", of: (a, b) => (a === 6 ? 1 : 0) + (b === 6 ? 1 : 0) },
+  prize: { name: "the prize in rupees, 20 for a double and −5 otherwise", of: (a, b) => (a === b ? 20 : -5) },
+};
+const VARIABLE_ORDER = ["max", "total", "gap", "sixes", "prize"];
+const minus = (value: number | string) => String(value).replace("-", "−");
+
+/** A number computed from two dice, its chances drawn as bars, one at a time or added up, with its mean and spread if asked. */
+function VariableBars(props: Props) {
+  const [which, setWhich] = useState(typeof props.variable === "string" && props.variable in DICE_VARIABLES ? props.variable : "max");
+  const [cumulative, setCumulative] = useState(props.cumulative === true);
+  const marks = props.marks === "mean" || props.marks === "spread" ? props.marks : "none";
+  const variable = DICE_VARIABLES[which];
+  const counts = new Map<number, number>();
+  for (let a = 1; a <= 6; a++) for (let b = 1; b <= 6; b++) counts.set(variable.of(a, b), (counts.get(variable.of(a, b)) ?? 0) + 1);
+  const values = [...counts.keys()].sort((x, y) => x - y);
+  const running = values.map((v, i) => values.slice(0, i + 1).reduce((total, w) => total + (counts.get(w) ?? 0), 0));
+  const lo = values[0];
+  const hi = values[values.length - 1];
+  const x = (v: number) => 50 + ((v - lo) / (hi - lo)) * 340;
+  const gaps = values.slice(1).map((v, i) => x(v) - x(values[i]));
+  const width = Math.min(28, 0.7 * Math.min(...gaps));
+  const most = Math.max(...counts.values());
+  const sum = values.reduce((total, v) => total + v * (counts.get(v) ?? 0), 0);
+  const mean = sum / 36;
+  const sd = Math.sqrt(values.reduce((total, v) => total + (v - mean) ** 2 * (counts.get(v) ?? 0), 0) / 36);
+  const inside = values.filter((v) => Math.abs(v - mean) <= sd).reduce((total, v) => total + (counts.get(v) ?? 0), 0);
+  const height = (count: number, all: number) => (count / all) * 150;
+  const modes = values.filter((v) => counts.get(v) === most).map(minus);
+  const meanText = Number.isInteger(mean) ? minus(mean) : `${minus(lowest(sum, 36))}, about ${minus(dp(mean, 2))}`;
+  const marksText =
+    marks === "mean"
+      ? ` The bars balance at ${meanText}: that is the mean.`
+      : marks === "spread"
+        ? ` The mean is ${meanText} and the standard deviation is about ${dp(sd, 2)}. The bracket runs from one standard deviation below the mean to one above, ${minus(dp(mean - sd, 2))} to ${minus(dp(mean + sd, 2))}, and the values inside it hold ${inside}/36 of the probability.`
+        : "";
+  const summary = cumulative
+    ? `The chance that ${variable.name} is at most x climbs in steps: ${values.map((v, i) => `${minus(v)}: ${running[i]}/36`).join(", ")}. Each step is as tall as the chance of that one value, and the last reaches 36/36 = 1.${marksText}`
+    : `Out of 36 equally likely throws, ${variable.name} takes ${plural(values.length, "value")}: ${values.map((v) => `${minus(v)} in ${counts.get(v)}`).join(", ")}. The most likely ${modes.length === 1 ? `value is ${modes[0]}` : `values are ${modes.join(" and ")}`}, with chance ${lowest(most, 36)}.${marksText}`;
+  const nextVariable = VARIABLE_ORDER[(VARIABLE_ORDER.indexOf(which) + 1) % VARIABLE_ORDER.length];
+  const edge = (v: number) => clamp(x(v), 30, 410);
+  return (
+    <Frame
+      title="A number that depends on two dice"
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setWhich(nextVariable)}>
+            {`Show ${DICE_VARIABLES[nextVariable].name.split(",")[0]}`}
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={cumulative} onClick={() => setCumulative(!cumulative)}>
+            Add up the chances
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`Bars for ${variable.name}${cumulative ? ", added up from the left" : ""}`}>
+        <line x1="30" y1="200" x2="410" y2="200" className="fig-axis" />
+        {values.map((v, i) => {
+          const count = cumulative ? running[i] : (counts.get(v) ?? 0);
+          const tall = height(count, cumulative ? 36 : most);
+          return (
+            <g key={v}>
+              <rect x={x(v) - width / 2} y={200 - tall} width={width} height={tall} className="fig-accent" />
+              <text x={x(v)} y={194 - tall} textAnchor="middle" className="fig-small">
+                {count}
+              </text>
+              <text x={x(v)} y="216" textAnchor="middle" className="fig-small">
+                {minus(v)}
+              </text>
+            </g>
+          );
+        })}
+        <text x="30" y="30" className="fig-small">
+          {cumulative ? "throws with at most this value, of 36" : "throws with this value, of 36"}
+        </text>
+        {marks === "none" ? null : (
+          <g>
+            <path d={`M ${x(mean)} 222 l -7 12 l 14 0 z`} className="fig-accent" />
+            <text x={clamp(x(mean), 60, 380)} y="252" textAnchor="middle" className="fig-small">
+              {`mean ${minus(dp(mean, 2))}`}
+            </text>
+          </g>
+        )}
+        {marks === "spread" ? (
+          <g>
+            <line x1={edge(mean - sd)} y1="44" x2={edge(mean + sd)} y2="44" className="fig-accent-line" />
+            <line x1={edge(mean - sd)} y1="38" x2={edge(mean - sd)} y2="50" className="fig-accent-line" />
+            <line x1={edge(mean + sd)} y1="38" x2={edge(mean + sd)} y2="50" className="fig-accent-line" />
+          </g>
+        ) : null}
+      </svg>
+    </Frame>
+  );
+}
+
+type Family = "binomial" | "geometric" | "poisson";
+const FAMILY_ORDER: Family[] = ["binomial", "geometric", "poisson"];
+const FAMILY_NAMES: Record<Family, string> = { binomial: "binomial", geometric: "geometric", poisson: "Poisson" };
+
+/** The chances of a named distribution, from its smallest value up to where almost no probability is left. */
+function familyChances(family: Family, n: number, p: number, rate: number): { start: number; chances: number[] } {
+  if (family === "binomial") {
+    const chances = [(1 - p) ** n];
+    for (let k = 0; k < n; k++) chances.push((chances[k] * (n - k) * p) / ((k + 1) * (1 - p)));
+    return { start: 0, chances };
+  }
+  if (family === "geometric") {
+    const chances = [p];
+    while (chances.length < 30 && (1 - p) ** chances.length > 0.005) chances.push(chances[chances.length - 1] * (1 - p));
+    return { start: 1, chances };
+  }
+  const chances = [Math.exp(-rate)];
+  const last = Math.min(30, Math.ceil(rate + 4 * Math.sqrt(rate) + 3));
+  for (let k = 0; k < last; k++) chances.push((chances[k] * rate) / (k + 1));
+  return { start: 0, chances };
+}
+
+/** The binomial, geometric and Poisson distributions, with their parameters on controls, and their means and spreads marked. */
+function DistributionBars(props: Props) {
+  const [family, setFamily] = useState<Family>(props.family === "geometric" || props.family === "poisson" ? props.family : "binomial");
+  const [n, setN] = useState(clamp(Math.round(num(props.n, 10)), 1, 40));
+  const [p, setP] = useState(clamp(Math.round(num(props.p, 0.3) * 20) / 20, 0.05, 0.95));
+  const [rate, setRate] = useState(clamp(Math.round(num(props.rate, 2) * 2) / 2, 0.5, 15));
+  const { start, chances } = familyChances(family, n, p, rate);
+  const mean = family === "binomial" ? n * p : family === "geometric" ? 1 / p : rate;
+  const variance = family === "binomial" ? n * p * (1 - p) : family === "geometric" ? (1 - p) / (p * p) : rate;
+  const sd = Math.sqrt(variance);
+  const tallest = Math.max(...chances);
+  const mode = start + chances.indexOf(tallest);
+  const count = chances.length;
+  const step = 350 / Math.max(count, 1);
+  const x = (value: number) => 45 + (value - start + 0.5) * step;
+  const label = count <= 16 ? 1 : 5;
+  const story =
+    family === "binomial"
+      ? `the number of successes in ${n} independent ${n === 1 ? "trial" : "trials"}, each a success with chance ${dp(p, 2)}`
+      : family === "geometric"
+        ? `the number of independent trials up to and including the first success, each a success with chance ${dp(p, 2)}`
+        : `the number of rare events in a stretch of time in which ${dp(rate, 1)} happen on average`;
+  const formula = family === "binomial" ? `np = ${dp(mean, 2)}` : family === "geometric" ? `1/p = ${dp(mean, 2)}` : `λ = ${dp(mean, 2)}`;
+  const shown = family === "geometric" ? ` The bars stop at ${start + count - 1}; later values are possible but together have chance ${dp((1 - p) ** count, 3)}.` : "";
+  const nextFamily = FAMILY_ORDER[(FAMILY_ORDER.indexOf(family) + 1) % FAMILY_ORDER.length];
+  const edge = (value: number) => clamp(x(value), 30, 410);
+  return (
+    <Frame
+      title="Three distributions that keep turning up"
+      summary={`The ${FAMILY_NAMES[family]} distribution: ${story}. Its mean is ${formula} and its standard deviation is about ${dp(sd, 2)}. The most likely value is ${mode}, with chance ${dp(tallest, 3)}.${shown}`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setFamily(nextFamily)}>
+            {`Show the ${FAMILY_NAMES[nextFamily]} distribution`}
+          </button>
+          {family === "binomial" ? <Stepper label="trials" value={n} onChange={setN} min={1} max={40} /> : null}
+          {family === "poisson" ? (
+            <Slider label="average count" value={rate} onChange={setRate} min={0.5} max={15} step={0.5} text={dp(rate, 1)} />
+          ) : (
+            <Slider label="chance of success" value={p} onChange={(v) => setP(Math.round(v * 20) / 20)} min={0.05} max={0.95} step={0.05} text={dp(p, 2)} />
+          )}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`Bars for the ${FAMILY_NAMES[family]} distribution, mean ${dp(mean, 2)}`}>
+        <line x1="30" y1="200" x2="410" y2="200" className="fig-axis" />
+        {chances.map((chance, i) => {
+          const tall = (chance / tallest) * 140;
+          const value = start + i;
+          return (
+            <g key={value}>
+              <rect x={x(value) - step * 0.36} y={200 - tall} width={step * 0.72} height={tall} className="fig-accent" />
+              {value % label === 0 || label === 1 ? (
+                <text x={x(value)} y="216" textAnchor="middle" className="fig-small">
+                  {value}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+        <path d={`M ${edge(mean)} 222 l -7 12 l 14 0 z`} className="fig-accent" />
+        <text x={clamp(edge(mean), 60, 380)} y="252" textAnchor="middle" className="fig-small">
+          {`mean ${dp(mean, 2)}`}
+        </text>
+        <line x1={edge(mean - sd)} y1="44" x2={edge(mean + sd)} y2="44" className="fig-accent-line" />
+        <line x1={edge(mean - sd)} y1="38" x2={edge(mean - sd)} y2="50" className="fig-accent-line" />
+        <line x1={edge(mean + sd)} y1="38" x2={edge(mean + sd)} y2="50" className="fig-accent-line" />
+        <text x="30" y="30" className="fig-small">
+          {`chance of each value, tallest ${dp(tallest, 3)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** The error function, to about seven places (Abramowitz and Stegun 7.1.26), for the normal distribution's cdf. */
+const erf = (x: number) => {
+  const t = 1 / (1 + 0.3275911 * Math.abs(x));
+  const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return x < 0 ? -y : y;
+};
+
+type DensityShape = "uniform" | "triangle" | "exponential" | "normal";
+const DENSITY_ORDER: DensityShape[] = ["uniform", "triangle", "exponential", "normal"];
+const DENSITIES: Record<DensityShape, { name: string; story: string; density: (x: number) => number; cdf: (x: number) => number }> = {
+  uniform: {
+    name: "uniform",
+    story: "The wait for a train that comes every 10 minutes, arriving at a random moment",
+    density: (x) => (x >= 0 && x <= 10 ? 0.1 : 0),
+    cdf: (x) => clamp(x / 10, 0, 1),
+  },
+  triangle: {
+    name: "triangular",
+    story: "The total of two separate random waits, each between 0 and 5 minutes",
+    density: (x) => (x <= 0 || x >= 10 ? 0 : x <= 5 ? x / 25 : (10 - x) / 25),
+    cdf: (x) => (x <= 0 ? 0 : x <= 5 ? (x * x) / 50 : x < 10 ? 1 - ((10 - x) * (10 - x)) / 50 : 1),
+  },
+  exponential: {
+    name: "exponential",
+    story: "The time until the next request reaches a server that gets one every 2 minutes on average",
+    density: (x) => (x < 0 ? 0 : 0.5 * Math.exp(-0.5 * x)),
+    cdf: (x) => (x <= 0 ? 0 : 1 - Math.exp(-0.5 * x)),
+  },
+  normal: {
+    name: "normal",
+    story: "A delivery time with mean 5 minutes and standard deviation 1.5 minutes",
+    density: (x) => Math.exp(-((x - 5) ** 2) / (2 * 1.5 * 1.5)) / (1.5 * Math.sqrt(2 * Math.PI)),
+    cdf: (x) => 0.5 * (1 + erf((x - 5) / (1.5 * Math.SQRT2))),
+  },
+};
+
+/** A density curve over 0 to 10 minutes; the chance of landing between two times is the area under it, shaded. */
+function DensityArea(props: Props) {
+  const [shape, setShape] = useState<DensityShape>(typeof props.shape === "string" && props.shape in DENSITIES ? (props.shape as DensityShape) : "uniform");
+  const [from, setFrom] = useState(clamp(Math.round(num(props.from, 4) * 2) / 2, 0, 10));
+  const [to, setTo] = useState(clamp(Math.round(num(props.to, 6) * 2) / 2, 0, 10));
+  const { name, story, density, cdf } = DENSITIES[shape];
+  const low = Math.min(from, to);
+  const high = Math.max(from, to);
+  const area = cdf(high) - cdf(low);
+  const xs = Array.from({ length: 201 }, (_, i) => i / 20);
+  const peak = Math.max(...xs.map(density));
+  const sx = (x: number) => 40 + x * 36;
+  const sy = (y: number) => 200 - (y / peak) * 150;
+  const curve = xs.map((x) => `${dp(sx(x), 2)},${dp(sy(density(x)), 2)}`).join(" ");
+  const inside = xs.filter((x) => x >= low && x <= high);
+  const shaded = inside.length > 0 ? `M ${sx(low)} 200 ${inside.map((x) => `L ${dp(sx(x), 2)} ${dp(sy(density(x)), 2)}`).join(" ")} L ${sx(high)} 200 Z` : "";
+  const middle = (low + high) / 2;
+  const nextShape = DENSITY_ORDER[(DENSITY_ORDER.indexOf(shape) + 1) % DENSITY_ORDER.length];
+  return (
+    <Frame
+      title="Chance as area under a density"
+      summary={`${story}: a ${name} distribution. The chance that it lands between ${dp(low, 1)} and ${dp(high, 1)} minutes is the shaded area, about ${dp(area, 3)}.${
+        low === high ? " An interval of zero width has zero area, so any one exact time has chance 0." : ` The height of the curve at ${dp(middle, 2)} minutes is ${dp(density(middle), 3)} per minute: a density, not a chance.`
+      }`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setShape(nextShape)}>
+            {`Show the ${DENSITIES[nextShape].name} distribution`}
+          </button>
+          <Slider label="from" value={from} onChange={setFrom} min={0} max={10} step={0.5} text={`${dp(from, 1)} min`} />
+          <Slider label="to" value={to} onChange={setTo} min={0} max={10} step={0.5} text={`${dp(to, 1)} min`} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`A ${name} density from 0 to 10 minutes, with the area from ${dp(low, 1)} to ${dp(high, 1)} shaded, about ${dp(area, 3)}`}>
+        {shaded ? <path d={shaded} className="fig-accent" opacity={0.6} /> : null}
+        <polyline points={curve} className="fig-line" />
+        <line x1="40" y1="200" x2="400" y2="200" className="fig-axis" />
+        {[0, 2, 4, 6, 8, 10].map((t) => (
+          <text key={t} x={sx(t)} y="218" textAnchor="middle" className="fig-small">
+            {t}
+          </text>
+        ))}
+        <text x="400" y="236" textAnchor="end" className="fig-small">
+          minutes
+        </text>
+        <line x1={sx(low)} y1="40" x2={sx(low)} y2="200" className="fig-guide" />
+        <line x1={sx(high)} y1="40" x2={sx(high)} y2="200" className="fig-guide" />
+        <text x="40" y="30" className="fig-small">
+          {`area ${dp(area, 3)}, highest density ${dp(peak, 3)} per minute`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+type SpaceName = "days" | "pins" | "codes" | "hashes";
+const SPACE_ORDER: SpaceName[] = ["days", "pins", "codes", "hashes"];
+const SPACES: Record<SpaceName, { size: number; things: string; values: string; most: number; step: number }> = {
+  days: { size: 365, things: "people", values: "birthdays", most: 60, step: 1 },
+  pins: { size: 10000, things: "customers", values: "four-digit PINs", most: 300, step: 3 },
+  codes: { size: 1000000, things: "users", values: "six-digit codes", most: 3000, step: 30 },
+  hashes: { size: 2 ** 32, things: "files", values: "32-bit hashes", most: 200000, step: 2000 },
+};
+
+/** The chance that some two of n random picks from m values coincide, exactly and by the exponential approximation, as n grows. */
+function BirthdayCurve(props: Props) {
+  const [space, setSpace] = useState<SpaceName>(typeof props.space === "string" && props.space in SPACES ? (props.space as SpaceName) : "days");
+  const { size, things, values, most, step } = SPACES[space];
+  const [n, setN] = useState(clamp(Math.round(num(props.people, 23) / step) * step, step, most));
+  // One pass of the exact product, keeping the chance of no match at every value the curve needs.
+  const samples = 60;
+  const marks = Array.from({ length: samples + 1 }, (_, i) => Math.round((most * i) / samples));
+  const noMatch = new Map<number, number>();
+  let logProduct = 0;
+  let firstHalf = most;
+  const wanted = new Set([...marks, n]);
+  for (let k = 0; k <= most; k++) {
+    if (wanted.has(k)) noMatch.set(k, Math.exp(logProduct));
+    if (firstHalf === most && Math.exp(logProduct) <= 0.5) firstHalf = k;
+    logProduct += Math.log1p(-k / size);
+  }
+  const exact = 1 - (noMatch.get(n) ?? 0);
+  const approx = 1 - Math.exp(-(n * (n - 1)) / (2 * size));
+  const half = Math.sqrt(2 * Math.log(2) * size);
+  const sx = (k: number) => 40 + (k / most) * 360;
+  const sy = (p: number) => 200 - p * 160;
+  const curve = marks.map((k) => `${dp(sx(k), 2)},${dp(sy(1 - (noMatch.get(k) ?? 0)), 2)}`).join(" ");
+  const nextSpace = SPACE_ORDER[(SPACE_ORDER.indexOf(space) + 1) % SPACE_ORDER.length];
+  const chooseSpace = (next: SpaceName) => {
+    setSpace(next);
+    setN(clamp(Math.round(Math.sqrt(2 * Math.log(2) * SPACES[next].size) / SPACES[next].step) * SPACES[next].step, SPACES[next].step, SPACES[next].most));
+  };
+  const percent = (p: number) => (p < 0.001 ? "under 0.1%" : `${dp(p * 100, 1)}%`);
+  return (
+    <Frame
+      title="When do two picks first coincide?"
+      summary={`${group(n)} ${things}, each with one of ${group(size)} ${values} picked at random. The chance that at least two share one is ${percent(exact)}; the approximation 1 − e^(−n(n − 1)/2m) gives ${percent(approx)}. The chance first reaches one half at ${group(firstHalf)} ${things}, close to 1.18 × √${group(size)} ≈ ${group(Math.round(half))} and far fewer than ${group(size)}.`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => chooseSpace(nextSpace)}>
+            {`Use ${SPACES[nextSpace].values}`}
+          </button>
+          <Slider label={things} value={n} onChange={setN} min={step} max={most} step={step} text={group(n)} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 250" role="img" aria-label={`The chance of a shared value rising with the number of ${things}, ${percent(exact)} at ${group(n)}`}>
+        <line x1="40" y1="200" x2="400" y2="200" className="fig-axis" />
+        <line x1="40" y1="40" x2="40" y2="200" className="fig-axis" />
+        <line x1="40" y1={sy(0.5)} x2="400" y2={sy(0.5)} className="fig-guide" />
+        <text x="36" y={sy(0.5) + 4} textAnchor="end" className="fig-small">
+          ½
+        </text>
+        <text x="36" y={sy(1) + 4} textAnchor="end" className="fig-small">
+          1
+        </text>
+        <polyline points={curve} className="fig-line" />
+        <line x1={sx(half)} y1={sy(0.5)} x2={sx(half)} y2="200" className="fig-guide" />
+        <circle cx={sx(n)} cy={sy(exact)} r="6" className="fig-accent" />
+        <text x="40" y="218" className="fig-small">
+          0
+        </text>
+        <text x="400" y="218" textAnchor="end" className="fig-small">
+          {group(most)}
+        </text>
+        <text x="220" y="236" textAnchor="middle" className="fig-small">
+          {`number of ${things}`}
+        </text>
+        <text x="48" y="30" className="fig-small">
+          {`chance of a shared value: ${percent(exact)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+type TailCase = "heads" | "requests" | "response";
+const TAIL_ORDER: TailCase[] = ["heads", "requests", "response"];
+const lnFactorial = (k: number) => {
+  let total = 0;
+  for (let i = 2; i <= k; i++) total += Math.log(i);
+  return total;
+};
+const TAIL_CASES: Record<TailCase, { name: string; unit: string; mean: number; sd: number; low: number; high: number; step: number; exact: (t: number) => number; chernoff: ((t: number) => number) | null }> = {
+  heads: {
+    name: "heads in 100 tosses of a fair coin",
+    unit: "heads",
+    mean: 50,
+    sd: 5,
+    low: 51,
+    high: 100,
+    step: 1,
+    exact: (t) => {
+      let total = 0;
+      for (let k = Math.ceil(t); k <= 100; k++) total += Math.exp(lnFactorial(100) - lnFactorial(k) - lnFactorial(100 - k) - 100 * Math.LN2);
+      return total;
+    },
+    chernoff: (t) => Math.exp((-2 * (t - 50) ** 2) / 100),
+  },
+  requests: {
+    name: "requests in a second, Poisson with mean 4",
+    unit: "requests",
+    mean: 4,
+    sd: 2,
+    low: 5,
+    high: 30,
+    step: 1,
+    exact: (t) => {
+      let below = 0;
+      for (let k = 0; k < Math.ceil(t); k++) below += Math.exp(-4 + k * Math.log(4) - lnFactorial(k));
+      return Math.max(0, 1 - below);
+    },
+    chernoff: (t) => Math.exp(-4) * ((Math.E * 4) / t) ** t,
+  },
+  response: {
+    name: "a response time in milliseconds, exponential with mean 100",
+    unit: "ms",
+    mean: 100,
+    sd: 100,
+    low: 150,
+    high: 2000,
+    step: 50,
+    exact: (t) => Math.exp(-t / 100),
+    chernoff: null,
+  },
+};
+
+/** The true chance of a large value next to the guarantees that Markov's, Chebyshev's and Chernoff's inequalities give, on a logarithmic scale. */
+function TailBounds(props: Props) {
+  const [which, setWhich] = useState<TailCase>(typeof props.variable === "string" && props.variable in TAIL_CASES ? (props.variable as TailCase) : "heads");
+  const spec = TAIL_CASES[which];
+  const [t, setT] = useState(clamp(Math.round(num(props.threshold, 70) / spec.step) * spec.step, spec.low, spec.high));
+  const exact = spec.exact(t);
+  const markov = Math.min(1, spec.mean / t);
+  const chebyshev = Math.min(1, (spec.sd * spec.sd) / ((t - spec.mean) * (t - spec.mean)));
+  const chernoff = spec.chernoff ? Math.min(1, spec.chernoff(t)) : null;
+  const rows: [string, number | null][] = [
+    ["true chance", exact],
+    ["Markov", markov],
+    ["Chebyshev", chebyshev],
+    ["Chernoff", chernoff],
+  ];
+  const floor = -16;
+  const width = (p: number) => (p <= 0 ? 0 : ((Math.max(Math.log10(p), floor) - floor) / -floor) * 250);
+  const show = (p: number) => (p >= 0.001 ? dp(p, 4) : p.toExponential(1).replace("e-", " × 10^-").replace("-", "−"));
+  const nextCase = TAIL_ORDER[(TAIL_ORDER.indexOf(which) + 1) % TAIL_ORDER.length];
+  const choose = (next: TailCase) => {
+    setWhich(next);
+    setT(clamp(TAIL_CASES[next].mean + 4 * TAIL_CASES[next].sd, TAIL_CASES[next].low, TAIL_CASES[next].high));
+  };
+  return (
+    <Frame
+      title="How good is a guarantee?"
+      summary={`For ${spec.name}, with mean ${spec.mean} and standard deviation ${spec.sd}: the chance of ${group(t)} ${spec.unit} or more is ${show(exact)}. Markov's inequality, which knows only the mean, promises at most ${show(markov)}. Chebyshev's, which also knows the standard deviation, promises at most ${show(chebyshev)}. ${
+        chernoff === null ? "Chernoff's bound needs a sum of many independent bounded parts, which one response time is not." : `Chernoff's, which uses the independence of the many small parts, promises at most ${show(chernoff)}.`
+      } Every bound is at least the true chance, as a guarantee must be.`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => choose(nextCase)}>
+            {`Show ${TAIL_CASES[nextCase].name.split(",")[0]}`}
+          </button>
+          <Slider label="at least" value={t} onChange={setT} min={spec.low} max={spec.high} step={spec.step} text={`${group(t)} ${spec.unit}`} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 230" role="img" aria-label={`The true chance and three upper bounds for ${group(t)} ${spec.unit} or more, on a logarithmic scale`}>
+        {rows.map(([label, p], i) => (
+          <g key={label}>
+            <text x="12" y={46 + i * 44} className="fig-small">
+              {label}
+            </text>
+            {p === null ? (
+              <text x="110" y={46 + i * 44} className="fig-small">
+                does not apply
+              </text>
+            ) : (
+              <>
+                <rect x="110" y={32 + i * 44} width={width(p)} height="20" className="fig-accent" opacity={i === 0 ? 1 : 0.55} />
+                <text x={Math.min(116 + width(p), 360)} y={46 + i * 44} className="fig-small">
+                  {show(p)}
+                </text>
+              </>
+            )}
+          </g>
+        ))}
+        <line x1="110" y1="24" x2="110" y2="200" className="fig-axis" />
+        <line x1="360" y1="24" x2="360" y2="200" className="fig-guide" />
+        <text x="110" y="218" textAnchor="middle" className="fig-small">
+          10^-16
+        </text>
+        <text x="360" y="218" textAnchor="middle" className="fig-small">
+          1
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+type MeanSource = "die" | "wait" | "rare" | "even";
+const MEAN_SOURCES: MeanSource[] = ["die", "wait", "rare", "even"];
+const MEAN_SPECS: Record<MeanSource, { name: string; mean: number; sd: number; low: number; high: number; draw: (u: number) => number }> = {
+  die: { name: "throws of a fair die", mean: 3.5, sd: Math.sqrt(35 / 12), low: 1, high: 6, draw: (u) => Math.floor(u * 6) + 1 },
+  wait: { name: "exponential waits with mean 1 minute", mean: 1, sd: 1, low: 0, high: 4, draw: (u) => -Math.log(1 - u) },
+  rare: { name: "requests that each fail with chance 0.1, counted as 1 for a failure", mean: 0.1, sd: 0.3, low: 0, high: 1, draw: (u) => (u < 0.1 ? 1 : 0) },
+  even: { name: "numbers spread evenly between 0 and 1", mean: 0.5, sd: Math.sqrt(1 / 12), low: 0, high: 1, draw: (u) => u },
+};
+const MEAN_SIZES = [1, 2, 4, 10, 30, 100];
+
+/** Two thousand averages of n draws each: they gather at the mean, their spread shrinks like 1/√n, and their shape turns into a bell. */
+function SampleMeans(props: Props) {
+  const [source, setSource] = useState<MeanSource>(typeof props.source === "string" && props.source in MEAN_SPECS ? (props.source as MeanSource) : "die");
+  const [sizeAt, setSizeAt] = useState(Math.max(0, MEAN_SIZES.indexOf(num(props.n, 1))));
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const spec = MEAN_SPECS[source];
+  const n = MEAN_SIZES[sizeAt];
+  const repeats = 2000;
+  const raw = draws(seed, repeats * n, false);
+  const averages = Array.from({ length: repeats }, (_, r) => {
+    let total = 0;
+    for (let i = 0; i < n; i++) total += spec.draw(raw[r * n + i]);
+    return total / n;
+  });
+  const bins = 30;
+  const span = spec.high - spec.low;
+  const counts = Array.from({ length: bins }, () => 0);
+  for (const a of averages) counts[clamp(Math.floor(((a - spec.low) / span) * bins), 0, bins - 1)]++;
+  const center = averages.reduce((a, b) => a + b, 0) / repeats;
+  const spread = Math.sqrt(averages.reduce((a, b) => a + (b - center) ** 2, 0) / repeats);
+  const theory = spec.sd / Math.sqrt(n);
+  const near = averages.filter((a) => Math.abs(a - spec.mean) <= 2 * theory).length / repeats;
+  const bell = (x: number) => (repeats * (span / bins) * Math.exp(-((x - spec.mean) ** 2) / (2 * theory * theory))) / (theory * Math.sqrt(2 * Math.PI));
+  const xs = Array.from({ length: 121 }, (_, i) => spec.low + (span * i) / 120);
+  const top = Math.max(...counts, ...xs.map(bell));
+  const sx = (x: number) => 40 + ((x - spec.low) / span) * 360;
+  const sy = (c: number) => 200 - (Math.min(c, top) / top) * 160;
+  const curve = xs.map((x) => `${dp(sx(x), 2)},${dp(sy(bell(x)), 2)}`).join(" ");
+  const nextSource = MEAN_SOURCES[(MEAN_SOURCES.indexOf(source) + 1) % MEAN_SOURCES.length];
+  return (
+    <Frame
+      title="Averages of many draws"
+      summary={`${group(repeats)} averages, each of ${plural(n, "draw")} from ${spec.name}. The averages centre on ${dp(center, 3)}, against a true mean of ${dp(spec.mean, 3)}. Their standard deviation is ${dp(spread, 3)}, close to σ/√n = ${dp(spec.sd, 3)}/√${n} = ${dp(theory, 3)}. ${dp(near * 100, 1)}% of them lie within two of those of the mean, against 95% for a normal. The curve is the normal distribution with that mean and standard deviation.`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" onClick={() => setSource(nextSource)}>
+            {`Average ${MEAN_SPECS[nextSource].name.split(",")[0]}`}
+          </button>
+          <Slider label="draws in each average" value={sizeAt} onChange={setSizeAt} min={0} max={MEAN_SIZES.length - 1} text={`${n}`} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 240" role="img" aria-label={`A histogram of ${group(repeats)} averages of ${n} draws, with a normal curve over it`}>
+        {counts.map((c, i) => (
+          <rect key={i} x={40 + (i * 360) / bins + 1} y={sy(c)} width={360 / bins - 2} height={200 - sy(c)} className="fig-accent" opacity={0.7} />
+        ))}
+        <polyline points={curve} className="fig-line" />
+        <line x1="40" y1="200" x2="400" y2="200" className="fig-axis" />
+        <line x1={sx(spec.mean)} y1="30" x2={sx(spec.mean)} y2="200" className="fig-guide" />
+        <text x="40" y="218" textAnchor="middle" className="fig-small">
+          {dp(spec.low, 2)}
+        </text>
+        <text x="400" y="218" textAnchor="middle" className="fig-small">
+          {dp(spec.high, 2)}
+        </text>
+        <text x={sx(spec.mean)} y="234" textAnchor="middle" className="fig-small">
+          {`mean ${dp(spec.mean, 2)}`}
+        </text>
+        <text x="40" y="22" className="fig-small">
+          {`averages of ${n}: spread ${dp(spread, 3)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** A small linear congruential generator, x → (5x + 1) mod 2048, whose pairs fall on five lines. */
+function poorDraws(seed: number, count: number): number[] {
+  let state = seed;
+  return Array.from({ length: count }, () => {
+    state = (5 * state + 1) % 2048;
+    return state / 2048;
+  });
+}
+
+const THROWS = [100, 300, 1000, 3000, 10000];
+
+/** Points thrown at a unit square to estimate π, from a good generator or a poor one. */
+function MonteCarlo(props: Props) {
+  const [poor, setPoor] = useState(props.generator === "poor");
+  const [throwsAt, setThrowsAt] = useState(Math.max(0, THROWS.indexOf(num(props.points, 1000))));
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const count = THROWS[throwsAt];
+  const raw = poor ? poorDraws(seed, 2 * count) : draws(seed, 2 * count, false);
+  const points = Array.from({ length: count }, (_, i) => [raw[2 * i], raw[2 * i + 1]] as const);
+  const inside = points.filter(([x, y]) => x * x + y * y < 1).length;
+  const share = inside / count;
+  const estimate = 4 * share;
+  const error = 4 * Math.sqrt((share * (1 - share)) / count);
+  const distinct = new Set(points.map(([x, y]) => `${x},${y}`)).size;
+  const shown = points.slice(0, 2000);
+  const sx = (x: number) => 20 + x * 200;
+  const sy = (y: number) => 220 - y * 200;
+  const arc = Array.from({ length: 61 }, (_, i) => {
+    const angle = (Math.PI / 2) * (i / 60);
+    return `${dp(sx(Math.cos(angle)), 2)},${dp(sy(Math.sin(angle)), 2)}`;
+  }).join(" ");
+  const name = poor ? "the poor generator, x → (5x + 1) mod 2048" : "a good generator";
+  return (
+    <Frame
+      title="Throwing points at a square"
+      summary={`${group(count)} points from ${name}, seed ${seed}, each made of two draws. ${group(inside)} land inside the quarter circle, so the estimate of π is 4 × ${group(inside)}/${group(count)} = ${dp(estimate, 3)}, with a standard error of about ${dp(error, 3)}. The true value is 3.142. ${
+        poor
+          ? `Only ${group(distinct)} of the points are different, because the generator repeats after 2,048 draws, and every pair lies on one of five lines. However many points are thrown, the estimate stays near 3.09, and the standard error, which assumes independent draws, is wrong.`
+          : "About 95% of the time the estimate is within two standard errors of π, and four times as many points halve the standard error."
+      }${shown.length < count ? ` The picture shows the first ${group(shown.length)} points.` : ""}`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={poor} onClick={() => setPoor(!poor)}>
+            Use the poor generator
+          </button>
+          <Slider label="points" value={throwsAt} onChange={setThrowsAt} min={0} max={THROWS.length - 1} text={group(count)} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 240" role="img" aria-label={`${group(shown.length)} points in a square from ${name}, with a quarter circle drawn in it`}>
+        <rect x="20" y="20" width="200" height="200" className="fig-ghost" />
+        {shown.map(([x, y], i) => (
+          <rect key={i} x={dp(sx(x) - 1, 2)} y={dp(sy(y) - 1, 2)} width="2" height="2" className={x * x + y * y < 1 ? "fig-accent" : "fig-fill"} />
+        ))}
+        <polyline points={arc} className="fig-line" />
+        <line x1="20" y1="220" x2="220" y2="220" className="fig-axis" />
+        <line x1="20" y1="20" x2="20" y2="220" className="fig-axis" />
+        <text x="250" y="60" className="fig-small">
+          {`inside: ${group(inside)} of ${group(count)}`}
+        </text>
+        <text x="250" y="90" className="fig-small">
+          {`estimate of π: ${dp(estimate, 3)}`}
+        </text>
+        <text x="250" y="120" className="fig-small">
+          {`standard error: ${dp(error, 3)}`}
+        </text>
+        <text x="250" y="150" className="fig-small">
+          {`different points: ${group(distinct)}`}
+        </text>
+        <text x="250" y="180" className="fig-small">
+          true π: 3.142
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5104,6 +5915,15 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "bound-witness": BoundWitness,
   "one-stroke": OneStroke,
   "leaf-strip": LeafStrip,
+  "dice-grid": DiceGrid,
+  "bayes-square": BayesSquare,
+  "variable-bars": VariableBars,
+  "distribution-bars": DistributionBars,
+  "density-area": DensityArea,
+  "birthday-curve": BirthdayCurve,
+  "tail-bounds": TailBounds,
+  "sample-means": SampleMeans,
+  "monte-carlo": MonteCarlo,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

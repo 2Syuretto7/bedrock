@@ -1,0 +1,448 @@
+concept: f4.the-birthday-problem-and-collisions
+minutes: 90
+claim: You can compute exactly the chance that n random picks from m equally likely values are all different, approximate it by e^(-n(n-1)/2m) using 1 - x ≈ e^(-x), explain why collisions become likely at about the square root of m picks, tell "some two match" apart from "someone matches me", bound the collision chance by the expected number of colliding pairs, and choose the length of random identifiers and hashes so that collisions stay acceptably rare.
+recalls: [f4.continuous-distributions-and-densities, s2.hash-tables]
+uses: [f4.continuous-distributions-and-densities, f4.common-discrete-distributions, f4.expectation-and-linearity, f4.independence, f4.sample-spaces-and-events, f3.permutations-and-combinations, f3.the-pigeonhole-principle, f1.exponents-and-exponential-growth, f1.logarithms, s2.hash-tables, h0.binary-and-hexadecimal, s1.modules-and-imports, s0.functions, s0.loops]
+leads: [f4.tail-bounds, f4.simulation-and-pseudo-random-numbers, f7.fingerprints-and-content-hashes, q2.bloom-filters, q8.sketches-hyperloglog-and-count-min]
+bridges:
+  s2.hash-tables: |
+    The hash tables lesson spread keys over buckets with a hash function and dealt with collisions by chaining or probing, and it kept the load factor low by resizing. It never asked how soon the first collision arrives if keys land in buckets at random. The answer is startling: in a table of a million buckets, two of the first 1,200 or so keys probably share a bucket, while the table is barely one tenth of one per cent full. This lesson computes that number, explains why it grows like the square root of the table's size, and turns the same calculation into a rule for how many bits a random identifier needs.
+starter: |
+  # Scratch space. The chance that 23 people all have different birthdays.
+  days = 365
+  all_different = 1.0
+  for i in range(23):
+      all_different = all_different * (days - i) / days
+  print(all_different, 1 - all_different)
+parts:
+  recall:
+    - text: |
+        This lesson joins two threads. [[f4.continuous-distributions-and-densities]] met the exponential function as the limit of many small independent chances, and [[s2.hash-tables]] handled collisions without asking how soon they come. Three quick pulls first.
+  puzzle:
+    - text: |
+        A Test match is about to begin. On the field are the 22 players and one umpire, 23 people in all. A commentator, filling time during a rain delay, wonders aloud whether any two of the 23 share a birthday.
+
+        "Very unlikely," says his colleague. "There are 365 days in the year and only 23 people. That is barely 6% of the days."
+
+        Ignore leap years, and suppose birthdays are spread evenly over the 365 days and have nothing to do with each other. **Is it more likely or less likely than not that two of the 23 share a birthday?**
+  intuition:
+    - text: |
+        The colleague compared 23 with 365, as if each person were checked against the calendar. But a shared birthday needs only *two* people to match, and the number of pairs grows much faster than the number of people. With 23 people there are $\binom{23}{2} = 253$ pairs, and each pair shares a birthday with chance $1/365$. By linearity, the expected number of sharing pairs is $253/365 \approx 0.69$. Already this suggests that a match is far from unlikely.
+
+        The exact chance comes from the complement. Line the people up. The first has some birthday. The second avoids it with chance $364/365$. Given that, the third avoids both with chance $363/365$, and so on, down to the 23rd, who must avoid 22 taken days, with chance $343/365$. By the multiplication rule,
+
+        $$P(\text{all different}) = \frac{365}{365} \cdot \frac{364}{365} \cdot \frac{363}{365} \cdots \frac{343}{365} \approx 0.493.$$
+
+        So the chance of a shared birthday is about $0.507$: slightly *more* likely than not.
+
+        The figure draws this chance as the number of people grows. It rises slowly at first, crosses one half at 23, and is above 97% by 50. Switch to PINs, codes and hashes: the same S-shaped curve appears every time, and the point where it crosses one half is always near the square root of the number of possible values.
+    - figure: birthday-curve
+      props: { space: days, people: 23 }
+    - text: |
+        Ten thousand four-digit PINs reach a coin-toss chance of a repeat after only 119 customers. A 32-bit hash, with over four billion values, does so after about 77,000 files. Square roots are much smaller than the numbers they come from, and that is the whole story.
+  derivation:
+    - text: |
+        **The exact chance.** Pick $n$ values independently and uniformly from $m$ possibilities. All $n$ are different with chance
+
+        $$p_n = \frac{m (m - 1) \cdots (m - n + 1)}{m^n} = \prod_{i=0}^{n-1} \Bigl(1 - \frac{i}{m}\Bigr),$$
+
+        the number of ordered selections without repetition from [[f3.permutations-and-combinations]] divided by the number of all selections. When $n > m$ some factor is zero: the pigeonhole principle of [[f3.the-pigeonhole-principle]] guarantees a repeat. The interesting range is far below that.
+
+        **The approximation.** For small $x$, $1 - x \approx e^{-x}$. Both sides start at 1 when $x = 0$ and fall with slope 1, and $e^{-x}$ is the limit of $(1 - x/k)^k$ that the last lesson used. Applying it to every factor, and adding the exponents with the sum $0 + 1 + \cdots + (n - 1) = n(n - 1)/2$,
+
+        $$p_n \approx e^{-0/m}\,e^{-1/m} \cdots e^{-(n-1)/m} = e^{-n(n - 1)/(2m)}.$$
+
+        For 23 people this gives $e^{-253/365} \approx 0.500$, close to the exact $0.493$. The exponent is exactly the expected number of matching pairs, $\binom{n}{2}/m$: the number of matching pairs is nearly Poisson with that mean, and $e^{-\text{mean}}$ is a Poisson's chance of 0.
+
+        **The square-root law.** Setting $e^{-n^2/(2m)} = 1/2$ and taking logarithms gives $n^2 = 2 \ln 2 \cdot m$, so
+
+        $$n_{1/2} \approx \sqrt{2 \ln 2 \cdot m} \approx 1.18\sqrt{m}.$$
+
+        Collisions start to be likely after about $\sqrt{m}$ picks, not $m$. Quadrupling the space only doubles the number of picks before the first collision.
+    - question:
+        id: derivation-pairs
+        type: numeric
+        system: s2
+        tolerance: "0.01"
+        prompt: |
+          40 people are in a room. Using $p \approx e^{-n(n-1)/(2m)}$, what is the approximate chance that two of them share a birthday? Give a decimal to two places.
+        answer: "0.88"
+        explanation: |
+          $n(n - 1)/2 = 780$ pairs, so the chance of no match is about $e^{-780/365} \approx e^{-2.14} \approx 0.118$, and of a match about $0.88$. The exact value is $0.891$.
+    - text: |
+        **Two different questions.** "Does anyone share *my* birthday?" is a much rarer event. Each of the other $n - 1$ people misses your birthday with chance $(m - 1)/m$, independently, so
+
+        $$P(\text{someone matches me}) = 1 - \Bigl(1 - \frac{1}{m}\Bigr)^{n - 1} \approx \frac{n - 1}{m}$$
+
+        when this is small. With 22 others, that is about $0.059$. The difference is pairs: matching a fixed person involves $n - 1$ pairs, but matching anyone involves $\binom{n}{2}$, which grows like $n^2/2$.
+
+        **When does the first collision come?** Let $N$ be the number of picks up to and including the first repeat. $N > n$ means the first $n$ are all different, so $P(N > n) = p_n \approx e^{-n^2/(2m)}$: a smooth tail that falls off like a bell's, and a continuous distribution in the sense of the last lesson, once $n$ is measured in units of $\sqrt{m}$. Its mean is about $\sqrt{\pi m / 2} \approx 1.25\sqrt{m}$: about 24 for birthdays and 82,000 for 32-bit hashes.
+
+        **A bound to design with.** By the union bound, the chance of any collision is at most the sum of the chances of each pair colliding:
+
+        $$P(\text{some collision}) \le \binom{n}{2} \frac{1}{m} < \frac{n^2}{2m}.$$
+
+        Unlike the approximation, this is a guaranteed upper limit, and when it is small it is also nearly exact. It turns into a rule for sizes. To give $n$ random identifiers a collision chance of at most $r$, choose $m \ge n^2/(2r)$. With identifiers of $b$ random bits, $m = 2^b$, so the bits needed are about $2\log_2 n + \log_2 (1/r) - 1$.
+    - question:
+        id: order-bits
+        type: order
+        system: s2
+        prompt: |
+          A service gives each of $2^{20}$ (about a million) uploaded files a random identifier of $b$ bits, and wants the chance of any collision to be at most $2^{-20}$. Put the steps for the smallest $b$ guaranteed by the union bound in order.
+        steps:
+          - "The number of pairs is about $n^2/2 = 2^{40}/2 = 2^{39}$."
+          - "Each pair collides with chance $2^{-b}$, so the union bound is about $2^{39 - b}$."
+          - "Require $2^{39 - b} \\le 2^{-20}$."
+          - "So $b \\ge 59$ bits."
+        explanation: |
+          In powers of two the arithmetic is just adding exponents. Roughly, you pay twice the bits of the number of items, plus the bits of the safety margin. That is why random identifiers are 64 or 128 bits long, never 32.
+    - text: |
+        **Where collisions matter.** Hash tables expect collisions and handle them, so for a table the question is how many, which [[f4.expectation-and-linearity]] answered: about $\binom{n}{2}/m$ colliding pairs. Elsewhere a collision is a failure. Two orders with the same random order number; two users with the same session token; two different files with the same short hash, so a cache serves the wrong one. A 6-character code from 36 letters and digits has $36^6 \approx 2.2 \times 10^9$ values, about the same as 31 bits, and a collision is likely after only some 55,000 codes. Version 4 UUIDs have 122 random bits, so a collision is likely only after about $1.18 \times 2^{61} \approx 2.7 \times 10^{18}$ of them.
+
+        The same square root governs attacks. Finding *some* two inputs with the same $k$-bit hash takes about $2^{k/2}$ tries, not $2^k$, which is why a hash meant to resist collisions needs twice as many bits as a hash meant only to resist guessing; [[f7.fingerprints-and-content-hashes]] returns to this. And clever data structures such as [[q2.bloom-filters]] and [[q8.sketches-hyperloglog-and-count-min]] are designed around exactly these collision rates.
+
+        **In Python.** The exact chance is a short loop, and the approximation is one call to `math.exp`:
+
+        ```python
+        import math
+
+        days, people = 365, 23
+        all_different = 1.0
+        for i in range(people):
+            all_different *= (days - i) / days
+        print(round(1 - all_different, 3), round(1 - math.exp(-people * (people - 1) / (2 * days)), 3))
+        ```
+
+        This prints `0.507 0.5`.
+  formal:
+    - text: |
+        **All different.** For $n$ independent uniform picks from $m$ values, $P(\text{all different}) = \prod_{i=0}^{n-1} (1 - i/m) = m!/\bigl((m - n)!\,m^n\bigr)$ for $n \le m$, and 0 for $n > m$.
+
+        **Approximation.** Using $1 - x \le e^{-x}$, $P(\text{all different}) \le e^{-n(n-1)/(2m)}$, and the two are close when $n$ is small compared with $m$.
+
+        **Half-way point.** $P(\text{some collision}) \approx 1/2$ when $n \approx \sqrt{2 \ln 2 \cdot m} \approx 1.18\sqrt{m}$. The expected number of picks up to the first repeat is about $\sqrt{\pi m/2}$.
+
+        **Matching a fixed value.** $P(\text{one of } k \text{ picks equals a given value}) = 1 - (1 - 1/m)^k$.
+
+        **Union bound.** $P(\text{some collision}) \le \binom{n}{2}/m$. For a collision chance at most $r$, it suffices that $m \ge \binom{n}{2}/r$.
+  drill:
+    - text: Seconds each. Count pairs, not people.
+    - question:
+        id: drill-pairs
+        type: numeric
+        system: s1
+        prompt: |
+          How many pairs can be made from 23 people?
+        answer: "253"
+        explanation: $\binom{23}{2} = 23 \times 22 / 2 = 253$.
+    - question:
+        id: drill-expected
+        type: numeric
+        system: s1
+        tolerance: "0.01"
+        prompt: |
+          With 23 people and 365 equally likely birthdays, what is the expected number of pairs who share a birthday? Give a decimal to two places.
+        answer: "0.69"
+        explanation: $253/365 \approx 0.69$, by linearity over the pairs.
+    - question:
+        id: drill-two
+        type: numeric
+        system: s1
+        prompt: |
+          Two people are picked at random. What is the chance they share a birthday? Give a fraction.
+        answer: "1/365"
+        explanation: Whatever the first birthday is, the second matches it with chance $1/365$.
+    - question:
+        id: drill-sqrt
+        type: numeric
+        system: s1
+        tolerance: "50"
+        prompt: |
+          Random six-digit codes are handed out, one million possible values. Roughly how many codes until a repeat becomes more likely than not? Give a whole number.
+        answer: "1178"
+        explanation: About $1.18\sqrt{10^6} = 1{,}180$; the exact crossing is at 1,178.
+    - question:
+        id: drill-hash
+        type: choice
+        system: s1
+        prompt: |
+          Roughly how many random 64-bit values can be drawn before a repeat becomes likely?
+        options: ["About $2^{32}$, around four billion", "About $2^{63}$", "About 64", "About $2^{64}$"]
+        answer: 0
+        explanation: Collisions become likely after about $\sqrt{2^{64}} = 2^{32}$ draws.
+    - question:
+        id: drill-double
+        type: choice
+        system: s1
+        prompt: |
+          The number of possible values is multiplied by 4. How does the number of picks needed for a likely repeat change?
+        options: ["It doubles", "It is multiplied by 4", "It is multiplied by 16", "It does not change"]
+        answer: 0
+        explanation: It grows like $\sqrt{m}$, and $\sqrt{4} = 2$.
+    - question:
+        id: predict-product
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          pins = 10000
+          all_different = 1.0
+          for i in range(119):
+              all_different *= (pins - i) / pins
+          print(round(1 - all_different, 3))
+        output: "0.506"
+        explanation: 119 random four-digit PINs have a repeat with chance just over one half, although they use barely 1% of the 10,000 values.
+    - question:
+        id: predict-me
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          days = 365
+          others = 22
+          anyone_matches_me = 1 - (1 - 1 / days) ** others
+          print(round(anyone_matches_me, 3))
+        output: "0.059"
+        explanation: Matching one particular birthday is much rarer than any two matching; only 22 pairs involve you, against 253 in all.
+  work:
+    - text: Slower now. Before computing, decide whether the question is about any two picks matching, or about matching one particular value.
+    - question:
+        id: fix-match
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `chance_of_match(n, m)` should give the chance that, among `n` independent uniform picks from `m` values, at least two are equal. The program should print `0.507 0.891 1.0`. It prints `0.061 0.104 0.686`. Find the fault and fix it.
+        starter: |
+          def chance_of_match(n, m):
+              return 1 - (1 - 1 / m) ** n
+
+          print(round(chance_of_match(23, 365), 3), round(chance_of_match(40, 365), 3), round(chance_of_match(11, 10), 3))
+        solution: |
+          def chance_of_match(n, m):
+              all_different = 1.0
+              for i in range(n):
+                  all_different *= (m - i) / m
+              return 1 - all_different
+
+          print(round(chance_of_match(23, 365), 3), round(chance_of_match(40, 365), 3), round(chance_of_match(11, 10), 3))
+        tests: |
+          import itertools
+          for _m in range(1, 6):
+              for _n in range(0, 6):
+                  _all = list(itertools.product(range(_m), repeat=_n))
+                  _hit = sum(1 for _t in _all if len(set(_t)) < len(_t))
+                  _want = _hit / len(_all)
+                  _got = chance_of_match(_n, _m)
+                  assert abs(_got - _want) < 1e-9, "chance_of_match(" + str(_n) + ", " + str(_m) + ") should be " + str(round(_want, 6)) + ", not " + str(_got)
+          assert abs(chance_of_match(23, 365) - 0.5072972343239854) < 1e-9, "chance_of_match(23, 365) should be about 0.5073"
+          assert output.strip() == "0.507 0.891 1.0", "The program should print 0.507 0.891 1.0"
+        wrong:
+          - |
+            import math
+
+            def chance_of_match(n, m):
+                return 1 - math.exp(-n * (n - 1) / (2 * m))
+
+            print("0.507 0.891 1.0")
+          - |
+            def chance_of_match(n, m):
+                return min(1, n * (n - 1) / (2 * m))
+
+            print("0.507 0.891 1.0")
+          - |
+            def chance_of_match(n, m):
+                all_different = 1.0
+                for i in range(1, n):
+                    all_different *= (m - i) / (m - i + 1)
+                return 1 - all_different
+
+            print("0.507 0.891 1.0")
+        explanation: |
+          $1 - (1 - 1/m)^n$ is the chance that some pick equals one *given* value, the "matches me" question. Any two matching needs the product $\prod_{i<n} (m - i)/m$: each new pick must avoid every value already taken, not just one. The exponential formula and the union bound are approximations, good for planning but not exact; and dividing each factor by the previous count telescopes to the wrong product. With 11 picks from 10 values the pigeonhole principle makes a match certain, and the exact product correctly reaches a factor of zero.
+    - question:
+        id: write-half
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `picks_for_half(m)`, the smallest number of independent uniform picks from `m` values for which the chance that at least two are equal is at least one half. Use the exact product, keeping it exact with `Fraction` so that no rounding can tip the answer.
+        starter: |
+          from fractions import Fraction
+
+          def picks_for_half(m):
+              return m
+
+          print(picks_for_half(365), picks_for_half(10000), picks_for_half(1), picks_for_half(2))
+        solution: |
+          from fractions import Fraction
+
+          def picks_for_half(m):
+              all_different = Fraction(1)
+              n = 0
+              while all_different > Fraction(1, 2):
+                  all_different *= Fraction(m - n, m)
+                  n += 1
+              return n
+
+          print(picks_for_half(365), picks_for_half(10000), picks_for_half(1), picks_for_half(2))
+        tests: |
+          from fractions import Fraction
+          for _m in range(1, 200):
+              _p = Fraction(1)
+              _n = 0
+              while _p > Fraction(1, 2):
+                  _p *= Fraction(_m - _n, _m)
+                  _n += 1
+              _got = picks_for_half(_m)
+              assert _got == _n, "picks_for_half(" + str(_m) + ") should be " + str(_n) + ", not " + str(_got)
+          assert output.strip() == "23 119 2 2", "The program should print 23 119 2 2"
+        wrong:
+          - |
+            import math
+
+            def picks_for_half(m):
+                return round(1.18 * math.sqrt(m))
+
+            print("23 119 2 2")
+          - |
+            from fractions import Fraction
+
+            def picks_for_half(m):
+                all_different = Fraction(1)
+                n = 0
+                while all_different > Fraction(1, 2):
+                    n += 1
+                    all_different *= Fraction(m - n, m)
+                return n
+
+            print("23 119 2 2")
+          - |
+            import math
+
+            def picks_for_half(m):
+                return m // 2 + 1
+
+            print("23 119 2 2")
+        explanation: |
+          Keep multiplying in the next factor, $(m - n)/m$ for the pick numbered $n$ from 0, and stop as soon as the chance of all different has fallen to one half or below. The order matters: the first pick multiplies by $m/m = 1$, and multiplying by $(m - n)/m$ after increasing $n$ skips that factor and stops one pick early. The square-root formula is a fine estimate, but it rounds to 22 for birthdays, not 23, and $m/2$ ignores pairs altogether.
+    - question:
+        id: write-bits
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `bits_needed(items, risk)`, the smallest number of bits $b$ such that the union bound $\binom{n}{2} / 2^b$ for `items` random $b$-bit identifiers is at most `risk`. `risk` is a `Fraction` strictly between 0 and 1. Use whole numbers and fractions only, so the answer is exact.
+        starter: |
+          from fractions import Fraction
+
+          def bits_needed(items, risk):
+              return 32
+
+          print(bits_needed(10 ** 6, Fraction(1, 10 ** 6)), bits_needed(10 ** 9, Fraction(1, 10 ** 9)), bits_needed(2, Fraction(1, 2)))
+        solution: |
+          import math
+          from fractions import Fraction
+
+          def bits_needed(items, risk):
+              pairs = math.comb(items, 2)
+              b = 0
+              while Fraction(pairs, 2 ** b) > risk:
+                  b += 1
+              return b
+
+          print(bits_needed(10 ** 6, Fraction(1, 10 ** 6)), bits_needed(10 ** 9, Fraction(1, 10 ** 9)), bits_needed(2, Fraction(1, 2)))
+        tests: |
+          import math
+          import random
+          from fractions import Fraction
+          random.seed(71)
+          for _trial in range(300):
+              _n = random.choice([0, 1, 2, 3, 10, 100, 12345, 10 ** 6, 10 ** 9])
+              _r = Fraction(1, random.choice([2, 3, 10, 1000, 10 ** 6, 2 ** 40]))
+              _pairs = math.comb(_n, 2)
+              _b = 0
+              while Fraction(_pairs, 2 ** _b) > _r:
+                  _b += 1
+              _got = bits_needed(_n, _r)
+              assert _got == _b, "bits_needed(" + str(_n) + ", " + str(_r) + ") should be " + str(_b) + ", not " + str(_got)
+          assert output.strip() == "59 89 1", "The program should print 59 89 1"
+        wrong:
+          - |
+            import math
+            from fractions import Fraction
+
+            def bits_needed(items, risk):
+                b = 0
+                while Fraction(items, 2 ** b) > risk:
+                    b += 1
+                return b
+
+            print("59 89 1")
+          - |
+            import math
+            from fractions import Fraction
+
+            def bits_needed(items, risk):
+                pairs = items * items
+                b = 0
+                while Fraction(pairs, 2 ** b) > risk:
+                    b += 1
+                return b
+
+            print("59 89 1")
+          - |
+            import math
+            from fractions import Fraction
+
+            def bits_needed(items, risk):
+                pairs = math.comb(items, 2)
+                b = 0
+                while Fraction(pairs, 2 ** b) >= risk:
+                    b += 1
+                return b
+
+            print("59 89 1")
+        explanation: |
+          Each of the $\binom{n}{2}$ pairs collides with chance $2^{-b}$, so the union bound is $\binom{n}{2}/2^b$, and the smallest $b$ that brings it to `risk` or below is found by doubling the space one bit at a time. Using $n$ in place of the number of pairs plans for matching one fixed value, and badly underestimates the bits. Using $n^2$ counts every pair twice and each item with itself, so it asks for a bit too many, and stopping only when the bound is strictly below `risk` does the same when they are exactly equal.
+    - question:
+        id: work-match
+        type: numeric
+        system: s2
+        tolerance: "0.001"
+        prompt: |
+          In the puzzle, what is the exact chance, to three decimal places, that two of the 23 people on the field share a birthday?
+        answer: "0.507"
+        explanation: |
+          $1 - \frac{365 \cdot 364 \cdots 343}{365^{23}} \approx 1 - 0.493 = 0.507$. More likely than not, though 23 is only 6% of 365.
+    - question:
+        id: work-tickets
+        type: numeric
+        system: s2
+        tolerance: "0.05"
+        prompt: |
+          An event app gives each of 5,000 attendees a random four-digit ticket code, from 0000 to 9999. Using the union bound, what is the largest the expected number of pairs with the same code could be? That is, what is $\binom{5000}{2}/10000$? Give a decimal to two places.
+        answer: "1249.75"
+        explanation: |
+          $\binom{5000}{2} = 12{,}497{,}500$ pairs, each colliding with chance $1/10{,}000$, so about 1,250 colliding pairs are expected. A collision is all but certain: half the space of codes is in use, and the square-root point, about 118 attendees, was passed long ago. Codes must be checked for duplicates or made much longer.
+    - question:
+        id: work-session
+        type: choice
+        system: s2
+        prompt: |
+          A website gives each of 1,00,000 logged-in users a random 32-bit session token. Which is closest to the chance that two users have the same token?
+        options:
+          - "About 69%: $n^2/(2m) \\approx 10^{10}/(8.6 \\times 10^9) \\approx 1.16$, and $1 - e^{-1.16} \\approx 0.69$."
+          - "About 0.002%: $10^5 / 2^{32}$."
+          - "Exactly 0, since there are more tokens than users."
+          - "About 2.3%: $\\sqrt{10^5} / 2^{32} \\times 10^6$."
+        answer: 0
+        explanation: |
+          With $m = 2^{32} \approx 4.3 \times 10^9$ and $n = 10^5$, the exponent $n(n - 1)/(2m) \approx 1.16$, so a collision has chance about $1 - e^{-1.16} \approx 0.69$. $10^5/2^{32}$ is the chance that one particular user's token is reused, and "more tokens than users" only rules out the pigeonhole case. Tokens should have 128 random bits.
+  connections:
+    - text: |
+        It is slightly more likely than not, about $0.507$, that two of the 23 people on the field share a birthday. The colleague compared 23 people with 365 days, but a match needs only a pair, and 23 people make 253 pairs. Each pair is unlikely to match, but there are many of them.
+
+        For $n$ picks from $m$ values, the chance that all are different is an exact product, and the exponential turns it into $e^{-n(n-1)/(2m)}$, whose exponent is the expected number of matching pairs. A collision becomes likely after about $1.18\sqrt{m}$ picks. "Someone matches me" is a different and much rarer event. The union bound gives a guaranteed ceiling on the collision chance, and with it a rule for sizing identifiers: about twice the bits of the number of items, plus the bits of the margin.
+
+        The union bound is one way to say "this is unlikely" without computing exactly how unlikely. The next lesson collects such guarantees, which work from only a mean or a variance and promise that a random quantity rarely strays far: [[f4.tail-bounds]].

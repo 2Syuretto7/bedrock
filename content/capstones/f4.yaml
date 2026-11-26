@@ -1,0 +1,346 @@
+cluster: F4
+title: Running a city's bus-ticket app
+minutes: 100
+claim: You will have checked a city bus-ticket app end to end with probability, the chance that random ticket codes collide, how far to trust the forgery checker, how reliable three servers really are, how much capacity a busy morning needs by the central limit theorem and by Chebyshev's guarantee, and how long riders wait at a stop, checked against a simulation.
+brief: |
+  This cluster gave you a language for uncertainty: sample spaces and events, conditional chances and Bayes' rule, independence, random variables with their means and variances, the standard distributions, collisions, tail bounds, the laws of averages, and simulation. A public service that runs on software meets every one of them.
+
+  **The project.** A city transport corporation is launching an app that sells bus tickets as QR codes. Each ticket carries a random code. A checker at the gate flags tickets that look forged. The app runs on three servers, and its capacity must cover the morning rush. Riders want to know how long they will wait for a bus.
+
+  Each stage below is one of these decisions, with its own questions. Nothing here is new: each stage applies a lesson of this cluster, and often two at once. Where a stage asks for code, the code computes an answer the corporation can act on, and checks it against a simulation where a formula alone would be taken on trust.
+starter: |
+  # Scratch space for the transport office.
+  import math
+
+  codes = 32 ** 6
+  tickets = 100000
+  print(math.comb(tickets, 2) / codes, "pairs of tickets expected to share a code each day")
+stages:
+  - title: Ticket codes
+    blocks:
+      - text: |
+          Each ticket gets a code of 6 characters, each chosen uniformly and independently from 32 letters and digits chosen so that none can be mistaken for another. The app sells about 1 lakh tickets a day. The developers argue that collisions cannot matter, because a day's tickets use only a tiny fraction of the possible codes.
+      - question:
+          id: ticket-codes
+          type: numeric
+          system: s1
+          concepts: [f4.sample-spaces-and-events]
+          prompt: |
+            How many different codes are possible?
+          answer: "1073741824"
+          explanation: |
+            $32^6 = 2^{30} = 1{,}073{,}741{,}824$, a little over a billion equally likely outcomes.
+      - question:
+          id: ticket-pairs
+          type: numeric
+          system: s2
+          tolerance: "0.05"
+          concepts: [f4.the-birthday-problem-and-collisions, f4.expectation-and-linearity]
+          prompt: |
+            On a day of 1 lakh, that is 100,000, tickets, what is the expected number of pairs of tickets that share a code? Give a decimal to two places.
+          answer: "4.66"
+          explanation: |
+            There are $\binom{100{,}000}{2} \approx 5 \times 10^9$ pairs, and each pair shares a code with chance $1/2^{30}$. By linearity the expected number of shared pairs is $4{,}999{,}950{,}000/1{,}073{,}741{,}824 \approx 4.66$, so a day with no collision at all has chance only about $e^{-4.66} \approx 0.01$. Less than a hundredth of a percent of the codes are used, but the number of pairs grows like the square of the tickets. The fix is to check each new code against the day's codes, or to use longer codes.
+  - title: The forgery checker
+    blocks:
+      - text: |
+          About 1 ticket in 2,000 shown at the gate is forged. The checker flags 99% of forged tickets and wrongly flags 1% of genuine ones. A flagged rider is sent to a conductor, who checks again with a second, independent check that has the same accuracy: given whether a ticket is forged, the two checks err independently.
+      - question:
+          id: forgery-one
+          type: numeric
+          system: s2
+          tolerance: "0.002"
+          concepts: [f4.bayes-rule, f4.conditional-probability]
+          prompt: |
+            What is the chance that a flagged ticket is really forged? Give a decimal to three places.
+          answer: "0.047"
+          explanation: |
+            Among 20 lakh tickets, about 1,000 are forged and 990 of them are flagged, while 1% of the 19.99 lakh genuine tickets, 19,990, are flagged too. So $990/(990 + 19{,}990) \approx 0.047$. Fewer than 1 flagged rider in 20 is a forger, which is why a flag must lead to a second check, never straight to a fine.
+      - question:
+          id: forgery-two
+          type: numeric
+          system: s2
+          tolerance: "0.01"
+          concepts: [f4.bayes-rule, f4.independence]
+          prompt: |
+            What is the chance that a ticket flagged by both checks is forged? Give a decimal to two places.
+          answer: "0.83"
+          explanation: |
+            In odds, the prior is $1 : 1{,}999$, and each flag multiplies the odds by $0.99/0.01 = 99$, because the checks err independently given the ticket. After two flags the odds are $9{,}801 : 1{,}999$, a chance of $9{,}801/11{,}800 \approx 0.83$. Even two flags leave about 1 genuine rider in 6, so the conductor's word should not be the last one either.
+  - title: Three servers
+    blocks:
+      - text: |
+          The app runs on three servers, and it works as long as at least one of them is up. Each server is down 1% of the time.
+      - question:
+          id: servers-down
+          type: numeric
+          system: s1
+          concepts: [f4.independence]
+          prompt: |
+            If the three servers fail independently, what is the chance that all three are down at a given moment? Give a decimal.
+          answer: "0.000001"
+          explanation: |
+            $0.01^3 = 10^{-6}$, about 30 seconds a year.
+      - question:
+          id: servers-shared
+          type: choice
+          system: s2
+          concepts: [f4.independence, f4.conditional-probability]
+          prompt: |
+            All three servers sit in one building, whose power fails 0.1% of the time and takes every server down with it. Which statement is right?
+          options:
+            - "The app is down at least 0.1% of the time, a thousand times the independent figure, because the servers' failures are not independent."
+            - "The app is down $0.01^3 \\times 0.001$ of the time, because the power cut is a fourth independent event."
+            - "The app is down $0.01^3$ of the time, because the power cut affects all servers equally."
+            - "Independence still holds, because each server fails 1% of the time whatever the others do."
+          answer: 0
+          explanation: |
+            A shared cause makes the failures dependent: given a power cut, every server is down, so $P(\text{all down}) \ge P(\text{power cut}) = 0.001$. Multiplying chances needs independence, and the common cause destroys it. Each server still fails 1% of the time on its own; what fails is the claim about all three together. Redundancy is only as good as its independence, which is why real systems spread copies across buildings and cities.
+  - title: The morning rush
+    blocks:
+      - text: |
+          The app has 40,000 regular riders. On a working day, each one buys a ticket in the morning rush with chance 0.6, independently of the others. The corporation pays for server capacity in whole tickets, and wants the chance that a morning's demand exceeds capacity to be at most 1 in 1,000.
+      - question:
+          id: rush-mean
+          type: numeric
+          system: s1
+          concepts: [f4.random-variables, f4.expectation-and-linearity]
+          prompt: |
+            What is the expected number of tickets bought in the morning rush?
+          answer: "24000"
+          explanation: |
+            The count is a sum of 40,000 indicators, each with mean 0.6, so by linearity its mean is $40{,}000 \times 0.6 = 24{,}000$.
+      - question:
+          id: capacity
+          type: code
+          mode: write
+          system: s2
+          concepts: [f4.the-law-of-large-numbers-and-the-central-limit-theorem, f4.variance]
+          prompt: |
+            Write `capacity_for(riders, p, risk)`. Each of `riders` riders buys a ticket independently with chance `p`. Return the smallest whole capacity `c` such that the central limit theorem's approximation, with the continuity correction, to the chance that more than `c` tickets are bought is at most `risk`. Use `statistics.NormalDist`.
+          starter: |
+            import math
+            import statistics
+
+            def capacity_for(riders, p, risk):
+                return 0
+
+            print(capacity_for(40000, 0.6, 0.001), capacity_for(40000, 0.6, 0.05))
+          solution: |
+            import math
+            import statistics
+
+            def capacity_for(riders, p, risk):
+                mean = riders * p
+                sd = math.sqrt(riders * p * (1 - p))
+                z = statistics.NormalDist().inv_cdf(1 - risk)
+                return math.ceil(mean + z * sd - 0.5)
+
+            print(capacity_for(40000, 0.6, 0.001), capacity_for(40000, 0.6, 0.05))
+          tests: |
+            import math
+            import statistics
+            _z = statistics.NormalDist()
+            for _riders in [10, 101, 2500, 40000]:
+                for _p in [0.1, 0.37, 0.6, 0.9]:
+                    for _risk in [0.001, 0.01, 0.05, 0.2]:
+                        _mean = _riders * _p
+                        _sd = math.sqrt(_riders * _p * (1 - _p))
+                        _c = 0
+                        while 1 - _z.cdf((_c + 0.5 - _mean) / _sd) > _risk:
+                            _c += 1
+                        _got = capacity_for(_riders, _p, _risk)
+                        assert _got == _c, "capacity_for(" + str(_riders) + ", " + str(_p) + ", " + str(_risk) + ") should be " + str(_c) + ", not " + str(_got)
+            assert output.strip() == "24303 24161", "The program should print 24303 24161"
+          wrong:
+            - |
+              import math
+              import statistics
+
+              def capacity_for(riders, p, risk):
+                  mean = riders * p
+                  sd = math.sqrt(riders * p * (1 - p))
+                  z = statistics.NormalDist().inv_cdf(1 - risk)
+                  return math.ceil(mean + z * sd)
+
+              print("24303 24161")
+            - |
+              import math
+              import statistics
+
+              def capacity_for(riders, p, risk):
+                  mean = riders * p
+                  sd = riders * p * (1 - p)
+                  z = statistics.NormalDist().inv_cdf(1 - risk)
+                  return math.ceil(mean + z * sd - 0.5)
+
+              print("24303 24161")
+            - |
+              import math
+              import statistics
+
+              def capacity_for(riders, p, risk):
+                  mean = riders * p
+                  sd = math.sqrt(riders * p * (1 - p))
+                  z = statistics.NormalDist().inv_cdf(risk)
+                  return math.ceil(mean + z * sd - 0.5)
+
+              print("24303 24161")
+          explanation: |
+            The count is Binomial(`riders`, `p`), with mean $np$ and standard deviation $\sqrt{np(1 - p)}$. "More than $c$" is "at least $c + 1$", which the continuity correction turns into $1 - \Phi\bigl((c + 0.5 - np)/\sigma\bigr)$. That is at most the risk exactly when $c \ge np + z\sigma - 0.5$, where $z$ is the normal quantile at $1 - \text{risk}$, so $c$ is that number rounded up. For the corporation, 24,303 tickets: only about 300 above the mean. Leaving out the correction asks for one ticket too many in some cases; dividing by the variance instead of the standard deviation squeezes the spread; and the quantile at the risk itself is in the lower tail, below the mean.
+      - question:
+          id: capacity-guarantee
+          type: numeric
+          system: s2
+          tolerance: "0.1"
+          concepts: [f4.tail-bounds]
+          prompt: |
+            The finance team does not trust the normal approximation and wants a guarantee from Chebyshev's inequality instead. By at least how many standard deviations must capacity exceed the mean for Chebyshev to promise a risk of at most 1 in 1,000? Give a decimal to one place.
+          answer: "31.6"
+          explanation: |
+            Chebyshev gives $P(\lvert X - \mu \rvert \ge k\sigma) \le 1/k^2$, so $1/k^2 = 0.001$ needs $k = \sqrt{1{,}000} \approx 31.6$: a capacity of about 27,100 tickets, against 24,303 from the normal approximation, which needs only 3.09 standard deviations. Chebyshev assumes nothing about the shape, so it pays for its certainty with about 2,800 tickets of spare capacity. For a sum of many independent riders, the normal approximation, or a Chernoff bound, is the honest tool.
+  - title: Waiting at the stop
+    blocks:
+      - text: |
+          On a busy route, buses reach a stop at random moments, 6 an hour on average, so the number arriving in any stretch of time follows a Poisson distribution, and a rider who turns up at a random moment waits an exponentially distributed time with mean 10 minutes.
+      - question:
+          id: wait-long
+          type: numeric
+          system: s1
+          tolerance: "0.002"
+          concepts: [f4.continuous-distributions-and-densities]
+          prompt: |
+            What is the chance that a rider waits more than 15 minutes? Give a decimal to three places.
+          answer: "0.223"
+          explanation: |
+            For an exponential wait with mean 10, $P(W > t) = e^{-t/10}$, so $P(W > 15) = e^{-1.5} \approx 0.223$.
+      - question:
+          id: no-bus
+          type: numeric
+          system: s1
+          tolerance: "0.002"
+          concepts: [f4.common-discrete-distributions]
+          prompt: |
+            What is the chance that no bus arrives in a given half hour? Give a decimal to three places.
+          answer: "0.050"
+          explanation: |
+            The count in half an hour is Poisson with mean 3, so $P(0) = e^{-3} \approx 0.050$. It agrees with the wait: no bus in 30 minutes is a wait of more than 30 minutes, $e^{-30/10}$.
+      - question:
+          id: wait-simulation
+          type: code
+          mode: find-bug
+          system: s2
+          concepts: [f4.simulation-and-pseudo-random-numbers, f4.continuous-distributions-and-densities]
+          prompt: |
+            Before publishing the 15-minute figure, the team checks it by simulation. `wait(u)` should turn a uniform draw `u` into a wait in minutes by the inverse transform, for the exponential distribution with mean 10 minutes. The program estimates the chance of waiting more than 15 minutes from 20,000 simulated riders, with its standard error, and prints the exact value beside it. It should print `0.223 0.003 0.223`. It prints `0.0 0.0 0.223`. Find the fault and fix it.
+          starter: |
+            import math
+            import random
+
+            def wait(u):
+                return -math.log(1 - u) / 10
+
+            def estimate(n):
+                hits = 0
+                for _ in range(n):
+                    if wait(random.random()) > 15:
+                        hits += 1
+                share = hits / n
+                return share, math.sqrt(share * (1 - share) / n)
+
+            random.seed(1)
+            share, error = estimate(20000)
+            print(round(share, 3), round(error, 3), round(math.exp(-1.5), 3))
+          solution: |
+            import math
+            import random
+
+            def wait(u):
+                return -10 * math.log(1 - u)
+
+            def estimate(n):
+                hits = 0
+                for _ in range(n):
+                    if wait(random.random()) > 15:
+                        hits += 1
+                share = hits / n
+                return share, math.sqrt(share * (1 - share) / n)
+
+            random.seed(1)
+            share, error = estimate(20000)
+            print(round(share, 3), round(error, 3), round(math.exp(-1.5), 3))
+          tests: |
+            import math
+            for _k in range(100):
+                _u = _k / 100
+                _want = -10 * math.log(1 - _u)
+                _got = wait(_u)
+                assert abs(_got - _want) < 1e-9, "wait(" + str(_u) + ") should be about " + str(round(_want, 6)) + ", not " + str(_got)
+            assert output.strip() == "0.223 0.003 0.223", "The program should print 0.223 0.003 0.223"
+          wrong:
+            - |
+              import math
+              import random
+
+              def wait(u):
+                  return -math.log(1 - u) * 6
+
+              def estimate(n):
+                  hits = 0
+                  for _ in range(n):
+                      if wait(random.random()) > 15:
+                          hits += 1
+                  share = hits / n
+                  return share, math.sqrt(share * (1 - share) / n)
+
+              random.seed(1)
+              share, error = estimate(20000)
+              print("0.223 0.003 0.223")
+            - |
+              import math
+              import random
+
+              def wait(u):
+                  return 10 * math.log(1 - u)
+
+              def estimate(n):
+                  hits = 0
+                  for _ in range(n):
+                      if wait(random.random()) > 15:
+                          hits += 1
+                  share = hits / n
+                  return share, math.sqrt(share * (1 - share) / n)
+
+              random.seed(1)
+              share, error = estimate(20000)
+              print("0.223 0.003 0.223")
+            - |
+              import math
+              import random
+
+              def wait(u):
+                  return 20 * u
+
+              def estimate(n):
+                  hits = 0
+                  for _ in range(n):
+                      if wait(random.random()) > 15:
+                          hits += 1
+                  share = hits / n
+                  return share, math.sqrt(share * (1 - share) / n)
+
+              random.seed(1)
+              share, error = estimate(20000)
+              print("0.223 0.003 0.223")
+          explanation: |
+            The exponential with mean 10 has rate $1/10$ per minute and cdf $F(t) = 1 - e^{-t/10}$, so $F^{-1}(u) = -10\ln(1 - u)$. Dividing by 10 treats the mean as the rate and makes waits a hundred times too short. Multiplying by 6 uses the rate per hour as if it were the mean in minutes; dropping the minus sign makes every wait negative; and $20u$ has the right mean but the wrong shape, a uniform wait that is never longer than 20 minutes. With the fix, the simulation agrees with $e^{-1.5}$ to within its standard error.
+review: |
+  The app is checked, and each decision came from a lesson of this cluster:
+
+  - The ticket codes were a sample space of $2^{30}$ outcomes, from [[f4.sample-spaces-and-events]], and their collisions were [[f4.the-birthday-problem-and-collisions]], counted pair by pair with [[f4.expectation-and-linearity]].
+  - The forgery checker was [[f4.bayes-rule]]: a flag raises the chance of forgery from 1 in 2,000 to under 5%, a reading of [[f4.conditional-probability]] in the right direction, and a second check multiplies the odds again only because the checks err independently.
+  - The servers showed both faces of [[f4.independence]]: it turns 1% into one in a million, and a shared power supply takes all of that away.
+  - The morning rush was a sum of indicators, a [[f4.random-variables]] question whose mean and [[f4.variance]] came from linearity and independence. [[f4.the-law-of-large-numbers-and-the-central-limit-theorem]] sized the capacity at 3.09 standard deviations above the mean, and [[f4.tail-bounds]] showed what a guarantee without assumptions costs.
+  - The stop was a Poisson process, from [[f4.common-discrete-distributions]], with exponential waits from [[f4.continuous-distributions-and-densities]], and [[f4.simulation-and-pseudo-random-numbers]] checked the formula by acting it out.
+
+  Notice the pattern. In every stage the intuitive answer, that collisions are impossible, that a flag means forgery, that three servers are a million times safer, or that capacity needs a large safety margin, was wrong, and a short calculation set it right. That is what probability is for. The next cluster turns the question round: given data from the app, what can be said about the chances that produced it?
