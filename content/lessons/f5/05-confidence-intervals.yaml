@@ -1,0 +1,474 @@
+concept: f5.confidence-intervals
+minutes: 90
+claim: You can build a confidence interval for a mean from a sample, choose its multiplier for a confidence level with the normal distribution, say exactly what the confidence level promises and what it does not, bound a failure rate when no failures were seen, plan how many measurements a given precision needs, give a distribution-free interval for a percentile, and recognise when skew or small samples make an interval's promise false.
+recalls: [f5.sampling-and-estimators]
+uses: [f5.summaries-mean-median-and-percentiles, f5.distributions-of-latency-and-heavy-tails, f4.continuous-distributions-and-densities, f4.the-law-of-large-numbers-and-the-central-limit-theorem, f4.common-discrete-distributions, f4.independence, f4.variance, f1.logarithms, s1.modules-and-imports, s1.comprehensions-and-iterators, s0.functions, s0.lists-and-tuples]
+leads: [f5.hypothesis-tests, f5.the-bootstrap, f5.comparing-two-systems-a-b-tests, f5.noise-in-measurements-and-benchmarks]
+starter: |
+  # Scratch space. A 95% interval for the mean of a sample.
+  import math
+  from statistics import NormalDist
+
+  xs = [42, 45, 47, 48, 50, 51, 52, 53, 55, 56, 58, 60, 61, 63, 66, 70, 75, 82, 95, 120]
+  n = len(xs)
+  m = sum(xs) / n
+  s = math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
+  z = NormalDist().inv_cdf(0.975)
+  print(m - z * s / math.sqrt(n), m + z * s / math.sqrt(n))
+parts:
+  recall:
+    - text: |
+        [[f5.sampling-and-estimators]] showed that an estimate scatters around the truth, by about one standard error. That says how good an estimator is in general, but a team with one sample in hand wants something sharper: a range of values that the truth is likely to be in, worked out from that sample alone. Three quick pulls first.
+  puzzle:
+    - text: |
+        A new release ran as a canary for a day and served 2,000 requests. Not one of them failed. In the release meeting someone says, "The error rate of the new version is zero."
+
+        Assume the requests fail independently, each with the same unknown chance $p$. The data cannot prove that $p$ is zero; a small enough $p$ would also often give no failures in 2,000 tries. **What is the largest $p$ for which seeing no failures in 2,000 requests still has a chance of at least 5%?** Give it to four decimal places.
+  intuition:
+    - text: |
+        A fielder at the boundary does not try to catch the ball with a fingertip. With hands spread, the catch is far more likely, and a coach can even say how often a given spread of hands succeeds. A confidence interval is a spread of hands around an estimate, wide enough to catch the true value with a stated frequency.
+
+        The recipe for a mean comes straight from the last lesson. The sample mean is roughly normal around the true mean, with spread one standard error. A normal value lies within 1.96 standard deviations of its centre 95% of the time. So the interval
+
+        $$\bar{x} \pm 1.96 \times \frac{s}{\sqrt{n}}$$
+
+        contains the true mean for about 95% of the samples one could draw. The 95% is called the **confidence level**, and the number of standard errors, 1.96, is its **multiplier**.
+
+        The figure draws a hundred samples from one population of response times and puts a 95% interval around each sample's mean. The vertical line is the true mean, which in real life nobody sees. Count the intervals that miss it. Then make the samples small, and change the confidence level.
+    - figure: interval-catch
+      props: { n: 100, level: 95, seed: 2 }
+    - text: |
+        With samples of 100, about 95 of the hundred intervals catch the truth, and which ones miss changes with the seed. At 99% they get wider and nearly all catch it; at 80% they are narrower and about one in five misses. With samples of 5 the promise breaks: often only around 80 of the hundred catch it, because these times are skewed and a sample of 5 usually misses the rare slow ones, so both its mean and its standard deviation come out too small.
+  derivation:
+    - text: |
+        **What 95% means.** Before the sample is drawn, the interval is random, and the chance that it will contain the fixed true mean $\mu$ is about 95%:
+
+        $$P\left(\bar{X} - 1.96\,\frac{S}{\sqrt{n}} \le \mu \le \bar{X} + 1.96\,\frac{S}{\sqrt{n}}\right) \approx 0.95.$$
+
+        After the sample is drawn, the interval is two fixed numbers, and it either contains $\mu$ or it does not. The 95% describes the *procedure*: used again and again, it catches the truth 95 times in 100. It is not a 95% chance that $\mu$ lies in this particular interval, because $\mu$ is not random. The figure is exactly this picture: a hundred uses of one procedure.
+
+        **The multiplier.** For confidence level $c$, the multiplier $z$ must leave a chance $(1 - c)/2$ in each tail of the standard normal, so $z$ is the point with $P(Z \le z) = (1 + c)/2$, found with `NormalDist().inv_cdf((1 + c) / 2)` from [[f4.continuous-distributions-and-densities]]. For 90%, 95% and 99% that gives 1.645, 1.960 and 2.576. Higher confidence costs width: a 99% interval is about a third wider than a 95% one.
+
+        **Small samples.** Using the sample's $s$ in place of the true $\sigma$ adds uncertainty, and for small $n$ the right multiplier comes from Student's $t$ distribution: 2.262 instead of 1.96 for $n = 10$, falling towards 1.96 as $n$ grows past about 30. The $t$ multiplier assumes the data are roughly normal. For skewed data like response times the real trouble is different: [[f5.distributions-of-latency-and-heavy-tails]] showed that the sample mean of a skewed population converges slowly, so the normal approximation needs much larger samples, and no multiplier fixes a sample too small to contain the tail.
+    - question:
+        id: derivation-upper
+        type: numeric
+        system: s2
+        tolerance: "0.01"
+        prompt: |
+          A sample of 100 response times has mean 120 ms and standard deviation 30 ms. What is the upper end of the 95% confidence interval for the mean, in milliseconds?
+        answer: "125.88"
+        explanation: |
+          The standard error is $30/\sqrt{100} = 3$ ms, and $120 + 1.96 \times 3 = 125.88$. The interval is 114.12 to 125.88 ms.
+    - text: |
+        **Width and sample size.** The half-width, or **margin of error**, is $E = z\,s/\sqrt{n}$. Solving for $n$ gives the size needed for a chosen margin:
+
+        $$n = \left(\frac{z\,\sigma}{E}\right)^2,$$
+
+        rounded up, with $\sigma$ guessed from earlier data. Since $n$ grows with the square of $1/E$, halving the margin takes four times the measurements, and a margin ten times finer takes a hundred times as many.
+    - question:
+        id: derivation-size
+        type: numeric
+        system: s2
+        prompt: |
+          Response times have standard deviation about 40 ms. How many must be measured for a 95% interval for the mean with a margin of 2 ms? Use $z = 1.96$.
+        answer: "1537"
+        explanation: |
+          $(1.96 \times 40/2)^2 = 39.2^2 = 1{,}536.64$, rounded up to 1,537. With 1,536 the margin would be a hair over 2 ms.
+    - text: |
+        **Proportions, and the rule of three.** For a failure rate, the interval $\hat{p} \pm z\sqrt{\hat{p}(1 - \hat{p})/n}$ works when there are a good number of failures and of successes. With no failures at all it collapses to the single point 0, which is wrong. Ask instead: for which $p$ would seeing zero failures be reasonably likely? With independent requests, by [[f4.independence]], the chance of no failures in $n$ is $(1 - p)^n$. The 95% upper limit is the $p$ where that chance falls to 5%:
+
+        $$(1 - p)^n = 0.05, \qquad p = 1 - 0.05^{1/n}.$$
+
+        Since $\ln(1 - p) \approx -p$ for small $p$, by [[f1.logarithms]] this is close to $p \approx -\ln(0.05)/n \approx 3/n$: the **rule of three**. No failures in $n$ trials means the failure rate is, with 95% confidence, below about $3/n$.
+    - question:
+        id: derivation-three
+        type: numeric
+        system: s2
+        tolerance: "0.0005"
+        prompt: |
+          A batch job has run 300 times without a single failure. By the rule of three, what is the approximate 95% upper limit on its chance of failing on a run?
+        answer: "0.01"
+        explanation: |
+          $3/300 = 0.01$. The exact limit, $1 - 0.05^{1/300}$, is about 0.0099.
+    - text: |
+        **Intervals for percentiles.** A percentile has no neat standard error, but its interval needs no assumption about the shape of the data. Let $t_q$ be the true $q$-quantile. Each measurement falls below $t_q$ with chance $q$, independently, so the number of the $n$ measurements below it is binomial, from [[f4.common-discrete-distributions]], with mean $nq$ and standard deviation $\sqrt{nq(1 - q)}$. So the true $t_q$ is very likely to lie between the sorted measurements whose ranks are about $nq \pm 1.96\sqrt{nq(1 - q)}$. For $n = 1{,}000$ and $q = 0.99$ that is $990 \pm 6.2$: the 95% interval for p99 runs from roughly the 984th to the 996th smallest measurement. Whatever the shape of the distribution, the p99 of a thousand requests is pinned down only to the range spanned by a dozen of its slowest values.
+
+        **Comparing intervals.** If two versions' intervals do not overlap, their means very likely differ. If they do overlap, that does *not* show they are the same. The difference of two independent means has standard error $\sqrt{\mathrm{SE}_1^2 + \mathrm{SE}_2^2}$, which is smaller than $\mathrm{SE}_1 + \mathrm{SE}_2$, so two intervals can overlap a little while the difference is still clear. [[f5.hypothesis-tests]] makes this precise.
+    - question:
+        id: order-interval
+        type: order
+        system: s2
+        prompt: |
+          Put the steps for a 95% confidence interval for a mean response time in order.
+        steps:
+          - "Measure a random sample of $n$ response times."
+          - "Compute the sample mean and the sample standard deviation $s$."
+          - "Divide $s$ by $\\sqrt{n}$ to get the standard error."
+          - "Go 1.96 standard errors either side of the sample mean."
+        explanation: |
+          The standard error needs $s$, which needs the sample; the interval needs the standard error. The confidence level only enters at the last step, through the multiplier.
+  formal:
+    - text: |
+        **Confidence interval.** A pair of statistics $(L, U)$ with $P(L \le \theta \le U) \ge c$ for every value of the parameter $\theta$ is a confidence interval at level $c$. The probability is over samples; $\theta$ is fixed.
+
+        **Mean, large sample.** $\bar{x} \pm z\,s/\sqrt{n}$ with $z = \Phi^{-1}((1 + c)/2)$: 1.645, 1.960, 2.576 for 90%, 95%, 99%. For small samples from a roughly normal population, use the $t$ multiplier with $n - 1$ degrees of freedom.
+
+        **Sample size.** Margin $E$ needs $n = \lceil (z\sigma/E)^2 \rceil$.
+
+        **Proportion.** $\hat{p} \pm z\sqrt{\hat{p}(1 - \hat{p})/n}$. With no failures in $n$ independent trials, the upper limit at level $c$ is $1 - (1 - c)^{1/n}$, about $3/n$ at 95%.
+
+        **Quantile.** With order statistics $x_{(1)} \le \cdots \le x_{(n)}$, the interval $[x_{(j)}, x_{(k)}]$ with $j, k \approx nq \mp z\sqrt{nq(1 - q)}$ covers $t_q$ with chance about $c$, for any continuous distribution.
+  drill:
+    - text: Seconds each. Multiplier times standard error; three over $n$ for no failures.
+    - question:
+        id: drill-z95
+        type: numeric
+        system: s1
+        tolerance: "0.005"
+        prompt: |
+          What multiplier gives a 95% confidence interval for a large-sample mean?
+        answer: "1.96"
+        explanation: 95% of a normal lies within 1.96 standard deviations of its centre.
+    - question:
+        id: drill-interval
+        type: numeric
+        system: s1
+        tolerance: "0.005"
+        prompt: |
+          A sample mean is 50 ms with standard error 2 ms. What is the upper end of its 95% interval?
+        answer: "53.92"
+        explanation: $50 + 1.96 \times 2 = 53.92$.
+    - question:
+        id: drill-halve
+        type: numeric
+        system: s1
+        prompt: |
+          To halve the width of a confidence interval for a mean, the sample must grow by what factor?
+        answer: "4"
+        explanation: The width is proportional to $1/\sqrt{n}$, so halving it needs $\sqrt{n}$ doubled, $n$ quadrupled.
+    - question:
+        id: drill-three
+        type: numeric
+        system: s1
+        tolerance: "0.0002"
+        prompt: |
+          No failures in 600 independent requests. By the rule of three, what is the 95% upper limit on the failure rate?
+        answer: "0.005"
+        explanation: $3/600 = 0.005$.
+    - question:
+        id: drill-meaning
+        type: choice
+        system: s1
+        prompt: |
+          What does "95% confidence" promise?
+        options:
+          - "The method catches the true value in about 95% of samples."
+          - "The true value is in this interval with chance 95%."
+          - "95% of the measurements lie in the interval."
+          - "A repeat of the experiment has a 95% chance of giving the same interval."
+        answer: 0
+        explanation: The confidence level describes the procedure over repeated samples. The true value is fixed, and an interval for the mean says nothing about where individual measurements lie.
+    - question:
+        id: drill-wider
+        type: choice
+        system: s1
+        prompt: |
+          From the same sample, how does a 99% interval for the mean compare with a 95% one?
+        options:
+          - "Wider"
+          - "Narrower"
+          - "The same width, shifted"
+        answer: 0
+        explanation: Catching the truth more often needs a wider spread of hands, 2.576 standard errors instead of 1.96.
+    - question:
+        id: predict-multipliers
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          from statistics import NormalDist
+
+          print([round(NormalDist().inv_cdf(p), 3) for p in [0.95, 0.975, 0.995]])
+        output: "[1.645, 1.96, 2.576]"
+        explanation: These are the points with 95%, 97.5% and 99.5% of the standard normal below them, the multipliers for 90%, 95% and 99% intervals.
+    - question:
+        id: predict-standard-error
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import math
+
+          xs = [8, 12, 10, 10]
+          m = sum(xs) / len(xs)
+          s = math.sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1))
+          print(m, round(s, 3), round(s / math.sqrt(len(xs)), 3))
+        output: "10.0 1.633 0.816"
+        explanation: The mean is 10.0. The squared deviations add to 8, so $s = \sqrt{8/3} \approx 1.633$, and the standard error is $1.633/\sqrt{4} \approx 0.816$.
+  work:
+    - text: Slower now. For each interval, ask which chance goes in each tail, and what the interval would do over many repeated samples.
+    - question:
+        id: fix-interval
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `mean_interval(xs, level)` should return a large-sample confidence interval for the population mean at the given level, such as 0.95, as a pair `(low, high)`. The program should print `9.721 10.279`. It prints `9.766 10.234`. Find the fault and fix it.
+        starter: |
+          import math
+          from statistics import NormalDist
+
+
+          def mean_interval(xs, level):
+              # A large-sample confidence interval for the population mean, as (low, high),
+              # for a confidence level such as 0.95.
+              n = len(xs)
+              m = sum(xs) / n
+              s = math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
+              z = NormalDist().inv_cdf(level)
+              return (m - z * s / math.sqrt(n), m + z * s / math.sqrt(n))
+
+
+          low, high = mean_interval([8, 12, 10, 10] * 25, 0.95)
+          print(round(low, 3), round(high, 3))
+        solution: |
+          import math
+          from statistics import NormalDist
+
+
+          def mean_interval(xs, level):
+              # A large-sample confidence interval for the population mean, as (low, high),
+              # for a confidence level such as 0.95.
+              n = len(xs)
+              m = sum(xs) / n
+              s = math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
+              z = NormalDist().inv_cdf(0.5 + level / 2)
+              return (m - z * s / math.sqrt(n), m + z * s / math.sqrt(n))
+
+
+          low, high = mean_interval([8, 12, 10, 10] * 25, 0.95)
+          print(round(low, 3), round(high, 3))
+        tests: |
+          for _xs, _level in [([1, 3], 0.95), ([8, 12, 10, 10] * 25, 0.95), ([20, 25, 30, 90, 40], 0.9), ([5, 6, 7, 8, 9, 10], 0.99), ([100, 102, 98, 101, 99, 250, 97], 0.8)]:
+              _n = len(_xs)
+              _m = sum(_xs) / _n
+              _s = math.sqrt(sum((_x - _m) ** 2 for _x in _xs) / (_n - 1))
+              _h = NormalDist().inv_cdf(0.5 + _level / 2) * _s / math.sqrt(_n)
+              _got = mean_interval(_xs, _level)
+              assert abs(_got[0] - (_m - _h)) < 1e-9 and abs(_got[1] - (_m + _h)) < 1e-9, "mean_interval(" + str(_xs) + ", " + str(_level) + ") should be about (" + str(round(_m - _h, 4)) + ", " + str(round(_m + _h, 4)) + "), not " + str(_got)
+          assert output.strip() == "9.721 10.279", "The program should print 9.721 10.279"
+        wrong:
+          - |
+            import math
+            from statistics import NormalDist
+
+
+            def mean_interval(xs, level):
+                # A large-sample confidence interval for the population mean, as (low, high),
+                # for a confidence level such as 0.95.
+                n = len(xs)
+                m = sum(xs) / n
+                s = math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
+                z = NormalDist().inv_cdf(0.5 + level / 2)
+                return (m - z * s / n, m + z * s / n)
+
+
+            low, high = mean_interval([8, 12, 10, 10] * 25, 0.95)
+            print(round(low, 3), round(high, 3))
+          - |
+            import math
+            from statistics import NormalDist
+
+
+            def mean_interval(xs, level):
+                # A large-sample confidence interval for the population mean, as (low, high),
+                # for a confidence level such as 0.95.
+                n = len(xs)
+                m = sum(xs) / n
+                s = math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
+                z = NormalDist().inv_cdf(1 - level / 2)
+                return (m - z * s / math.sqrt(n), m + z * s / math.sqrt(n))
+
+
+            low, high = mean_interval([8, 12, 10, 10] * 25, 0.95)
+            print(round(low, 3), round(high, 3))
+          - |
+            import math
+            from statistics import NormalDist
+
+
+            def mean_interval(xs, level):
+                # A large-sample confidence interval for the population mean, as (low, high),
+                # for a confidence level such as 0.95.
+                n = len(xs)
+                m = sum(xs) / n
+                s = math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
+                z = NormalDist().inv_cdf(0.5 + level / 2)
+                return (m - z * s, m + z * s)
+
+
+            low, high = mean_interval([8, 12, 10, 10] * 25, 0.95)
+            print(round(low, 3), round(high, 3))
+        explanation: |
+          A 95% interval leaves 2.5% in each tail, so its multiplier is the point with 97.5% below it, `inv_cdf(0.5 + level / 2)`, which is 1.96. `inv_cdf(level)` puts all 5% in one tail and gives 1.645, an interval that catches the truth only 90% of the time. Dividing by `n` instead of `sqrt(n)`, or not dividing at all, gives the wrong standard error, and `inv_cdf(1 - level / 2)` is a point near the middle of the normal, not in its tail.
+    - question:
+        id: write-zero-failure
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `zero_failure_bound(n, level)`. There were `n` independent trials and none failed. Return the largest failure chance `p` for which no failures in `n` trials still has a chance of at least `1 - level`.
+        starter: |
+          def zero_failure_bound(n, level):
+              # n independent trials all succeeded. Return the largest failure chance p
+              # that would still give no failures in n trials with chance at least 1 - level.
+              return 0
+
+
+          print(round(zero_failure_bound(2000, 0.95), 6), round(zero_failure_bound(300, 0.95), 4), zero_failure_bound(1, 0.95))
+        solution: |
+          def zero_failure_bound(n, level):
+              # n independent trials all succeeded. Return the largest failure chance p
+              # that would still give no failures in n trials with chance at least 1 - level.
+              return 1 - (1 - level) ** (1 / n)
+
+
+          print(round(zero_failure_bound(2000, 0.95), 6), round(zero_failure_bound(300, 0.95), 4), zero_failure_bound(1, 0.95))
+        tests: |
+          for _n in [1, 2, 10, 300, 2000, 100000]:
+              for _level in [0.8, 0.9, 0.95, 0.99]:
+                  _got = zero_failure_bound(_n, _level)
+                  _want = 1 - (1 - _level) ** (1 / _n)
+                  assert abs(_got - _want) <= 1e-9 * _want, "zero_failure_bound(" + str(_n) + ", " + str(_level) + ") should be about " + str(_want) + ", not " + str(_got)
+                  assert abs((1 - _got) ** _n - (1 - _level)) < 1e-9, "With p = zero_failure_bound(" + str(_n) + ", " + str(_level) + "), the chance of no failures should be exactly " + str(round(1 - _level, 4))
+          assert output.strip() == "0.001497 0.0099 0.95", "The program should print 0.001497 0.0099 0.95"
+        wrong:
+          - |
+            def zero_failure_bound(n, level):
+                # n independent trials all succeeded. Return the largest failure chance p
+                # that would still give no failures in n trials with chance at least 1 - level.
+                return 3 / n
+
+
+            print(round(zero_failure_bound(2000, 0.95), 6), round(zero_failure_bound(300, 0.95), 4), zero_failure_bound(1, 0.95))
+          - |
+            def zero_failure_bound(n, level):
+                # n independent trials all succeeded. Return the largest failure chance p
+                # that would still give no failures in n trials with chance at least 1 - level.
+                return 1 - level ** (1 / n)
+
+
+            print(round(zero_failure_bound(2000, 0.95), 6), round(zero_failure_bound(300, 0.95), 4), zero_failure_bound(1, 0.95))
+          - |
+            def zero_failure_bound(n, level):
+                # n independent trials all succeeded. Return the largest failure chance p
+                # that would still give no failures in n trials with chance at least 1 - level.
+                return (1 - level) / n
+
+
+            print(round(zero_failure_bound(2000, 0.95), 6), round(zero_failure_bound(300, 0.95), 4), zero_failure_bound(1, 0.95))
+        explanation: |
+          The chance of no failures is $(1 - p)^n$; setting it equal to $1 - c$ gives $p = 1 - (1 - c)^{1/n}$. The rule of three, `3 / n`, is only an approximation for 95% and large `n`, and for one trial it gives a chance of 3. Using `level` where `1 - level` belongs gives a tiny bound, and dividing $1 - c$ by $n$ is a different, wrong shape.
+    - question:
+        id: write-sample-size
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `sample_size(sigma, margin, z)`: the smallest whole number of measurements `n` for which `z * sigma / sqrt(n)` is at most `margin`.
+        starter: |
+          import math
+
+
+          def sample_size(sigma, margin, z):
+              # The smallest whole number of measurements n for which z * sigma / sqrt(n)
+              # is at most margin.
+              return 0
+
+
+          print(sample_size(40, 2, 1.96), sample_size(10, 1, 2), sample_size(5, 10, 1.96))
+        solution: |
+          import math
+
+
+          def sample_size(sigma, margin, z):
+              # The smallest whole number of measurements n for which z * sigma / sqrt(n)
+              # is at most margin.
+              return math.ceil((z * sigma / margin) ** 2)
+
+
+          print(sample_size(40, 2, 1.96), sample_size(10, 1, 2), sample_size(5, 10, 1.96))
+        tests: |
+          for _sigma, _margin, _z in [(40, 2, 1.96), (10, 1, 2), (5, 10, 1.96), (30, 4, 2.576), (100, 7, 1.645), (12, 3, 1), (50, 1, 1.96)]:
+              _got = sample_size(_sigma, _margin, _z)
+              _want = 1
+              while _z * _sigma / math.sqrt(_want) > _margin + 1e-12:
+                  _want += 1
+              assert _got == _want, "sample_size(" + str(_sigma) + ", " + str(_margin) + ", " + str(_z) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "1537 400 1", "The program should print 1537 400 1"
+        wrong:
+          - |
+            import math
+
+
+            def sample_size(sigma, margin, z):
+                # The smallest whole number of measurements n for which z * sigma / sqrt(n)
+                # is at most margin.
+                return math.ceil(z * sigma / margin)
+
+
+            print(sample_size(40, 2, 1.96), sample_size(10, 1, 2), sample_size(5, 10, 1.96))
+          - |
+            import math
+
+
+            def sample_size(sigma, margin, z):
+                # The smallest whole number of measurements n for which z * sigma / sqrt(n)
+                # is at most margin.
+                return round((z * sigma / margin) ** 2)
+
+
+            print(sample_size(40, 2, 1.96), sample_size(10, 1, 2), sample_size(5, 10, 1.96))
+          - |
+            import math
+
+
+            def sample_size(sigma, margin, z):
+                # The smallest whole number of measurements n for which z * sigma / sqrt(n)
+                # is at most margin.
+                return int((z * sigma / margin) ** 2)
+
+
+            print(sample_size(40, 2, 1.96), sample_size(10, 1, 2), sample_size(5, 10, 1.96))
+        explanation: |
+          Solve $z\sigma/\sqrt{n} \le E$ for $n$: $n \ge (z\sigma/E)^2$, so round *up* to the next whole number. Forgetting the square confuses $\sqrt{n}$ with $n$; rounding to the nearest or down can leave the margin slightly too large, as with 373 measurements where 374 are needed.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        tolerance: "0.00005"
+        prompt: |
+          A canary served 2,000 independent requests with no failures. What is the largest failure chance $p$ for which no failures in 2,000 still has a chance of at least 5%? Give four decimal places.
+        answer: "0.0015"
+        explanation: |
+          Solve $(1 - p)^{2000} = 0.05$: $p = 1 - 0.05^{1/2000} \approx 0.0015$, about $3/2{,}000$ by the rule of three. So the data are consistent with up to about 1.5 failures per thousand requests.
+    - question:
+        id: work-overlap
+        type: choice
+        system: s2
+        prompt: |
+          Version A's mean response time is 100 ms with 95% interval 96 to 104 ms. Version B's is 108 ms with interval 104 to 112 ms. The two samples are independent. The intervals touch at 104. What can be said?
+        options:
+          - "The difference of 8 ms has standard error about 2.9 ms, so its interval, about 2.3 to 13.7 ms, excludes zero: B is very likely slower."
+          - "Touching intervals mean the versions cannot be told apart."
+          - "Nothing, because the intervals are for means, not for the difference."
+          - "B is slower with 100% certainty, because its interval starts where A's ends."
+        answer: 0
+        explanation: |
+          Each half-width is 4 ms, so each standard error is about $4/1.96 \approx 2.04$ ms. The difference has standard error $\sqrt{2.04^2 + 2.04^2} \approx 2.89$ ms, and its 95% interval is $8 \pm 1.96 \times 2.89$, about 2.3 to 13.7 ms, which excludes zero. Overlapping or touching intervals are a weaker test than an interval for the difference itself.
+  connections:
+    - text: |
+        The largest such $p$ is about 0.0015: $(1 - 0.0015)^{2000} \approx 0.05$. So 2,000 clean requests are consistent with an error rate of up to one and a half in a thousand, which over a million requests a day could be 1,500 failures. "Zero errors" was a statement about the sample; the honest statement about the release is "below about 0.15%, with 95% confidence". To claim below 0.01% would take about 30,000 clean requests.
+
+        A confidence interval answers "where is the truth?". [[f5.hypothesis-tests]] answers the neighbouring question, "could this difference be chance?", and the two are two views of the same calculation. [[f5.the-bootstrap]] builds intervals for any estimator by resampling, with no formula for its standard error. [[f5.comparing-two-systems-a-b-tests]] uses intervals for differences to decide between versions, and [[f5.noise-in-measurements-and-benchmarks]] uses them to report how fast a program really is.

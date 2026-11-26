@@ -4879,6 +4879,62 @@ function EstimatorSpread(props: Props) {
   );
 }
 
+const IV_SIZES = [5, 10, 20, 50, 100, 200];
+const IV_LEVELS = [80, 90, 95, 99];
+const IV_Z: Record<number, number> = { 80: 1.2816, 90: 1.6449, 95: 1.96, 99: 2.5758 };
+
+/** A hundred samples, each with its confidence interval for the mean: about the stated share of them catch the true value. */
+function IntervalCatch(props: Props) {
+  const [sizeAt, setSizeAt] = useState(Math.max(0, IV_SIZES.indexOf(num(props.n, 20))));
+  const [levelAt, setLevelAt] = useState(Math.max(0, IV_LEVELS.indexOf(num(props.level, 95))));
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const n = IV_SIZES[sizeAt];
+  const level = IV_LEVELS[levelAt];
+  const z = IV_Z[level];
+  const truth = EST_TRUE.mean;
+  const picks = draws(20 + seed, 100 * n, false);
+  const intervals = Array.from({ length: 100 }, (_, r) => {
+    const xs = Array.from({ length: n }, (_, i) => EST_POPULATION[Math.floor(picks[r * n + i] * EST_POPULATION.length)]);
+    const mean = xs.reduce((a, b) => a + b, 0) / n;
+    const s = Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1));
+    const half = (z * s) / Math.sqrt(n);
+    return { low: mean - half, high: mean + half, caught: mean - half <= truth && truth <= mean + half };
+  });
+  const caught = intervals.filter((i) => i.caught).length;
+  const width = intervals.reduce((a, i) => a + (i.high - i.low), 0) / 100;
+  const top = 60;
+  const sx = (v: number) => 40 + (clamp(v, 0, top) / top) * 380;
+  return (
+    <Frame
+      title="How often an interval catches the truth"
+      summary={`100 samples of ${n} response times, each with its ${level}% interval for the mean, the sample mean plus or minus ${dp(z, 2)} standard errors. The true mean is ${dp(truth, 1)} ms. ${caught} of the 100 intervals catch it and ${100 - caught} miss, against ${level} expected. The intervals are ${dp(width, 1)} ms wide on average.${n <= 10 ? " With samples this small and times this skewed, the standard error is itself badly estimated, and fewer intervals catch the truth than promised." : ""}`}
+      controls={
+        <>
+          <Slider label="sample size" value={sizeAt} onChange={setSizeAt} min={0} max={IV_SIZES.length - 1} text={`${n}`} />
+          <Slider label="confidence" value={levelAt} onChange={setLevelAt} min={0} max={IV_LEVELS.length - 1} text={`${level}%`} />
+          <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`100 horizontal intervals stacked one above another, with a vertical line at the true mean; ${caught} of them cross it`}>
+        {intervals.map((iv, r) => (
+          <line key={r} x1={sx(iv.low)} y1={20 + r * 2.2} x2={sx(iv.high)} y2={20 + r * 2.2} className={iv.caught ? "fig-line" : "fig-accent-line"} />
+        ))}
+        <line x1={sx(truth)} y1="14" x2={sx(truth)} y2="242" className="fig-guide" />
+        <line x1="40" y1="242" x2="420" y2="242" className="fig-axis" />
+        {[0, 20, 40, 60].map((t) => (
+          <text key={t} x={sx(t)} y="256" textAnchor="middle" className="fig-small">
+            {`${t} ms`}
+          </text>
+        ))}
+        <text x={sx(truth) + 4} y="12" className="fig-small">
+          {`true mean ${dp(truth, 1)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -6183,6 +6239,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "tail-plot": TailPlot,
   "histogram-bins": HistogramBins,
   "estimator-spread": EstimatorSpread,
+  "interval-catch": IntervalCatch,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
