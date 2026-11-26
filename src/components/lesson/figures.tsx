@@ -6802,6 +6802,73 @@ function FdClosure(props: Props) {
   );
 }
 
+const NF_FLAT: string[][] = [
+  ["Asha", "98450", "P1", "Physics", "Rao", "99001", "4,000"],
+  ["Asha", "98450", "C1", "Chemistry", "Iyer", "99002", "3,500"],
+  ["Bilal", "98761", "P1", "Physics", "Rao", "99001", "4,000"],
+  ["Chitra", "97012", "P1", "Physics", "Rao", "99001", "3,000"],
+  ["Chitra", "97012", "M1", "Maths", "Rao", "99001", "3,800"],
+  ["Dev", "96543", "C1", "Chemistry", "Iyer", "99002", "3,500"],
+];
+const NF_HEAD = ["student", "s_phone", "batch", "subject", "teacher", "t_phone", "fee"];
+type NfTable = { name: string; cols: number[]; x: number; y: number; widths: number[] };
+const nfRows = (cols: number[]) => {
+  const seen = new Set<string>();
+  return NF_FLAT.map((r) => cols.map((c) => r[c])).filter((r) => (seen.has(r.join("|")) ? false : (seen.add(r.join("|")), true)));
+};
+const NF_STAGES: { title: string; tables: NfTable[]; note: string; text: string }[] = [
+  {
+    title: "one wide table",
+    tables: [{ name: "flat", cols: [0, 1, 2, 3, 4, 5, 6], x: 6, y: 22, widths: [52, 50, 40, 64, 50, 50, 40] }],
+    note: "key (student, batch); Rao's phone is in 4 rows",
+    text: "One table holds everything, keyed by (student, batch). Rao's phone number appears in 4 rows, Physics as P1's subject in 3, and Asha's phone in 2: changing one fact means changing many rows, and a batch with no students cannot be recorded at all.",
+  },
+  {
+    title: "second normal form",
+    tables: [
+      { name: "students", cols: [0, 1], x: 6, y: 22, widths: [52, 50] },
+      { name: "enrolments", cols: [0, 2, 6], x: 112, y: 22, widths: [52, 40, 40] },
+      { name: "batches", cols: [2, 3, 4, 5], x: 250, y: 22, widths: [40, 64, 50, 50] },
+    ],
+    note: "no partial dependency; Rao's phone is in 2 rows",
+    text: "student → s_phone and batch → subject, teacher depend on part of the key, so those columns move to tables of their own, students and batches. Every non-key column now depends on a whole key. But batch → teacher → t_phone still repeats Rao's phone in both of his batches.",
+  },
+  {
+    title: "third normal form",
+    tables: [
+      { name: "students", cols: [0, 1], x: 6, y: 22, widths: [52, 50] },
+      { name: "enrolments", cols: [0, 2, 6], x: 112, y: 22, widths: [52, 40, 40] },
+      { name: "batches", cols: [2, 3, 4], x: 250, y: 22, widths: [40, 64, 50] },
+      { name: "teachers", cols: [4, 5], x: 250, y: 132, widths: [50, 50] },
+    ],
+    note: "every fact once; Rao's phone is in 1 row",
+    text: "teacher → t_phone does not start from a key of batches, so the teachers get their own table. Now every column depends on the key, the whole key and nothing but the key: each fact is stored once, Rao's phone in exactly one row, and joining the four tables gives back the original six rows.",
+  },
+];
+
+/** A wide table split step by step into tables in second and third normal form. */
+function NormaliseSteps(props: Props) {
+  const [stage, setStage] = useState(clamp(Math.round(num(props.step, 1)), 1, NF_STAGES.length) - 1);
+  const s = NF_STAGES[stage];
+  const raos = (t: NfTable) => (r: number, c: number): SqlMark => {
+    const rows = nfRows(t.cols);
+    return t.cols[c] === 5 && rows[r][c] === "99001" ? "accent" : undefined;
+  };
+  const summary = `Step ${stage + 1} of ${NF_STAGES.length}, ${s.title}: ${s.tables.map((t) => `${t.name} (${t.cols.map((c) => NF_HEAD[c]).join(", ")}) with ${plural(nfRows(t.cols).length, "row")}`).join("; ")}. ${s.text}`;
+  return (
+    <Frame title="Splitting a table until each fact is stored once" summary={summary} controls={<Stepper label="step" value={stage + 1} onChange={(v) => setStage(v - 1)} min={1} max={NF_STAGES.length} />}>
+      <svg viewBox="0 0 466 214" role="img" aria-label={`${s.title}: ${s.tables.length} tables; ${s.note}`}>
+        {s.tables.map((t) => (
+          <SqlTable key={t.name} x={t.x} y={t.y} widths={t.widths} head={t.cols.map((c) => NF_HEAD[c])} rows={nfRows(t.cols)} title={t.name} height={18} mark={raos(t)} />
+        ))}
+        <text x={8} y={206} className="fig-small">
+          {s.note}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -8128,6 +8195,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "index-lookup": IndexLookup,
   "er-cardinality": ErCardinality,
   "fd-closure": FdClosure,
+  "normalise-steps": NormaliseSteps,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
