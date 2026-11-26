@@ -5245,6 +5245,462 @@ function BenchmarkRuns(props: Props) {
   );
 }
 
+const TREE_N = 16;
+const TREE_LEVELS = 4;
+
+function growthName(a: number, d: number): string {
+  const ratio = a / 2 ** d;
+  const power = (e: number) => (e === 0 ? "1" : e === 1 ? "n" : "n²");
+  if (ratio < 1) return `Θ(${power(d)})`;
+  if (ratio === 1) return d === 0 ? "Θ(log n)" : `Θ(${power(d)} log n)`;
+  const e = Math.log2(a);
+  return Number.isInteger(e) ? `Θ(${power(e)})` : `Θ(n^${dp(e, 2)}), since log₂ ${a} = ${dp(e, 2)}`;
+}
+
+/** The recursion tree of T(n) = a T(n/2) + n^d on n = 16: the work of each level, and which levels dominate. */
+function RecursionTree(props: Props) {
+  const [a, setA] = useState(clamp(Math.round(num(props.a, 2)), 1, 4));
+  const [d, setD] = useState(clamp(Math.round(num(props.d, 1)), 0, 2));
+  const levels = Array.from({ length: TREE_LEVELS + 1 }, (_, k) => {
+    const count = a ** k;
+    const size = TREE_N / 2 ** k;
+    return { k, count, size, work: count * size ** d };
+  });
+  const total = levels.reduce((s, l) => s + l.work, 0);
+  const widest = Math.max(...levels.map((l) => l.work));
+  const ratio = a / 2 ** d;
+  const ratioText = Number.isInteger(ratio) ? `${ratio}` : `${a}/${2 ** d}`;
+  const cost = d === 0 ? "1 step" : d === 1 ? "as many steps as its size" : "its size squared in steps";
+  const verdict =
+    ratio < 1
+      ? `Each level does ${ratioText} of the work of the level above, so the top level dominates and the total is ${growthName(a, d)}.`
+      : ratio === 1
+        ? `Each level does the same work as the level above, so every level counts and the total is the work of one level times the number of levels: ${growthName(a, d)}.`
+        : `Each level does ${ratioText} times the work of the level above, so the leaves dominate and the total is ${growthName(a, d)}.`;
+  const y = (k: number) => 44 + k * 34;
+  return (
+    <Frame
+      title="The recursion tree"
+      summary={`T(n) = ${a === 1 ? "" : a}T(n/2) + ${d === 0 ? "1" : d === 1 ? "n" : "n²"} on an input of size ${TREE_N}: each problem splits into ${plural(a, "half-size subproblem")}, and splitting and combining cost ${cost}. The levels, from the top, do ${levels
+        .map((l) => group(l.work))
+        .join(", ")} steps of work, ${group(total)} in all. ${verdict}`}
+      controls={
+        <>
+          <Slider label="subproblems" value={a} onChange={setA} min={1} max={4} text={`${a}`} />
+          <Slider label="work exponent" value={d} onChange={setD} min={0} max={2} text={`${d}`} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 224" role="img" aria-label={`Bars for the five levels of the recursion tree, with work ${levels.map((l) => l.work).join(", ")} from top to bottom`}>
+        <text x="10" y="18" className="fig-small">
+          problems × size
+        </text>
+        <text x="96" y="18" className="fig-small">
+          work of the level
+        </text>
+        {levels.map((l) => {
+          const width = Math.max(2, (l.work / widest) * 270);
+          return (
+            <g key={l.k}>
+              <text x="10" y={y(l.k) + 4} className="fig-small">
+                {`${group(l.count)} × ${l.size}`}
+              </text>
+              <rect x="96" y={y(l.k) - 10} width={width} height="20" className={l.work === widest ? "fig-accent" : "fig-fill"} />
+              <text x={102 + width} y={y(l.k) + 4} className="fig-small">
+                {group(l.work)}
+              </text>
+            </g>
+          );
+        })}
+        <text x="10" y="216" className="fig-small">
+          {`total ${group(total)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+type Road = [string, string, number];
+const roadName = ([a, b, length]: Road) => `${a}–${b} ${length}`;
+
+/** Kruskal's steps on the six towns: each road in order of length, taken unless it would close a loop. */
+function kruskalSteps(): { road: Road; taken: boolean }[] {
+  const group: Record<string, string> = Object.fromEntries(Object.keys(TOWNS).map((town) => [town, town]));
+  const find = (town: string): string => (group[town] === town ? town : find(group[town]));
+  return [...ROADS]
+    .sort((x, y) => x[2] - y[2])
+    .map((road) => {
+      const [ra, rb] = [find(road[0]), find(road[1])];
+      if (ra !== rb) group[ra] = rb;
+      return { road, taken: ra !== rb };
+    });
+}
+
+/** Prim's steps from A: each time, the shortest road with exactly one end in the tree. */
+function primSteps(): Road[] {
+  const inTree = new Set(["A"]);
+  const taken: Road[] = [];
+  while (inTree.size < Object.keys(TOWNS).length) {
+    const leaving = ROADS.filter(([a, b]) => inTree.has(a) !== inTree.has(b)).sort((x, y) => x[2] - y[2]);
+    const road = leaving[0];
+    taken.push(road);
+    inTree.add(road[0]);
+    inTree.add(road[1]);
+  }
+  return taken;
+}
+
+/** The cheapest set of roads joining six towns, found two ways: shortest roads first, or growing one tree. */
+function SpanningTree(props: Props) {
+  const [prim, setPrim] = useState(props.method === "prim");
+  const kruskal = kruskalSteps();
+  const grown = primSteps();
+  const most = prim ? grown.length : kruskal.length;
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, most));
+  const total = (roads: Road[]) => roads.reduce((s, r) => s + r[2], 0);
+  let summary: string;
+  let hot: Road[];
+  let faint: Road[] = [];
+  if (prim) {
+    hot = grown.slice(0, step);
+    const inTree = new Set(["A", ...hot.flatMap(([a, b]) => [a, b])]);
+    summary = `Prim's method from A, after ${plural(step, "road")} added. In the tree: ${[...inTree].sort().join(", ")}. Roads taken: ${hot.map(roadName).join(", ") || "none yet"}, ${total(hot)} in all. ${
+      step < grown.length ? `The shortest road with one end in the tree and one outside is ${roadName(grown[step])}, so it is added next.` : "Every town is joined, by 5 roads."
+    }`;
+  } else {
+    const seen = kruskal.slice(0, step);
+    hot = seen.filter((s) => s.taken).map((s) => s.road);
+    faint = seen.filter((s) => !s.taken).map((s) => s.road);
+    const next = kruskal[step];
+    summary = `Kruskal's method, after ${step} of ${kruskal.length} roads considered, shortest first. Taken: ${hot.map(roadName).join(", ") || "none yet"}, ${total(hot)} in all. ${
+      faint.length > 0 ? `Skipped, because each would close a loop: ${faint.map(roadName).join(", ")}. ` : ""
+    }${
+      hot.length === 5
+        ? "Five roads join all six towns, so the rest can only close loops."
+        : next
+          ? `Next to consider: ${roadName(next.road)}.`
+          : ""
+    }`;
+  }
+  const isIn = (list: Road[], road: Road) => list.some((r) => r[0] === road[0] && r[1] === road[1]);
+  return (
+    <Frame
+      title="The cheapest roads that join every town"
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="step" value={step} onChange={setStep} min={0} max={most} />
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => {
+              setPrim(!prim);
+              setStep(0);
+            }}
+          >
+            {prim ? "Switch to Kruskal's method" : "Switch to Prim's method"}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 260" role="img" aria-label={`Six towns joined by nine roads with lengths, ${hot.length} of the roads taken`}>
+        {ROADS.map((road) => (
+          <Link key={road[0] + road[1]} from={TOWNS[road[0]]} to={TOWNS[road[1]]} label={road[2]} hot={isIn(hot, road)} faint={isIn(faint, road)} />
+        ))}
+        {Object.entries(TOWNS).map(([name, at]) => (
+          <Dot key={name} at={at} name={name} mark={hot.some(([a, b]) => a === name || b === name) || (prim && name === "A") ? "done" : "wait"} />
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+const BOOKINGS: [string, number, number][] = [
+  ["A", 8, 19],
+  ["B", 9, 12],
+  ["C", 11, 13],
+  ["D", 12, 15],
+  ["E", 14, 16],
+  ["F", 15, 18],
+  ["G", 17, 19],
+  ["H", 18, 20],
+];
+type Rule = "finish" | "start" | "shortest";
+const BOOKING_RULES: Rule[] = ["finish", "start", "shortest"];
+const RULE_NAMES: Record<Rule, string> = { finish: "Earliest finish first", start: "Earliest start first", shortest: "Shortest first" };
+const hour = (h: number) => (h === 12 ? "12 noon" : h < 12 ? `${h} am` : `${h - 12} pm`);
+
+/** One hall, eight bookings, and three greedy rules for choosing as many as fit without overlapping. */
+function IntervalSchedule(props: Props) {
+  const [rule, setRule] = useState<Rule>(BOOKING_RULES.includes(props.rule as Rule) ? (props.rule as Rule) : "finish");
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, BOOKINGS.length));
+  const order = [...BOOKINGS].sort((x, y) =>
+    rule === "finish" ? x[2] - y[2] || x[1] - y[1] : rule === "start" ? x[1] - y[1] || x[2] - y[2] : x[2] - x[1] - (y[2] - y[1]) || x[1] - y[1],
+  );
+  const taken: string[] = [];
+  const skipped: string[] = [];
+  const fits = (b: [string, number, number]) => taken.every((name) => {
+    const t = BOOKINGS.find((x) => x[0] === name)!;
+    return b[2] <= t[1] || b[1] >= t[2];
+  });
+  order.slice(0, step).forEach((b) => (fits(b) ? taken.push(b[0]) : skipped.push(b[0])));
+  const span = (name: string) => {
+    const b = BOOKINGS.find((x) => x[0] === name)!;
+    return `${name} (${hour(b[1])} to ${hour(b[2])})`;
+  };
+  const end = step === BOOKINGS.length;
+  const summary = `${RULE_NAMES[rule]}, after ${step} of ${BOOKINGS.length} bookings considered. Taken: ${taken.map(span).join(", ") || "none yet"}. ${
+    skipped.length > 0 ? `Skipped, because each overlaps one already taken: ${skipped.join(", ")}. ` : ""
+  }${
+    end
+      ? `${plural(taken.length, "booking")} fit. The most that can fit is 4, ${taken.length === 4 ? "so this rule finds the best." : "so this rule falls short."}`
+      : `Next to consider: ${span(order[step][0])}.`
+  }`;
+  const x = (h: number) => 40 + (h - 8) * 32;
+  return (
+    <Frame
+      title="Choosing bookings that do not overlap"
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="step" value={step} onChange={setStep} min={0} max={BOOKINGS.length} />
+          {BOOKING_RULES.map((r) => (
+            <button
+              key={r}
+              type="button"
+              className="btn btn-secondary btn-small"
+              aria-pressed={rule === r}
+              onClick={() => {
+                setRule(r);
+                setStep(0);
+              }}
+            >
+              {RULE_NAMES[r]}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 236" role="img" aria-label={`Eight bookings of one hall drawn as bars across the day, ${taken.length} taken`}>
+        {[8, 10, 12, 14, 16, 18, 20].map((h) => (
+          <g key={h}>
+            <line x1={x(h)} x2={x(h)} y1="8" y2="200" className="fig-grid" />
+            <text x={x(h)} y="216" textAnchor="middle" className="fig-small">
+              {h > 12 ? h - 12 : h}
+            </text>
+          </g>
+        ))}
+        {BOOKINGS.map(([name, from, to], i) => (
+          <g key={name}>
+            <text x="14" y={26 + i * 23} className="fig-small">
+              {name}
+            </text>
+            <rect
+              x={x(from)}
+              y={13 + i * 23}
+              width={x(to) - x(from)}
+              height="17"
+              className={taken.includes(name) ? "fig-accent" : skipped.includes(name) ? "fig-ghost" : "fig-fill"}
+            />
+          </g>
+        ))}
+        <text x="40" y="232" className="fig-small">
+          hour of the day
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const QS_N = 16;
+const QS_SHUFFLED = (() => {
+  const items = Array.from({ length: QS_N }, (_, i) => i + 1);
+  const u = draws(42, QS_N, false);
+  for (let i = QS_N - 1; i > 0; i--) {
+    const j = Math.floor(u[i] * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+  return items;
+})();
+type QsPart = { depth: number; low: number; size: number; pivot: number };
+
+/** Quicksort's partitions, level by level; the pivot is the first item, or one chosen with the uniform numbers given. */
+function quicksortRun(items: number[], random: number[] | null) {
+  const parts: QsPart[] = [];
+  let comparisons = 0;
+  let used = 0;
+  const sort = (list: number[], depth: number) => {
+    if (list.length < 2) return;
+    const at = random ? Math.floor(random[used++ % random.length] * list.length) : 0;
+    const pivot = list[at];
+    comparisons += list.length - 1;
+    parts.push({ depth, low: Math.min(...list), size: list.length, pivot });
+    sort(
+      list.filter((x) => x < pivot),
+      depth + 1,
+    );
+    sort(
+      list.filter((x) => x > pivot),
+      depth + 1,
+    );
+  };
+  sort(items, 0);
+  return { parts, comparisons, levels: parts.length === 0 ? 0 : Math.max(...parts.map((p) => p.depth)) + 1 };
+}
+
+const QS_RANDOM_RUNS = (() => {
+  const counts = Array.from({ length: 1000 }, (_, k) => quicksortRun(QS_SHUFFLED, draws(1000 + k, QS_N, false)).comparisons);
+  return { mean: counts.reduce((s, c) => s + c, 0) / counts.length, most: Math.max(...counts), least: Math.min(...counts) };
+})();
+
+/** Quicksort with the first item as pivot, or a random one, on numbers already in order or shuffled. */
+function QuickPivot(props: Props) {
+  const [sorted, setSorted] = useState(props.input !== "shuffled");
+  const [random, setRandom] = useState(props.pivot === "random");
+  const [seed, setSeed] = useState(clamp(Math.round(num(props.seed, 0)), 0, 9));
+  const items = sorted ? Array.from({ length: QS_N }, (_, i) => i + 1) : QS_SHUFFLED;
+  const run = quicksortRun(items, random ? draws(seed, QS_N, false) : null);
+  const note = random
+    ? `Over 1,000 runs with random pivots, on any order of the input, the comparisons average ${dp(QS_RANDOM_RUNS.mean, 1)}, ranging from ${QS_RANDOM_RUNS.least} to ${QS_RANDOM_RUNS.most}.`
+    : sorted
+      ? "Every pivot is the smallest item left, so each partition peels off a single item: 15 + 14 + … + 1 = 120 comparisons, the most possible."
+      : "On this shuffled input the first item happens to be a fair pivot, but an input already in order would make it the worst.";
+  const w = 24;
+  const top = 26;
+  const row = Math.min(13, 190 / Math.max(run.levels, 1));
+  return (
+    <Frame
+      title="Quicksort's pivots"
+      summary={`Quicksort on ${QS_N} numbers ${sorted ? "already in order" : "in a shuffled order"}, taking ${random ? `a pivot chosen at random, seed ${seed}` : "the first item as the pivot"}. It partitions on ${plural(run.levels, "level")} and makes ${run.comparisons} comparisons. ${note}`}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={random} onClick={() => setRandom(!random)}>
+            Choose pivots at random
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!sorted} onClick={() => setSorted(!sorted)}>
+            Shuffle the input
+          </button>
+          {random ? <Stepper label="seed" value={seed} onChange={setSeed} min={0} max={9} /> : null}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 236" role="img" aria-label={`Quicksort's partitions drawn level by level: ${run.levels} levels and ${run.comparisons} comparisons`}>
+        <text x="12" y="16" className="fig-small">
+          each row is one level of partitioning; the marked square is the pivot
+        </text>
+        {run.parts.map((p, i) => (
+          <g key={i}>
+            <rect x={28 + (p.low - 1) * w} y={top + p.depth * row} width={p.size * w - 2} height={row - 3} className="fig-fill" />
+            <rect x={28 + (p.pivot - 1) * w} y={top + p.depth * row} width={w - 2} height={row - 3} className="fig-accent" />
+          </g>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+const TOUR_TOWNS: Spot[] = [
+  [15, 20],
+  [25, 40],
+  [50, 35],
+  [60, 15],
+  [70, 25],
+  [75, 40],
+  [5, 40],
+  [85, 5],
+  [30, 5],
+];
+const TOUR_NAMES = "ABCDEFGHI";
+const tourKm = (a: number, b: number) => Math.hypot(TOUR_TOWNS[a][0] - TOUR_TOWNS[b][0], TOUR_TOWNS[a][1] - TOUR_TOWNS[b][1]);
+const tourLength = (order: number[]) => order.reduce((s, t, k) => s + tourKm(t, order[(k + 1) % order.length]), 0);
+const tourRoads = (order: number[]) => order.map((t, k) => [t, order[(k + 1) % order.length]].sort((x, y) => x - y).join("-"));
+const roadLabel = (road: string) =>
+  road
+    .split("-")
+    .map((t) => TOUR_NAMES[Number(t)])
+    .join("–");
+
+/** The nearest-neighbour tour from A, then each 2-opt step that shortens it most, until none does. */
+const TOUR_STEPS = (() => {
+  const order = [0];
+  const left = new Set(TOUR_TOWNS.map((_, i) => i).slice(1));
+  while (left.size > 0) {
+    const here = order[order.length - 1];
+    let next = -1;
+    for (const t of left) if (next < 0 || tourKm(here, t) < tourKm(here, next)) next = t;
+    order.push(next);
+    left.delete(next);
+  }
+  const steps = [order];
+  for (;;) {
+    const now = steps[steps.length - 1];
+    let best: number[] | null = null;
+    let bestLength = tourLength(now);
+    for (let i = 1; i < now.length - 1; i++) {
+      for (let j = i + 1; j < now.length; j++) {
+        const trial = [...now.slice(0, i), ...now.slice(i, j + 1).reverse(), ...now.slice(j + 1)];
+        const length = tourLength(trial);
+        if (length < bestLength - 1e-9) {
+          best = trial;
+          bestLength = length;
+        }
+      }
+    }
+    if (!best) return steps;
+    steps.push(best);
+  }
+})();
+
+/** A tour of nine towns built by the nearest-neighbour rule, then shortened by reversing stretches of it. */
+function TourHeuristic(props: Props) {
+  const last = TOUR_STEPS.length - 1;
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, last));
+  const order = TOUR_STEPS[step];
+  const roads = tourRoads(order);
+  const before = step > 0 ? tourRoads(TOUR_STEPS[step - 1]) : roads;
+  const added = roads.filter((r) => !before.includes(r));
+  const removed = before.filter((r) => !roads.includes(r));
+  const km = (x: number) => dp(x, 1);
+  // The saving is worked from the lengths as shown, so that it is their difference to the last digit.
+  const tenths = (x: number) => Math.round(x * 10) / 10;
+  const names = order.map((t) => TOUR_NAMES[t]).join(", ");
+  let summary: string;
+  if (step === 0) {
+    const [g, h] = [order[order.length - 2], order[order.length - 1]];
+    summary = `The tour that nearest neighbour builds from A: ${names}, and back to A, ${km(tourLength(order))} km. Each move goes to the closest town not yet visited, so ${TOUR_NAMES[h]}, out on its own, is left until last, and the tour ends with ${km(tourKm(g, h))} km from ${TOUR_NAMES[g]} to ${TOUR_NAMES[h]} and ${km(tourKm(h, 0))} km back to A.`;
+  } else {
+    const prev = TOUR_STEPS[step - 1];
+    const first = prev.findIndex((t, k) => t !== order[k]);
+    const end = prev.length - 1 - [...prev].reverse().findIndex((t, k) => t !== order[order.length - 1 - k]);
+    summary = `After ${plural(step, "improvement")}: ${names}, and back to A, ${km(tourLength(order))} km. This step reversed the stretch from ${TOUR_NAMES[prev[first]]} to ${TOUR_NAMES[prev[end]]}, replacing the roads ${removed.map(roadLabel).join(" and ")} with ${added.map(roadLabel).join(" and ")}, ${km(tenths(tourLength(prev)) - tenths(tourLength(order)))} km shorter. ${
+      step === last
+        ? "No single reversal shortens it further. Checking all 20,160 possible tours confirms that, here, it is also the shortest of them all."
+        : "Another reversal can still shorten it."
+    }`;
+  }
+  const at = (t: number): Spot => [30 + TOUR_TOWNS[t][0] * 4.6, 22 + TOUR_TOWNS[t][1] * 5];
+  return (
+    <Frame title="Building a tour, then improving it" summary={summary} controls={<Stepper label="improvements" value={step} onChange={setStep} min={0} max={last} />}>
+      <svg viewBox="0 0 440 250" role="img" aria-label={`Nine towns and a tour through them, ${km(tourLength(order))} km long`}>
+        <text x="12" y="16" className="fig-small">
+          {`tour ${km(tourLength(order))} km`}
+        </text>
+        {removed.map((r) => {
+          const [a, b] = r.split("-").map(Number);
+          return <Link key={"x" + r} from={at(a)} to={at(b)} faint />;
+        })}
+        {roads.map((r) => {
+          const [a, b] = r.split("-").map(Number);
+          return <Link key={r} from={at(a)} to={at(b)} hot={added.includes(r)} />;
+        })}
+        {TOUR_TOWNS.map((_, t) => (
+          <Dot key={t} at={at(t)} name={TOUR_NAMES[t]} mark={t === 0 ? "now" : "done"} />
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -6554,6 +7010,11 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "bootstrap": Bootstrap,
   "ab-test": AbTest,
   "benchmark-runs": BenchmarkRuns,
+  "recursion-tree": RecursionTree,
+  "spanning-tree": SpanningTree,
+  "interval-schedule": IntervalSchedule,
+  "quick-pivot": QuickPivot,
+  "tour-heuristic": TourHeuristic,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

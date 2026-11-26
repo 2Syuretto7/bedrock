@@ -1,0 +1,548 @@
+concept: s3.binary-search
+minutes: 90
+claim: You can find an item in a sorted list of n items in about log₂ n comparisons, keep a binary search correct with a half-open interval and a loop invariant, find the first and last positions of a value with bisect_left and bisect_right, count the items in a range, and search for the smallest answer that works whenever a yes-or-no test switches only once.
+recalls: [s3.sorting]
+uses: [s3.measuring-and-predicting-running-time, f2.loop-invariants, f1.logarithms, f1.inequalities, s2.binary-search-trees, s2.hash-tables, s2.arrays-and-dynamic-arrays, s1.modules-and-imports, s0.loops]
+leads: [s3.divide-and-conquer-and-the-master-theorem, s3.greedy-algorithms, q0.indexes-from-the-outside]
+starter: |
+  # Scratch space. Count the halvings a binary search makes.
+  def search(xs, x):
+      lo = 0
+      hi = len(xs)
+      looks = 0
+      while lo < hi:
+          mid = (lo + hi) // 2
+          looks += 1
+          if xs[mid] < x:
+              lo = mid + 1
+          else:
+              hi = mid
+      return lo, looks
+
+  xs = list(range(0, 2000, 2))
+  print(search(xs, 1234))
+  print(search(xs, 1235))
+parts:
+  recall:
+    - text: |
+        [[s3.sorting]] promised that sorting is rarely the goal but the step that makes the next one easy. Here is the first payoff. In a list that is not sorted, deciding whether a value is present means looking at every item. In a sorted list, one look at the middle rules out half of the list, and the next look half of what remains. Three quick pulls first.
+  puzzle:
+    - text: |
+        A food-delivery app worked at commit 0 and is broken at commit 1,000. Exactly one commit in between broke it, and every commit after that one is broken too. Checking out a commit, building it and testing it takes 6 minutes.
+
+        **In the worst case, how many minutes does it take to find the commit that broke it?**
+  intuition:
+    - text: |
+        Think of the guessing game where one person picks a number from 1 to 100 and the other guesses, hearing only "higher" or "lower". Guessing 1, 2, 3 in turn could take a hundred tries. Guessing 50 first, then 25 or 75, then halving again, never takes more than seven, because each answer throws away half of the numbers still possible, and $2^7 = 128$ is more than 100.
+
+        A sorted list plays the same game. Compare the item you want with the middle item. If it is smaller, it can only be in the left half; if larger, only in the right half. Either way half the list is gone after one comparison. This is **binary search**, and it needs the list to be sorted, because the whole argument rests on everything left of the middle being no larger than the middle.
+
+        The figure searches fifteen sorted numbers. Step through the search for 23, then move the target, or switch to searching for a number that is not there.
+    - figure: binary-search
+      props: { target: 5 }
+    - text: |
+        Finding 23 takes three comparisons: 42, then 12, then 23. No target among these fifteen takes more than four, because fifteen positions halve to seven, three, one and none. Searching for 50, which is absent, also takes four, and the search ends knowing exactly where 50 would go, between 42 and 56. That second result turns out to be the more useful one.
+  derivation:
+    - text: |
+        **Counting the comparisons.** Each comparison with the middle leaves at most half of the remaining positions, rounded down. Starting from $n$, after $k$ comparisons at most $n/2^k$ remain, and the search must stop once none remain. So a binary search makes at most $\lfloor \log_2 n \rfloor + 1$ comparisons, by [[f1.logarithms]]: 10 for a thousand items, 20 for a million, 30 for a billion. A linear scan of the same billion items makes up to a billion comparisons. Doubling the list adds one comparison to a binary search and doubles a linear scan, exactly the difference between $\Theta(\log n)$ and $\Theta(n)$ from [[s3.measuring-and-predicting-running-time]].
+    - question:
+        id: derivation-million
+        type: numeric
+        system: s2
+        prompt: |
+          At most how many comparisons does a binary search make on a sorted list of 1,000,000 items?
+        answer: "20"
+        explanation: |
+          $2^{19} = 5{,}24{,}288$ is less than a million and $2^{20} = 10{,}48{,}576$ is more, so $\lfloor \log_2 1{,}000{,}000 \rfloor + 1 = 19 + 1 = 20$. After 20 halvings no position can remain.
+    - text: |
+        **Getting it right.** Binary search is famous for being easy to describe and hard to write correctly. Most bugs are off by one: the search skips the item it wants, or loops for ever because the interval stops shrinking. The cure is to say exactly what the interval means and keep it true, a loop invariant in the sense of [[f2.loop-invariants]].
+
+        Use a **half-open interval** `lo` to `hi`: positions `lo`, `lo + 1`, up to `hi - 1`, with `hi` itself excluded. Start with `lo = 0` and `hi = len(xs)`, the whole list. The invariant is about the first position whose item is at least `x`: everything before `lo` is smaller than `x`, and everything from `hi` on is at least `x`. Each round takes `mid = (lo + hi) // 2`. If `xs[mid] < x`, then `mid` and everything before it are smaller, so `lo = mid + 1`. Otherwise `xs[mid]` is at least `x`, so `hi = mid`. Both moves keep the invariant, and both shrink the interval, since `lo <= mid < hi`. When `lo == hi` the interval is empty, and `lo` is the answer: the first position whose item is at least `x`, or `len(xs)` if there is none.
+
+        That answer does more than say yes or no. If `xs[lo] == x`, it is the first copy of `x`. If not, `lo` is where `x` would be inserted to keep the list sorted, and its neighbours are the nearest items below and above. Changing the test to `xs[mid] <= x` finds instead the first position whose item is greater than `x`, just past the last copy. The two positions differ by the number of copies of `x`.
+    - question:
+        id: derivation-copies
+        type: numeric
+        system: s2
+        prompt: |
+          In a sorted list, the first position whose item is at least 20 is 3, and the first position whose item is greater than 20 is 7. How many items equal 20?
+        answer: "4"
+        explanation: |
+          Positions 3, 4, 5 and 6 hold items at least 20 but not greater than 20, so exactly 20: $7 - 3 = 4$ copies.
+    - text: |
+        **Python's `bisect`.** The `bisect` module, imported as in [[s1.modules-and-imports]], provides both searches. `bisect.bisect_left(xs, x)` returns the first position whose item is at least `x`, which is also the number of items smaller than `x`. `bisect.bisect_right(xs, x)` returns the first position whose item is greater than `x`, the number of items at most `x`. So the number of items between `a` and `b`, both included, is `bisect_right(xs, b) - bisect_left(xs, a)`. `bisect.insort(xs, x)` inserts `x` in its place, but the insertion shifts every later item along, as in [[s2.arrays-and-dynamic-arrays]], so it costs $\Theta(n)$ even though the search costs $\Theta(\log n)$. A list kept sorted under many insertions is better kept in a balanced tree, from [[s2.binary-search-trees]], which is a binary search frozen into a data structure.
+
+        **Searching for an answer.** The idea needs less than a sorted list. It needs only a yes-or-no question that switches once: no, no, …, no, yes, yes, …, yes. Binary search finds the switch in $\log_2$ of the length of the range. The puzzle is one case, where the question is "is this commit broken?", and `git bisect` automates it. Another is searching for the smallest answer that works. A courier company must move parcels in a fixed order within a number of days, and asks for the smallest van that does it. A bigger van never needs more days, so "can a van of capacity $c$ finish in time?" switches once from no to yes as $c$ grows, as in [[f1.inequalities]]. Search $c$ between the heaviest parcel and the total weight, and each check is a single pass over the parcels.
+
+        **Bisection on numbers.** The same halving finds where a continuous quantity crosses a threshold: the rate at which a server's latency passes 200 ms, or the root of an equation. Each halving of an interval adds one binary digit of precision, so about 50 halvings reach the limit of a floating-point number.
+
+        **When not to.** A hash set from [[s2.hash-tables]] answers "is $x$ present?" in constant time on average, faster than $\log_2 n$, and needs no sorting. Binary search earns its place when the question is about order: the nearest item, the first item at least $x$, how many items lie in a range. And sorting costs $n \log_2 n$, so for a handful of lookups a single scan of the unsorted list is cheaper.
+    - question:
+        id: order-search-answer
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of searching for the smallest van capacity that delivers every parcel in time in order.
+        steps:
+          - "Set the range of capacities from the heaviest parcel to the total weight of all parcels."
+          - "Test the middle capacity of the range by loading the parcels in order and counting the days."
+          - "Keep the half of the range where the first capacity that works must lie."
+          - "Return the capacity left when the range has shrunk to a single value."
+        explanation: |
+          The range must exist before its middle can be tested, a test result is needed to choose which half to keep, and only repeated halving shrinks the range to one value. The search is valid because a bigger van never needs more days, so the answer to "does this capacity work?" switches only once.
+  formal:
+    - text: |
+        **Binary search.** On a sorted list of $n$ items, at most $\lfloor \log_2 n \rfloor + 1$ comparisons: $\Theta(\log n)$.
+
+        **Half-open interval.** `lo` to `hi` means positions `lo` to `hi - 1`. Invariant for the first position with an item at least $x$: `xs[i] < x` for `i < lo`, and `xs[i] >= x` for `i >= hi`. Update with `mid = (lo + hi) // 2`: `lo = mid + 1` if `xs[mid] < x`, else `hi = mid`. Stop when `lo == hi`.
+
+        **`bisect_left(xs, x)`.** The number of items less than $x$; the first position with an item at least $x$.
+
+        **`bisect_right(xs, x)`.** The number of items at most $x$; the first position with an item greater than $x$.
+
+        **Counts.** Copies of $x$: `bisect_right(xs, x) - bisect_left(xs, x)`. Items in $[a, b]$: `bisect_right(xs, b) - bisect_left(xs, a)`.
+
+        **Monotone predicate.** If $p$ is false then true along a range of $m$ values, the first true value is found with $\lceil \log_2 m \rceil$ evaluations of $p$.
+  drill:
+    - text: Seconds each. Halve, and halve again.
+    - question:
+        id: drill-thousand
+        type: numeric
+        system: s1
+        prompt: |
+          At most how many comparisons does a binary search make on a sorted list of 1,000 items?
+        answer: "10"
+        explanation: $2^9 = 512 \le 1{,}000 < 1{,}024 = 2^{10}$, so $\lfloor \log_2 1000 \rfloor + 1 = 10$.
+    - question:
+        id: drill-remaining
+        type: numeric
+        system: s1
+        prompt: |
+          A search starts with 64 possible positions and each comparison halves them. How many remain after 3 comparisons?
+        answer: "8"
+        explanation: $64 \to 32 \to 16 \to 8$.
+    - question:
+        id: drill-bisection
+        type: numeric
+        system: s1
+        prompt: |
+          An interval of width 1 is halved repeatedly. How many halvings make it narrower than 0.001?
+        answer: "10"
+        explanation: $1/2^9 = 1/512$ is still wider than 0.001, and $1/2^{10} = 1/1{,}024$ is narrower.
+    - question:
+        id: drill-unsorted
+        type: choice
+        system: s1
+        prompt: |
+          A binary search is run on a list that is not sorted. What can happen?
+        options:
+          - "It can report that an item is missing when it is present."
+          - "It always finds the item, but more slowly."
+          - "Python raises an error."
+          - "It sorts the list first."
+        answer: 0
+        explanation: Each step throws away half of the list on the assumption that it is sorted. If it is not, the half thrown away may hold the item, and the search ends without seeing it.
+    - question:
+        id: drill-set-or-bisect
+        type: choice
+        system: s1
+        prompt: |
+          Which question needs a sorted list rather than a hash set?
+        options:
+          - "Which stored price is the closest one below ₹500?"
+          - "Is this PIN code in the list of serviceable PIN codes?"
+          - "Has this user already voted?"
+          - "Is this coupon code valid?"
+        answer: 0
+        explanation: The closest item below a value is a question about order, and `bisect_left` answers it. The others only ask whether a value is present, which a set answers faster.
+    - question:
+        id: predict-left-right
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import bisect
+          xs = [10, 20, 20, 30]
+          print(bisect.bisect_left(xs, 20), bisect.bisect_right(xs, 20))
+        output: "1 3"
+        explanation: One item, 10, is smaller than 20, so `bisect_left` gives 1. Three items are at most 20, so `bisect_right` gives 3. The two copies of 20 sit at positions 1 and 2.
+    - question:
+        id: predict-insert-point
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import bisect
+          print(bisect.bisect_left([1, 3, 5, 7], 4))
+        output: "2"
+        explanation: 4 is not in the list. Two items, 1 and 3, are smaller, so 4 would go at position 2, between 3 and 5.
+  work:
+    - text: Slower now. For each search, say what `lo` and `hi` mean before reading the loop, and check the first and last positions.
+    - question:
+        id: fix-first-index
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `first_index(xs, x)` should return the index of the first item equal to `x` in the sorted list `xs`, or `-1` if there is none. The program should print `1 -1 1`. It prints `-1 -1 -1`. Find the fault and fix it.
+        starter: |
+          def first_index(xs, x):
+              # xs is sorted. Return the index of the first item equal to x, or -1 if there is none.
+              lo = 0
+              hi = len(xs)
+              while lo < hi:
+                  mid = (lo + hi) // 2
+                  if xs[mid] <= x:
+                      lo = mid + 1
+                  else:
+                      hi = mid
+              if lo < len(xs) and xs[lo] == x:
+                  return lo
+              return -1
+
+
+          xs = [2, 4, 4, 4, 7, 9]
+          print(first_index(xs, 4), first_index(xs, 5), first_index([1, 3], 3))
+        solution: |
+          def first_index(xs, x):
+              # xs is sorted. Return the index of the first item equal to x, or -1 if there is none.
+              lo = 0
+              hi = len(xs)
+              while lo < hi:
+                  mid = (lo + hi) // 2
+                  if xs[mid] < x:
+                      lo = mid + 1
+                  else:
+                      hi = mid
+              if lo < len(xs) and xs[lo] == x:
+                  return lo
+              return -1
+
+
+          xs = [2, 4, 4, 4, 7, 9]
+          print(first_index(xs, 4), first_index(xs, 5), first_index([1, 3], 3))
+        tests: |
+          for _xs in [[], [5], [2, 4, 4, 4, 7, 9], [1, 3], [1, 1, 1, 1], [1, 2, 3, 4, 5, 6, 7, 8], [3, 3, 5, 5, 5, 8]]:
+              for _x in range(0, 11):
+                  _want = _xs.index(_x) if _x in _xs else -1
+                  _got = first_index(_xs, _x)
+                  assert _got == _want, "first_index(" + str(_xs) + ", " + str(_x) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "1 -1 1", "The program should print 1 -1 1"
+        wrong:
+          - |
+            def first_index(xs, x):
+                # xs is sorted. Return the index of the first item equal to x, or -1 if there is none.
+                lo = 0
+                hi = len(xs)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if xs[mid] < x:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+                return lo
+
+
+            xs = [2, 4, 4, 4, 7, 9]
+            print(first_index(xs, 4), first_index(xs, 5), first_index([1, 3], 3))
+          - |
+            def first_index(xs, x):
+                # xs is sorted. Return the index of the first item equal to x, or -1 if there is none.
+                lo = 0
+                hi = len(xs)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if xs[mid] < x:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+                if lo <= len(xs) and xs[lo] == x:
+                    return lo
+                return -1
+
+
+            xs = [2, 4, 4, 4, 7, 9]
+            print(first_index(xs, 4), first_index(xs, 5), first_index([1, 3], 3))
+          - |
+            def first_index(xs, x):
+                # xs is sorted. Return the index of the first item equal to x, or -1 if there is none.
+                lo = 0
+                hi = len(xs)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if xs[mid] < x:
+                        lo = mid + 1
+                    else:
+                        hi = mid - 1
+                if lo < len(xs) and xs[lo] == x:
+                    return lo
+                return -1
+
+
+            xs = [2, 4, 4, 4, 7, 9]
+            print(first_index(xs, 4), first_index(xs, 5), first_index([1, 3], 3))
+        explanation: |
+          With `<=`, the loop moves `lo` past every copy of `x`, so it ends just after the last copy, where the item is never `x`. With `<` it moves past only the items smaller than `x` and stops at the first copy. Returning `lo` without checking it holds `x` reports positions for missing values; checking `lo <= len(xs)` reads past the end when `x` is larger than everything; and `hi = mid - 1` throws away `mid`, which may be the first copy.
+    - question:
+        id: write-count-in-range
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A toll plaza records the minute of the day, from 0 to 1,439, at which each FASTag is read, and keeps the minutes sorted. Write `count_in_range(times, start, end)`, which returns how many readings `t` have `start <= t <= end`, using `bisect` rather than looking at every reading.
+        starter: |
+          import bisect
+
+
+          def count_in_range(times, start, end):
+              # times is sorted. Return how many times t have start <= t <= end, using bisect.
+              return 0
+
+
+          reads = [540, 545, 545, 560, 600, 600, 610, 655]
+          print(count_in_range(reads, 545, 600), count_in_range(reads, 601, 609), count_in_range(reads, 0, 1440))
+        solution: |
+          import bisect
+
+
+          def count_in_range(times, start, end):
+              # times is sorted. Return how many times t have start <= t <= end, using bisect.
+              return bisect.bisect_right(times, end) - bisect.bisect_left(times, start)
+
+
+          reads = [540, 545, 545, 560, 600, 600, 610, 655]
+          print(count_in_range(reads, 545, 600), count_in_range(reads, 601, 609), count_in_range(reads, 0, 1440))
+        tests: |
+          for _times in [[], [5], [540, 545, 545, 560, 600, 600, 610, 655], [1, 1, 1, 2, 2, 3], [0, 10, 20, 30, 40]]:
+              for _start in range(-1, 42, 3):
+                  for _end in range(_start, 42, 4):
+                      _want = len([_t for _t in _times if _start <= _t <= _end])
+                      _got = count_in_range(_times, _start, _end)
+                      assert _got == _want, "count_in_range(" + str(_times) + ", " + str(_start) + ", " + str(_end) + ") should be " + str(_want) + ", not " + str(_got)
+          for _start, _end in [(545, 600), (540, 540), (600, 600), (601, 609), (655, 700)]:
+              _times = [540, 545, 545, 560, 600, 600, 610, 655]
+              _want = len([_t for _t in _times if _start <= _t <= _end])
+              _got = count_in_range(_times, _start, _end)
+              assert _got == _want, "count_in_range(" + str(_times) + ", " + str(_start) + ", " + str(_end) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "5 0 8", "The program should print 5 0 8"
+        wrong:
+          - |
+            import bisect
+
+
+            def count_in_range(times, start, end):
+                # times is sorted. Return how many times t have start <= t <= end, using bisect.
+                return bisect.bisect_left(times, end) - bisect.bisect_left(times, start)
+
+
+            reads = [540, 545, 545, 560, 600, 600, 610, 655]
+            print(count_in_range(reads, 545, 600), count_in_range(reads, 601, 609), count_in_range(reads, 0, 1440))
+          - |
+            import bisect
+
+
+            def count_in_range(times, start, end):
+                # times is sorted. Return how many times t have start <= t <= end, using bisect.
+                return bisect.bisect_right(times, end) - bisect.bisect_right(times, start)
+
+
+            reads = [540, 545, 545, 560, 600, 600, 610, 655]
+            print(count_in_range(reads, 545, 600), count_in_range(reads, 601, 609), count_in_range(reads, 0, 1440))
+          - |
+            import bisect
+
+
+            def count_in_range(times, start, end):
+                # times is sorted. Return how many times t have start <= t <= end, using bisect.
+                return bisect.bisect_left(times, end) - bisect.bisect_right(times, start)
+
+
+            reads = [540, 545, 545, 560, 600, 600, 610, 655]
+            print(count_in_range(reads, 545, 600), count_in_range(reads, 601, 609), count_in_range(reads, 0, 1440))
+        explanation: |
+          `bisect_right(times, end)` counts the readings at most `end`, and `bisect_left(times, start)` counts those less than `start`; the difference is the readings from `start` to `end`, both included. Using `bisect_left` for `end` drops readings exactly at `end`, using `bisect_right` for `start` drops readings exactly at `start`, and swapping both drops both and can even go negative. Each call costs about $\log_2 n$ comparisons, so a day of ten lakh readings answers any window in about 40.
+    - question:
+        id: write-min-capacity
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Parcels must be shipped in the order given, and each day a van takes parcels from the front of the line until the next one would push its load over its capacity. `days_needed(parcels, capacity)` counts the days. Write `min_capacity(parcels, days)`, the smallest whole-number capacity that ships every parcel within `days` days, by binary search on the capacity.
+        starter: |
+          def days_needed(parcels, capacity):
+              # Parcels go into the van in the order given; a day ends when the next one will not fit.
+              days = 1
+              load = 0
+              for w in parcels:
+                  if load + w > capacity:
+                      days += 1
+                      load = 0
+                  load += w
+              return days
+
+
+          def min_capacity(parcels, days):
+              # The smallest whole-number capacity that ships every parcel, in order, within days days.
+              return sum(parcels)
+
+
+          print(min_capacity([3, 2, 2, 4, 1, 4], 3), min_capacity([3, 2, 2, 4, 1, 4], 1), min_capacity([5], 4))
+        solution: |
+          def days_needed(parcels, capacity):
+              # Parcels go into the van in the order given; a day ends when the next one will not fit.
+              days = 1
+              load = 0
+              for w in parcels:
+                  if load + w > capacity:
+                      days += 1
+                      load = 0
+                  load += w
+              return days
+
+
+          def min_capacity(parcels, days):
+              # The smallest whole-number capacity that ships every parcel, in order, within days days.
+              lo = max(parcels)
+              hi = sum(parcels)
+              while lo < hi:
+                  mid = (lo + hi) // 2
+                  if days_needed(parcels, mid) <= days:
+                      hi = mid
+                  else:
+                      lo = mid + 1
+              return lo
+
+
+          print(min_capacity([3, 2, 2, 4, 1, 4], 3), min_capacity([3, 2, 2, 4, 1, 4], 1), min_capacity([5], 4))
+        tests: |
+          def _days(_parcels, _capacity):
+              _d = 1
+              _load = 0
+              for _w in _parcels:
+                  if _load + _w > _capacity:
+                      _d += 1
+                      _load = 0
+                  _load += _w
+              return _d
+
+
+          for _parcels in [[5], [3, 2, 2, 4, 1, 4], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [7, 2, 5, 10, 8], [1, 1, 1, 1, 1, 1, 1], [10, 1, 1, 1, 10]]:
+              for _days_allowed in range(1, len(_parcels) + 2):
+                  _want = max(_parcels)
+                  while _days(_parcels, _want) > _days_allowed:
+                      _want += 1
+                  _got = min_capacity(list(_parcels), _days_allowed)
+                  assert _got == _want, "min_capacity(" + str(_parcels) + ", " + str(_days_allowed) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "6 16 5", "The program should print 6 16 5"
+        wrong:
+          - |
+            def days_needed(parcels, capacity):
+                # Parcels go into the van in the order given; a day ends when the next one will not fit.
+                days = 1
+                load = 0
+                for w in parcels:
+                    if load + w > capacity:
+                        days += 1
+                        load = 0
+                    load += w
+                return days
+
+
+            def min_capacity(parcels, days):
+                # The smallest whole-number capacity that ships every parcel, in order, within days days.
+                lo = max(parcels)
+                hi = sum(parcels)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if days_needed(parcels, mid) < days:
+                        hi = mid
+                    else:
+                        lo = mid + 1
+                return lo
+
+
+            print(min_capacity([3, 2, 2, 4, 1, 4], 3), min_capacity([3, 2, 2, 4, 1, 4], 1), min_capacity([5], 4))
+          - |
+            def days_needed(parcels, capacity):
+                # Parcels go into the van in the order given; a day ends when the next one will not fit.
+                days = 1
+                load = 0
+                for w in parcels:
+                    if load + w > capacity:
+                        days += 1
+                        load = 0
+                    load += w
+                return days
+
+
+            def min_capacity(parcels, days):
+                # The smallest whole-number capacity that ships every parcel, in order, within days days.
+                lo = max(parcels)
+                hi = max(parcels)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if days_needed(parcels, mid) <= days:
+                        hi = mid
+                    else:
+                        lo = mid + 1
+                return lo
+
+
+            print(min_capacity([3, 2, 2, 4, 1, 4], 3), min_capacity([3, 2, 2, 4, 1, 4], 1), min_capacity([5], 4))
+          - |
+            def days_needed(parcels, capacity):
+                # Parcels go into the van in the order given; a day ends when the next one will not fit.
+                days = 1
+                load = 0
+                for w in parcels:
+                    if load + w > capacity:
+                        days += 1
+                        load = 0
+                    load += w
+                return days
+
+
+            def min_capacity(parcels, days):
+                # The smallest whole-number capacity that ships every parcel, in order, within days days.
+                lo = max(parcels)
+                hi = sum(parcels)
+                while lo <= hi:
+                    mid = (lo + hi) // 2
+                    if days_needed(parcels, mid) <= days:
+                        hi = mid - 1
+                    else:
+                        lo = mid + 1
+                return hi
+
+
+            print(min_capacity([3, 2, 2, 4, 1, 4], 3), min_capacity([3, 2, 2, 4, 1, 4], 1), min_capacity([5], 4))
+        explanation: |
+          No capacity below the heaviest parcel can carry it, and a capacity equal to the total weight ships everything in one day, so the answer lies from `max(parcels)` to `sum(parcels)`. A bigger van never needs more days, so "fits within `days`" switches once from false to true, and the search keeps `hi` on a capacity that works and `lo` below or on the first that does. Testing `< days` demands finishing a day early; capping the range at the heaviest parcel cannot answer when one day is allowed; and the closed-interval version returns `hi`, which ends one below the answer.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Commit 0 works and commit 1,000 is broken; exactly one commit in between broke it, and every later commit is broken too. Each test of a commit takes 6 minutes. In the worst case, how many minutes does a binary search take to find the breaking commit?
+        answer: "60"
+        explanation: |
+          The breaking commit is one of commits 1 to 1,000, so there are 1,000 possibilities. Each test halves them, and $2^{10} = 1{,}024 \ge 1{,}000$, so 10 tests always suffice and 9 do not, since $2^9 = 512$. $10 \times 6 = 60$ minutes.
+    - question:
+        id: work-few-lookups
+        type: choice
+        system: s2
+        prompt: |
+          A script gets an unsorted list of 10 lakh phone numbers and must check whether 5 particular numbers are in it, once. Which approach does the least work?
+        options:
+          - "Scan the list once for each of the 5 numbers, about 50 lakh comparisons at most."
+          - "Sort the list, then binary search 5 times."
+          - "Sort the list, then scan it."
+          - "Binary search the unsorted list 5 times."
+        answer: 0
+        explanation: |
+          Sorting 10 lakh items costs about $n \log_2 n \approx 2$ crore comparisons before the first search starts, four times the cost of five scans. Sorting pays off only when the lookups are many, roughly more than $\log_2 n$ of them. Binary search on an unsorted list gives wrong answers.
+  connections:
+    - text: |
+        60 minutes. The breaking commit is one of 1,000, and each test halves the commits still suspected: 500, 250, 125, 63, 32, 16, 8, 4, 2, 1. Ten tests of 6 minutes each, where testing every commit in turn could take 100 hours. This is what `git bisect` does, and it works because "is this commit broken?" switches only once along the history.
+
+        Binary search halves a problem and keeps one half. [[s3.divide-and-conquer-and-the-master-theorem]] studies algorithms that split a problem, solve some or all of the parts, and combine the results, and gives one rule for counting the cost of all of them, binary search and merge sort included. Searching for the smallest answer that works is a tool that returns among [[s3.greedy-algorithms]], whose quick yes-or-no checks it often uses. And the database indexes of [[q0.indexes-from-the-outside]] are, at heart, sorted structures that let a query find a row or a range of rows with a binary search instead of reading the whole table.

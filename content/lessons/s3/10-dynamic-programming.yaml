@@ -1,0 +1,529 @@
+concept: s3.dynamic-programming
+minutes: 100
+claim: You can solve a problem whose subproblems overlap by naming the subproblems, writing the recurrence that builds each answer from smaller ones, and filling a table in an order where every answer needed is already there, top down with a memo or bottom up with a table, and you can apply this to counting routes, making change with any coins, packing whole items and measuring how far apart two words are.
+recalls: [s3.greedy-algorithms]
+uses: [s3.divide-and-conquer-and-the-master-theorem, s3.topological-sort, s3.shortest-paths, f3.recurrences, f3.permutations-and-combinations, s1.recursion, s0.dictionaries-and-sets, s3.measuring-and-predicting-running-time]
+leads: [s3.amortised-analysis, s3.intractability-p-np-and-heuristics]
+starter: |
+  # Scratch space. The same small answers are needed again and again.
+  memo = {}
+
+  def fib(n):
+      if n < 2:
+          return n
+      if n not in memo:
+          memo[n] = fib(n - 1) + fib(n - 2)
+      return memo[n]
+
+  print(fib(30), len(memo))
+parts:
+  recall:
+    - text: |
+        [[s3.greedy-algorithms]] ended with two problems a greedy rule gets wrong: paying with canteen tokens of ₹1, ₹4 and ₹6, and packing whole machines into a truck. Trying every possibility would be right but hopelessly slow. This lesson's method sits in between: it considers every possibility, but never works out the same thing twice. Three quick pulls first.
+  puzzle:
+    - text: |
+        A courtyard 2 metres wide and 10 metres long is to be paved with stone slabs of 2 metres by 1 metre. Each slab can lie across the courtyard or along it, and slabs may not be cut or overlap.
+
+        **In how many different ways can the courtyard be paved?**
+  intuition:
+    - text: |
+        Count the routes across a city grid from the top-left corner to the bottom-right, moving only right or down. Listing routes one by one is slow, because there are many, and most of them share long stretches. Instead, notice that every route into a corner arrives either from the corner above it or from the corner to its left. So the number of routes to a corner is the routes to the one above plus the routes to the one on the left. Fill in the corners row by row and each needs only two numbers already written down.
+
+        That is **dynamic programming**: solve a problem by solving smaller versions of it, write each small answer in a table, and build bigger answers from the table instead of solving the small problems again. The figure fills the table for a grid of 4 rows and 5 columns. Step through it.
+    - figure: dp-grid
+      props: { rows: 4, cols: 5, filled: 0 }
+    - text: |
+        The top row and left column hold 1, since there is only one way to reach them, straight along the edge. Every other cell is the sum of the cell above and the cell to the left, and the far corner ends with 35. That matches [[f3.permutations-and-combinations]]: a route is 7 moves, of which 3 are down, and $\binom{7}{3} = 35$. The table found it with a dozen additions and no formula, and it would still work if some corners were blocked, where the formula would not.
+  derivation:
+    - text: |
+        **Overlapping subproblems.** The Fibonacci numbers, $F(n) = F(n - 1) + F(n - 2)$ from [[f3.recurrences]], show what goes wrong without a table. A direct recursive function, as in [[s1.recursion]], calls itself for $F(n - 1)$ and $F(n - 2)$; the first of those calls $F(n - 2)$ again, and so on. The same small values are recomputed an exponential number of times: computing $F(30)$ this way makes over 26 lakh calls. Divide and conquer, from [[s3.divide-and-conquer-and-the-master-theorem]], had subproblems that did not overlap, so nothing was repeated; here they overlap heavily.
+
+        **Two ways to remember.** **Top down**: keep the recursive function, but before computing a value check a dictionary, the **memo**, and store each value the first time it is computed. **Bottom up**: fill a table from the smallest subproblem upward, in an order where everything a cell needs is already filled. Both compute each subproblem once. The cost is the number of subproblems times the work for each: for Fibonacci, $n$ subproblems of constant work, $\Theta(n)$ instead of exponential.
+    - question:
+        id: derivation-calls
+        type: numeric
+        system: s2
+        prompt: |
+          A plain recursive function computes Fibonacci numbers: `fib(n)` returns `n` if `n < 2`, and otherwise calls `fib(n - 1)` and `fib(n - 2)`. How many calls in all, the first included, does `fib(5)` make?
+        answer: "15"
+        explanation: |
+          Calls for $n = 0$ and $n = 1$ are 1 each. For larger $n$, $C(n) = 1 + C(n - 1) + C(n - 2)$: $C(2) = 3$, $C(3) = 5$, $C(4) = 9$, $C(5) = 15$. With a memo, only 6 distinct values are ever computed.
+    - text: |
+        **The recipe.** Every dynamic program answers four questions.
+
+        1. **Subproblems.** What smaller problems, written with one or two numbers, would be enough? For change-making: the fewest tokens for each amount from 0 up to the target.
+        2. **Recurrence.** How does one subproblem's answer come from smaller ones? The last token used is one of the token values $t$, so $\text{best}(a) = 1 + \min_t \text{best}(a - t)$ over the tokens with $t \le a$.
+        3. **Order and base cases.** Which subproblems are solved directly, and in what order are the rest filled? $\text{best}(0) = 0$, and amounts in increasing order, so $a - t$ is always ready. The subproblems with arrows from each to those it needs form a DAG, and the order is a topological order, as in [[s3.topological-sort]].
+        4. **Answer and cost.** Which entry is the answer, and how much work is there? $\text{best}(\text{target})$; target times the number of token values.
+
+        For tokens of ₹1, ₹4 and ₹6 this gives best(8) = 2, using 4 and 4, where largest-first used three. Recording which token achieved each minimum lets the tokens themselves be read back from the table.
+
+        Bellman and Ford's method from [[s3.shortest-paths]] was this recipe too: the subproblem is the shortest route to each node using at most $k$ edges, and each pass fills the next layer from the last.
+    - question:
+        id: derivation-tokens
+        type: numeric
+        system: s2
+        prompt: |
+          Tokens are ₹1, ₹4 and ₹6, and $\text{best}(a)$ is the fewest tokens adding to $a$. Given $\text{best}(6) = 1$, $\text{best}(8) = 2$ and $\text{best}(11) = 3$, what is $\text{best}(12)$?
+        answer: "2"
+        explanation: |
+          $\text{best}(12) = 1 + \min(\text{best}(11), \text{best}(8), \text{best}(6)) = 1 + \min(3, 2, 1) = 2$: two ₹6 tokens.
+    - text: |
+        **Packing whole items.** A truck carries $C$ tonnes, and machine $i$ weighs $w_i$ and is worth $v_i$; each goes whole or not at all. Let $\text{best}(i, c)$ be the most value from the first $i$ machines in $c$ tonnes of room. Machine $i$ is either left behind or taken:
+
+        $$\text{best}(i, c) = \max\big(\text{best}(i - 1, c),\ v_i + \text{best}(i - 1, c - w_i)\big),$$
+
+        the second only if $w_i \le c$. There are $n \times C$ subproblems, each constant work. A single row of $C + 1$ entries suffices if room is filled from $C$ downward, so each machine is counted at most once; filling upward would let a machine be taken again and again. The cost $\Theta(nC)$ looks polynomial, but $C$ is a number, not a count: a capacity written with $d$ digits can be $10^d$, and the table grows with it.
+
+        **How far apart are two words?** The **edit distance** between two words is the fewest single-letter insertions, deletions and replacements that turn one into the other; spell-checkers, the `diff` tool and DNA comparison all use it. Let $d(i, j)$ be the distance between the first $i$ letters of $a$ and the first $j$ of $b$. The last step either deletes $a$'s $i$-th letter, inserts $b$'s $j$-th, or matches the two, at a cost of 0 if they are equal and 1 if not:
+
+        $$d(i, j) = \min\big(d(i - 1, j) + 1,\ d(i, j - 1) + 1,\ d(i - 1, j - 1) + [a_i \ne b_j]\big),$$
+
+        with $d(i, 0) = i$ and $d(0, j) = j$. A table of $(|a| + 1) \times (|b| + 1)$ entries, filled row by row, gives $d(|a|, |b|)$.
+    - question:
+        id: order-recipe
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of designing a dynamic program in order.
+        steps:
+          - "Decide what the subproblems are."
+          - "Write the recurrence that gives each subproblem's answer from smaller ones."
+          - "Choose the base cases and an order in which every needed answer is filled first."
+          - "Read the answer from the table and count the work."
+        explanation: |
+          A recurrence needs subproblems to relate, the order is chosen to suit the recurrence, and the table can only be read once it is filled.
+  formal:
+    - text: |
+        **Dynamic programming.** Applies when a problem's optimal answer is built from optimal answers to subproblems, and the subproblems overlap. Solve each subproblem once and store the answer.
+
+        **Top down.** Recursion with a memo. **Bottom up.** Fill a table in a topological order of the subproblem graph. Time: number of subproblems × work per subproblem.
+
+        **Change-making.** $\text{best}(0) = 0$; $\text{best}(a) = 1 + \min_{t \le a} \text{best}(a - t)$; $\Theta(A \cdot k)$ for target $A$ and $k$ token values.
+
+        **0/1 knapsack.** $\text{best}(i, c) = \max(\text{best}(i - 1, c),\ v_i + \text{best}(i - 1, c - w_i))$; $\Theta(nC)$, polynomial in the value $C$, not in its number of digits.
+
+        **Edit distance.** $d(i, 0) = i$, $d(0, j) = j$, $d(i, j) = \min(d(i - 1, j) + 1, d(i, j - 1) + 1, d(i - 1, j - 1) + [a_i \ne b_j])$; $\Theta(|a| \cdot |b|)$.
+  drill:
+    - text: Seconds each. Name the subproblem, then fill one entry.
+    - question:
+        id: drill-grid
+        type: numeric
+        system: s1
+        prompt: |
+          In a routes table, the cell above holds 10 and the cell to the left holds 15. What does the cell hold?
+        answer: "25"
+        explanation: Every route arrives from above or from the left, so $10 + 15 = 25$.
+    - question:
+        id: drill-fib
+        type: numeric
+        system: s1
+        prompt: |
+          $F(0) = 0$, $F(1) = 1$ and $F(n) = F(n - 1) + F(n - 2)$. What is $F(10)$?
+        answer: "55"
+        explanation: 0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55.
+    - question:
+        id: drill-edit
+        type: numeric
+        system: s1
+        prompt: |
+          What is the edit distance from "teh" to "the"?
+        answer: "2"
+        explanation: Two replacements, e to h and h to e. A swap of neighbouring letters is not one of the allowed steps.
+    - question:
+        id: drill-memo
+        type: choice
+        system: s1
+        prompt: |
+          What does a memo store?
+        options:
+          - "The answer to each subproblem, the first time it is computed"
+          - "Every call made, in order"
+          - "Only the final answer"
+          - "The inputs that caused errors"
+        answer: 0
+        explanation: Later requests for the same subproblem read the stored answer instead of recomputing it.
+    - question:
+        id: drill-knapsack-direction
+        type: choice
+        system: s1
+        prompt: |
+          In a one-row knapsack table, why is the room filled from the largest down?
+        options:
+          - "So that each item is counted at most once"
+          - "Because larger rooms are more valuable"
+          - "So the loop runs faster"
+          - "It makes no difference"
+        answer: 0
+        explanation: Filling upward would read entries already updated for the same item, letting it be packed again.
+    - question:
+        id: predict-memo-size
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          memo = {}
+
+          def ways(n):
+              if n <= 1:
+                  return 1
+              if n not in memo:
+                  memo[n] = ways(n - 1) + ways(n - 2)
+              return memo[n]
+
+          print(ways(6), len(memo))
+        output: "13 5"
+        explanation: ways(2) to ways(6) are 2, 3, 5, 8 and 13, and each is stored once, for $n$ from 2 to 6, so the memo holds 5 entries.
+    - question:
+        id: predict-table
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          best = [0, 1, 2, 3, 1]
+          print(1 + min(best[5 - 1], best[5 - 4]))
+        output: "2"
+        explanation: With tokens of 1 and 4, the fewest for 5 is one more than the best of 4 and of 1, both 1.
+  work:
+    - text: Slower now. For each problem, write the subproblem in words before reading the code.
+    - question:
+        id: fix-fewest-tokens
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `fewest_tokens(amount, tokens)` should return the fewest tokens adding to exactly `amount`, or `None` if no mix of tokens does. The program should print `3 None 0`. It prints `None None 0`. Find the fault and fix it.
+        starter: |
+          import math
+
+
+          def fewest_tokens(amount, tokens):
+              # Return the fewest tokens that add to exactly amount, or None if no mix of tokens does.
+              best = [math.inf] * (amount + 1)
+              best[0] = 0
+              for a in range(1, amount):
+                  for t in tokens:
+                      if t <= a and best[a - t] + 1 < best[a]:
+                          best[a] = best[a - t] + 1
+              if best[amount] == math.inf:
+                  return None
+              return best[amount]
+
+
+          print(fewest_tokens(9, [1, 4, 6]), fewest_tokens(7, [2, 4]), fewest_tokens(0, [5]))
+        solution: |
+          import math
+
+
+          def fewest_tokens(amount, tokens):
+              # Return the fewest tokens that add to exactly amount, or None if no mix of tokens does.
+              best = [math.inf] * (amount + 1)
+              best[0] = 0
+              for a in range(1, amount + 1):
+                  for t in tokens:
+                      if t <= a and best[a - t] + 1 < best[a]:
+                          best[a] = best[a - t] + 1
+              if best[amount] == math.inf:
+                  return None
+              return best[amount]
+
+
+          print(fewest_tokens(9, [1, 4, 6]), fewest_tokens(7, [2, 4]), fewest_tokens(0, [5]))
+        tests: |
+          def _reference(_amount, _tokens):
+              _best = {0: 0}
+              for _a in range(1, _amount + 1):
+                  _options = [_best[_a - _t] + 1 for _t in _tokens if _t <= _a and (_a - _t) in _best]
+                  if _options:
+                      _best[_a] = min(_options)
+              return _best.get(_amount)
+
+
+          for _tokens in [[1, 4, 6], [2, 4], [5], [1, 2, 5, 10, 20, 50], [3, 7], [1, 3, 4], [7, 11]]:
+              for _amount in range(0, 40):
+                  _want = _reference(_amount, _tokens)
+                  _got = fewest_tokens(_amount, list(_tokens))
+                  assert _got == _want, "fewest_tokens(" + str(_amount) + ", " + str(_tokens) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "3 None 0", "The program should print 3 None 0"
+        wrong:
+          - |
+            import math
+
+
+            def fewest_tokens(amount, tokens):
+                # Return the fewest tokens that add to exactly amount, or None if no mix of tokens does.
+                best = [math.inf] * (amount + 1)
+                best[0] = 1
+                for a in range(1, amount + 1):
+                    for t in tokens:
+                        if t <= a and best[a - t] + 1 < best[a]:
+                            best[a] = best[a - t] + 1
+                if best[amount] == math.inf:
+                    return None
+                return best[amount]
+
+
+            print(fewest_tokens(9, [1, 4, 6]), fewest_tokens(7, [2, 4]), fewest_tokens(0, [5]))
+          - |
+            import math
+
+
+            def fewest_tokens(amount, tokens):
+                # Return the fewest tokens that add to exactly amount, or None if no mix of tokens does.
+                count = 0
+                for t in sorted(tokens, reverse=True):
+                    while amount >= t:
+                        amount -= t
+                        count += 1
+                if amount > 0:
+                    return None
+                return count
+
+
+            print(fewest_tokens(9, [1, 4, 6]), fewest_tokens(7, [2, 4]), fewest_tokens(0, [5]))
+          - |
+            import math
+
+
+            def fewest_tokens(amount, tokens):
+                # Return the fewest tokens that add to exactly amount, or None if no mix of tokens does.
+                best = [math.inf] * (amount + 1)
+                best[0] = 0
+                for a in range(1, amount + 1):
+                    for t in tokens:
+                        if t <= a and best[a - t] + 1 < best[a]:
+                            best[a] = best[a - t] + 1
+                return best[amount]
+
+
+            print(fewest_tokens(9, [1, 4, 6]), fewest_tokens(7, [2, 4]), fewest_tokens(0, [5]))
+        explanation: |
+          `range(1, amount)` stops one short, so the entry for `amount` itself is never filled and stays infinite. `range(1, amount + 1)` fills every amount up to the target. Starting `best[0]` at 1 counts a token for paying nothing, and every answer comes out one too high; largest-first pays 9 with four tokens; and dropping the final check returns infinity instead of `None` when the amount cannot be made.
+    - question:
+        id: write-edit-distance
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `edit_distance(a, b)`, the fewest single-letter insertions, deletions and replacements that turn the word `a` into the word `b`, by filling a table of the distances between every beginning of `a` and every beginning of `b`.
+        starter: |
+          def edit_distance(a, b):
+              # The fewest single-letter insertions, deletions and replacements that turn a into b.
+              differ = 0
+              for i in range(min(len(a), len(b))):
+                  if a[i] != b[i]:
+                      differ += 1
+              return differ
+
+
+          print(edit_distance("recieve", "receive"), edit_distance("mumbai", "bombay"), edit_distance("", "chai"))
+        solution: |
+          def edit_distance(a, b):
+              # The fewest single-letter insertions, deletions and replacements that turn a into b.
+              rows = len(a) + 1
+              cols = len(b) + 1
+              d = [[0] * cols for _ in range(rows)]
+              for i in range(rows):
+                  d[i][0] = i
+              for j in range(cols):
+                  d[0][j] = j
+              for i in range(1, rows):
+                  for j in range(1, cols):
+                      change = 0 if a[i - 1] == b[j - 1] else 1
+                      d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + change)
+              return d[rows - 1][cols - 1]
+
+
+          print(edit_distance("recieve", "receive"), edit_distance("mumbai", "bombay"), edit_distance("", "chai"))
+        tests: |
+          import random as _random
+
+
+          def _reference(_a, _b):
+              _memo = {}
+
+              def _go(_i, _j):
+                  if _i == 0 or _j == 0:
+                      return _i + _j
+                  if (_i, _j) not in _memo:
+                      _memo[(_i, _j)] = min(_go(_i - 1, _j) + 1, _go(_i, _j - 1) + 1, _go(_i - 1, _j - 1) + (0 if _a[_i - 1] == _b[_j - 1] else 1))
+                  return _memo[(_i, _j)]
+
+              return _go(len(_a), len(_b))
+
+
+          _rng = _random.Random(67)
+          _pairs = [("recieve", "receive"), ("mumbai", "bombay"), ("", "chai"), ("chai", ""), ("", ""), ("kolkata", "calcutta"), ("abc", "abc"), ("ab", "ba"), ("teh", "the"), ("pune", "puna"), ("bengaluru", "bangalore")]
+          for _ in range(60):
+              _pairs.append(("".join(_rng.choice("abc") for _ in range(_rng.randint(0, 7))), "".join(_rng.choice("abc") for _ in range(_rng.randint(0, 7)))))
+          for _a, _b in _pairs:
+              _want = _reference(_a, _b)
+              _got = edit_distance(_a, _b)
+              assert _got == _want, "edit_distance(" + repr(_a) + ", " + repr(_b) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "2 3 4", "The program should print 2 3 4"
+        wrong:
+          - |
+            def edit_distance(a, b):
+                # The fewest single-letter insertions, deletions and replacements that turn a into b.
+                rows = len(a) + 1
+                cols = len(b) + 1
+                d = [[0] * cols for _ in range(rows)]
+                for i in range(1, rows):
+                    for j in range(1, cols):
+                        change = 0 if a[i - 1] == b[j - 1] else 1
+                        d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + change)
+                return d[rows - 1][cols - 1]
+
+
+            print(edit_distance("recieve", "receive"), edit_distance("mumbai", "bombay"), edit_distance("", "chai"))
+          - |
+            def edit_distance(a, b):
+                # The fewest single-letter insertions, deletions and replacements that turn a into b.
+                rows = len(a) + 1
+                cols = len(b) + 1
+                d = [[0] * cols for _ in range(rows)]
+                for i in range(rows):
+                    d[i][0] = i
+                for j in range(cols):
+                    d[0][j] = j
+                for i in range(1, rows):
+                    for j in range(1, cols):
+                        change = 0 if a[i - 1] == b[j - 1] else 1
+                        d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + 1)
+                return d[rows - 1][cols - 1]
+
+
+            print(edit_distance("recieve", "receive"), edit_distance("mumbai", "bombay"), edit_distance("", "chai"))
+          - |
+            def edit_distance(a, b):
+                # The fewest single-letter insertions, deletions and replacements that turn a into b.
+                differ = abs(len(a) - len(b))
+                for i in range(min(len(a), len(b))):
+                    if a[i] != b[i]:
+                        differ += 1
+                return differ
+
+
+            print(edit_distance("recieve", "receive"), edit_distance("mumbai", "bombay"), edit_distance("", "chai"))
+        explanation: |
+          `d[i][j]` is the distance between the first `i` letters of `a` and the first `j` of `b`; the first row and column are the cost of building a word from nothing, or deleting it to nothing. Leaving them at 0 makes empty beginnings free; charging 1 even for matching letters counts every letter as changed; and comparing letters position by position cannot see that one inserted letter shifts all the rest, so "kolkata" to "calcutta" comes out 6 instead of 5.
+    - question:
+        id: write-best-load
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `best_load(items, capacity)`. Each item is `(tonnes, lakh)` for a machine that must go whole or not at all, and the truck carries at most `capacity` tonnes, a whole number. Return the most value, in lakh, that fits.
+        starter: |
+          def best_load(items, capacity):
+              # items is a list of (tonnes, lakh) for machines that must each go whole or not at all.
+              # Return the most value, in lakh, that fits in a truck carrying capacity tonnes.
+              return 0
+
+
+          print(best_load([(6, 6), (5, 4), (5, 4)], 10), best_load([(3, 5), (4, 6), (2, 3)], 7), best_load([(8, 9)], 7))
+        solution: |
+          def best_load(items, capacity):
+              # items is a list of (tonnes, lakh) for machines that must each go whole or not at all.
+              # Return the most value, in lakh, that fits in a truck carrying capacity tonnes.
+              best = [0] * (capacity + 1)
+              for tonnes, lakh in items:
+                  for room in range(capacity, tonnes - 1, -1):
+                      best[room] = max(best[room], best[room - tonnes] + lakh)
+              return best[capacity]
+
+
+          print(best_load([(6, 6), (5, 4), (5, 4)], 10), best_load([(3, 5), (4, 6), (2, 3)], 7), best_load([(8, 9)], 7))
+        tests: |
+          import random as _random
+
+
+          def _reference(_items, _capacity):
+              _most = 0
+              _n = len(_items)
+              for _mask in range(1 << _n):
+                  _w = sum(_items[_i][0] for _i in range(_n) if _mask >> _i & 1)
+                  _v = sum(_items[_i][1] for _i in range(_n) if _mask >> _i & 1)
+                  if _w <= _capacity:
+                      _most = max(_most, _v)
+              return _most
+
+
+          _rng = _random.Random(71)
+          _cases = [([(6, 6), (5, 4), (5, 4)], 10), ([(3, 5), (4, 6), (2, 3)], 7), ([(8, 9)], 7), ([], 5), ([(1, 1)], 0), ([(2, 3), (2, 3), (2, 3)], 5), ([(5, 10), (4, 7), (3, 5)], 7)]
+          for _ in range(50):
+              _items = [(_rng.randint(1, 6), _rng.randint(1, 9)) for _ in range(_rng.randint(1, 7))]
+              _cases.append((_items, _rng.randint(0, 15)))
+          for _items, _capacity in _cases:
+              _want = _reference(_items, _capacity)
+              _got = best_load(list(_items), _capacity)
+              assert _got == _want, "best_load(" + str(_items) + ", " + str(_capacity) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "8 11 0", "The program should print 8 11 0"
+        wrong:
+          - |
+            def best_load(items, capacity):
+                # items is a list of (tonnes, lakh) for machines that must each go whole or not at all.
+                # Return the most value, in lakh, that fits in a truck carrying capacity tonnes.
+                best = [0] * (capacity + 1)
+                for tonnes, lakh in items:
+                    for room in range(tonnes, capacity + 1):
+                        best[room] = max(best[room], best[room - tonnes] + lakh)
+                return best[capacity]
+
+
+            print(best_load([(6, 6), (5, 4), (5, 4)], 10), best_load([(3, 5), (4, 6), (2, 3)], 7), best_load([(8, 9)], 7))
+          - |
+            def best_load(items, capacity):
+                # items is a list of (tonnes, lakh) for machines that must each go whole or not at all.
+                # Return the most value, in lakh, that fits in a truck carrying capacity tonnes.
+                total = 0
+                for tonnes, lakh in sorted(items, key=lambda m: m[1] / m[0], reverse=True):
+                    if tonnes <= capacity:
+                        capacity -= tonnes
+                        total += lakh
+                return total
+
+
+            print(best_load([(6, 6), (5, 4), (5, 4)], 10), best_load([(3, 5), (4, 6), (2, 3)], 7), best_load([(8, 9)], 7))
+          - |
+            def best_load(items, capacity):
+                # items is a list of (tonnes, lakh) for machines that must each go whole or not at all.
+                # Return the most value, in lakh, that fits in a truck carrying capacity tonnes.
+                best = [0] * (capacity + 1)
+                for tonnes, lakh in items:
+                    for room in range(capacity, tonnes - 1, -1):
+                        best[room] = best[room - tonnes] + lakh
+                return best[capacity]
+
+
+            print(best_load([(6, 6), (5, 4), (5, 4)], 10), best_load([(3, 5), (4, 6), (2, 3)], 7), best_load([(8, 9)], 7))
+        explanation: |
+          `best[room]` is the most value that fits in `room` tonnes using the machines seen so far. For each machine, a room either leaves it out or takes it plus the best for the room left over. Filling room from the top down means `best[room - tonnes]` still describes the machines before this one. Filling upward lets one machine be packed many times; packing by value per tonne is the greedy rule that fails on whole items; and always taking the machine forgets the choice to leave it out.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          A courtyard 2 metres wide and 10 metres long is paved with uncut 2 × 1 slabs, each lying across or along it. In how many different ways can it be paved?
+        answer: "89"
+        explanation: |
+          Look at the courtyard's first end. Either one slab lies across it, leaving a 2 × 9 courtyard, or two slabs lie along it side by side, leaving 2 × 8. So $W(n) = W(n - 1) + W(n - 2)$, with $W(1) = 1$ and $W(2) = 2$: 1, 2, 3, 5, 8, 13, 21, 34, 55, 89.
+    - question:
+        id: work-when
+        type: choice
+        system: s2
+        prompt: |
+          Which problem gains most from dynamic programming?
+        options:
+          - "The fewest coins to pay every amount up to ₹1,000 with an unusual set of coins"
+          - "Sorting a list of names"
+          - "Finding the largest number in a list"
+          - "Searching for a word in a sorted dictionary"
+        answer: 0
+        explanation: |
+          Each amount's answer is built from the answers for smaller amounts, which are shared by many larger ones: overlapping subproblems. Sorting splits into independent halves, and the other two need one pass or one halving search with nothing to reuse.
+  connections:
+    - text: |
+        89 ways. A slab across the first metre leaves a courtyard one metre shorter, and two slabs along the first two metres leave one two metres shorter, so the counts follow the Fibonacci pattern: 1, 2, 3, 5 and on to 89 for ten metres. Listing all 89 would be tedious; the table needs eight additions.
+
+        Dynamic programming turns many exponential searches into polynomial ones, but not all. The knapsack table grows with the capacity's value, not its length, and [[s3.intractability-p-np-and-heuristics]] explains why no method is known that is fast for every packing problem, and what engineers do instead. Meanwhile, [[s3.amortised-analysis]] returns to counting cost, for operations such as appending to a list, which are usually cheap but occasionally expensive, and shows how to average the occasional cost over the many cheap ones.

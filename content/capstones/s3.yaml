@@ -1,0 +1,486 @@
+cluster: S3
+title: Running a city's delivery network
+minutes: 100
+claim: You will have taken a grocery-delivery service through a day of algorithmic decisions, predicting a slow search from its measurements and fixing it with sorting and binary search, choosing the rider who can reach a store soonest with one run of Dijkstra's algorithm, laying the cheapest fibre between dark stores, planning a rider's most valuable day by dynamic programming, keeping a log and a fair sample of orders cheaply, and judging how good a van's route is when the best one is out of reach.
+brief: |
+  This cluster was about choosing and judging algorithms: predicting running time from measurements, sorting and searching, divide and conquer, graphs and their paths and trees, greedy rules and dynamic programmes, amortised and randomised costs, and the problems for which no fast algorithm is known. Each lesson had its own neat examples. Real systems mix them, and the skill is to see which one a messy problem is.
+
+  **The project.** A grocery-delivery service in Bengaluru runs dark stores, small warehouses that only serve online orders, with riders on scooters for single orders and vans for bulk ones. During one day, its engineering team meets six problems, from a search box that has become slow to a planning team that wants perfect van routes.
+
+  Each stage below is one of those problems. Nothing here is new: each stage applies a lesson of this cluster, and often two at once. The task in every stage is the same: recognise the problem, choose the method, and know what it guarantees.
+starter: |
+  # Scratch space for the day's problems.
+  import bisect
+
+  ids = sorted([5821, 1093, 7740, 2604, 9918, 3357])
+  at = bisect.bisect_left(ids, 7740)
+  print(ids, at, ids[at] == 7740)
+stages:
+  - title: The slow search box
+    blocks:
+      - text: |
+          Support staff type an order ID into a search box, and the service checks whether it is among the day's orders by scanning a list kept in the order they arrived. A nightly reconciliation job looks up every one of the day's orders the same way, and it has become painfully slow. The team timed it: 0.8 seconds with 10,000 orders, 3.2 seconds with 20,000.
+      - question:
+          id: search-predict
+          type: numeric
+          system: s2
+          concepts: [s3.measuring-and-predicting-running-time]
+          prompt: |
+            If the pattern holds, how many seconds will the job take with 80,000 orders?
+          answer: "51.2"
+          tolerance: "0.1"
+          explanation: |
+            Doubling the orders multiplied the time by 4, the signature of quadratic growth. From 10,000 to 80,000 is three doublings, so the time grows by $4^3 = 64$: $0.8 \times 64 = 51.2$ seconds. Each of the $n$ lookups scans up to $n$ orders.
+      - question:
+          id: search-binary
+          type: numeric
+          system: s1
+          concepts: [s3.binary-search, s3.sorting]
+          prompt: |
+            The team sorts the IDs once and switches to binary search. At most how many comparisons does one lookup need among 10,00,000 sorted IDs?
+          answer: "20"
+          explanation: |
+            Each comparison halves the range, and $2^{20} = 10{,}48{,}576$ is the first power of 2 above 10 lakh, so 20 comparisons always suffice. Sorting costs $n \log n$ once, and every lookup after that is logarithmic, so the nightly job becomes $n \log n$ in all.
+  - title: Which rider goes
+    blocks:
+      - text: |
+          When an order is packed, the dispatcher must send the rider who can reach the dark store soonest. The city is a graph of junctions joined by two-way roads, each with its travel time in minutes, and each free rider waits at some junction.
+      - question:
+          id: nearest-rider
+          type: code
+          mode: write
+          system: s2
+          concepts: [s3.shortest-paths]
+          prompt: |
+            Write `nearest_rider(n, roads, riders, restaurant)`. Junctions are numbered 0 to `n - 1`; `roads` lists two-way roads `(a, b, minutes)`; `riders` maps each rider's name to a junction. Return `(minutes, name)` for the rider who can reach junction `restaurant` soonest, the name first in alphabetical order if two are equally close, or `None` if no rider can reach it. Run Dijkstra's algorithm once, from the restaurant.
+          starter: |
+            import heapq
+
+
+            def nearest_rider(n, roads, riders, restaurant):
+                # Roads are two-way (a, b, minutes) between junctions 0 to n - 1; riders maps each rider to a junction.
+                # Return (minutes, rider) for the rider who can reach the restaurant soonest, or None if none can.
+                return None
+
+
+            roads = [(0, 1, 4), (1, 2, 3), (0, 3, 9), (3, 2, 2), (2, 4, 6), (5, 6, 1)]
+            riders = {"Asha": 0, "Bilal": 3, "Chitra": 4, "Dev": 6}
+            print(nearest_rider(7, roads, riders, 2), nearest_rider(7, roads, {"Dev": 6}, 2))
+          solution: |
+            import heapq
+
+
+            def nearest_rider(n, roads, riders, restaurant):
+                # Roads are two-way (a, b, minutes) between junctions 0 to n - 1; riders maps each rider to a junction.
+                # Return (minutes, rider) for the rider who can reach the restaurant soonest, or None if none can.
+                links = [[] for i in range(n)]
+                for a, b, minutes in roads:
+                    links[a].append((b, minutes))
+                    links[b].append((a, minutes))
+                best = [None] * n
+                best[restaurant] = 0
+                heap = [(0, restaurant)]
+                while heap:
+                    d, here = heapq.heappop(heap)
+                    if d == best[here]:
+                        for there, minutes in links[here]:
+                            if best[there] is None or d + minutes < best[there]:
+                                best[there] = d + minutes
+                                heapq.heappush(heap, (d + minutes, there))
+                found = None
+                for rider in sorted(riders):
+                    at = best[riders[rider]]
+                    if at is not None and (found is None or at < found[0]):
+                        found = (at, rider)
+                return found
+
+
+            roads = [(0, 1, 4), (1, 2, 3), (0, 3, 9), (3, 2, 2), (2, 4, 6), (5, 6, 1)]
+            riders = {"Asha": 0, "Bilal": 3, "Chitra": 4, "Dev": 6}
+            print(nearest_rider(7, roads, riders, 2), nearest_rider(7, roads, {"Dev": 6}, 2))
+          tests: |
+            import random as _random
+
+
+            def _reference(n, roads, riders, restaurant):
+                _d = [None] * n
+                _d[restaurant] = 0
+                for _ in range(n):
+                    for _a, _b, _m in roads:
+                        for _x, _y in [(_a, _b), (_b, _a)]:
+                            if _d[_x] is not None and (_d[_y] is None or _d[_x] + _m < _d[_y]):
+                                _d[_y] = _d[_x] + _m
+                _found = None
+                for _r in sorted(riders):
+                    _at = _d[riders[_r]]
+                    if _at is not None and (_found is None or _at < _found[0]):
+                        _found = (_at, _r)
+                return _found
+
+
+            _rng = _random.Random(47)
+            _cases = [
+                (7, [(0, 1, 4), (1, 2, 3), (0, 3, 9), (3, 2, 2), (2, 4, 6), (5, 6, 1)], {"Asha": 0, "Bilal": 3, "Chitra": 4, "Dev": 6}, 2),
+                (7, [(0, 1, 4), (1, 2, 3), (0, 3, 9), (3, 2, 2), (2, 4, 6), (5, 6, 1)], {"Dev": 6}, 2),
+                (3, [(0, 1, 5), (1, 2, 5), (0, 2, 20)], {"Ravi": 0, "Meena": 2}, 1),
+                (2, [], {"Uma": 1}, 1),
+                (4, [(0, 1, 1), (1, 2, 1), (2, 3, 1), (0, 3, 10)], {"Kiran": 3, "Anil": 2}, 0),
+            ]
+            _names = ["Asha", "Bilal", "Chitra", "Dev", "Esha", "Farhan", "Gita", "Harish"]
+            for _ in range(40):
+                _n = _rng.randint(2, 9)
+                _roads = [(_rng.randrange(_n), _rng.randrange(_n), _rng.randint(1, 20)) for _ in range(_rng.randint(0, 14))]
+                _riders = {}
+                for _name in _rng.sample(_names, _rng.randint(1, 5)):
+                    _riders[_name] = _rng.randrange(_n)
+                _cases.append((_n, _roads, _riders, _rng.randrange(_n)))
+            for _n, _roads, _riders, _at in _cases:
+                _want = _reference(_n, _roads, _riders, _at)
+                _got = nearest_rider(_n, list(_roads), dict(_riders), _at)
+                assert _got == _want, "nearest_rider(" + str(_n) + ", " + str(_roads) + ", " + str(_riders) + ", " + str(_at) + ") should be " + str(_want) + ", not " + str(_got)
+            assert output.strip() == "(2, 'Bilal') None", "The program should print (2, 'Bilal') None"
+          wrong:
+            - |
+              import heapq
+
+
+              def nearest_rider(n, roads, riders, restaurant):
+                  # Roads are two-way (a, b, minutes) between junctions 0 to n - 1; riders maps each rider to a junction.
+                  # Return (minutes, rider) for the rider who can reach the restaurant soonest, or None if none can.
+                  links = [[] for i in range(n)]
+                  for a, b, minutes in roads:
+                      links[a].append((b, minutes))
+                  best = [None] * n
+                  best[restaurant] = 0
+                  heap = [(0, restaurant)]
+                  while heap:
+                      d, here = heapq.heappop(heap)
+                      if d == best[here]:
+                          for there, minutes in links[here]:
+                              if best[there] is None or d + minutes < best[there]:
+                                  best[there] = d + minutes
+                                  heapq.heappush(heap, (d + minutes, there))
+                  found = None
+                  for rider in sorted(riders):
+                      at = best[riders[rider]]
+                      if at is not None and (found is None or at < found[0]):
+                          found = (at, rider)
+                  return found
+
+
+              roads = [(0, 1, 4), (1, 2, 3), (0, 3, 9), (3, 2, 2), (2, 4, 6), (5, 6, 1)]
+              riders = {"Asha": 0, "Bilal": 3, "Chitra": 4, "Dev": 6}
+              print(nearest_rider(7, roads, riders, 2), nearest_rider(7, roads, {"Dev": 6}, 2))
+            - |
+              import heapq
+
+
+              def nearest_rider(n, roads, riders, restaurant):
+                  # Roads are two-way (a, b, minutes) between junctions 0 to n - 1; riders maps each rider to a junction.
+                  # Return (minutes, rider) for the rider who can reach the restaurant soonest, or None if none can.
+                  links = [[] for i in range(n)]
+                  for a, b, minutes in roads:
+                      links[a].append((b, minutes))
+                      links[b].append((a, minutes))
+                  best = [None] * n
+                  best[restaurant] = 0
+                  heap = [(0, restaurant)]
+                  while heap:
+                      d, here = heapq.heappop(heap)
+                      if d == best[here]:
+                          for there, minutes in links[here]:
+                              if best[there] is None:
+                                  best[there] = d + minutes
+                                  heapq.heappush(heap, (d + minutes, there))
+                  found = None
+                  for rider in sorted(riders):
+                      at = best[riders[rider]]
+                      if at is not None and (found is None or at < found[0]):
+                          found = (at, rider)
+                  return found
+
+
+              roads = [(0, 1, 4), (1, 2, 3), (0, 3, 9), (3, 2, 2), (2, 4, 6), (5, 6, 1)]
+              riders = {"Asha": 0, "Bilal": 3, "Chitra": 4, "Dev": 6}
+              print(nearest_rider(7, roads, riders, 2), nearest_rider(7, roads, {"Dev": 6}, 2))
+            - |
+              import heapq
+
+
+              def nearest_rider(n, roads, riders, restaurant):
+                  # Roads are two-way (a, b, minutes) between junctions 0 to n - 1; riders maps each rider to a junction.
+                  # Return (minutes, rider) for the rider who can reach the restaurant soonest, or None if none can.
+                  links = [[] for i in range(n)]
+                  for a, b, minutes in roads:
+                      links[a].append((b, minutes))
+                      links[b].append((a, minutes))
+                  best = [None] * n
+                  best[restaurant] = 0
+                  heap = [(0, restaurant)]
+                  while heap:
+                      d, here = heapq.heappop(heap)
+                      if d == best[here]:
+                          for there, minutes in links[here]:
+                              if best[there] is None or d + minutes < best[there]:
+                                  best[there] = d + minutes
+                                  heapq.heappush(heap, (d + minutes, there))
+                  found = None
+                  for rider in sorted(riders):
+                      at = best[riders[rider]]
+                      if found is None or at < found[0]:
+                          found = (at, rider)
+                  return found
+
+
+              roads = [(0, 1, 4), (1, 2, 3), (0, 3, 9), (3, 2, 2), (2, 4, 6), (5, 6, 1)]
+              riders = {"Asha": 0, "Bilal": 3, "Chitra": 4, "Dev": 6}
+              print(nearest_rider(7, roads, riders, 2), nearest_rider(7, roads, {"Dev": 6}, 2))
+          explanation: |
+            Roads are two-way, so the shortest time from a rider to the store equals the shortest time from the store to the rider, and one run of Dijkstra's algorithm from the store answers for every rider at once. Storing each road in one direction only cuts the store off from riders; fixing a junction's time when it is first reached, as breadth-first search would, misses a later, faster route; and comparing a rider who cannot reach the store, whose time is `None`, with a number fails.
+      - question:
+          id: rider-once
+          type: choice
+          system: s1
+          concepts: [s3.shortest-paths, s3.measuring-and-predicting-running-time]
+          prompt: |
+            There are 2,000 free riders. Why run Dijkstra's algorithm once from the store, rather than once from each rider?
+          options:
+            - "One run from the store finds the time to every junction, so it does the work of 2,000 runs from the riders."
+            - "Dijkstra's algorithm only works when started from a store."
+            - "Running from the riders gives wrong answers on two-way roads."
+            - "It makes no difference to the running time."
+          answer: 0
+          explanation: |
+            On two-way roads the times are the same in both directions. A single run costs about $(V + E) \log V$; 2,000 runs cost 2,000 times as much, for the same answer.
+  - title: Fibre between the dark stores
+    blocks:
+      - text: |
+          The company is joining its five dark stores, P, Q, R, S and T, with leased fibre so their stock systems can talk. Possible links and their yearly cost in lakh rupees are P–Q 4, P–R 3, Q–R 2, Q–S 5, R–S 7, R–T 6, S–T 1 and Q–T 8. Every store must be reachable from every other, directly or through others.
+      - question:
+          id: fibre-cost
+          type: numeric
+          system: s2
+          concepts: [s3.minimum-spanning-trees, s3.greedy-algorithms]
+          prompt: |
+            What is the least total yearly cost, in lakh rupees?
+          answer: "11"
+          explanation: |
+            Kruskal's method takes links cheapest first, skipping any that would close a loop: S–T 1, Q–R 2, P–R 3, then P–Q 4 is skipped because P and Q are already joined through R, and Q–S 5 joins the two groups. Four links join five stores, for $1 + 2 + 3 + 5 = 11$ lakh. The greedy choice is safe because the cheapest link across any division of the stores belongs to some cheapest network.
+  - title: A rider's most valuable day
+    blocks:
+      - text: |
+          Riders can also book delivery slots in advance: each slot has a start hour, an end hour and a fixed pay. A rider can work slots that do not overlap, and may start one at the moment another ends. The app should suggest the most valuable set.
+      - question:
+          id: best-earnings
+          type: code
+          mode: write
+          system: s2
+          concepts: [s3.dynamic-programming, s3.binary-search]
+          prompt: |
+            Write `best_earnings(slots)`, the largest total pay from slots that do not overlap. Each slot is `(start, end, pay)` with `start < end`. Sort the slots by end, and let `best[i]` be the most pay from the first `i` of them; for each slot, use `bisect.bisect_right` on the sorted ends to find how many earlier slots end by its start.
+          starter: |
+            import bisect
+
+
+            def best_earnings(slots):
+                # Each slot is (start, end, pay), with start < end. Return the largest total pay from slots that
+                # do not overlap; a slot may start at the moment another ends.
+                return 0
+
+
+            slots = [(9, 12, 300), (11, 13, 150), (12, 15, 400), (14, 16, 250), (15, 18, 350), (8, 19, 900)]
+            print(best_earnings(slots), best_earnings([]))
+          solution: |
+            import bisect
+
+
+            def best_earnings(slots):
+                # Each slot is (start, end, pay), with start < end. Return the largest total pay from slots that
+                # do not overlap; a slot may start at the moment another ends.
+                order = sorted((end, start, pay) for start, end, pay in slots)
+                ends = [end for end, start, pay in order]
+                best = [0] * (len(order) + 1)
+                for i in range(len(order)):
+                    end, start, pay = order[i]
+                    fits = bisect.bisect_right(ends, start)
+                    best[i + 1] = max(best[i], best[fits] + pay)
+                return best[len(order)]
+
+
+            slots = [(9, 12, 300), (11, 13, 150), (12, 15, 400), (14, 16, 250), (15, 18, 350), (8, 19, 900)]
+            print(best_earnings(slots), best_earnings([]))
+          tests: |
+            import random as _random
+
+
+            def _brute(slots):
+                _best = 0
+                for _mask in range(1 << len(slots)):
+                    _pick = [slots[_k] for _k in range(len(slots)) if _mask >> _k & 1]
+                    _ok = all(_a[1] <= _b[0] or _b[1] <= _a[0] for _x, _a in enumerate(_pick) for _b in _pick[_x + 1:])
+                    if _ok:
+                        _best = max(_best, sum(_p[2] for _p in _pick))
+                return _best
+
+
+            _rng = _random.Random(53)
+            _cases = [[], [(1, 2, 5)], [(1, 3, 5), (3, 5, 5)], [(1, 4, 5), (3, 6, 7)], [(9, 12, 300), (11, 13, 150), (12, 15, 400), (14, 16, 250), (15, 18, 350), (8, 19, 900)], [(1, 10, 100), (1, 2, 30), (2, 3, 30), (3, 4, 30)]]
+            for _ in range(40):
+                _slots = []
+                for _ in range(_rng.randint(1, 8)):
+                    _s = _rng.randint(0, 12)
+                    _slots.append((_s, _s + _rng.randint(1, 5), _rng.randint(1, 9) * 50))
+                _cases.append(_slots)
+            for _slots in _cases:
+                _copy = list(_slots)
+                _want = _brute(_copy)
+                _got = best_earnings(_slots)
+                assert _got == _want, "best_earnings(" + str(_copy) + ") should be " + str(_want) + ", not " + str(_got)
+            _big = [(_k, _k + 2, 10 + _k % 7) for _k in range(20000)]
+            _got = best_earnings(_big)
+            assert _got == 130000, "On 20,000 slots, best_earnings should be 1,30,000, not " + str(_got)
+            assert output.strip() == "1050 0", "The program should print 1050 0"
+          wrong:
+            - |
+              import bisect
+
+
+              def best_earnings(slots):
+                  # Each slot is (start, end, pay), with start < end. Return the largest total pay from slots that
+                  # do not overlap; a slot may start at the moment another ends.
+                  order = sorted((end, start, pay) for start, end, pay in slots)
+                  ends = [end for end, start, pay in order]
+                  best = [0] * (len(order) + 1)
+                  for i in range(len(order)):
+                      end, start, pay = order[i]
+                      fits = bisect.bisect_left(ends, start)
+                      best[i + 1] = max(best[i], best[fits] + pay)
+                  return best[len(order)]
+
+
+              slots = [(9, 12, 300), (11, 13, 150), (12, 15, 400), (14, 16, 250), (15, 18, 350), (8, 19, 900)]
+              print(best_earnings(slots), best_earnings([]))
+            - |
+              import bisect
+
+
+              def best_earnings(slots):
+                  # Each slot is (start, end, pay), with start < end. Return the largest total pay from slots that
+                  # do not overlap; a slot may start at the moment another ends.
+                  order = sorted((end, start, pay) for start, end, pay in slots)
+                  ends = [end for end, start, pay in order]
+                  best = [0] * (len(order) + 1)
+                  for i in range(len(order)):
+                      end, start, pay = order[i]
+                      fits = bisect.bisect_right(ends, start)
+                      best[i + 1] = best[fits] + pay
+                  return best[len(order)]
+
+
+              slots = [(9, 12, 300), (11, 13, 150), (12, 15, 400), (14, 16, 250), (15, 18, 350), (8, 19, 900)]
+              print(best_earnings(slots), best_earnings([]))
+            - |
+              import bisect
+
+
+              def best_earnings(slots):
+                  # Each slot is (start, end, pay), with start < end. Return the largest total pay from slots that
+                  # do not overlap; a slot may start at the moment another ends.
+                  total = 0
+                  free = None
+                  for end, start, pay in sorted((end, start, pay) for start, end, pay in slots):
+                      if free is None or start >= free:
+                          total += pay
+                          free = end
+                  return total
+
+
+              slots = [(9, 12, 300), (11, 13, 150), (12, 15, 400), (14, 16, 250), (15, 18, 350), (8, 19, 900)]
+              print(best_earnings(slots), best_earnings([]))
+          explanation: |
+            With the slots sorted by end, the best plan for the first $i + 1$ slots either skips slot $i$, keeping `best[i]`, or works it and adds its pay to the best plan among the slots that end by its start, which are exactly the first `bisect_right(ends, start)`. Sorting and the searches cost $n \log n$ in all. `bisect_left` refuses a slot that starts as another ends; always working the slot loses when skipping it pays more; and the earliest-finish greedy rule maximises the number of slots, not the pay.
+      - question:
+          id: greedy-fails
+          type: choice
+          system: s1
+          concepts: [s3.greedy-algorithms, s3.dynamic-programming]
+          prompt: |
+            Earliest finish first was proved best for fitting in as many bookings as possible. Why is it not enough here?
+          options:
+            - "The goal is the most pay, not the most slots, and the exchange argument that proved the rule breaks when slots pay differently."
+            - "Earliest finish first only works when slots are sorted by start."
+            - "It is too slow for a full day's slots."
+            - "It is enough; it always gives the most pay."
+          answer: 0
+          explanation: |
+            Swapping the first slot of a best plan for the earliest-finishing one keeps the count the same, but can lower the pay. One long, well-paid slot can beat three short ones, so each choice must weigh both options, which is what the dynamic programme does.
+  - title: The order log and a fair sample
+    blocks:
+      - text: |
+          Every order is appended to an in-memory log, a list that starts with room for one item and doubles its room when full. Separately, the quality team wants 100 of the day's orders chosen uniformly at random for a check, but the number of orders is unknown until midnight and the service cannot keep them all.
+      - question:
+          id: log-copies
+          type: numeric
+          system: s1
+          concepts: [s3.amortised-analysis]
+          prompt: |
+            How many items are copied in all while 1,000 orders are appended to the log?
+          answer: "1023"
+          explanation: |
+            The list is full at 1, 2, 4, …, 512 items before the next append, and copies $1 + 2 + \cdots + 512 = 1{,}023$ items: about one copy per append, though the append that moves 512 items is a single slow one.
+      - question:
+          id: fair-sample
+          type: choice
+          system: s2
+          concepts: [s3.randomised-algorithms]
+          prompt: |
+            How should the service choose the 100 orders?
+          options:
+            - "Keep the first 100; for the t-th order after that, keep it with probability 100/t in place of a randomly chosen kept order."
+            - "Keep every 100th order."
+            - "Keep each order with probability 1/100."
+            - "Keep the last 100 orders before midnight."
+          answer: 0
+          explanation: |
+            Reservoir sampling keeps exactly 100 orders, each with the same chance, $100/t$ after $t$ orders, whenever the day ends. Every 100th order is not random and can follow a pattern in the traffic; keeping each with probability $1/100$ gives a random number of orders, not 100; and the last 100 are all late-evening orders.
+  - title: The vans' routes
+    blocks:
+      - text: |
+          The planning team wants the provably shortest route each morning for every van, each with about 40 stops. The current planner builds routes by nearest neighbour and improves them with 2-opt. For one van, the cheapest spanning tree joining its 40 stops and the store is 52 km long, and the 2-opt route is 61 km.
+      - question:
+          id: route-bound
+          type: numeric
+          system: s2
+          concepts: [s3.intractability-p-np-and-heuristics, s3.minimum-spanning-trees]
+          prompt: |
+            At most how many per cent longer than the best possible route can the 61 km route be? Give one decimal place.
+          answer: "17.3"
+          tolerance: "0.1"
+          explanation: |
+            Deleting one road from the best route leaves a spanning tree, so the best route is at least as long as the cheapest tree, 52 km. The 2-opt route is at most $61/52 = 1.173$ times the best, 17.3% longer at worst; it is probably much closer. A cheap lower bound turns a heuristic's answer into one with a known worst case.
+      - question:
+          id: route-proof
+          type: choice
+          system: s2
+          concepts: [s3.intractability-p-np-and-heuristics]
+          prompt: |
+            What should the team say to the request for provably shortest routes?
+          options:
+            - "Finding the shortest route is NP-hard; keep the heuristic, report each route's gap above a lower bound, and use an exact solver only where a van's stops are few or the gap is large."
+            - "Try every order of each van's 40 stops overnight."
+            - "Ask for a faster computer, which will make the exact search practical."
+            - "Promise the shortest routes, since nearest neighbour followed by 2-opt always finds them."
+          answer: 0
+          explanation: |
+            With 40 stops and the store there are about $4 \times 10^{47}$ routes, and no fast exact method is known for every input. A faster computer moves the limit by only a few stops. 2-opt reaches a local minimum, not necessarily the best. Reporting the gap to a lower bound gives the planning team an honest guarantee, and exact methods remain worth running on small or troublesome cases.
+review: |
+  The day's six problems are handled, and each answer came from a lesson of this cluster:
+
+  - The search box's slowdown was predicted from two measurements, as in [[s3.measuring-and-predicting-running-time]], and fixed by [[s3.sorting]] once and [[s3.binary-search]] for every lookup.
+  - One run from the store, using [[s3.shortest-paths]], found the nearest rider among 2,000.
+  - The fibre network came from [[s3.minimum-spanning-trees]], whose cut rule is one of the safe choices of [[s3.greedy-algorithms]].
+  - The rider's best day needed [[s3.dynamic-programming]], because the greedy rule that maximises the number of slots ignores the pay.
+  - The order log's appends cost a constant each over the day, by [[s3.amortised-analysis]], and the fair sample came from reservoir sampling in [[s3.randomised-algorithms]].
+  - The vans' routes are NP-hard, by [[s3.intractability-p-np-and-heuristics]], so the honest answer was a good heuristic with a lower bound beside it.
+
+  Notice the pattern. Hardly any problem arrived with its algorithm's name on it. A search box, a dispatcher, a fibre lease, a rider's diary and a van's morning each had to be recognised as a sorted-list lookup, a shortest-path tree, a spanning tree, a weighted scheduling programme and a travelling salesperson. Recognising the problem was most of the work. The next cluster turns to where the data for all of this lives: tables of rows and keys, and the language for asking them questions.

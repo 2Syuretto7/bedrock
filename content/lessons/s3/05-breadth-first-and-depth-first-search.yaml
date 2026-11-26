@@ -1,0 +1,650 @@
+concept: s3.breadth-first-and-depth-first-search
+minutes: 90
+claim: You can explore every node of a graph reachable from a start in time proportional to its nodes and edges, breadth first with a queue to find the fewest steps to every node and the route that achieves them, or depth first with a stack or recursion to find regions, reachability and cycles, and you can treat a grid or a puzzle as a graph whose neighbours are computed on the fly.
+recalls: [s3.divide-and-conquer-and-the-master-theorem]
+uses: [s2.graphs-and-their-representations, s2.stacks-and-queues, f3.graph-theory-basics, f3.trees-and-their-properties, s2.hash-tables, s1.recursion, s0.dictionaries-and-sets, s3.measuring-and-predicting-running-time]
+leads: [s3.topological-sort, s3.shortest-paths, s3.minimum-spanning-trees]
+starter: |
+  # Scratch space. Explore a small metro map breadth first.
+  from collections import deque
+
+  metro = {"A": ["B", "C"], "B": ["A", "D"], "C": ["A", "E"], "D": ["B", "E"], "E": ["C", "D", "F"], "F": ["E"]}
+  dist = {"A": 0}
+  queue = deque(["A"])
+  while queue:
+      here = queue.popleft()
+      for there in metro[here]:
+          if there not in dist:
+              dist[there] = dist[here] + 1
+              queue.append(there)
+  print(dist)
+parts:
+  recall:
+    - text: |
+        [[s3.divide-and-conquer-and-the-master-theorem]] ended with recursion as a way to explore, going deep down one branch before coming back to try the next. Graphs, the networks of nodes and edges from [[s2.graphs-and-their-representations]], are where exploring matters most: road maps, metro lines, friendships, links between web pages, the moves of a puzzle. This lesson gives the two basic ways to visit everything in a graph, and what each one finds along the way. Three quick pulls first.
+  puzzle:
+    - text: |
+        A knight in chess moves two squares in one direction and one square at right angles to it, in an L. It starts in one corner of an empty 8 × 8 board.
+
+        **What is the fewest number of moves that takes it to the opposite corner?**
+  intuition:
+    - text: |
+        Drop a stone in a still pond and the ripple reaches everything one step away first, then everything two steps away, then three. Exploring a graph that way, all the neighbours of the start, then all their unvisited neighbours, and so on, is **breadth-first search**. It needs a line of nodes waiting to be visited, served in the order they joined: a queue, from [[s2.stacks-and-queues]].
+
+        Someone exploring a cave with a ball of thread does something else. They follow one passage as far as it goes, and only when it ends do they wind the thread back to the last fork and try the next passage. That is **depth-first search**. The thread is a stack: the most recent fork is the first one returned to, which is also how recursive calls unwind.
+
+        The figure explores the same seven-node graph both ways, starting from A. Step through breadth first, then switch to depth first.
+    - figure: graph-walk
+      props: { mode: breadth, step: 0 }
+    - text: |
+        Breadth first visits A, then B and C, one edge away, then D, E and F, two edges away, then G, three away. The order is the distance from A. Depth first visits A, B and D, finds D a dead end, backs up to B, goes on to E, F and C, backs up to F, and finishes at G. Both visit every node exactly once; they differ in the order, and the order is what each one is good for.
+  derivation:
+    - text: |
+        **Breadth-first search.** Put the start in a queue and record its distance as 0. Repeatedly take the node at the front of the queue, and for each neighbour not seen before, record its distance as one more than the current node's and add it to the back of the queue. In Python the queue is a `collections.deque`, whose `popleft` and `append` are both constant time.
+
+        A node must be marked as seen when it **joins** the queue, not when it leaves. Otherwise the same node can join many times, once for each neighbour that discovers it before its turn comes, wasting work and, if distances are written when nodes leave, recording the wrong ones.
+
+        **Why the distances are right.** The queue holds nodes in order of distance, and never holds nodes of more than two neighbouring distances at once: all of distance $k$ leave before any of distance $k + 1$, because each node of distance $k + 1$ was added by a node of distance $k$. So the first time a node is reached is along a path with the fewest edges, and breadth-first search finds the **shortest paths** in a graph whose edges all count the same. Recording for each node the node it was discovered from, its **parent**, and walking parents back from any node gives a shortest route to it. The parent edges form a tree, in the sense of [[f3.trees-and-their-properties]], rooted at the start.
+    - question:
+        id: derivation-distance-g
+        type: numeric
+        system: s2
+        prompt: |
+          In the figure's graph, the edges are A–B, A–C, B–D, B–E, C–F, E–F and F–G. Breadth-first search starts at A. What distance does it record for G?
+        answer: "3"
+        explanation: |
+          A is at 0; B and C at 1; D and E (from B) and F (from C) at 2; G (from F) at 3. The route is A, C, F, G.
+    - text: |
+        **The cost.** With adjacency lists, each node joins the queue at most once and each node's list is read once, when the node leaves. An undirected graph lists every edge twice, once at each end, so the total work is $\Theta(V + E)$ for $V$ nodes and $E$ edges: linear in the size of the graph, in the sense of [[s3.measuring-and-predicting-running-time]]. With an adjacency matrix, finding a node's neighbours means reading its whole row of $V$ entries, and the search costs $\Theta(V^2)$ however few edges there are. The "seen" check must be fast too: a dictionary or a set, from [[s2.hash-tables]], answers it in constant time on average, where a list would make each check linear.
+
+        **Depth-first search.** Visit the start, then, for each neighbour not yet visited, run depth-first search from that neighbour. Written recursively, as in [[s1.recursion]], the call stack is the thread back to the start. Written with an explicit list used as a stack, `append` to push and `pop` to take the most recent, it works the same way without the danger of Python's recursion limit, about a thousand calls deep, which a long chain of nodes easily passes. It also costs $\Theta(V + E)$.
+    - question:
+        id: derivation-neighbour-reads
+        type: numeric
+        system: s2
+        prompt: |
+          A breadth-first search covers an undirected graph of 7 nodes and 7 edges, stored as adjacency lists. How many neighbour entries does it read in all?
+        answer: "14"
+        explanation: |
+          Each edge appears in the lists of both its ends, so the lists hold $2 \times 7 = 14$ entries, and each list is read once, when its node leaves the queue.
+    - text: |
+        **What depth first finds.** Depth-first search started from one node visits exactly the nodes reachable from it. Starting again from every node not yet visited, and counting the starts, counts the **connected components**, the separate pieces of the graph, from [[f3.graph-theory-basics]]. Meeting an already visited node that is not the one just came from reveals a **cycle**. And the order in which nodes finish, all their neighbours done, is the key to the next lesson's ordering of tasks. Breadth first could find components too; depth first is usually chosen when distances do not matter, because a stack is simpler and a recursive version is short.
+
+        **Implicit graphs.** Many graphs are never stored. A map of flooded wards drawn as a grid is a graph whose nodes are the flooded cells and whose edges join cells sharing a side; the neighbours of cell $(r, c)$ are worked out when needed as $(r \pm 1, c)$ and $(r, c \pm 1)$, checked against the edges of the grid. The states of a puzzle, the positions of a knight, and the configurations of a lock are graphs in the same way. Breadth-first search over a puzzle's states finds the fewest moves that solve it.
+    - question:
+        id: order-bfs
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of one breadth-first search in order.
+        steps:
+          - "Record the start's distance as 0 and put it in the queue."
+          - "Take the node at the front of the queue."
+          - "For each neighbour not yet recorded, record its distance as one more and add it to the back of the queue."
+          - "When the queue is empty, return the recorded distances."
+        explanation: |
+          The queue must hold the start before anything can be taken from it, a node's neighbours are examined after it is taken, and the distances are complete only when the queue has run dry.
+  formal:
+    - text: |
+        **Breadth-first search.** Queue; mark a node when it is added. Visits nodes in order of their number of edges from the start, and records $d(v)$, the fewest edges from the start to $v$, and a parent for each node; following parents back from $v$ gives a shortest route. Time $\Theta(V + E)$ with adjacency lists, $\Theta(V^2)$ with a matrix.
+
+        **Depth-first search.** Stack or recursion; visit a node, then search from each unvisited neighbour. Visits exactly the nodes reachable from the start. Time $\Theta(V + E)$ with adjacency lists.
+
+        **Uses.** Fewest-edge paths: breadth first. Reachability, connected components, cycle detection, and finishing orders: depth first, or either.
+
+        **Implicit graph.** Nodes and neighbours generated by a rule, such as grid cells sharing a side, rather than stored.
+  drill:
+    - text: Seconds each. Queue or stack, and what each node is marked with.
+    - question:
+        id: drill-structure
+        type: choice
+        system: s1
+        prompt: |
+          Which structure holds the nodes waiting to be visited in a breadth-first search?
+        options:
+          - "A queue"
+          - "A stack"
+          - "A heap"
+          - "A sorted list"
+        answer: 0
+        explanation: Nodes are served in the order they were discovered, first in, first out, so the nearest are visited first.
+    - question:
+        id: drill-cost
+        type: choice
+        system: s1
+        prompt: |
+          What is the running time of depth-first search on a graph stored as adjacency lists?
+        options:
+          - "$\\Theta(V + E)$"
+          - "$\\Theta(V^2)$"
+          - "$\\Theta(V \\times E)$"
+          - "$\\Theta(E \\log V)$"
+        answer: 0
+        explanation: Each node is visited once and each adjacency list is read once.
+    - question:
+        id: drill-entries
+        type: numeric
+        system: s1
+        prompt: |
+          An undirected graph has 10 edges, stored as adjacency lists. How many entries do the lists hold in all?
+        answer: "20"
+        explanation: Each edge is listed at both of its ends.
+    - question:
+        id: drill-grid-neighbours
+        type: numeric
+        system: s1
+        prompt: |
+          In a grid where cells sharing a side are neighbours, how many neighbours does a corner cell have?
+        answer: "2"
+        explanation: A corner cell has one neighbour along its row and one along its column; the other two would be off the grid.
+    - question:
+        id: drill-mark
+        type: choice
+        system: s1
+        prompt: |
+          In breadth-first search, when should a node be marked as seen?
+        options:
+          - "When it is added to the queue"
+          - "When it is taken from the queue"
+          - "When all its neighbours have been visited"
+          - "Only at the end"
+        answer: 0
+        explanation: Marking on entry stops the same node from joining the queue again while it waits.
+    - question:
+        id: predict-deque
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          from collections import deque
+          q = deque(["A"])
+          q.append("B")
+          q.append("C")
+          print(q.popleft(), q.pop())
+        output: "A C"
+        explanation: "`popleft` takes from the front, the oldest item A; `pop` takes from the back, the newest item C."
+    - question:
+        id: predict-order
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          graph = {1: [2, 3], 2: [4], 3: [4], 4: []}
+          order = []
+          stack = [1]
+          seen = {1}
+          while stack:
+              node = stack.pop()
+              order.append(node)
+              for nxt in graph[node]:
+                  if nxt not in seen:
+                      seen.add(nxt)
+                      stack.append(nxt)
+          print(order)
+        output: "[1, 3, 4, 2]"
+        explanation: After 1, the stack holds 2 then 3, and `pop` takes the most recent, 3. Node 3 adds 4, which is taken next, and 2 comes last.
+  work:
+    - text: Slower now. Before reading each search, say which structure holds the waiting nodes, and when a node is marked.
+    - question:
+        id: fix-distances
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `distances(graph, start)` should return the fewest stops from `start` to every station it can reach. The program should print `2 2 3`. It prints `3 2 3`. Find the fault and fix it.
+        starter: |
+          from collections import deque
+
+
+          def distances(graph, start):
+              # graph maps each station to a list of the stations one stop away.
+              # Return a dictionary of the fewest stops from start to every station it can reach.
+              dist = {start: 0}
+              queue = deque([start])
+              while queue:
+                  here = queue.pop()
+                  for there in graph[here]:
+                      if there not in dist:
+                          dist[there] = dist[here] + 1
+                          queue.append(there)
+              return dist
+
+
+          metro = {"A": ["B", "C"], "B": ["A", "D"], "C": ["A", "E"], "D": ["B", "E"], "E": ["C", "D", "F"], "F": ["E"]}
+          d = distances(metro, "A")
+          print(d["D"], d["E"], d["F"])
+        solution: |
+          from collections import deque
+
+
+          def distances(graph, start):
+              # graph maps each station to a list of the stations one stop away.
+              # Return a dictionary of the fewest stops from start to every station it can reach.
+              dist = {start: 0}
+              queue = deque([start])
+              while queue:
+                  here = queue.popleft()
+                  for there in graph[here]:
+                      if there not in dist:
+                          dist[there] = dist[here] + 1
+                          queue.append(there)
+              return dist
+
+
+          metro = {"A": ["B", "C"], "B": ["A", "D"], "C": ["A", "E"], "D": ["B", "E"], "E": ["C", "D", "F"], "F": ["E"]}
+          d = distances(metro, "A")
+          print(d["D"], d["E"], d["F"])
+        tests: |
+          def _reference(_graph, _start):
+              _dist = {_start: 0}
+              _layer = [_start]
+              while _layer:
+                  _next = []
+                  for _here in _layer:
+                      for _there in _graph[_here]:
+                          if _there not in _dist:
+                              _dist[_there] = _dist[_here] + 1
+                              _next.append(_there)
+                  _layer = _next
+              return _dist
+
+
+          _graphs = [
+              {"A": ["B", "C"], "B": ["A", "D"], "C": ["A", "E"], "D": ["B", "E"], "E": ["C", "D", "F"], "F": ["E"]},
+              {"S": ["A", "B"], "A": ["S", "G"], "B": ["S", "C"], "C": ["B", "G"], "G": ["A", "C"]},
+              {"X": []},
+              {"P": ["Q"], "Q": ["P"], "R": ["S"], "S": ["R"]},
+              {1: [2, 3, 4], 2: [1, 5], 3: [1, 5], 4: [1, 6], 5: [2, 3, 7], 6: [4, 7], 7: [5, 6, 8], 8: [7]},
+          ]
+          for _graph in _graphs:
+              for _start in _graph:
+                  _want = _reference(_graph, _start)
+                  _got = distances(_graph, _start)
+                  assert dict(_got) == _want, "distances(" + str(_graph) + ", " + repr(_start) + ") should be " + str(_want) + ", not " + str(dict(_got))
+          assert output.strip() == "2 2 3", "The program should print 2 2 3"
+        wrong:
+          - |
+            from collections import deque
+
+
+            def distances(graph, start):
+                # graph maps each station to a list of the stations one stop away.
+                # Return a dictionary of the fewest stops from start to every station it can reach.
+                dist = {start: 0}
+                queue = deque([start])
+                while queue:
+                    here = queue.popleft()
+                    for there in graph[here]:
+                        if there not in dist:
+                            dist[there] = dist[here] + 1
+                            queue.appendleft(there)
+                return dist
+
+
+            metro = {"A": ["B", "C"], "B": ["A", "D"], "C": ["A", "E"], "D": ["B", "E"], "E": ["C", "D", "F"], "F": ["E"]}
+            d = distances(metro, "A")
+            print(d["D"], d["E"], d["F"])
+          - |
+            from collections import deque
+
+
+            def distances(graph, start):
+                # graph maps each station to a list of the stations one stop away.
+                # Return a dictionary of the fewest stops from start to every station it can reach.
+                dist = {}
+                queue = deque([(start, 0)])
+                while queue:
+                    here, steps = queue.popleft()
+                    dist[here] = steps
+                    for there in graph[here]:
+                        if there not in dist:
+                            queue.append((there, steps + 1))
+                return dist
+
+
+            metro = {"A": ["B", "C"], "B": ["A", "D"], "C": ["A", "E"], "D": ["B", "E"], "E": ["C", "D", "F"], "F": ["E"]}
+            d = distances(metro, "A")
+            print(d["D"], d["E"], d["F"])
+          - |
+            from collections import deque
+
+
+            def distances(graph, start):
+                # graph maps each station to a list of the stations one stop away.
+                # Return a dictionary of the fewest stops from start to every station it can reach.
+                dist = {start: 0}
+                queue = deque([start])
+                while queue:
+                    here = queue.popleft()
+                    for there in graph[here]:
+                        if there not in dist:
+                            queue.append(there)
+                        dist[there] = dist[here] + 1
+                return dist
+
+
+            metro = {"A": ["B", "C"], "B": ["A", "D"], "C": ["A", "E"], "D": ["B", "E"], "E": ["C", "D", "F"], "F": ["E"]}
+            d = distances(metro, "A")
+            print(d["D"], d["E"], d["F"])
+        explanation: |
+          `pop` takes the newest node from the deque, which turns the queue into a stack and the search into a depth-first one: it reaches D through C and E with 3 stops before reaching it through B with 2. `popleft` serves nodes in the order they were found, nearest first. Adding to the front with `appendleft` makes the same stack from the other end; writing distances when nodes leave lets a node join twice and keep the later, longer distance; and writing a neighbour's distance even when it has one already overwrites correct distances, the start's included.
+    - question:
+        id: write-count-regions
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A map of a town after heavy rain is a list of equal-length strings, `"#"` for a flooded cell and `"."` for a dry one. Flooded cells that share a side belong to the same flooded region. Write `count_regions(grid)`, which returns the number of separate flooded regions.
+        starter: |
+          def count_regions(grid):
+              # grid is a list of equal-length strings of "#" (flooded) and "." (dry). Two flooded
+              # cells are in the same region if they share a side. Return the number of regions.
+              return 0
+
+
+          town = ["##..#", "#...#", "..#..", "....#"]
+          print(count_regions(town), count_regions(["..."]), count_regions(["#.#", ".#.", "#.#"]))
+        solution: |
+          def count_regions(grid):
+              # grid is a list of equal-length strings of "#" (flooded) and "." (dry). Two flooded
+              # cells are in the same region if they share a side. Return the number of regions.
+              seen = set()
+              regions = 0
+              for r in range(len(grid)):
+                  for c in range(len(grid[r])):
+                      if grid[r][c] == "#" and (r, c) not in seen:
+                          regions += 1
+                          seen.add((r, c))
+                          stack = [(r, c)]
+                          while stack:
+                              y, x = stack.pop()
+                              for ny, nx in [(y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)]:
+                                  if 0 <= ny < len(grid) and 0 <= nx < len(grid[ny]) and grid[ny][nx] == "#" and (ny, nx) not in seen:
+                                      seen.add((ny, nx))
+                                      stack.append((ny, nx))
+              return regions
+
+
+          town = ["##..#", "#...#", "..#..", "....#"]
+          print(count_regions(town), count_regions(["..."]), count_regions(["#.#", ".#.", "#.#"]))
+        tests: |
+          import random as _random
+
+
+          def _reference(_grid):
+              _label = {}
+              _count = 0
+              for _r in range(len(_grid)):
+                  for _c in range(len(_grid[_r])):
+                      if _grid[_r][_c] == "#" and (_r, _c) not in _label:
+                          _count += 1
+                          _todo = [(_r, _c)]
+                          _label[(_r, _c)] = _count
+                          while _todo:
+                              _y, _x = _todo.pop()
+                              for _ny, _nx in [(_y - 1, _x), (_y + 1, _x), (_y, _x - 1), (_y, _x + 1)]:
+                                  if 0 <= _ny < len(_grid) and 0 <= _nx < len(_grid[_ny]) and _grid[_ny][_nx] == "#" and (_ny, _nx) not in _label:
+                                      _label[(_ny, _nx)] = _count
+                                      _todo.append((_ny, _nx))
+              return _count
+
+
+          _rng = _random.Random(11)
+          _grids = [[], [""], ["#"], ["."], ["##..#", "#...#", "..#..", "....#"], ["#.#", ".#.", "#.#"], ["#.#", "###"], ["###", "#.#", "###"], [".#.", "##.", ".##"]]
+          for _ in range(40):
+              _rows = _rng.randint(1, 6)
+              _cols = _rng.randint(1, 6)
+              _grids.append(["".join(_rng.choice("#..") for _ in range(_cols)) for _ in range(_rows)])
+          for _grid in _grids:
+              _want = _reference(_grid)
+              _got = count_regions(list(_grid))
+              assert _got == _want, "count_regions(" + str(_grid) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "4 0 5", "The program should print 4 0 5"
+        wrong:
+          - |
+            def count_regions(grid):
+                # grid is a list of equal-length strings of "#" (flooded) and "." (dry). Two flooded
+                # cells are in the same region if they share a side. Return the number of regions.
+                regions = 0
+                for row in grid:
+                    for cell in row:
+                        if cell == "#":
+                            regions += 1
+                return regions
+
+
+            town = ["##..#", "#...#", "..#..", "....#"]
+            print(count_regions(town), count_regions(["..."]), count_regions(["#.#", ".#.", "#.#"]))
+          - |
+            def count_regions(grid):
+                # grid is a list of equal-length strings of "#" (flooded) and "." (dry). Two flooded
+                # cells are in the same region if they share a side. Return the number of regions.
+                seen = set()
+                regions = 0
+                for r in range(len(grid)):
+                    for c in range(len(grid[r])):
+                        if grid[r][c] == "#" and (r, c) not in seen:
+                            regions += 1
+                            seen.add((r, c))
+                            stack = [(r, c)]
+                            while stack:
+                                y, x = stack.pop()
+                                for ny, nx in [(y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1), (y - 1, x - 1), (y - 1, x + 1), (y + 1, x - 1), (y + 1, x + 1)]:
+                                    if 0 <= ny < len(grid) and 0 <= nx < len(grid[ny]) and grid[ny][nx] == "#" and (ny, nx) not in seen:
+                                        seen.add((ny, nx))
+                                        stack.append((ny, nx))
+                return regions
+
+
+            town = ["##..#", "#...#", "..#..", "....#"]
+            print(count_regions(town), count_regions(["..."]), count_regions(["#.#", ".#.", "#.#"]))
+          - |
+            def count_regions(grid):
+                # grid is a list of equal-length strings of "#" (flooded) and "." (dry). Two flooded
+                # cells are in the same region if they share a side. Return the number of regions.
+                regions = 0
+                for r in range(len(grid)):
+                    for c in range(len(grid[r])):
+                        # A region starts at a flooded cell with nothing flooded above it or to its left.
+                        above = r > 0 and grid[r - 1][c] == "#"
+                        left = c > 0 and grid[r][c - 1] == "#"
+                        if grid[r][c] == "#" and not above and not left:
+                            regions += 1
+                return regions
+
+
+            town = ["##..#", "#...#", "..#..", "....#"]
+            print(count_regions(town), count_regions(["..."]), count_regions(["#.#", ".#.", "#.#"]))
+        explanation: |
+          Each flooded cell not yet seen starts a new region, and a depth-first search from it marks every flooded cell it can reach through shared sides, so none of them starts another. Counting flooded cells counts cells, not regions; adding the four diagonal neighbours joins cells that only touch at a corner; and counting cells with nothing flooded above or to the left counts a U-shaped region twice, because its two arms both look like starts. Each cell is examined a constant number of times, so the search is linear in the size of the map.
+    - question:
+        id: write-route
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `route(graph, start, goal)`, which returns a list of stations from `start` to `goal` with the fewest stops, or `None` if `goal` cannot be reached. Record each station's parent during a breadth-first search, then walk the parents back from the goal.
+        starter: |
+          from collections import deque
+
+
+          def route(graph, start, goal):
+              # Return a list of the stations from start to goal with the fewest stops, or None if
+              # goal cannot be reached. When several routes tie, any one of them will do.
+              return None
+
+
+          metro = {"A": ["B", "C"], "B": ["A", "D"], "C": ["A", "E"], "D": ["B", "E"], "E": ["C", "D", "F"], "F": ["E"]}
+          print(route(metro, "A", "F"), route(metro, "F", "F"), route({"X": [], "Y": []}, "X", "Y"))
+        solution: |
+          from collections import deque
+
+
+          def route(graph, start, goal):
+              # Return a list of the stations from start to goal with the fewest stops, or None if
+              # goal cannot be reached. When several routes tie, any one of them will do.
+              parent = {start: None}
+              queue = deque([start])
+              while queue:
+                  here = queue.popleft()
+                  if here == goal:
+                      path = []
+                      while here is not None:
+                          path.append(here)
+                          here = parent[here]
+                      return path[::-1]
+                  for there in graph[here]:
+                      if there not in parent:
+                          parent[there] = here
+                          queue.append(there)
+              return None
+
+
+          metro = {"A": ["B", "C"], "B": ["A", "D"], "C": ["A", "E"], "D": ["B", "E"], "E": ["C", "D", "F"], "F": ["E"]}
+          print(route(metro, "A", "F"), route(metro, "F", "F"), route({"X": [], "Y": []}, "X", "Y"))
+        tests: |
+          def _fewest(_graph, _start):
+              _dist = {_start: 0}
+              _layer = [_start]
+              while _layer:
+                  _next = []
+                  for _here in _layer:
+                      for _there in _graph[_here]:
+                          if _there not in _dist:
+                              _dist[_there] = _dist[_here] + 1
+                              _next.append(_there)
+                  _layer = _next
+              return _dist
+
+
+          _graphs = [
+              {"A": ["B", "C"], "B": ["A", "D"], "C": ["A", "E"], "D": ["B", "E"], "E": ["C", "D", "F"], "F": ["E"]},
+              {"S": ["A", "B"], "A": ["S", "G"], "B": ["S", "C"], "C": ["B", "G"], "G": ["A", "C"]},
+              {"X": [], "Y": []},
+              {"P": ["Q"], "Q": ["P"], "R": ["S"], "S": ["R"]},
+              {1: [2, 3, 4], 2: [1, 5], 3: [1, 5], 4: [1, 6], 5: [2, 3, 7], 6: [4, 7], 7: [5, 6, 8], 8: [7]},
+          ]
+          for _graph in _graphs:
+              for _start in _graph:
+                  _dist = _fewest(_graph, _start)
+                  for _goal in _graph:
+                      _got = route(_graph, _start, _goal)
+                      _name = "route(" + str(_graph) + ", " + repr(_start) + ", " + repr(_goal) + ")"
+                      if _goal not in _dist:
+                          assert _got is None, _name + " should be None, because the goal cannot be reached, not " + str(_got)
+                          continue
+                      assert isinstance(_got, list), _name + " should be a list of stations, not " + str(_got)
+                      assert len(_got) > 0 and _got[0] == _start and _got[-1] == _goal, _name + " should start at " + repr(_start) + " and end at " + repr(_goal) + ", not " + str(_got)
+                      for _i in range(len(_got) - 1):
+                          assert _got[_i + 1] in _graph[_got[_i]], _name + " gave " + str(_got) + ", but " + repr(_got[_i]) + " is not next to " + repr(_got[_i + 1])
+                      assert len(_got) == _dist[_goal] + 1, _name + " gave " + str(_got) + ", which takes " + str(len(_got) - 1) + " stops, but " + str(_dist[_goal]) + " is enough"
+          assert output.strip() == "['A', 'C', 'E', 'F'] ['F'] None", "The program should print ['A', 'C', 'E', 'F'] ['F'] None"
+        wrong:
+          - |
+            from collections import deque
+
+
+            def route(graph, start, goal):
+                # Return a list of the stations from start to goal with the fewest stops, or None if
+                # goal cannot be reached. When several routes tie, any one of them will do.
+                parent = {start: None}
+                queue = deque([start])
+                while queue:
+                    here = queue.popleft()
+                    if here == goal:
+                        path = []
+                        while here is not None:
+                            path.append(here)
+                            here = parent[here]
+                        return path
+                    for there in graph[here]:
+                        if there not in parent:
+                            parent[there] = here
+                            queue.append(there)
+                return None
+
+
+            metro = {"A": ["B", "C"], "B": ["A", "D"], "C": ["A", "E"], "D": ["B", "E"], "E": ["C", "D", "F"], "F": ["E"]}
+            print(route(metro, "A", "F"), route(metro, "F", "F"), route({"X": [], "Y": []}, "X", "Y"))
+          - |
+            from collections import deque
+
+
+            def route(graph, start, goal):
+                # Return a list of the stations from start to goal with the fewest stops, or None if
+                # goal cannot be reached. When several routes tie, any one of them will do.
+                parent = {start: None}
+                queue = deque([start])
+                while queue:
+                    here = queue.pop()
+                    if here == goal:
+                        path = []
+                        while here is not None:
+                            path.append(here)
+                            here = parent[here]
+                        return path[::-1]
+                    for there in graph[here]:
+                        if there not in parent:
+                            parent[there] = here
+                            queue.append(there)
+                return None
+
+
+            metro = {"A": ["B", "C"], "B": ["A", "D"], "C": ["A", "E"], "D": ["B", "E"], "E": ["C", "D", "F"], "F": ["E"]}
+            print(route(metro, "A", "F"), route(metro, "F", "F"), route({"X": [], "Y": []}, "X", "Y"))
+          - |
+            from collections import deque
+
+
+            def route(graph, start, goal):
+                # Return a list of the stations from start to goal with the fewest stops, or None if
+                # goal cannot be reached. When several routes tie, any one of them will do.
+                parent = {start: None}
+                queue = deque([start])
+                while queue:
+                    here = queue.popleft()
+                    if here == goal:
+                        path = []
+                        while here is not None:
+                            path.append(here)
+                            here = parent[here]
+                        return path[::-1]
+                    for there in graph[here]:
+                        if there not in parent:
+                            parent[there] = here
+                            queue.append(there)
+                return []
+
+
+            metro = {"A": ["B", "C"], "B": ["A", "D"], "C": ["A", "E"], "D": ["B", "E"], "E": ["C", "D", "F"], "F": ["E"]}
+            print(route(metro, "A", "F"), route(metro, "F", "F"), route({"X": [], "Y": []}, "X", "Y"))
+        explanation: |
+          Breadth first reaches each station first along a route with the fewest stops, so the parent recorded then lies on such a route, and following parents from the goal back to the start, whose parent is `None`, retraces it backwards. Forgetting to reverse returns the route from goal to start; taking the newest node with `pop` explores depth first and can find a longer route first; and an empty list is not `None`, so a caller cannot tell "no route" from a route.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          A knight starts in one corner of an empty 8 × 8 chessboard. What is the fewest number of moves that takes it to the opposite corner?
+        answer: "6"
+        explanation: |
+          Treat each square as a node and each knight's move as an edge, and run breadth-first search from the corner. The layers reach the opposite corner at distance 6. Each move changes the sum of the row and column numbers by an odd amount, so the corner, 14 away in that sum, needs an even number of moves, and 4 moves change the sum by at most 12.
+    - question:
+        id: work-recursion-limit
+        type: choice
+        system: s2
+        prompt: |
+          A recursive depth-first search works on small maps but crashes with `RecursionError` on a map of a long road with one lakh junctions in a line. What is the best fix?
+        options:
+          - "Rewrite it with an explicit list used as a stack, so the depth of the search no longer uses Python's call stack."
+          - "Switch to an adjacency matrix."
+          - "Start the search from the middle of the road."
+          - "Use breadth-first search with a stack."
+        answer: 0
+        explanation: |
+          Each step along the road is one more nested call, and Python stops at about a thousand. An explicit stack holds the same nodes in an ordinary list, which can grow as long as memory allows. An adjacency matrix would need $10^{10}$ entries, starting in the middle only halves the depth, and breadth-first search with a stack is depth-first search.
+  connections:
+    - text: |
+        Six moves. Breadth-first search from the corner over the 64 squares finds the far corner in the sixth layer, and it is the only square on the board that needs six. A parity argument confirms it: every knight's move changes the sum of the row and column numbers by 1 or 3, an odd number, so reaching a sum 14 higher needs an even number of moves, and four moves add at most 12.
+
+        Breadth-first search counts every edge as one step. When edges have lengths, travel times or fares, the fewest edges is no longer the shortest route, and [[s3.shortest-paths]] replaces the queue with a priority queue to handle them. Depth-first search's finishing order is the heart of [[s3.topological-sort]], which puts the tasks of a project in an order that respects every dependency. And the trees that a search leaves behind are one kind of spanning tree; [[s3.minimum-spanning-trees]] finds the cheapest one.

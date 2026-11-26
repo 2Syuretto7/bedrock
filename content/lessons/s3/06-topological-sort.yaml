@@ -1,0 +1,749 @@
+concept: s3.topological-sort
+minutes: 90
+claim: You can put the tasks of a dependency graph in an order where every task comes after everything it needs, by repeatedly taking a task whose prerequisites are done or by reversing the finishing order of a depth-first search, detect the cycles that make such an order impossible, and use the order to compute the fewest rounds or the earliest finishing time of a project.
+recalls: [s3.breadth-first-and-depth-first-search]
+uses: [f2.equivalence-relations-and-partial-orders, f3.counting-with-products-and-sums, s2.graphs-and-their-representations, s2.stacks-and-queues, s2.heaps-and-priority-queues, f3.graph-theory-basics, s1.recursion, s0.dictionaries-and-sets]
+leads: [s3.shortest-paths, s3.dynamic-programming]
+starter: |
+  # Scratch space. Count the prerequisites each task is waiting for.
+  needs = [("data", "clean"), ("clean", "split"), ("split", "train"), ("model", "train"), ("train", "test"), ("split", "test")]
+  waiting = {}
+  for before, after in needs:
+      waiting[after] = waiting.get(after, 0) + 1
+      waiting[before] = waiting.get(before, 0)
+  print(waiting)
+  print([task for task in waiting if waiting[task] == 0])
+parts:
+  recall:
+    - text: |
+        [[s3.breadth-first-and-depth-first-search]] explored a graph from one start and promised that the order in which depth-first search finishes its nodes would matter. It matters whenever the edges of a graph mean "this must happen before that": the steps of a build, the courses of a degree, the cells of a spreadsheet that read other cells. Doing the steps in an order that respects every arrow is this lesson's problem. Three quick pulls first.
+  puzzle:
+    - text: |
+        A chai stall's recipe has six steps, with these rules:
+
+        - the water boils before the tea leaves go in, and before the crushed ginger goes in;
+        - the milk goes in after both the tea leaves and the ginger;
+        - the sugar can go in at any point before straining;
+        - straining comes after the milk and after the sugar.
+
+        **In how many different orders can the six steps be done while following every rule?**
+  intuition:
+    - text: |
+        A rule like "boil before adding leaves" is an arrow from one task to another, so the tasks and rules form a directed graph, as in [[f3.graph-theory-basics]]. A directed graph with no way to follow arrows round in a circle is a **directed acyclic graph**, a DAG, and its arrows describe a partial order in the sense of [[f2.equivalence-relations-and-partial-orders]]: some pairs of tasks are ordered, others, like tea leaves and ginger, are not. A **topological order** lists every task so that each arrow points forward, extending the partial order to a complete one.
+
+        The natural way to find one is how anyone works through a to-do list with dependencies. Do any task that is waiting on nothing. Doing it may free other tasks; do one of those. Keep going until nothing is left. The figure does this for the steps of training a machine-learning model, always taking the ready task that comes first alphabetically. Step through it.
+    - figure: topo-order
+      props: { step: 0 }
+    - text: |
+        At the start, two tasks are waiting on nothing: getting the data and choosing the model. Each step finishes one ready task and checks which tasks it frees. The order that comes out, data, clean, model, split, train, test, is one of several that work; choosing the model could equally come first or after the split. If at some point no task is ready but some remain, they are waiting on one another in a circle, and no order exists.
+  derivation:
+    - text: |
+        **Kahn's method.** For each task, count the arrows coming into it: the number of prerequisites it is **waiting** for, its in-degree. Put every task with a count of 0 in a queue of ready tasks. Repeatedly take a ready task, add it to the order, and for each arrow out of it, reduce the count of the task at the other end by 1; any count that reaches 0 makes that task ready. When the queue empties, either every task is in the order, or the tasks left over all wait on one another: there is a **cycle**, and no topological order exists.
+
+        Each task joins the queue once and each arrow is followed once, so with adjacency lists the method takes $\Theta(V + E)$ time, like the searches of the last lesson. The queue can be any container: a stack gives a different valid order, and a heap from [[s2.heaps-and-priority-queues]] gives the order that is first alphabetically, as the figure does.
+    - question:
+        id: derivation-ready-at-start
+        type: numeric
+        system: s2
+        prompt: |
+          The arrows are data → clean, clean → split, split → train, model → train, train → test and split → test. How many tasks have a waiting count of 0 at the start?
+        answer: "2"
+        explanation: |
+          Every task except data and model has an arrow coming into it. Those two are ready at once.
+    - text: |
+        **The depth-first method.** Run depth-first search over every node, as in [[s3.breadth-first-and-depth-first-search]], and record each node when it **finishes**, after all the nodes reachable from it have finished. Then reverse the list. If there is an arrow from $u$ to $v$, then $v$ finishes before $u$: either the search reaches $v$ from $u$ and finishes it first, or $v$ was finished already. So in reversed finishing order, every arrow points forward. Written recursively, as in [[s1.recursion]], this is a few lines.
+
+        **Finding the cycle.** The same search detects cycles if each node has three states: not yet reached, **open** (reached, still exploring what lies beyond it), and **done**. The open nodes are exactly the current path from the starting node. An arrow to an open node leads back into the current path, which closes a cycle. An arrow to a done node is harmless: everything beyond that node was already explored without finding a way back. A single "visited" mark cannot tell these apart, and reports a cycle in a diamond like $A \to B \to D$, $A \to C \to D$, which has none. The search must also start from every node not yet reached, because a cycle may be unreachable from the first one tried.
+    - question:
+        id: derivation-critical-path
+        type: numeric
+        system: s2
+        prompt: |
+          The tasks above take these hours: data 2, clean 3, split 1, model 4, train 5, test 2. With as many people as needed, any task can start as soon as everything it needs is finished. What is the earliest time, in hours, at which the test can be finished?
+        answer: "13"
+        explanation: |
+          Work in topological order, each task finishing at the latest finish among its prerequisites plus its own hours: data 2, clean 5, split 6, model 4, train $\max(6, 4) + 5 = 11$, test $\max(11, 6) + 2 = 13$. The longest chain, data, clean, split, train, test, is the critical path; model has 2 hours to spare.
+    - text: |
+        **Using the order.** A topological order is the order in which to compute anything that depends on earlier results. A spreadsheet recalculates cells so that each cell's inputs are ready, and refuses a circular reference. A build tool compiles each file after the files it includes. And the earliest finishing time of a project, as in the question above, comes from one pass in topological order, each task's finish being its own time plus the latest finish of its prerequisites. The chain of tasks that sets the final time is the **critical path**; delaying any task on it delays the whole project. The same pass with "fewest rounds" in place of hours gives the fewest semesters in which a degree can be completed. This idea, solving the parts in an order where each part's inputs are already solved, returns as dynamic programming.
+
+        **How many orders?** A graph usually has many topological orders. There is exactly one when the order found has an arrow between every pair of neighbours in it, so the queue of ready tasks never holds two at once. Counting them all takes the methods of [[f3.counting-with-products-and-sums]], as in the puzzle.
+    - question:
+        id: order-kahn
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of Kahn's method in order.
+        steps:
+          - "Count the arrows coming into each task."
+          - "Put every task whose count is 0 in the queue of ready tasks."
+          - "Take a ready task, add it to the order, and reduce the count of each task it points to, making any that reach 0 ready."
+          - "When the queue is empty, report a cycle if any task is missing from the order."
+        explanation: |
+          The ready tasks are known only once the counts exist, tasks can be taken only from the ready queue, and only an empty queue shows whether everything made it into the order.
+  formal:
+    - text: |
+        **DAG.** A directed graph with no directed cycle.
+
+        **Topological order.** A listing of all nodes in which every edge $u \to v$ has $u$ before $v$. It exists if and only if the graph is a DAG.
+
+        **Kahn's method.** Repeatedly remove a node of in-degree 0 and the edges out of it. $\Theta(V + E)$. If nodes remain with none of in-degree 0, they include a cycle.
+
+        **Depth-first method.** The reverse of the finishing order of depth-first search is a topological order. Three states, unreached, open and done: an edge to an open node closes a cycle.
+
+        **Longest path in a DAG.** In topological order, $\text{finish}(v) = t(v) + \max_{u \to v} \text{finish}(u)$, with the maximum over no prerequisites taken as 0. The largest finish is the project's length; a chain achieving it is a critical path.
+  drill:
+    - text: Seconds each. Find what is ready, and what is waiting on what.
+    - question:
+        id: drill-cycle
+        type: choice
+        system: s1
+        prompt: |
+          The rules say A before B, B before C, and C before A. What is true?
+        options:
+          - "No order of A, B and C follows all three rules."
+          - "A, B, C follows all three rules."
+          - "C, A, B follows all three rules."
+          - "Exactly two orders follow all three rules."
+        answer: 0
+        explanation: The rules form a cycle, so whichever of A, B, C comes first breaks the rule that puts something before it.
+    - question:
+        id: drill-unique
+        type: numeric
+        system: s1
+        prompt: |
+          The only rules are A before B, B before C, and C before D. How many orders of A, B, C, D follow them?
+        answer: "1"
+        explanation: The rules chain all four tasks, so the order is forced.
+    - question:
+        id: drill-no-rules
+        type: numeric
+        system: s1
+        prompt: |
+          Three tasks have no rules between them. How many orders follow the rules?
+        answer: "6"
+        explanation: Every one of the $3! = 6$ orders does.
+    - question:
+        id: drill-in-degree
+        type: numeric
+        system: s1
+        prompt: |
+          The arrows are A → C, B → C, C → D and B → D. What is D's waiting count at the start?
+        answer: "2"
+        explanation: Two arrows come into D, from C and from B.
+    - question:
+        id: drill-finish
+        type: choice
+        system: s1
+        prompt: |
+          In the depth-first method, how is the topological order read off?
+        options:
+          - "The finishing order, reversed"
+          - "The order in which nodes are first reached"
+          - "The finishing order as it is"
+          - "Alphabetical order"
+        answer: 0
+        explanation: A node finishes after everything it points to, so reversing the finishing order puts it before them.
+    - question:
+        id: predict-waiting
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          arrows = [("a", "c"), ("b", "c"), ("c", "d")]
+          waiting = {"a": 0, "b": 0, "c": 0, "d": 0}
+          for before, after in arrows:
+              waiting[after] += 1
+          print([t for t in waiting if waiting[t] == 0], waiting["c"])
+        output: "['a', 'b'] 2"
+        explanation: a and b have no arrows coming in; c has two, from a and from b.
+    - question:
+        id: predict-finish
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          graph = {"a": ["b", "c"], "b": ["d"], "c": ["d"], "d": []}
+          finished = []
+
+          def visit(node):
+              if node in finished:
+                  return
+              for nxt in graph[node]:
+                  visit(nxt)
+              finished.append(node)
+
+          visit("a")
+          print(finished[::-1])
+        output: "['a', 'c', 'b', 'd']"
+        explanation: The search finishes d, then b, then c (whose d is already finished), then a. Reversed, a comes first and d last, with every arrow pointing forward.
+  work:
+    - text: Slower now. For each method, say what is counted or marked for each task, and what shows that a cycle exists.
+    - question:
+        id: fix-build-order
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `build_order(steps, needs)` should return an order of the build steps in which every step comes after the steps it needs, or `None` if the needs go round in a cycle. The program should print `['fetch', 'install', 'docs', 'compile', 'test'] None`. It prints `None None`. Find the fault and fix it.
+        starter: |
+          from collections import deque
+
+
+          def build_order(steps, needs):
+              # needs is a list of pairs (before, after): before must finish before after starts.
+              # Return an order of all the steps that respects every pair, or None if there is none.
+              waiting = {s: 0 for s in steps}
+              after = {s: [] for s in steps}
+              for before, later in needs:
+                  waiting[before] += 1
+                  after[before].append(later)
+              ready = deque([s for s in steps if waiting[s] == 0])
+              order = []
+              while ready:
+                  s = ready.popleft()
+                  order.append(s)
+                  for t in after[s]:
+                      waiting[t] -= 1
+                      if waiting[t] == 0:
+                          ready.append(t)
+              if len(order) < len(steps):
+                  return None
+              return order
+
+
+          steps = ["fetch", "install", "compile", "docs", "test"]
+          needs = [("fetch", "compile"), ("install", "compile"), ("compile", "test"), ("fetch", "docs")]
+          print(build_order(steps, needs), build_order(["a", "b"], [("a", "b"), ("b", "a")]))
+        solution: |
+          from collections import deque
+
+
+          def build_order(steps, needs):
+              # needs is a list of pairs (before, after): before must finish before after starts.
+              # Return an order of all the steps that respects every pair, or None if there is none.
+              waiting = {s: 0 for s in steps}
+              after = {s: [] for s in steps}
+              for before, later in needs:
+                  waiting[later] += 1
+                  after[before].append(later)
+              ready = deque([s for s in steps if waiting[s] == 0])
+              order = []
+              while ready:
+                  s = ready.popleft()
+                  order.append(s)
+                  for t in after[s]:
+                      waiting[t] -= 1
+                      if waiting[t] == 0:
+                          ready.append(t)
+              if len(order) < len(steps):
+                  return None
+              return order
+
+
+          steps = ["fetch", "install", "compile", "docs", "test"]
+          needs = [("fetch", "compile"), ("install", "compile"), ("compile", "test"), ("fetch", "docs")]
+          print(build_order(steps, needs), build_order(["a", "b"], [("a", "b"), ("b", "a")]))
+        tests: |
+          import random as _random
+
+
+          def _has_cycle(_steps, _needs):
+              _left = set(_steps)
+              _changed = True
+              while _changed:
+                  _changed = False
+                  for _s in list(_left):
+                      if all(not (_b in _left and _a == _s) for _b, _a in [(_x, _y) for _x, _y in _needs]):
+                          _left.discard(_s)
+                          _changed = True
+              return len(_left) > 0
+
+
+          _rng = _random.Random(5)
+          _cases = [
+              (["fetch", "install", "compile", "docs", "test"], [("fetch", "compile"), ("install", "compile"), ("compile", "test"), ("fetch", "docs")]),
+              (["a", "b"], [("a", "b"), ("b", "a")]),
+              (["x"], []),
+              ([], []),
+              (["p", "q", "r"], [("p", "q"), ("q", "r"), ("r", "p")]),
+              (["p", "q", "r", "s"], [("p", "q"), ("q", "r"), ("r", "q")]),
+          ]
+          for _ in range(40):
+              _n = _rng.randint(1, 7)
+              _steps = ["s" + str(_i) for _i in range(_n)]
+              _needs = []
+              for _ in range(_rng.randint(0, 9)):
+                  _a = _rng.randint(0, _n - 1)
+                  _b = _rng.randint(0, _n - 1)
+                  if _a != _b and (_rng.random() < 0.85 and _a < _b or _rng.random() < 0.1):
+                      _needs.append(("s" + str(_a), "s" + str(_b)))
+              _cases.append((_steps, _needs))
+          for _steps, _needs in _cases:
+              _got = build_order(list(_steps), list(_needs))
+              _name = "build_order(" + str(_steps) + ", " + str(_needs) + ")"
+              if _has_cycle(_steps, _needs):
+                  assert _got is None, _name + " should be None, because the pairs go round in a cycle, not " + str(_got)
+                  continue
+              assert _got is not None, _name + " should be an order, because the pairs have no cycle, not None"
+              assert sorted(_got) == sorted(_steps), _name + " should contain every step exactly once, not " + str(_got)
+              for _b, _a in _needs:
+                  assert _got.index(_b) < _got.index(_a), _name + " gave " + str(_got) + ", which puts " + _a + " before " + _b
+          assert output.strip() == "['fetch', 'install', 'docs', 'compile', 'test'] None", "The program should print ['fetch', 'install', 'docs', 'compile', 'test'] None"
+        wrong:
+          - |
+            from collections import deque
+
+
+            def build_order(steps, needs):
+                # needs is a list of pairs (before, after): before must finish before after starts.
+                # Return an order of all the steps that respects every pair, or None if there is none.
+                waiting = {s: 0 for s in steps}
+                after = {s: [] for s in steps}
+                for before, later in needs:
+                    waiting[later] += 1
+                    after[before].append(later)
+                ready = deque([s for s in steps if waiting[s] == 0])
+                order = []
+                while ready:
+                    s = ready.popleft()
+                    order.append(s)
+                    for t in after[s]:
+                        waiting[t] -= 1
+                        if waiting[t] == 0:
+                            ready.append(t)
+                return order
+
+
+            steps = ["fetch", "install", "compile", "docs", "test"]
+            needs = [("fetch", "compile"), ("install", "compile"), ("compile", "test"), ("fetch", "docs")]
+            print(build_order(steps, needs), build_order(["a", "b"], [("a", "b"), ("b", "a")]))
+          - |
+            from collections import deque
+
+
+            def build_order(steps, needs):
+                # needs is a list of pairs (before, after): before must finish before after starts.
+                # Return an order of all the steps that respects every pair, or None if there is none.
+                waiting = {s: 0 for s in steps}
+                after = {s: [] for s in steps}
+                for before, later in needs:
+                    waiting[later] += 1
+                    after[before].append(later)
+                ready = deque([s for s in steps if waiting[s] == 0])
+                order = []
+                while ready:
+                    s = ready.popleft()
+                    order.append(s)
+                    for t in after[s]:
+                        waiting[t] -= 1
+                        ready.append(t)
+                if len(order) < len(steps):
+                    return None
+                return order
+
+
+            steps = ["fetch", "install", "compile", "docs", "test"]
+            needs = [("fetch", "compile"), ("install", "compile"), ("compile", "test"), ("fetch", "docs")]
+            print(build_order(steps, needs), build_order(["a", "b"], [("a", "b"), ("b", "a")]))
+          - |
+            from collections import deque
+
+
+            def build_order(steps, needs):
+                # needs is a list of pairs (before, after): before must finish before after starts.
+                # Return an order of all the steps that respects every pair, or None if there is none.
+                waiting = {s: 0 for s in steps}
+                after = {s: [] for s in steps}
+                for before, later in needs:
+                    waiting[later] += 1
+                    after[later].append(before)
+                ready = deque([s for s in steps if waiting[s] == 0])
+                order = []
+                while ready:
+                    s = ready.popleft()
+                    order.append(s)
+                    for t in after[s]:
+                        waiting[t] -= 1
+                        if waiting[t] == 0:
+                            ready.append(t)
+                if len(order) < len(steps):
+                    return None
+                return order
+
+
+            steps = ["fetch", "install", "compile", "docs", "test"]
+            needs = [("fetch", "compile"), ("install", "compile"), ("compile", "test"), ("fetch", "docs")]
+            print(build_order(steps, needs), build_order(["a", "b"], [("a", "b"), ("b", "a")]))
+        explanation: |
+          A step waits for the steps it needs, so each pair adds one to the count of `later`, the step at the arrow's head. Counting at `before` makes steps with many dependants look blocked and steps at the end look ready, the order stalls, and every input looks like a cycle. Dropping the final check returns a short list instead of `None` for a cycle; making a step ready on every decrement adds it once per prerequisite; and recording arrows backwards frees the wrong steps.
+    - question:
+        id: write-min-semesters
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `min_semesters(courses, prereqs)`. Each pair `(first, then)` in `prereqs` means `first` must be passed in an earlier semester than `then`, and any number of courses can be taken in one semester. Return the fewest semesters that cover every course, or `None` if the prerequisites go round in a cycle.
+        starter: |
+          def min_semesters(courses, prereqs):
+              # prereqs is a list of pairs (first, then): first must be passed in an earlier semester
+              # than then. Any number of courses can be taken in a semester. Return the fewest
+              # semesters that cover every course, or None if no plan is possible.
+              return len(courses)
+
+
+          courses = ["maths", "python", "data", "stats", "ml", "project"]
+          prereqs = [("maths", "stats"), ("python", "data"), ("data", "ml"), ("stats", "ml"), ("ml", "project")]
+          print(min_semesters(courses, prereqs), min_semesters(["a"], []), min_semesters(["a", "b"], [("a", "b"), ("b", "a")]))
+        solution: |
+          def min_semesters(courses, prereqs):
+              # prereqs is a list of pairs (first, then): first must be passed in an earlier semester
+              # than then. Any number of courses can be taken in a semester. Return the fewest
+              # semesters that cover every course, or None if no plan is possible.
+              waiting = {c: 0 for c in courses}
+              unlocks = {c: [] for c in courses}
+              for first, then in prereqs:
+                  waiting[then] += 1
+                  unlocks[first].append(then)
+              now = [c for c in courses if waiting[c] == 0]
+              semesters = 0
+              passed = 0
+              while now:
+                  semesters += 1
+                  passed += len(now)
+                  nxt = []
+                  for c in now:
+                      for d in unlocks[c]:
+                          waiting[d] -= 1
+                          if waiting[d] == 0:
+                              nxt.append(d)
+                  now = nxt
+              if passed < len(courses):
+                  return None
+              return semesters
+
+
+          courses = ["maths", "python", "data", "stats", "ml", "project"]
+          prereqs = [("maths", "stats"), ("python", "data"), ("data", "ml"), ("stats", "ml"), ("ml", "project")]
+          print(min_semesters(courses, prereqs), min_semesters(["a"], []), min_semesters(["a", "b"], [("a", "b"), ("b", "a")]))
+        tests: |
+          import random as _random
+
+
+          def _reference(_courses, _prereqs):
+              _level = {}
+              _left = list(_courses)
+              _round = 0
+              while _left:
+                  _round += 1
+                  _can = [_c for _c in _left if all(_f in _level and _level[_f] < _round for _f, _t in _prereqs if _t == _c)]
+                  if not _can:
+                      return None
+                  for _c in _can:
+                      _level[_c] = _round
+                  _left = [_c for _c in _left if _c not in _level]
+              return _round
+
+
+          _rng = _random.Random(9)
+          _cases = [
+              (["maths", "python", "data", "stats", "ml", "project"], [("maths", "stats"), ("python", "data"), ("data", "ml"), ("stats", "ml"), ("ml", "project")]),
+              (["a"], []),
+              ([], []),
+              (["a", "b"], [("a", "b"), ("b", "a")]),
+              (["a", "b", "c"], [("a", "b"), ("b", "c"), ("a", "c")]),
+              (["a", "b", "c", "d"], []),
+          ]
+          for _ in range(40):
+              _n = _rng.randint(1, 7)
+              _courses = ["c" + str(_i) for _i in range(_n)]
+              _prereqs = []
+              for _ in range(_rng.randint(0, 9)):
+                  _a = _rng.randint(0, _n - 1)
+                  _b = _rng.randint(0, _n - 1)
+                  if _a != _b and (_a < _b or _rng.random() < 0.1) and ("c" + str(_a), "c" + str(_b)) not in _prereqs:
+                      _prereqs.append(("c" + str(_a), "c" + str(_b)))
+              _cases.append((_courses, _prereqs))
+          for _courses, _prereqs in _cases:
+              _want = _reference(_courses, _prereqs)
+              _got = min_semesters(list(_courses), list(_prereqs))
+              assert _got == _want, "min_semesters(" + str(_courses) + ", " + str(_prereqs) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "4 1 None", "The program should print 4 1 None"
+        wrong:
+          - |
+            def min_semesters(courses, prereqs):
+                # prereqs is a list of pairs (first, then): first must be passed in an earlier semester
+                # than then. Any number of courses can be taken in a semester. Return the fewest
+                # semesters that cover every course, or None if no plan is possible.
+                waiting = {c: 0 for c in courses}
+                unlocks = {c: [] for c in courses}
+                for first, then in prereqs:
+                    waiting[then] += 1
+                    unlocks[first].append(then)
+                now = [c for c in courses if waiting[c] == 0]
+                semesters = -1
+                passed = 0
+                while now:
+                    semesters += 1
+                    passed += len(now)
+                    nxt = []
+                    for c in now:
+                        for d in unlocks[c]:
+                            waiting[d] -= 1
+                            if waiting[d] == 0:
+                                nxt.append(d)
+                    now = nxt
+                if passed < len(courses):
+                    return None
+                return semesters
+
+
+            courses = ["maths", "python", "data", "stats", "ml", "project"]
+            prereqs = [("maths", "stats"), ("python", "data"), ("data", "ml"), ("stats", "ml"), ("ml", "project")]
+            print(min_semesters(courses, prereqs), min_semesters(["a"], []), min_semesters(["a", "b"], [("a", "b"), ("b", "a")]))
+          - |
+            def min_semesters(courses, prereqs):
+                # prereqs is a list of pairs (first, then): first must be passed in an earlier semester
+                # than then. Any number of courses can be taken in a semester. Return the fewest
+                # semesters that cover every course, or None if no plan is possible.
+                waiting = {c: 0 for c in courses}
+                unlocks = {c: [] for c in courses}
+                for first, then in prereqs:
+                    waiting[then] += 1
+                    unlocks[first].append(then)
+                ready = [c for c in courses if waiting[c] == 0]
+                semesters = 0
+                while ready:
+                    c = ready.pop()
+                    semesters += 1
+                    for d in unlocks[c]:
+                        waiting[d] -= 1
+                        if waiting[d] == 0:
+                            ready.append(d)
+                if semesters < len(courses):
+                    return None
+                return semesters
+
+
+            courses = ["maths", "python", "data", "stats", "ml", "project"]
+            prereqs = [("maths", "stats"), ("python", "data"), ("data", "ml"), ("stats", "ml"), ("ml", "project")]
+            print(min_semesters(courses, prereqs), min_semesters(["a"], []), min_semesters(["a", "b"], [("a", "b"), ("b", "a")]))
+          - |
+            def min_semesters(courses, prereqs):
+                # prereqs is a list of pairs (first, then): first must be passed in an earlier semester
+                # than then. Any number of courses can be taken in a semester. Return the fewest
+                # semesters that cover every course, or None if no plan is possible.
+                waiting = {c: 0 for c in courses}
+                unlocks = {c: [] for c in courses}
+                for first, then in prereqs:
+                    waiting[then] += 1
+                    unlocks[first].append(then)
+                now = [c for c in courses if waiting[c] == 0]
+                semesters = 0
+                passed = 0
+                while now:
+                    semesters += 1
+                    nxt = []
+                    i = 0
+                    while i < len(now):
+                        c = now[i]
+                        passed += 1
+                        for d in unlocks[c]:
+                            waiting[d] -= 1
+                            if waiting[d] == 0:
+                                now.append(d)
+                        i += 1
+                    now = nxt
+                if passed < len(courses):
+                    return None
+                return semesters
+
+
+            courses = ["maths", "python", "data", "stats", "ml", "project"]
+            prereqs = [("maths", "stats"), ("python", "data"), ("data", "ml"), ("stats", "ml"), ("ml", "project")]
+            print(min_semesters(courses, prereqs), min_semesters(["a"], []), min_semesters(["a", "b"], [("a", "b"), ("b", "a")]))
+        explanation: |
+          Run Kahn's method a whole round at a time: every course ready now is taken this semester, and only the courses they unlock form the next round. The number of rounds is the number of courses on the longest chain of prerequisites. Starting the count at −1 counts the arrows on that chain instead of its courses; taking one course per semester counts courses, not semesters; and adding newly ready courses to the current round lets a course share a semester with its own prerequisite.
+    - question:
+        id: write-has-cycle
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A spreadsheet maps each cell to the list of cells its formula reads. Write `has_cycle(graph)`, which returns `True` if some cell depends, directly or through other cells, on itself, using depth-first search with three states for each cell.
+        starter: |
+          def has_cycle(graph):
+              # graph maps each cell of a spreadsheet to the list of cells its formula reads.
+              # Return True if some cell depends, directly or through others, on itself.
+              return False
+
+
+          sheet = {"A1": [], "B1": ["A1"], "C1": ["A1", "B1"], "D1": ["C1"]}
+          loop = {"A1": ["C1"], "B1": ["A1"], "C1": ["B1"], "D1": []}
+          print(has_cycle(sheet), has_cycle(loop), has_cycle({"A1": ["A1"]}))
+        solution: |
+          def has_cycle(graph):
+              # graph maps each cell of a spreadsheet to the list of cells its formula reads.
+              # Return True if some cell depends, directly or through others, on itself.
+              state = {}  # missing: not started; "open": still being explored; "done": finished
+
+              def explore(cell):
+                  state[cell] = "open"
+                  for other in graph[cell]:
+                      if state.get(other) == "open":
+                          return True
+                      if other not in state and explore(other):
+                          return True
+                  state[cell] = "done"
+                  return False
+
+              for cell in graph:
+                  if cell not in state and explore(cell):
+                      return True
+              return False
+
+
+          sheet = {"A1": [], "B1": ["A1"], "C1": ["A1", "B1"], "D1": ["C1"]}
+          loop = {"A1": ["C1"], "B1": ["A1"], "C1": ["B1"], "D1": []}
+          print(has_cycle(sheet), has_cycle(loop), has_cycle({"A1": ["A1"]}))
+        tests: |
+          import random as _random
+
+
+          def _reference(_graph):
+              _left = set(_graph)
+              _changed = True
+              while _changed:
+                  _changed = False
+                  for _c in list(_left):
+                      if all(_o not in _left for _o in _graph[_c]):
+                          _left.discard(_c)
+                          _changed = True
+              return len(_left) > 0
+
+
+          _rng = _random.Random(13)
+          _cases = [
+              {"A1": [], "B1": ["A1"], "C1": ["A1", "B1"], "D1": ["C1"]},
+              {"A1": ["C1"], "B1": ["A1"], "C1": ["B1"], "D1": []},
+              {"A1": ["A1"]},
+              {},
+              {"A": ["B", "C"], "B": ["D"], "C": ["D"], "D": []},
+              {"A": [], "B": ["C"], "C": ["B"]},
+              {"A": [], "B": [], "C": ["D"], "D": ["E"], "E": ["C"]},
+          ]
+          for _ in range(60):
+              _n = _rng.randint(1, 7)
+              _cells = ["c" + str(_i) for _i in range(_n)]
+              _graph = {}
+              for _i in range(_n):
+                  _graph[_cells[_i]] = [_cells[_j] for _j in range(_n) if _j != _i and _rng.random() < (0.35 if _j < _i else 0.04)]
+              _cases.append(_graph)
+          for _graph in _cases:
+              _want = _reference(_graph)
+              _got = has_cycle(_graph)
+              assert _got == _want, "has_cycle(" + str(_graph) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "False True True", "The program should print False True True"
+        wrong:
+          - |
+            def has_cycle(graph):
+                # graph maps each cell of a spreadsheet to the list of cells its formula reads.
+                # Return True if some cell depends, directly or through others, on itself.
+                state = {}  # missing: not started; "open": still being explored; "done": finished
+
+                def explore(cell):
+                    state[cell] = "open"
+                    for other in graph[cell]:
+                        if other in state:
+                            return True
+                        if other not in state and explore(other):
+                            return True
+                    state[cell] = "done"
+                    return False
+
+                for cell in graph:
+                    if cell not in state and explore(cell):
+                        return True
+                return False
+
+
+            sheet = {"A1": [], "B1": ["A1"], "C1": ["A1", "B1"], "D1": ["C1"]}
+            loop = {"A1": ["C1"], "B1": ["A1"], "C1": ["B1"], "D1": []}
+            print(has_cycle(sheet), has_cycle(loop), has_cycle({"A1": ["A1"]}))
+          - |
+            def has_cycle(graph):
+                # graph maps each cell of a spreadsheet to the list of cells its formula reads.
+                # Return True if some cell depends, directly or through others, on itself.
+                state = {}  # missing: not started; "open": still being explored; "done": finished
+
+                def explore(cell):
+                    state[cell] = "open"
+                    for other in graph[cell]:
+                        if state.get(other) == "open":
+                            return True
+                        if other not in state and explore(other):
+                            return True
+                    state[cell] = "done"
+                    return False
+
+                for cell in graph:
+                    return explore(cell)
+                return False
+
+
+            sheet = {"A1": [], "B1": ["A1"], "C1": ["A1", "B1"], "D1": ["C1"]}
+            loop = {"A1": ["C1"], "B1": ["A1"], "C1": ["B1"], "D1": []}
+            print(has_cycle(sheet), has_cycle(loop), has_cycle({"A1": ["A1"]}))
+          - |
+            def has_cycle(graph):
+                # graph maps each cell of a spreadsheet to the list of cells its formula reads.
+                # Return True if some cell depends, directly or through others, on itself.
+                state = {}  # missing: not started; "open": still being explored; "done": finished
+
+                def explore(cell):
+                    state[cell] = "open"
+                    for other in graph[cell]:
+                        if state.get(other) == "open":
+                            return True
+                        if other not in state and explore(other):
+                            return True
+                    return False
+
+                for cell in graph:
+                    if cell not in state and explore(cell):
+                        return True
+                return False
+
+
+            sheet = {"A1": [], "B1": ["A1"], "C1": ["A1", "B1"], "D1": ["C1"]}
+            loop = {"A1": ["C1"], "B1": ["A1"], "C1": ["B1"], "D1": []}
+            print(has_cycle(sheet), has_cycle(loop), has_cycle({"A1": ["A1"]}))
+        explanation: |
+          A cell is open while the search explores what it reads, and done afterwards. Reading an open cell means following references back into the current path: a cycle. Treating any visited cell as a cycle wrongly flags C1, which reads B1 and also A1, which B1 already reached; starting only from the first cell misses cycles that it cannot reach; and never marking cells done leaves every finished cell looking open.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Six chai steps: boil water; add tea leaves; add ginger; add milk; add sugar; strain. Leaves and ginger go in after boiling; milk after both leaves and ginger; sugar at any point before straining; straining after milk and sugar. How many orders follow every rule?
+        answer: "10"
+        explanation: |
+          Without the sugar, the order must be boil, then leaves and ginger in either of 2 orders, then milk, then strain. The sugar can go into any of the 5 gaps before straining: first, or after any of the first four steps. $2 \times 5 = 10$.
+    - question:
+        id: work-spreadsheet
+        type: choice
+        system: s2
+        prompt: |
+          A spreadsheet with 50,000 formula cells recalculates by evaluating every cell, then evaluating every cell again, until nothing changes. It is slow. Which change fixes it, and what does it cost?
+        options:
+          - "Evaluate each cell once in a topological order of the cells it reads, found in time proportional to the cells plus the references."
+          - "Evaluate the cells row by row from the top, which is always a valid order."
+          - "Evaluate the cells in alphabetical order of their names."
+          - "Keep repeating, but stop after ten passes."
+        answer: 0
+        explanation: |
+          In topological order each cell's inputs are final before it is computed, so one pass suffices, and finding the order costs $\Theta(V + E)$. A cell near the top can read a cell further down, so row order can use stale values; names are no better; and a fixed number of passes is either wasteful or wrong.
+  connections:
+    - text: |
+        Ten orders. Boiling must come first among the four steps that hang off it, tea leaves and ginger can swap, milk and straining are forced, and the sugar floats freely in any of the five places before straining. A topological sort finds one of these ten in a single pass; counting them all needed the argument above.
+
+        Doing work in topological order, so that everything a step needs is ready when the step comes, is a pattern that returns often. [[s3.shortest-paths]] uses it on graphs without cycles to find the shortest route in one pass, and has to work harder when routes can go round in circles. [[s3.dynamic-programming]] solves a problem by breaking it into overlapping subproblems and solving them in an order where every subproblem's parts are already solved: a topological order of the subproblems, whether or not the graph is ever drawn.

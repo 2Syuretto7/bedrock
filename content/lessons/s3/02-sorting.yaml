@@ -1,0 +1,502 @@
+concept: s3.sorting
+minutes: 90
+claim: You can sort a list by insertion and by merging and count the comparisons each makes, explain why no method that only compares items can beat about n log₂ n comparisons, sort small whole-number keys in linear time by counting, keep equal items in their original order with a stable sort, and sort records by several keys with Python's sorted and a key function.
+recalls: [s3.measuring-and-predicting-running-time]
+uses: [f3.permutations-and-combinations, f3.trees-and-their-properties, f3.asymptotic-notation, f2.loop-invariants, f1.logarithms, s1.recursion, s2.heaps-and-priority-queues, s2.arrays-and-dynamic-arrays, f1.composition-and-inverses, s0.lists-and-tuples]
+leads: [s3.binary-search, s3.divide-and-conquer-and-the-master-theorem, s3.greedy-algorithms, s3.randomised-algorithms]
+starter: |
+  # Scratch space. Count the comparisons insertion sort makes.
+  def insertion_sort(xs):
+      xs = list(xs)
+      comparisons = 0
+      for i in range(1, len(xs)):
+          j = i
+          while j > 0:
+              comparisons += 1
+              if xs[j - 1] <= xs[j]:
+                  break
+              xs[j - 1], xs[j] = xs[j], xs[j - 1]
+              j -= 1
+      return xs, comparisons
+
+  print(insertion_sort([5, 2, 8, 1, 9, 3, 7, 4]))
+  print(insertion_sort([1, 2, 3, 4, 5, 6, 7, 8]))
+  print(insertion_sort([8, 7, 6, 5, 4, 3, 2, 1]))
+parts:
+  recall:
+    - text: |
+        [[s3.measuring-and-predicting-running-time]] ended with a duplicate-finding script that compared every record with every other one and needed nearly six hours on ten lakh records. Putting the records in order first would bring identical records next to each other, so one pass down the sorted list would find every duplicate. That only helps if sorting itself is fast, and this lesson shows how fast it can be and why it can be no faster. Three quick pulls first.
+  puzzle:
+    - text: |
+        A courier office has five parcels that look alike but weigh different amounts, and a balance that compares two parcels at a time and shows which is heavier. The parcels must be put in order from lightest to heaviest.
+
+        Different methods use different numbers of weighings, and a method may get lucky on some parcels. **What is the smallest number of weighings that a method must be ready to make, so that it can always finish the order of five parcels, however their weights fall?**
+  intuition:
+    - text: |
+        A teacher with a stack of answer sheets to arrange by roll number usually does what card players do with a hand of cards. Pick up the sheets one at a time and slide each into its place among the ones already held, moving past every sheet with a larger roll number. The held sheets are always in order, and the pile grows by one each time. This is **insertion sort**.
+
+        Two teachers with a tall stack can do better. Each takes half and sorts it. Then they lay the two sorted piles face up side by side and repeatedly take whichever top sheet has the smaller roll number. One glance per sheet merges the two piles into one sorted pile. Splitting the halves again and again, down to single sheets, gives **merge sort**.
+
+        Both put items in order using one kind of step, comparing two items and asking which comes first. Counting those **comparisons** measures the work, as [[s3.measuring-and-predicting-running-time]] counted basic steps. The figure sorts eight numbers both ways. Step through insertion sort, then switch to merge sort.
+    - figure: sort-steps
+      props: { method: insertion, step: 0 }
+    - text: |
+        On these eight numbers insertion sort makes 18 comparisons and merge sort 17, hardly a difference. Look at where the work goes, though. Insertion sort's last item, 4, walks past four larger numbers, and an item near the end of a long list can walk past nearly everything before it. Merge sort never walks: each round of merging touches every item once, and the number of rounds is the number of times the list can be halved, 3 for eight items. On a million items that is the difference between about 50,000 crore comparisons in insertion sort's worst case and about 2 crore in merge sort's.
+  derivation:
+    - text: |
+        **Insertion sort.** For each position $i$ from the second onward, the item there is moved left, swapping with its neighbour, until the item before it is no larger. The loop keeps an invariant, in the sense of [[f2.loop-invariants]]: before pass $i$, the first $i$ items are in order. Each pass keeps it true for one more item, so when the passes end the whole list is in order.
+
+        Its cost depends on the input. If the list is already in order, each new item is compared once with its neighbour and stays: $n - 1$ comparisons. If it is in reverse order, the item at position $i$ walks past all $i$ items before it, and the total is $1 + 2 + \cdots + (n - 1) = n(n - 1)/2$, quadratic. More precisely, each swap removes exactly one **inversion**, a pair of items that are in the wrong order relative to each other, so insertion sort takes time proportional to $n$ plus the number of inversions. A nearly sorted list has few inversions, and insertion sort finishes it in close to linear time.
+    - question:
+        id: derivation-insertion-worst
+        type: numeric
+        system: s2
+        prompt: |
+          How many comparisons does insertion sort make on the list `[6, 5, 4, 3, 2, 1]`?
+        answer: "15"
+        explanation: |
+          The list is in reverse order, so the second item walks past 1 item, the third past 2, and so on: $1 + 2 + 3 + 4 + 5 = 15 = 6 \times 5/2$. Every one of the $\binom{6}{2} = 15$ pairs is an inversion.
+    - text: |
+        **Merge sort.** A list of one item is already sorted. A longer list is split into two halves, each half is sorted by the same method, and the two sorted halves are merged. That is recursion in the sense of [[s1.recursion]]: a base case, and a rule that reduces a problem to smaller copies of itself.
+
+        Merging is where the comparisons happen. Keep a finger on the front of each sorted half, compare the two items under the fingers, move the smaller one to the output and advance that finger. When one half runs out, the rest of the other half is already in order and is copied across. Each comparison outputs one item, so merging lists with $m$ items in total takes at most $m - 1$ comparisons.
+
+        Picture the recursion as a tree, as in [[f3.trees-and-their-properties]]. The whole list sits at the root, its halves below, their halves below those, down to single items at the leaves. Halving $n$ reaches 1 after $\log_2 n$ levels, by [[f1.logarithms]]. At every level the merges between them handle each item once, so each level costs at most $n$ comparisons, and the total is at most about $n \log_2 n$. Unlike insertion sort, merge sort pays this even on a list that is already sorted, and it needs a second list of $n$ places to merge into.
+    - question:
+        id: derivation-merge-levels
+        type: numeric
+        system: s2
+        prompt: |
+          Merge sort splits a list of 1,024 items in half, then each half in half, and so on, down to single items. How many levels of merging are needed to put it back together?
+        answer: "10"
+        explanation: |
+          $1{,}024 = 2^{10}$, so the list can be halved 10 times before every piece has one item, and each halving is undone by one level of merging. With at most 1,024 comparisons per level, merge sort needs at most about 10,240 comparisons, where insertion sort could need $1{,}024 \times 1{,}023/2 = 5{,}23{,}776$.
+    - text: |
+        **Heap sort and quicksort.** Two other methods reach $n \log n$. **Heap sort** puts the items in a heap, from [[s2.heaps-and-priority-queues]], and takes out the smallest $n$ times; each removal costs $O(\log n)$, and the heap can live inside the list itself, so no second list is needed. **Quicksort** picks one item as a pivot, splits the others into those smaller and those larger, and sorts each side. It is fast in practice, but a bad pivot every time makes it quadratic; [[s3.randomised-algorithms]] shows how choosing the pivot at random makes that vanishingly unlikely.
+
+        **The lower bound.** Is $n \log_2 n$ the best possible? For any method that learns about the items only by comparing them, yes. Draw every possible run of the method as a tree: each internal node is a comparison, each branch is one of its two answers, and each leaf is the point where the method stops and announces an order. Different starting orders of the items must end at different leaves, since the method must rearrange them differently. There are $n!$ starting orders, by [[f3.permutations-and-combinations]], so the tree has at least $n!$ leaves. A binary tree of height $h$ has at most $2^h$ leaves, so
+
+        $$2^h \ge n!, \qquad h \ge \log_2 n! \approx n \log_2 n - 1.44\,n.$$
+
+        The height is the number of comparisons on the unluckiest input. Merge sort is within a small constant of the best possible, and no amount of cleverness with comparisons will do better.
+    - question:
+        id: derivation-lower-bound
+        type: numeric
+        system: s2
+        prompt: |
+          By the decision-tree argument, at least how many comparisons must any comparison-based method be ready to make to sort 4 items?
+        answer: "5"
+        explanation: |
+          There are $4! = 24$ orders, and a tree of height 4 has at most $2^4 = 16$ leaves, too few. Height 5 allows 32, so at least $\lceil \log_2 24 \rceil = 5$ comparisons are needed in the worst case, and merge sort on 4 items makes at most 5.
+    - text: |
+        **Sorting without comparing.** The lower bound covers only methods that compare items. If the keys are small whole numbers, say exam marks from 0 to 100, there is a quicker way: count how many times each mark occurs in one pass, then write out each mark as many times as it was counted, in order. That is **counting sort**, and it takes $\Theta(n + k)$ steps for $n$ items with keys from 0 to $k$, linear when $k$ is not much bigger than $n$. It never compares two items, so the lower bound does not apply. **Radix sort** extends the idea to longer keys by sorting on one digit at a time.
+
+        **Stability and keys.** A sort is **stable** if items with equal keys stay in the order they arrived. Stability matters when records are sorted by one field while another order is already in place. Sort a day's orders by time, then stably by city, and within each city the orders remain in time order. Merge sort is stable if a tie takes the item from the left half; heap sort and the simple quicksort are not.
+
+        **Sorting in Python.** Python's built-in sort is **Timsort**, a merge sort that first looks for stretches already in order and sorts short stretches by insertion. It is stable, never worse than $O(n \log n)$, and linear on a list that is already sorted. `sorted(xs)` returns a new sorted list and leaves `xs` alone; `xs.sort()` sorts `xs` in place and returns `None`. Both take `key=`, a function applied to each item to get the value to sort by, often a `lambda` as in [[f1.composition-and-inverses]], and `reverse=True`. A tuple key sorts by its first part, then breaks ties by the second, and negating a number in the key reverses that part alone.
+    - question:
+        id: order-merge-sort
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of merge sort on one list in order.
+        steps:
+          - "If the list has at most one item, return it as it is."
+          - "Split the list into a left half and a right half."
+          - "Sort each half by the same method."
+          - "Merge the two sorted halves by repeatedly taking the smaller front item."
+        explanation: |
+          The base case must be checked before splitting, or the recursion never stops. The halves must exist before they can be sorted, and merging needs both halves already in order.
+  formal:
+    - text: |
+        **Comparison sort.** A method that learns about the items only by comparing pairs. Its cost is the number of comparisons in the worst case over inputs of size $n$.
+
+        **Insertion sort.** Invariant: before pass $i$, items $0$ to $i - 1$ are in order. Comparisons: $n - 1$ on sorted input, $n(n - 1)/2$ on reversed input, $\Theta(n + I)$ in general, where $I$ is the number of inversions, pairs $i < j$ with $x_i > x_j$.
+
+        **Merge.** Merging sorted lists of total length $m$ takes at most $m - 1$ comparisons.
+
+        **Merge sort.** $\lceil \log_2 n \rceil$ levels of at most $n$ comparisons each: $O(n \log n)$, with $n$ extra places of memory. Stable when ties take from the left.
+
+        **Lower bound.** Any comparison sort makes at least $\lceil \log_2 n! \rceil$ comparisons in the worst case, and $\log_2 n! = \Theta(n \log n)$.
+
+        **Counting sort.** Keys in $\{0, \dots, k\}$: $\Theta(n + k)$, with no comparisons.
+
+        **Stable.** Items with equal keys keep their input order.
+
+        **Python.** `sorted(xs, key=f, reverse=False)` returns a new list; `xs.sort(key=f)` sorts in place and returns `None`. Both are stable, $O(n \log n)$, and $O(n)$ on sorted input.
+  drill:
+    - text: Seconds each. Count passes, levels and orders.
+    - question:
+        id: drill-sorted-input
+        type: numeric
+        system: s1
+        prompt: |
+          How many comparisons does insertion sort make on a list of 10 items that is already in order?
+        answer: "9"
+        explanation: Each of the 9 items after the first is compared once with its neighbour and stays where it is.
+    - question:
+        id: drill-levels
+        type: numeric
+        system: s1
+        prompt: |
+          How many levels of merging does merge sort need for 8 items?
+        answer: "3"
+        explanation: $8 = 2^3$, so 8 halves to 4, 2 and 1 in three steps, and three levels of merging rebuild it.
+    - question:
+        id: drill-orders
+        type: numeric
+        system: s1
+        prompt: |
+          In how many different orders can 4 distinct items arrive?
+        answer: "24"
+        explanation: $4! = 4 \times 3 \times 2 \times 1 = 24$. A sort must be able to tell all of them apart.
+    - question:
+        id: drill-stable
+        type: choice
+        system: s1
+        prompt: |
+          Orders already in time order are sorted by city with a stable sort. Within each city, what order are the orders in?
+        options:
+          - "Time order"
+          - "Reverse time order"
+          - "Any order at all"
+          - "Order of amount"
+        answer: 0
+        explanation: A stable sort keeps items with equal keys, here the same city, in the order they arrived, which was time order.
+    - question:
+        id: drill-counting
+        type: choice
+        system: s1
+        prompt: |
+          Which list can counting sort put in order in linear time?
+        options:
+          - "Ten lakh exam marks, each a whole number from 0 to 100"
+          - "Ten lakh names"
+          - "Ten lakh prices with paise, from ₹0 to ₹1 crore"
+          - "Ten lakh random decimals between 0 and 1"
+        answer: 0
+        explanation: Counting sort needs small whole-number keys. 101 possible marks need 101 counters; names, decimals and a crore of rupees counted in paise do not fit a small table of counters.
+    - question:
+        id: drill-sort-returns
+        type: choice
+        system: s1
+        prompt: |
+          `xs` is a list. Which line leaves `xs` unchanged?
+        options:
+          - "`ys = sorted(xs)`"
+          - "`xs.sort()`"
+          - "`ys = xs.sort()`"
+          - "`xs = sorted(xs)`"
+        answer: 0
+        explanation: "`sorted` builds a new list. `xs.sort()` rearranges `xs` itself, and also returns `None`, so `ys = xs.sort()` sets `ys` to `None`. `xs = sorted(xs)` makes `xs` name the new sorted list."
+    - question:
+        id: predict-case
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(sorted(["banana", "Apple", "cherry"]))
+        output: "['Apple', 'banana', 'cherry']"
+        explanation: Strings compare character by character by code point, and every capital letter comes before every small letter. Here that happens to match the alphabet; `sorted(["banana", "Cherry", "apple"])` would put `"Cherry"` first.
+    - question:
+        id: predict-none
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          xs = [3, 1, 2]
+          print(xs.sort(), xs)
+        output: "None [1, 2, 3]"
+        explanation: "`xs.sort()` sorts the list in place and returns `None`, so the first value printed is `None` and the second is the now-sorted list."
+    - question:
+        id: predict-stable
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          pairs = [("b", 2), ("a", 2), ("c", 1)]
+          print(sorted(pairs, key=lambda p: p[1]))
+        output: "[('c', 1), ('b', 2), ('a', 2)]"
+        explanation: The key is the number alone, so `("b", 2)` and `("a", 2)` tie, and Python's sort is stable, keeping `"b"` before `"a"` as they arrived.
+  work:
+    - text: Slower now. For each piece of code, decide what is compared with what, and what happens to items that tie or are left over.
+    - question:
+        id: fix-merge
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `merge(a, b)` takes two lists that are each sorted and should return one sorted list holding every item of both. The program should print `[1, 2, 3, 4, 9, 10, 12] [5, 6]`. It prints `[1, 2, 3, 4, 9] []`. Find the fault and fix it.
+        starter: |
+          def merge(a, b):
+              # a and b are each sorted. Return one sorted list holding every item of both.
+              result = []
+              i = 0
+              j = 0
+              while i < len(a) and j < len(b):
+                  if a[i] <= b[j]:
+                      result.append(a[i])
+                      i += 1
+                  else:
+                      result.append(b[j])
+                      j += 1
+              return result + a[i:]
+
+
+          print(merge([1, 4, 9], [2, 3, 10, 12]), merge([], [5, 6]))
+        solution: |
+          def merge(a, b):
+              # a and b are each sorted. Return one sorted list holding every item of both.
+              result = []
+              i = 0
+              j = 0
+              while i < len(a) and j < len(b):
+                  if a[i] <= b[j]:
+                      result.append(a[i])
+                      i += 1
+                  else:
+                      result.append(b[j])
+                      j += 1
+              return result + a[i:] + b[j:]
+
+
+          print(merge([1, 4, 9], [2, 3, 10, 12]), merge([], [5, 6]))
+        tests: |
+          for _a, _b in [([], []), ([1], []), ([], [5, 6]), ([1, 4, 9], [2, 3, 10, 12]), ([5, 6, 7], [1, 2]), ([2, 2, 3], [2, 4]), ([1, 3, 5, 7], [2, 4, 6, 8])]:
+              _want = sorted(_a + _b)
+              _got = merge(list(_a), list(_b))
+              assert _got == _want, "merge(" + str(_a) + ", " + str(_b) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[1, 2, 3, 4, 9, 10, 12] [5, 6]", "The program should print [1, 2, 3, 4, 9, 10, 12] [5, 6]"
+        wrong:
+          - |
+            def merge(a, b):
+                # a and b are each sorted. Return one sorted list holding every item of both.
+                result = []
+                i = 0
+                j = 0
+                while i < len(a) and j < len(b):
+                    if a[i] <= b[j]:
+                        result.append(a[i])
+                        i += 1
+                    else:
+                        result.append(b[j])
+                        j += 1
+                return result + b[j:]
+
+
+            print(merge([1, 4, 9], [2, 3, 10, 12]), merge([], [5, 6]))
+          - |
+            def merge(a, b):
+                # a and b are each sorted. Return one sorted list holding every item of both.
+                result = []
+                i = 0
+                j = 0
+                while i < len(a) and j < len(b):
+                    if a[i] <= b[j]:
+                        result.append(a[i])
+                        i += 1
+                    else:
+                        result.append(b[j])
+                        j += 1
+                return result + a + b
+
+
+            print(merge([1, 4, 9], [2, 3, 10, 12]), merge([], [5, 6]))
+          - |
+            def merge(a, b):
+                # a and b are each sorted. Return one sorted list holding every item of both.
+                result = []
+                i = 0
+                j = 0
+                while i < len(a) and j < len(b):
+                    if a[i] <= b[j]:
+                        result.append(a[i])
+                        i += 1
+                    else:
+                        result.append(b[j])
+                        j += 1
+                return result + a[i + 1:] + b[j + 1:]
+
+
+            print(merge([1, 4, 9], [2, 3, 10, 12]), merge([], [5, 6]))
+        explanation: |
+          The loop stops as soon as either list runs out, and whatever remains of the other list is already sorted and larger than everything output so far, so it must be added on. Either list can be the one with items left, so both leftovers are needed: `a[i:] + b[j:]`, one of which is empty. Adding only `b[j:]` fails when `a` runs out last; adding the whole of `a` and `b` repeats items; and `a[i + 1:]` skips the first leftover item.
+    - question:
+        id: write-counting-sort
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `counting_sort(scores, top)`. Every score is a whole number from 0 to `top`. Return a new list of the scores in increasing order, built by counting how many times each value occurs, without comparing scores with each other.
+        starter: |
+          def counting_sort(scores, top):
+              # scores are whole numbers from 0 to top. Return them in increasing order,
+              # by counting how many times each value occurs, without comparing scores.
+              return list(scores)
+
+
+          print(counting_sort([3, 0, 2, 3, 1, 0, 3], 3), counting_sort([], 5), counting_sort([7, 7], 9))
+        solution: |
+          def counting_sort(scores, top):
+              # scores are whole numbers from 0 to top. Return them in increasing order,
+              # by counting how many times each value occurs, without comparing scores.
+              counts = [0] * (top + 1)
+              for s in scores:
+                  counts[s] += 1
+              result = []
+              for value in range(top + 1):
+                  result = result + [value] * counts[value]
+              return result
+
+
+          print(counting_sort([3, 0, 2, 3, 1, 0, 3], 3), counting_sort([], 5), counting_sort([7, 7], 9))
+        tests: |
+          for _scores, _top in [([], 0), ([0], 0), ([3, 0, 2, 3, 1, 0, 3], 3), ([7, 7], 9), ([5, 4, 3, 2, 1, 0], 5), ([10, 0, 10, 5], 10)]:
+              _got = counting_sort(list(_scores), _top)
+              assert _got == sorted(_scores), "counting_sort(" + str(_scores) + ", " + str(_top) + ") should be " + str(sorted(_scores)) + ", not " + str(_got)
+          assert output.strip() == "[0, 0, 1, 2, 3, 3, 3] [] [7, 7]", "The program should print [0, 0, 1, 2, 3, 3, 3] [] [7, 7]"
+        wrong:
+          - |
+            def counting_sort(scores, top):
+                # scores are whole numbers from 0 to top. Return them in increasing order,
+                # by counting how many times each value occurs, without comparing scores.
+                counts = [0] * top
+                for s in scores:
+                    if s < top:
+                        counts[s] += 1
+                result = []
+                for value in range(top):
+                    result = result + [value] * counts[value]
+                return result
+
+
+            print(counting_sort([3, 0, 2, 3, 1, 0, 3], 3), counting_sort([], 5), counting_sort([7, 7], 9))
+          - |
+            def counting_sort(scores, top):
+                # scores are whole numbers from 0 to top. Return them in increasing order,
+                # by counting how many times each value occurs, without comparing scores.
+                counts = [0] * (top + 1)
+                for s in scores:
+                    counts[s] += 1
+                return counts
+
+
+            print(counting_sort([3, 0, 2, 3, 1, 0, 3], 3), counting_sort([], 5), counting_sort([7, 7], 9))
+          - |
+            def counting_sort(scores, top):
+                # scores are whole numbers from 0 to top. Return them in increasing order,
+                # by counting how many times each value occurs, without comparing scores.
+                counts = [0] * (top + 1)
+                for s in scores:
+                    counts[s] += 1
+                result = []
+                for value in range(top + 1):
+                    if counts[value] > 0:
+                        result.append(value)
+                return result
+
+
+            print(counting_sort([3, 0, 2, 3, 1, 0, 3], 3), counting_sort([], 5), counting_sort([7, 7], 9))
+        explanation: |
+          There are `top + 1` possible values, 0 to `top` inclusive, so the counts need `top + 1` places; with only `top` the largest value is lost. Each value must be written out as many times as it was counted, not once, or repeated scores collapse; and the counts themselves are not the sorted list. One pass to count and one pass over the values make $\Theta(n + k)$ steps.
+    - question:
+        id: write-sort-orders
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `sort_orders(orders)`. Each order is a tuple `(order_id, city, amount)`. Return a new list sorted by city from A to Z, and within each city by amount, largest first. Orders that tie on both city and amount keep their original order, and the list passed in must not change.
+        starter: |
+          def sort_orders(orders):
+              # Each order is (order_id, city, amount). Return a new list sorted by city, A to Z,
+              # and within a city by amount, largest first. Orders that tie on both keep their
+              # original order.
+              return list(orders)
+
+
+          orders = [(1, "Pune", 450), (2, "Delhi", 300), (3, "Pune", 900), (4, "Agra", 120), (5, "Delhi", 300), (6, "Pune", 450)]
+          print([o[0] for o in sort_orders(orders)])
+        solution: |
+          def sort_orders(orders):
+              # Each order is (order_id, city, amount). Return a new list sorted by city, A to Z,
+              # and within a city by amount, largest first. Orders that tie on both keep their
+              # original order.
+              return sorted(orders, key=lambda o: (o[1], -o[2]))
+
+
+          orders = [(1, "Pune", 450), (2, "Delhi", 300), (3, "Pune", 900), (4, "Agra", 120), (5, "Delhi", 300), (6, "Pune", 450)]
+          print([o[0] for o in sort_orders(orders)])
+        tests: |
+          _cases = [[], [(1, "A", 5)], [(1, "Pune", 450), (2, "Delhi", 300), (3, "Pune", 900), (4, "Agra", 120), (5, "Delhi", 300), (6, "Pune", 450)], [(1, "B", 1), (2, "A", 1), (3, "B", 2), (4, "A", 3), (5, "B", 2)], [(9, "X", 10), (8, "X", 10), (7, "X", 10)]]
+          for _orders in _cases:
+              _want = []
+              for _city in sorted(set(_o[1] for _o in _orders)):
+                  _in_city = [_o for _o in _orders if _o[1] == _city]
+                  for _amount in sorted(set(_o[2] for _o in _in_city), reverse=True):
+                      _want = _want + [_o for _o in _in_city if _o[2] == _amount]
+              _copy = list(_orders)
+              _got = sort_orders(_orders)
+              assert _orders == _copy, "sort_orders should not change the list it is given"
+              assert list(_got) == _want, "sort_orders(" + str(_orders) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[4, 2, 5, 3, 1, 6]", "The program should print [4, 2, 5, 3, 1, 6]"
+        wrong:
+          - |
+            def sort_orders(orders):
+                # Each order is (order_id, city, amount). Return a new list sorted by city, A to Z,
+                # and within a city by amount, largest first. Orders that tie on both keep their
+                # original order.
+                return sorted(orders, key=lambda o: (o[1], o[2]))
+
+
+            orders = [(1, "Pune", 450), (2, "Delhi", 300), (3, "Pune", 900), (4, "Agra", 120), (5, "Delhi", 300), (6, "Pune", 450)]
+            print([o[0] for o in sort_orders(orders)])
+          - |
+            def sort_orders(orders):
+                # Each order is (order_id, city, amount). Return a new list sorted by city, A to Z,
+                # and within a city by amount, largest first. Orders that tie on both keep their
+                # original order.
+                return sorted(orders, key=lambda o: (o[1], o[2]), reverse=True)
+
+
+            orders = [(1, "Pune", 450), (2, "Delhi", 300), (3, "Pune", 900), (4, "Agra", 120), (5, "Delhi", 300), (6, "Pune", 450)]
+            print([o[0] for o in sort_orders(orders)])
+          - |
+            def sort_orders(orders):
+                # Each order is (order_id, city, amount). Return a new list sorted by city, A to Z,
+                # and within a city by amount, largest first. Orders that tie on both keep their
+                # original order.
+                return sorted(orders, key=lambda o: (-o[2], o[1]))
+
+
+            orders = [(1, "Pune", 450), (2, "Delhi", 300), (3, "Pune", 900), (4, "Agra", 120), (5, "Delhi", 300), (6, "Pune", 450)]
+            print([o[0] for o in sort_orders(orders)])
+        explanation: |
+          The key `(city, -amount)` sorts by city first and breaks ties by amount, with the minus sign making larger amounts come first; Python's sort is stable, so full ties keep their order. Sorting by `(city, amount)` puts small amounts first; reversing the whole sort reverses the cities as well; and putting the amount first in the key ignores the cities until amounts tie. Sorting twice also works: first by amount with `reverse=True`, then stably by city.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Five parcels of different weights are to be ordered with a balance that compares two at a time. What is the smallest number of weighings a method must be ready to make so that it can always finish?
+        answer: "7"
+        explanation: |
+          Five parcels can arrive in $5! = 120$ orders. Each weighing has two outcomes, so 6 weighings can tell apart at most $2^6 = 64$ orders, too few, while 7 allow 128. So no method can promise fewer than 7, and a careful method does manage it in 7.
+    - question:
+        id: work-nearly-sorted
+        type: choice
+        system: s2
+        prompt: |
+          A shop's list of 50,000 products is kept sorted by price. Each morning about 20 prices change by a rupee or two, so each of those products is only a few places from where it belongs, and the list must be sorted again. Which approach does the least work?
+        options:
+          - "Insertion sort, because the list has only a few inversions"
+          - "Merge sort written from scratch, because it is always $n \\log n$"
+          - "Counting sort, because prices are numbers"
+          - "Heap sort, because it needs no extra list"
+        answer: 0
+        explanation: |
+          With 20 items each a few places out, the list has only about a hundred inversions, so insertion sort does about $n$ plus a hundred steps, close to 50,000. A plain merge sort pays about $n \log_2 n$, nearly 8 lakh comparisons, whatever the input, and so does heap sort. Prices in paise span too wide a range for counting sort. Python's Timsort spots the long sorted stretches by itself and also finishes in close to linear time.
+  connections:
+    - text: |
+        Seven weighings. Five parcels can arrive in 120 orders, and each weighing at best halves the orders still possible, so six weighings leave at least two orders that cannot be told apart. Seven is enough in principle, $2^7 = 128$, and a careful method does sort five items in seven comparisons. Merge sort would need up to eight here, so it is close to the limit but not at it.
+
+        Sorting is rarely the goal. It is the step that makes the next one easy. Once the records of the opening example are sorted, duplicates sit side by side; once a list is sorted, [[s3.binary-search]] finds any item in it in $\log_2 n$ steps. Merge sort's split, solve and combine pattern is the first instance of [[s3.divide-and-conquer-and-the-master-theorem]], which gives a quick way to count the cost of every such algorithm. Many [[s3.greedy-algorithms]] begin by sorting their choices, by deadline or by size, and then take them in order. And quicksort's pivot, which can ruin it if chosen badly, is the classic case of an algorithm saved by randomness in [[s3.randomised-algorithms]].

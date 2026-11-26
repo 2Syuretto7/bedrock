@@ -1,0 +1,553 @@
+concept: s3.greedy-algorithms
+minutes: 90
+claim: You can design an algorithm that builds its answer one choice at a time by a simple rule and never goes back, prove such a rule right with an exchange argument or by showing it stays ahead, and recognise the problems where it fails, such as making change with unusual coins or packing whole items, on the way to the method that handles them.
+recalls: [s3.minimum-spanning-trees]
+uses: [s3.sorting, s3.shortest-paths, s2.heaps-and-priority-queues, f2.induction-and-strong-induction, f2.contrapositive-and-contradiction, f1.inequalities]
+leads: [s3.dynamic-programming, s3.intractability-p-np-and-heuristics, f7.prefix-codes-and-huffman-coding]
+starter: |
+  # Scratch space. Pay an amount with the largest token that fits, again and again.
+  def greedy_tokens(amount, tokens):
+      used = []
+      for t in sorted(tokens, reverse=True):
+          while amount >= t:
+              used.append(t)
+              amount -= t
+      return used
+
+  print(greedy_tokens(9, [1, 4, 6]))
+  print(greedy_tokens(287, [1, 2, 5, 10, 20, 50, 100, 200, 500]))
+parts:
+  recall:
+    - text: |
+        [[s3.minimum-spanning-trees]] took the cheapest safe link again and again and never reconsidered, and the cut property proved that this short-sighted habit finds the best tree. Dijkstra's algorithm did the same with the nearest unsettled place. This lesson looks at the habit itself: when choosing what looks best right now is enough, how to prove it, and how to spot when it is not. Three quick pulls first.
+  puzzle:
+    - text: |
+        A college canteen sells tokens worth ₹1, ₹4 and ₹6, and a meal must be paid for with tokens adding to exactly its price.
+
+        The habit at the counter is to hand over the largest token that still fits, then the largest that fits the rest, and so on. **What is the fewest number of tokens that pays exactly ₹9?**
+  intuition:
+    - text: |
+        A **greedy algorithm** builds its answer one piece at a time, each time taking the piece that looks best by some simple rule, and never undoing a choice. Greedy algorithms are short and fast, usually a sort followed by one pass. The catch is that the rule must be the right one, and plausible rules are often wrong.
+
+        Take one hall and a day's requests to book it, each from a start time to an end time. The hall can host one booking at a time, and the goal is to accept as many bookings as possible. Three rules suggest themselves: take the booking that starts earliest, the one that is shortest, or the one that finishes earliest, each time skipping any booking that overlaps one already taken. The figure applies each rule to the same eight requests. Step through each one.
+    - figure: interval-schedule
+      props: { rule: finish, step: 0 }
+    - text: |
+        Earliest finish takes B, D, F and H: four bookings, the most possible. Earliest start grabs A, which runs from 8 in the morning to 7 in the evening and blocks everything else, so it ends with one. Shortest first takes C, E and G, each two hours long, but C straddles the gap between B and D and spoils both, so it ends with three. All three rules are reasonable, and only one is right. A rule needs a proof.
+  derivation:
+    - text: |
+        **Why earliest finish is right.** Taking the booking that finishes first leaves the hall free as early as possible for everything else. To make that precise, compare the greedy choices $g_1, g_2, \ldots$ with any other set of compatible bookings $o_1, o_2, \ldots$, both in time order. Claim: for every $k$, $g_k$ finishes no later than $o_k$. For $k = 1$, $g_1$ finishes earliest of all bookings. If $g_k$ finishes no later than $o_k$, then $o_{k+1}$, which starts after $o_k$ ends, also starts after $g_k$ ends, so it was available to the greedy rule, which therefore chose something finishing no later than $o_{k+1}$. By induction, as in [[f2.induction-and-strong-induction]], the greedy choices **stay ahead**. If the other set had more bookings than greedy, its extra booking $o_{m+1}$ would start after $g_m$ ends and would have been available to greedy, which stops only when nothing is available. So no set is larger than greedy's.
+    - question:
+        id: derivation-schedule
+        type: numeric
+        system: s2
+        prompt: |
+          Bookings, as start–end hours: 1–3, 2–5, 4–6, 6–8, 5–9, 8–10. A booking may start when another ends. How many does the earliest-finish rule take?
+        answer: "4"
+        explanation: |
+          In order of finish: 1–3 taken; 2–5 overlaps it; 4–6 taken; 6–8 taken; 5–9 overlaps; 8–10 taken. Four bookings.
+    - text: |
+        **The exchange argument.** A second style of proof works for many greedy rules. Take any best solution that differs from the greedy one. Find the first place they differ, and show that changing the best solution to agree with greedy there makes it no worse. Repeating the swap turns the best solution into the greedy one without ever making it worse, so the greedy one is also best. The cut property of the last lesson was this argument.
+
+        A ticket counter shows it well. Customers need 5, 1 and 3 minutes of service, and the aim is the smallest total of the times at which each customer finishes, the sum of everyone's waiting plus service. If a longer job is served just before a shorter one, swapping them leaves everyone else unchanged, makes the shorter job finish earlier by the length of the longer one, and makes the longer job finish later by the length of the shorter one, a net gain. So the best order has no such pair: **shortest job first**. The same swap of neighbours shows that doing jobs in order of **earliest deadline** makes the worst lateness as small as it can be. Both rules are a sort, [[s3.sorting]], followed by one pass.
+    - question:
+        id: derivation-counter
+        type: numeric
+        system: s2
+        prompt: |
+          Customers at a counter need 5, 1 and 3 minutes. Served shortest first, starting at time 0, what is the total of the three finishing times?
+        answer: "14"
+        explanation: |
+          In the order 1, 3, 5, the customers finish at 1, 4 and 9, which add to 14. The order 5, 1, 3 gives $5 + 6 + 9 = 20$.
+    - text: |
+        **Rooms rather than one hall.** If every booking must be hosted, using as few rooms as possible, take the bookings in order of start time and put each into a room that is already free, opening a new room only when none is. Keeping the rooms' end times in a heap, from [[s2.heaps-and-priority-queues]], finds the earliest-free room at once. The number of rooms opened equals the largest number of bookings that overlap at one moment, and no plan can use fewer, since those overlapping bookings need a room each.
+
+        **When greed fails.** For the canteen's tokens, the largest-first habit pays ₹9 with 6, 1, 1 and 1, four tokens, while 4, 4 and 1 uses three. The rupee's coins and notes, 1, 2, 5, 10, 20, 50 and so on, were chosen so that largest-first always gives the fewest, but nothing guarantees that for an arbitrary set. Packing a truck shows another failure. If items can be cut, as with sacks of spice sold by weight, taking the highest value per kilogram first is right. If each item must go whole, the rule can fill the truck with one dense item and leave room that nothing else fits, and a slower method is needed. Recognising which kind of problem is at hand, by trying to prove the rule and looking for a small counterexample when the proof will not come, is the real skill.
+    - question:
+        id: derivation-spices
+        type: numeric
+        system: s2
+        prompt: |
+          A van can carry 8 kg. Cardamom: 4 kg available, worth ₹4,000 in all. Pepper: 6 kg, worth ₹3,000. Cumin: 5 kg, worth ₹1,500. Any amount of each can be taken. What is the most value, in rupees, the van can carry?
+        answer: "6000"
+        explanation: |
+          By value per kilogram: cardamom ₹1,000, pepper ₹500, cumin ₹300. Take all 4 kg of cardamom, ₹4,000, then 4 kg of pepper, ₹2,000, filling the van: ₹6,000.
+    - question:
+        id: order-exchange
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of an exchange argument in order.
+        steps:
+          - "Take a best solution that differs from the greedy solution."
+          - "Find the first place where the two differ."
+          - "Show that changing the best solution to match greedy there makes it no worse."
+          - "Repeat until the best solution has become the greedy one, which is therefore also best."
+        explanation: |
+          There must be a best solution to compare before a difference can be found, the swap is made at that difference, and only repeated swaps turn it fully into the greedy solution.
+  formal:
+    - text: |
+        **Greedy algorithm.** Builds a solution by repeatedly making the locally best choice under a fixed rule, never revising earlier choices. Typically a sort or a heap plus one pass: $O(n \log n)$.
+
+        **Greedy stays ahead.** Show by induction that after each step, the greedy partial solution is at least as good as any other solution's corresponding part.
+
+        **Exchange argument.** Transform any optimal solution into the greedy one by swaps that never make it worse.
+
+        **Interval scheduling.** Earliest finish first maximises the number of compatible intervals. **Interval partitioning.** Earliest start first, reusing a free room, uses as many rooms as the maximum overlap. **Total completion time.** Shortest job first. **Maximum lateness.** Earliest deadline first.
+
+        **Failures.** Making change with an arbitrary coin set; choosing whole items of given weight and value to fit a capacity.
+  drill:
+    - text: Seconds each. Name the rule, or the counterexample.
+    - question:
+        id: drill-rule
+        type: choice
+        system: s1
+        prompt: |
+          Which rule takes the most non-overlapping bookings for one hall?
+        options:
+          - "Earliest finish first"
+          - "Earliest start first"
+          - "Shortest first"
+          - "Fewest overlaps first, without a proof"
+        answer: 0
+        explanation: Finishing earliest leaves the most time for the rest; the other rules have small counterexamples.
+    - question:
+        id: drill-rupee
+        type: numeric
+        system: s1
+        prompt: |
+          Paying ₹287 with the largest rupee coin or note that fits each time, from 1, 2, 5, 10, 20, 50, 100, 200 and 500, how many pieces are used?
+        answer: "6"
+        explanation: 200, then 50, 20, 10, 5 and 2, one of each, since $200 + 50 + 20 + 10 + 5 + 2 = 287$. Six pieces, which for rupee values is also the fewest possible.
+    - question:
+        id: drill-tokens
+        type: numeric
+        system: s1
+        prompt: |
+          With tokens of ₹1, ₹4 and ₹6, how many tokens does the largest-first habit use to pay ₹8?
+        answer: "3"
+        explanation: 6, then 1 and 1. Two ₹4 tokens would do it with two.
+    - question:
+        id: drill-rooms
+        type: numeric
+        system: s1
+        prompt: |
+          Bookings run 9–11, 10–12 and 11–13, and a room is free again the moment a booking ends. How many rooms are needed?
+        answer: "2"
+        explanation: At most two bookings overlap at any moment, so two rooms suffice and are needed.
+    - question:
+        id: drill-shortest-first
+        type: choice
+        system: s1
+        prompt: |
+          A barber has three customers waiting, needing 30, 10 and 20 minutes. In which order should they be served to make the total of their finishing times smallest?
+        options:
+          - "10, 20, 30"
+          - "30, 20, 10"
+          - "In the order they arrived"
+          - "20, 10, 30"
+        answer: 0
+        explanation: Shortest job first, by the exchange argument.
+    - question:
+        id: predict-greedy-tokens
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          amount = 9
+          used = []
+          for t in [6, 4, 1]:
+              while amount >= t:
+                  used.append(t)
+                  amount -= t
+          print(used)
+        output: "[6, 1, 1, 1]"
+        explanation: 6 fits once, leaving 3; 4 does not fit; 1 fits three times.
+    - question:
+        id: predict-sort-key
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          bookings = [("B", 9, 12), ("A", 8, 19), ("C", 11, 13)]
+          print([b[0] for b in sorted(bookings, key=lambda b: b[2])])
+        output: "['B', 'C', 'A']"
+        explanation: The key is the end time, so B (12) comes before C (13) and A (19).
+  work:
+    - text: Slower now. For each problem, name the greedy rule, then look for a small case that would break a different rule.
+    - question:
+        id: fix-most-bookings
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `most_bookings(bookings)` should return the names of as many non-overlapping bookings of one hall as possible, chosen greedily. The program should print `['B', 'D', 'F', 'H']`. It prints `['A']`. Find the fault and fix it.
+        starter: |
+          def most_bookings(bookings):
+              # bookings is a list of (name, start, end) for one hall. A booking may start at the
+              # moment another ends. Return the names of as many bookings as can be taken without
+              # two overlapping, chosen greedily.
+              chosen = []
+              free_from = 0
+              for name, start, end in sorted(bookings, key=lambda b: b[1]):
+                  if start >= free_from:
+                      chosen.append(name)
+                      free_from = end
+              return chosen
+
+
+          hall = [("A", 8, 19), ("B", 9, 12), ("C", 11, 13), ("D", 12, 15), ("E", 14, 16), ("F", 15, 18), ("G", 17, 19), ("H", 18, 20)]
+          print(most_bookings(hall))
+        solution: |
+          def most_bookings(bookings):
+              # bookings is a list of (name, start, end) for one hall. A booking may start at the
+              # moment another ends. Return the names of as many bookings as can be taken without
+              # two overlapping, chosen greedily.
+              chosen = []
+              free_from = 0
+              for name, start, end in sorted(bookings, key=lambda b: b[2]):
+                  if start >= free_from:
+                      chosen.append(name)
+                      free_from = end
+              return chosen
+
+
+          hall = [("A", 8, 19), ("B", 9, 12), ("C", 11, 13), ("D", 12, 15), ("E", 14, 16), ("F", 15, 18), ("G", 17, 19), ("H", 18, 20)]
+          print(most_bookings(hall))
+        tests: |
+          import random as _random
+
+
+          def _best(_bookings):
+              _n = len(_bookings)
+              _most = 0
+              for _mask in range(1 << _n):
+                  _pick = sorted(_bookings[_i] for _i in range(_n) if _mask >> _i & 1)
+                  _pick = sorted(_pick, key=lambda _b: _b[1])
+                  if all(_pick[_i][2] <= _pick[_i + 1][1] for _i in range(len(_pick) - 1)):
+                      _most = max(_most, len(_pick))
+              return _most
+
+
+          _rng = _random.Random(53)
+          _cases = [
+              [("A", 8, 19), ("B", 9, 12), ("C", 11, 13), ("D", 12, 15), ("E", 14, 16), ("F", 15, 18), ("G", 17, 19), ("H", 18, 20)],
+              [],
+              [("X", 1, 2)],
+              [("X", 1, 2), ("Y", 2, 3), ("Z", 3, 4)],
+              [("X", 1, 10), ("Y", 2, 3), ("Z", 4, 5)],
+          ]
+          for _ in range(40):
+              _k = _rng.randint(1, 9)
+              _list = []
+              for _i in range(_k):
+                  _s = _rng.randint(0, 12)
+                  _list.append(("b" + str(_i), _s, _s + _rng.randint(1, 6)))
+              _cases.append(_list)
+          for _bookings in _cases:
+              _got = most_bookings(list(_bookings))
+              _name = "most_bookings(" + str(_bookings) + ")"
+              _by_name = {_b[0]: _b for _b in _bookings}
+              assert all(_x in _by_name for _x in _got) and len(set(_got)) == len(_got), _name + " should list distinct names of bookings, not " + str(_got)
+              _pick = sorted((_by_name[_x] for _x in _got), key=lambda _b: _b[1])
+              for _i in range(len(_pick) - 1):
+                  assert _pick[_i][2] <= _pick[_i + 1][1], _name + " gave " + str(_got) + ", but " + _pick[_i][0] + " and " + _pick[_i + 1][0] + " overlap"
+              _want = _best(_bookings)
+              assert len(_got) == _want, _name + " gave " + str(len(_got)) + " bookings, but " + str(_want) + " can fit"
+          assert output.strip() == "['B', 'D', 'F', 'H']", "The program should print ['B', 'D', 'F', 'H']"
+        wrong:
+          - |
+            def most_bookings(bookings):
+                # bookings is a list of (name, start, end) for one hall. A booking may start at the
+                # moment another ends. Return the names of as many bookings as can be taken without
+                # two overlapping, chosen greedily.
+                chosen = []
+                free_from = 0
+                for name, start, end in sorted(bookings, key=lambda b: b[2] - b[1]):
+                    if start >= free_from:
+                        chosen.append(name)
+                        free_from = end
+                return chosen
+
+
+            hall = [("A", 8, 19), ("B", 9, 12), ("C", 11, 13), ("D", 12, 15), ("E", 14, 16), ("F", 15, 18), ("G", 17, 19), ("H", 18, 20)]
+            print(most_bookings(hall))
+          - |
+            def most_bookings(bookings):
+                # bookings is a list of (name, start, end) for one hall. A booking may start at the
+                # moment another ends. Return the names of as many bookings as can be taken without
+                # two overlapping, chosen greedily.
+                chosen = []
+                free_from = 0
+                for name, start, end in sorted(bookings, key=lambda b: b[2]):
+                    if start > free_from:
+                        chosen.append(name)
+                        free_from = end
+                return chosen
+
+
+            hall = [("A", 8, 19), ("B", 9, 12), ("C", 11, 13), ("D", 12, 15), ("E", 14, 16), ("F", 15, 18), ("G", 17, 19), ("H", 18, 20)]
+            print(most_bookings(hall))
+          - |
+            def most_bookings(bookings):
+                # bookings is a list of (name, start, end) for one hall. A booking may start at the
+                # moment another ends. Return the names of as many bookings as can be taken without
+                # two overlapping, chosen greedily.
+                chosen = []
+                free_from = 0
+                for name, start, end in sorted(bookings, key=lambda b: b[2]):
+                    if start >= free_from:
+                        chosen.append(name)
+                        free_from = start
+                return chosen
+
+
+            hall = [("A", 8, 19), ("B", 9, 12), ("C", 11, 13), ("D", 12, 15), ("E", 14, 16), ("F", 15, 18), ("G", 17, 19), ("H", 18, 20)]
+            print(most_bookings(hall))
+        explanation: |
+          The loop is right; the order is wrong. Sorting by start time takes A first, which blocks the whole day. Sorting by end time, `b[2]`, takes the booking that frees the hall soonest. Sorting by length takes C, which spoils B and D; requiring `start > free_from` rejects a booking that starts the moment the last one ends; and moving `free_from` to the start of the taken booking lets the next one overlap it.
+    - question:
+        id: write-rooms-needed
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `rooms_needed(bookings)`, the fewest rooms that can host every booking, where each booking is `(start, end)` and a room is free again at the moment its booking ends. Take bookings in order of start, and keep the end times of the rooms in use in a heap.
+        starter: |
+          import heapq
+
+
+          def rooms_needed(bookings):
+              # bookings is a list of (start, end) times. A room is free again at the moment its
+              # booking ends. Return the fewest rooms that can host every booking.
+              return len(bookings)
+
+
+          day = [(9, 12), (11, 13), (12, 15), (14, 16), (8, 19)]
+          print(rooms_needed(day), rooms_needed([]), rooms_needed([(1, 2), (2, 3)]))
+        solution: |
+          import heapq
+
+
+          def rooms_needed(bookings):
+              # bookings is a list of (start, end) times. A room is free again at the moment its
+              # booking ends. Return the fewest rooms that can host every booking.
+              ends = []
+              for start, end in sorted(bookings):
+                  if ends and ends[0] <= start:
+                      heapq.heappop(ends)
+                  heapq.heappush(ends, end)
+              return len(ends)
+
+
+          day = [(9, 12), (11, 13), (12, 15), (14, 16), (8, 19)]
+          print(rooms_needed(day), rooms_needed([]), rooms_needed([(1, 2), (2, 3)]))
+        tests: |
+          import random as _random
+
+
+          def _reference(_bookings):
+              _most = 0
+              for _s, _e in _bookings:
+                  _most = max(_most, len([1 for _a, _b in _bookings if _a <= _s < _b]))
+              return _most
+
+
+          _rng = _random.Random(59)
+          _cases = [[(9, 12), (11, 13), (12, 15), (14, 16), (8, 19)], [], [(1, 2), (2, 3)], [(1, 5), (2, 3), (4, 6)], [(1, 10), (2, 3), (3, 4), (4, 5)], [(5, 6), (1, 2), (1, 9)]]
+          for _ in range(60):
+              _list = []
+              for _i in range(_rng.randint(1, 9)):
+                  _s = _rng.randint(0, 12)
+                  _list.append((_s, _s + _rng.randint(1, 6)))
+              _cases.append(_list)
+          for _bookings in _cases:
+              _want = _reference(_bookings)
+              _got = rooms_needed(list(_bookings))
+              assert _got == _want, "rooms_needed(" + str(_bookings) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "3 0 1", "The program should print 3 0 1"
+        wrong:
+          - |
+            import heapq
+
+
+            def rooms_needed(bookings):
+                # bookings is a list of (start, end) times. A room is free again at the moment its
+                # booking ends. Return the fewest rooms that can host every booking.
+                ends = []
+                for start, end in sorted(bookings):
+                    if ends and ends[0] < start:
+                        heapq.heappop(ends)
+                    heapq.heappush(ends, end)
+                return len(ends)
+
+
+            day = [(9, 12), (11, 13), (12, 15), (14, 16), (8, 19)]
+            print(rooms_needed(day), rooms_needed([]), rooms_needed([(1, 2), (2, 3)]))
+          - |
+            import heapq
+
+
+            def rooms_needed(bookings):
+                # bookings is a list of (start, end) times. A room is free again at the moment its
+                # booking ends. Return the fewest rooms that can host every booking.
+                ends = []
+                for start, end in sorted(bookings, key=lambda b: b[1]):
+                    if ends and ends[0] <= start:
+                        heapq.heappop(ends)
+                    heapq.heappush(ends, end)
+                return len(ends)
+
+
+            day = [(9, 12), (11, 13), (12, 15), (14, 16), (8, 19)]
+            print(rooms_needed(day), rooms_needed([]), rooms_needed([(1, 2), (2, 3)]))
+          - |
+            import heapq
+
+
+            def rooms_needed(bookings):
+                # bookings is a list of (start, end) times. A room is free again at the moment its
+                # booking ends. Return the fewest rooms that can host every booking.
+                ends = []
+                for start, end in sorted(bookings):
+                    if ends and ends[-1] <= start:
+                        ends.pop()
+                    ends.append(end)
+                return len(ends)
+
+
+            day = [(9, 12), (11, 13), (12, 15), (14, 16), (8, 19)]
+            print(rooms_needed(day), rooms_needed([]), rooms_needed([(1, 2), (2, 3)]))
+        explanation: |
+          In order of start, a booking can reuse the room that frees earliest if that room is free by its start; otherwise it needs a new room. The heap's smallest end time is that room. Using `<` makes a booking wait for a room that is free at exactly its start; taking bookings in order of end can open a room before an earlier-starting booking has freed one; and checking only the most recently added end time, `ends[-1]`, misses rooms that are free.
+    - question:
+        id: write-max-lateness
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          A printing press does jobs one after another from time 0. Each job is `(hours, deadline)`. Write `max_lateness(jobs)`, which orders the jobs greedily so that the worst lateness is as small as possible, and returns that worst lateness: the largest amount by which a job finishes after its deadline, or 0 if every job is on time.
+        starter: |
+          def max_lateness(jobs):
+              # jobs is a list of (hours, deadline). One printing press does the jobs one after
+              # another from time 0. Choose the order greedily, and return the largest amount by
+              # which a job finishes after its deadline, or 0 if every job is on time.
+              return 0
+
+
+          print(max_lateness([(4, 5), (2, 3), (3, 9), (1, 6)]), max_lateness([(1, 1), (2, 4)]))
+        solution: |
+          def max_lateness(jobs):
+              # jobs is a list of (hours, deadline). One printing press does the jobs one after
+              # another from time 0. Choose the order greedily, and return the largest amount by
+              # which a job finishes after its deadline, or 0 if every job is on time.
+              time = 0
+              worst = 0
+              for hours, deadline in sorted(jobs, key=lambda j: j[1]):
+                  time += hours
+                  worst = max(worst, time - deadline)
+              return worst
+
+
+          print(max_lateness([(4, 5), (2, 3), (3, 9), (1, 6)]), max_lateness([(1, 1), (2, 4)]))
+        tests: |
+          import random as _random
+
+
+          def _best(_jobs):
+              def _go(_left, _time):
+                  if not _left:
+                      return 0
+                  _m = None
+                  for _i in range(len(_left)):
+                      _h, _d = _left[_i]
+                      _v = max(_time + _h - _d, _go(_left[:_i] + _left[_i + 1:], _time + _h))
+                      if _m is None or _v < _m:
+                          _m = _v
+                  return _m
+
+              return max(0, _go(list(_jobs), 0))
+
+
+          _rng = _random.Random(61)
+          _cases = [[(4, 5), (2, 3), (3, 9), (1, 6)], [(1, 1), (2, 4)], [], [(5, 2)], [(1, 10), (1, 10)], [(3, 3), (1, 2)], [(1, 4), (3, 3)], [(2, 2), (4, 6), (1, 4)]]
+          for _ in range(50):
+              _cases.append([(_rng.randint(1, 5), _rng.randint(1, 12)) for _ in range(_rng.randint(1, 6))])
+          for _jobs in _cases:
+              _want = _best(_jobs)
+              _got = max_lateness(list(_jobs))
+              assert _got == _want, "max_lateness(" + str(_jobs) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "1 0", "The program should print 1 0"
+        wrong:
+          - |
+            def max_lateness(jobs):
+                # jobs is a list of (hours, deadline). One printing press does the jobs one after
+                # another from time 0. Choose the order greedily, and return the largest amount by
+                # which a job finishes after its deadline, or 0 if every job is on time.
+                time = 0
+                worst = 0
+                for hours, deadline in sorted(jobs, key=lambda j: j[0]):
+                    time += hours
+                    worst = max(worst, time - deadline)
+                return worst
+
+
+            print(max_lateness([(4, 5), (2, 3), (3, 9), (1, 6)]), max_lateness([(1, 1), (2, 4)]))
+          - |
+            def max_lateness(jobs):
+                # jobs is a list of (hours, deadline). One printing press does the jobs one after
+                # another from time 0. Choose the order greedily, and return the largest amount by
+                # which a job finishes after its deadline, or 0 if every job is on time.
+                time = 0
+                worst = 0
+                for hours, deadline in sorted(jobs, key=lambda j: j[1] - j[0]):
+                    time += hours
+                    worst = max(worst, time - deadline)
+                return worst
+
+
+            print(max_lateness([(4, 5), (2, 3), (3, 9), (1, 6)]), max_lateness([(1, 1), (2, 4)]))
+          - |
+            def max_lateness(jobs):
+                # jobs is a list of (hours, deadline). One printing press does the jobs one after
+                # another from time 0. Choose the order greedily, and return the largest amount by
+                # which a job finishes after its deadline, or 0 if every job is on time.
+                time = 0
+                lates = []
+                for hours, deadline in sorted(jobs, key=lambda j: j[1]):
+                    time += hours
+                    lates.append(time - deadline)
+                return max(lates)
+
+
+            print(max_lateness([(4, 5), (2, 3), (3, 9), (1, 6)]), max_lateness([(1, 1), (2, 4)]))
+        explanation: |
+          Earliest deadline first: if a job with a later deadline were done just before one with an earlier deadline, swapping them would not increase the worst lateness, so some best order has no such pair. Shortest first ignores deadlines; least slack first, deadline minus hours, sounds clever but fails on the example; and taking the maximum of the raw lateness gives a negative answer when every job is early, and fails on no jobs at all.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Canteen tokens come in ₹1, ₹4 and ₹6. What is the fewest number of tokens that pays exactly ₹9?
+        answer: "3"
+        explanation: |
+          4, 4 and 1. The largest-first habit takes 6 and then needs three ₹1 tokens, four in all. No two tokens make 9, since the pairs make 2, 5, 7, 8, 10 and 12.
+    - question:
+        id: work-truck
+        type: choice
+        system: s2
+        prompt: |
+          A truck can carry 10 tonnes. Three machines must each go whole or not at all: one weighs 6 tonnes and is worth ₹6 lakh, and two weigh 5 tonnes and are worth ₹4 lakh each. Taking the highest value per tonne first, what happens?
+        options:
+          - "It takes the 6-tonne machine, ₹6 lakh, and nothing else fits, while the two 5-tonne machines would give ₹8 lakh."
+          - "It takes both 5-tonne machines and is best."
+          - "It takes all three machines."
+          - "It takes the 6-tonne machine, which is best."
+        answer: 0
+        explanation: |
+          ₹1 lakh per tonne beats ₹0.8 lakh, so the rule takes the 6-tonne machine first, and neither 5-tonne machine then fits. Whole items break the greedy rule that is right for goods that can be cut.
+  connections:
+    - text: |
+        Three tokens: ₹4, ₹4 and ₹1. Largest first hands over ₹6 and is then stuck paying ₹3 with three ₹1 tokens. The greedy habit works for rupee coins because their values were chosen so that it does; with ₹1, ₹4 and ₹6 there is no such luck.
+
+        Problems where greed fails are not hopeless, only harder. The fewest tokens for every amount up to ₹9 can be found by building on the answers for smaller amounts, and that is the method of [[s3.dynamic-programming]], which also packs whole machines into a truck. Some problems resist both approaches, and [[s3.intractability-p-np-and-heuristics]] explains why, and why greedy rules remain useful there as fast approximations. One of the most elegant greedy algorithms, which builds the shortest codes for a message by repeatedly merging its two rarest symbols, is the subject of [[f7.prefix-codes-and-huffman-coding]].
