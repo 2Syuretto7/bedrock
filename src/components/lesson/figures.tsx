@@ -5415,6 +5415,103 @@ function SpanningTree(props: Props) {
   );
 }
 
+const BOOKINGS: [string, number, number][] = [
+  ["A", 8, 19],
+  ["B", 9, 12],
+  ["C", 11, 13],
+  ["D", 12, 15],
+  ["E", 14, 16],
+  ["F", 15, 18],
+  ["G", 17, 19],
+  ["H", 18, 20],
+];
+type Rule = "finish" | "start" | "shortest";
+const BOOKING_RULES: Rule[] = ["finish", "start", "shortest"];
+const RULE_NAMES: Record<Rule, string> = { finish: "Earliest finish first", start: "Earliest start first", shortest: "Shortest first" };
+const hour = (h: number) => (h === 12 ? "12 noon" : h < 12 ? `${h} am` : `${h - 12} pm`);
+
+/** One hall, eight bookings, and three greedy rules for choosing as many as fit without overlapping. */
+function IntervalSchedule(props: Props) {
+  const [rule, setRule] = useState<Rule>(BOOKING_RULES.includes(props.rule as Rule) ? (props.rule as Rule) : "finish");
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, BOOKINGS.length));
+  const order = [...BOOKINGS].sort((x, y) =>
+    rule === "finish" ? x[2] - y[2] || x[1] - y[1] : rule === "start" ? x[1] - y[1] || x[2] - y[2] : x[2] - x[1] - (y[2] - y[1]) || x[1] - y[1],
+  );
+  const taken: string[] = [];
+  const skipped: string[] = [];
+  const fits = (b: [string, number, number]) => taken.every((name) => {
+    const t = BOOKINGS.find((x) => x[0] === name)!;
+    return b[2] <= t[1] || b[1] >= t[2];
+  });
+  order.slice(0, step).forEach((b) => (fits(b) ? taken.push(b[0]) : skipped.push(b[0])));
+  const span = (name: string) => {
+    const b = BOOKINGS.find((x) => x[0] === name)!;
+    return `${name} (${hour(b[1])} to ${hour(b[2])})`;
+  };
+  const end = step === BOOKINGS.length;
+  const summary = `${RULE_NAMES[rule]}, after ${step} of ${BOOKINGS.length} bookings considered. Taken: ${taken.map(span).join(", ") || "none yet"}. ${
+    skipped.length > 0 ? `Skipped, because each overlaps one already taken: ${skipped.join(", ")}. ` : ""
+  }${
+    end
+      ? `${plural(taken.length, "booking")} fit. The most that can fit is 4, ${taken.length === 4 ? "so this rule finds the best." : "so this rule falls short."}`
+      : `Next to consider: ${span(order[step][0])}.`
+  }`;
+  const x = (h: number) => 40 + (h - 8) * 32;
+  return (
+    <Frame
+      title="Choosing bookings that do not overlap"
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="step" value={step} onChange={setStep} min={0} max={BOOKINGS.length} />
+          {BOOKING_RULES.map((r) => (
+            <button
+              key={r}
+              type="button"
+              className="btn btn-secondary btn-small"
+              aria-pressed={rule === r}
+              onClick={() => {
+                setRule(r);
+                setStep(0);
+              }}
+            >
+              {RULE_NAMES[r]}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 236" role="img" aria-label={`Eight bookings of one hall drawn as bars across the day, ${taken.length} taken`}>
+        {[8, 10, 12, 14, 16, 18, 20].map((h) => (
+          <g key={h}>
+            <line x1={x(h)} x2={x(h)} y1="8" y2="200" className="fig-grid" />
+            <text x={x(h)} y="216" textAnchor="middle" className="fig-small">
+              {h > 12 ? h - 12 : h}
+            </text>
+          </g>
+        ))}
+        {BOOKINGS.map(([name, from, to], i) => (
+          <g key={name}>
+            <text x="14" y={26 + i * 23} className="fig-small">
+              {name}
+            </text>
+            <rect
+              x={x(from)}
+              y={13 + i * 23}
+              width={x(to) - x(from)}
+              height="17"
+              className={taken.includes(name) ? "fig-accent" : skipped.includes(name) ? "fig-ghost" : "fig-fill"}
+            />
+          </g>
+        ))}
+        <text x="40" y="232" className="fig-small">
+          hour of the day
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -6726,6 +6823,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "benchmark-runs": BenchmarkRuns,
   "recursion-tree": RecursionTree,
   "spanning-tree": SpanningTree,
+  "interval-schedule": IntervalSchedule,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

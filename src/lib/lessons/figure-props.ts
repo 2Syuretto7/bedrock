@@ -96,6 +96,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "benchmark-runs": z.strictObject({ difference: z.number().int().min(-10).max(10).optional(), interleave: z.boolean().optional(), dropWarmup: z.boolean().optional(), seed: z.number().int().min(0).max(9).optional() }),
   "recursion-tree": z.strictObject({ a: z.number().optional(), d: z.number().optional() }),
   "spanning-tree": z.strictObject({ method: z.enum(["kruskal", "prim"]).optional(), step: z.number().optional() }),
+  "interval-schedule": z.strictObject({ rule: z.enum(["finish", "start", "shortest"]).optional(), step: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
