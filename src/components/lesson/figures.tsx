@@ -42,11 +42,12 @@ function Stepper({ label, value, onChange, min, max }: { label: string; value: n
   );
 }
 
-function Slider({ label, value, onChange, min, max, step = 1 }: { label: string; value: number; onChange: (v: number) => void; min: number; max: number; step?: number }) {
+function Slider({ label, value, onChange, min, max, step = 1, text }: { label: string; value: number; onChange: (v: number) => void; min: number; max: number; step?: number; text?: string }) {
   return (
     <label className="fig-slider">
       <span className="label">{label}</span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input type="range" min={min} max={max} step={step} value={value} aria-valuetext={text} onChange={(event) => onChange(Number(event.target.value))} />
+      {text === undefined ? null : <output className="fig-value">{text}</output>}
     </label>
   );
 }
@@ -3903,6 +3904,80 @@ function DiceGrid(props: Props) {
   );
 }
 
+const BAYES_RATES = [1, 2, 5, 10, 20, 50, 100, 200, 300, 500];
+
+/** Ten thousand people split by a condition and by a test, drawn as areas, so the chance of the condition given a positive test can be seen. */
+function BayesSquare(props: Props) {
+  const start = num(props.prevalence, 10);
+  const nearest = BAYES_RATES.reduce((best, rate, i) => (Math.abs(rate - start) < Math.abs(BAYES_RATES[best] - start) ? i : best), 0);
+  const [rateAt, setRateAt] = useState(nearest);
+  const [sensitivity, setSensitivity] = useState(clamp(Math.round(num(props.sensitivity, 90)), 50, 100));
+  const [falsePositive, setFalsePositive] = useState(clamp(Math.round(num(props.falsePositive, 5)), 0, 30));
+  const perThousand = BAYES_RATES[rateAt];
+  const people = 10000;
+  const sick = perThousand * 10;
+  const well = people - sick;
+  const caught = Math.round((sick * sensitivity) / 100);
+  const alarms = Math.round((well * falsePositive) / 100);
+  const positives = caught + alarms;
+  const share = positives === 0 ? 0 : caught / positives;
+  const left = Math.max(4, (360 * sick) / people);
+  const right = 360 - left;
+  const top = 34;
+  const tall = 180;
+  const caughtHeight = (tall * sensitivity) / 100;
+  const alarmHeight = (tall * falsePositive) / 100;
+  const barTrue = positives === 0 ? 0 : 360 * share;
+  const percent = (value: number) => `${dp(value * 100, value * 100 < 10 ? 1 : 0)}%`;
+  return (
+    <Frame
+      title="Ten thousand people and one test"
+      summary={`Out of ${group(people)} people, ${group(sick)} have the condition and ${group(well)} do not. The test is positive for ${sensitivity}% of those who have it, which is ${group(caught)} people, and for ${falsePositive}% of those who do not, which is ${group(alarms)} more. ${
+        positives === 0
+          ? "Nobody tests positive."
+          : `So ${group(positives)} people test positive, and ${group(caught)} of them have the condition: given a positive test, the chance of having it is ${group(caught)}/${group(positives)}, about ${percent(share)}, against ${percent(sick / people)} before the test.`
+      }`}
+      controls={
+        <>
+          <Slider label="have the condition" value={rateAt} onChange={setRateAt} min={0} max={BAYES_RATES.length - 1} text={`${perThousand} in 1,000`} />
+          <Slider label="positive if they have it" value={sensitivity} onChange={setSensitivity} min={50} max={100} text={`${sensitivity}%`} />
+          <Slider label="positive if they do not" value={falsePositive} onChange={setFalsePositive} min={0} max={30} text={`${falsePositive}%`} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 440 300" role="img" aria-label={`A square of ${group(people)} people: ${group(caught)} true positives and ${group(alarms)} false positives`}>
+        <text x="40" y="22" className="fig-small">
+          {`have it: ${group(sick)}`}
+        </text>
+        <text x="400" y="22" textAnchor="end" className="fig-small">
+          {`do not: ${group(well)}`}
+        </text>
+        <rect x="40" y={top} width={left} height={caughtHeight} className="fig-accent" />
+        <rect x="40" y={top + caughtHeight} width={left} height={tall - caughtHeight} className="fig-fill" />
+        <rect x={40 + left} y={top} width={right} height={alarmHeight} className="fig-accent" opacity={0.45} />
+        <rect x={40 + left} y={top} width={right} height={tall} className="fig-ghost" />
+        <rect x="40" y={top} width="360" height={tall} className="fig-cell" />
+        <line x1={40 + left} y1={top} x2={40 + left} y2={top + tall} className="fig-axis" />
+        <text x="408" y={top + Math.max(alarmHeight / 2, 6) + 4} className="fig-small">
+          +
+        </text>
+        <text x="408" y={top + tall - 4} className="fig-small">
+          −
+        </text>
+        <text x="40" y="240" className="fig-small">
+          {`everyone who tests positive: ${group(positives)}`}
+        </text>
+        <rect x="40" y="248" width={barTrue} height="20" className="fig-accent" />
+        <rect x={40 + barTrue} y="248" width={360 - barTrue} height="20" className="fig-accent" opacity={positives === 0 ? 0 : 0.45} />
+        <rect x="40" y="248" width="360" height="20" className="fig-cell" />
+        <text x="40" y="288" className="fig-small">
+          {positives === 0 ? "no positive tests" : `${group(caught)} have it, ${group(alarms)} do not: ${percent(share)} have it`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -5195,6 +5270,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "one-stroke": OneStroke,
   "leaf-strip": LeafStrip,
   "dice-grid": DiceGrid,
+  "bayes-square": BayesSquare,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
