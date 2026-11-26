@@ -5661,6 +5661,8 @@ function TourHeuristic(props: Props) {
   const added = roads.filter((r) => !before.includes(r));
   const removed = before.filter((r) => !roads.includes(r));
   const km = (x: number) => dp(x, 1);
+  // The saving is worked from the lengths as shown, so that it is their difference to the last digit.
+  const tenths = (x: number) => Math.round(x * 10) / 10;
   const names = order.map((t) => TOUR_NAMES[t]).join(", ");
   let summary: string;
   if (step === 0) {
@@ -5670,7 +5672,7 @@ function TourHeuristic(props: Props) {
     const prev = TOUR_STEPS[step - 1];
     const first = prev.findIndex((t, k) => t !== order[k]);
     const end = prev.length - 1 - [...prev].reverse().findIndex((t, k) => t !== order[order.length - 1 - k]);
-    summary = `After ${plural(step, "improvement")}: ${names}, and back to A, ${km(tourLength(order))} km. This step reversed the stretch from ${TOUR_NAMES[prev[first]]} to ${TOUR_NAMES[prev[end]]}, replacing the roads ${removed.map(roadLabel).join(" and ")} with ${added.map(roadLabel).join(" and ")}, ${km(tourLength(prev) - tourLength(order))} km shorter. ${
+    summary = `After ${plural(step, "improvement")}: ${names}, and back to A, ${km(tourLength(order))} km. This step reversed the stretch from ${TOUR_NAMES[prev[first]]} to ${TOUR_NAMES[prev[end]]}, replacing the roads ${removed.map(roadLabel).join(" and ")} with ${added.map(roadLabel).join(" and ")}, ${km(tenths(tourLength(prev)) - tenths(tourLength(order)))} km shorter. ${
       step === last
         ? "No single reversal shortens it further. Checking all 20,160 possible tours confirms that, here, it is also the shortest of them all."
         : "Another reversal can still shorten it."

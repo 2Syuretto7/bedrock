@@ -485,3 +485,69 @@ test("the benchmark figure shows drift posing as a difference until the runs are
   await slide(figure, "true difference", "-5", "B is truly 5% faster than A.");
   await expect(figure).toContainText("Measured B against A: median −5.5%, minimum −5%, mean −6.5%, against a true −5%.");
 });
+
+test("the recursion tree adds up each level's work in the three cases of the master theorem", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="recursion-tree"]').first().getByRole("figure");
+  await expect(figure).toContainText("The levels, from the top, do 16, 16, 16, 16, 16 steps of work, 80 in all.");
+  await slide(figure, "subproblems", "3", "The levels, from the top, do 16, 24, 36, 54, 81 steps of work, 211 in all. Each level does 3/2 times the work of the level above, so the leaves dominate and the total is Θ(n^1.58)");
+  await slide(figure, "work exponent", "2", "The levels, from the top, do 256, 192, 144, 108, 81 steps of work, 781 in all. Each level does 3/4 of the work of the level above, so the top level dominates and the total is Θ(n²).");
+});
+
+test("the spanning tree reaches the same total by Kruskal's and Prim's methods", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="spanning-tree"]').first().getByRole("figure");
+  await expect(figure).toContainText("Kruskal's method, after 0 of 9 roads considered, shortest first. Taken: none yet, 0 in all. Next to consider: A–C 1.");
+  for (let i = 0; i < 6; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Taken: A–C 1, C–B 2, D–E 2, E–F 3, B–D 5, 13 in all. Skipped, because each would close a loop: A–B 4.");
+  await figure.getByRole("button", { name: "Switch to Prim's method" }).click();
+  await expect(figure).toContainText("Prim's method from A, after 0 roads added. In the tree: A.");
+  for (let i = 0; i < 5; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Roads taken: A–C 1, C–B 2, B–D 5, D–E 2, E–F 3, 13 in all. Every town is joined, by 5 roads.");
+});
+
+test("only earliest finish first fits the most bookings into the hall", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="interval-schedule"]').first().getByRole("figure");
+  for (let i = 0; i < 8; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Taken: B (9 am to 12 noon), D (12 noon to 3 pm), F (3 pm to 6 pm), H (6 pm to 8 pm).");
+  await expect(figure).toContainText("4 bookings fit. The most that can fit is 4, so this rule finds the best.");
+  const start = figure.getByRole("button", { name: "Earliest start first" });
+  await start.click();
+  await expect(start).toHaveAttribute("aria-pressed", "true");
+  for (let i = 0; i < 8; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Taken: A (8 am to 7 pm). Skipped, because each overlaps one already taken: B, C, D, E, F, G, H. 1 booking fit.");
+  await figure.getByRole("button", { name: "Shortest first" }).click();
+  for (let i = 0; i < 8; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Taken: C (11 am to 1 pm), E (2 pm to 4 pm), G (5 pm to 7 pm).");
+  await expect(figure).toContainText("3 bookings fit. The most that can fit is 4, so this rule falls short.");
+});
+
+test("random pivots save quicksort from input already in order", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="quick-pivot"]').first().getByRole("figure");
+  await expect(figure).toContainText("Quicksort on 16 numbers already in order, taking the first item as the pivot. It partitions on 15 levels and makes 120 comparisons.");
+  await figure.getByRole("button", { name: "Shuffle the input" }).click();
+  await expect(figure).toContainText("Quicksort on 16 numbers in a shuffled order, taking the first item as the pivot. It partitions on 5 levels and makes 46 comparisons.");
+  const random = figure.getByRole("button", { name: "Choose pivots at random" });
+  await random.click();
+  await expect(random).toHaveAttribute("aria-pressed", "true");
+  await expect(figure).toContainText("It partitions on 7 levels and makes 48 comparisons. Over 1,000 runs with random pivots, on any order of the input, the comparisons average 50.9, ranging from 40 to 89.");
+  await figure.getByRole("button", { name: "Shuffle the input" }).click();
+  await expect(figure).toContainText("Quicksort on 16 numbers already in order, taking a pivot chosen at random, seed 0. It partitions on 5 levels and makes 46 comparisons.");
+});
+
+test("2-opt shortens the nearest-neighbour tour one reversal at a time", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="tour-heuristic"]').first().getByRole("figure");
+  await expect(figure).toContainText("The tour that nearest neighbour builds from A: A, I, D, E, F, C, B, G, H, and back to A, 312.7 km.");
+  await expect(figure).toContainText("the tour ends with 87.3 km from G to H and 71.6 km back to A.");
+  await figure.getByRole("button", { name: "Increase improvements" }).click();
+  await expect(figure).toContainText("After 1 improvement: A, I, G, B, C, F, E, D, H, and back to A, 263.7 km. This step reversed the stretch from D to G, replacing the roads D–I and G–H with G–I and D–H, 49 km shorter.");
+  await figure.getByRole("button", { name: "Increase improvements" }).click();
+  await expect(figure).toContainText("After 2 improvements: A, I, H, D, E, F, C, B, G, and back to A, 226.4 km.");
+  await expect(figure).toContainText("37.3 km shorter. Another reversal can still shorten it.");
+  await figure.getByRole("button", { name: "Increase improvements" }).click();
+  await expect(figure).toContainText("After 3 improvements: A, I, D, H, E, F, C, B, G, and back to A, 213.9 km.");
+  await expect(figure).toContainText("No single reversal shortens it further. Checking all 20,160 possible tours confirms that, here, it is also the shortest of them all.");
+});
