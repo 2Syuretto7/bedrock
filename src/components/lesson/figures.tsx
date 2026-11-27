@@ -8511,6 +8511,82 @@ function BisectCommits(props: Props) {
   );
 }
 
+const AS_PARTS: { key: string; label: string; secs: number }[] = [
+  { key: "load", label: "load", secs: 9 },
+  { key: "parse", label: "parse", secs: 33 },
+  { key: "compute", label: "compute", secs: 12 },
+  { key: "save", label: "save", secs: 6 },
+];
+
+/** Amdahl's law: speeding up one part of a 60-second program, and how much the whole gains. */
+function AmdahlSpeedup(props: Props) {
+  const keys = AS_PARTS.map((p) => p.key);
+  const [part, setPart] = useState(typeof props.part === "string" && keys.includes(props.part) ? props.part : "compute");
+  const [factor, setFactor] = useState(clamp(Math.round(num(props.factor, 10)), 1, 50));
+  const total = AS_PARTS.reduce((s, p) => s + p.secs, 0);
+  const after = AS_PARTS.map((p) => ({ ...p, secs: p.key === part ? p.secs / factor : p.secs }));
+  const newTotal = after.reduce((s, p) => s + p.secs, 0);
+  const chosen = AS_PARTS.find((p) => p.key === part) ?? AS_PARTS[0];
+  const rest = total - chosen.secs;
+  const fmt = (x: number) => x.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  const speedup = total / newTotal;
+  const ceiling = total / rest;
+  const summary = `${chosen.label} takes ${chosen.secs} of the program's ${total} seconds, ${fmt((100 * chosen.secs) / total)}%. Making it ${factor} times faster brings the whole program from ${total} to ${fmt(newTotal)} seconds, ${fmt(speedup)} times faster. Even if ${chosen.label} took no time at all, the other ${rest} seconds would remain, so the whole could never be more than ${fmt(ceiling)} times faster.`;
+  const scale = 440 / total;
+  const bar = (rows: { key: string; label: string; secs: number }[], y: number) => {
+    let x = 10;
+    return rows.map((p) => {
+      const w = p.secs * scale;
+      const r = (
+        <g key={p.key}>
+          <rect x={x} y={y} width={Math.max(w - 2, 0.5)} height={30} className={p.key === part ? "fig-accent" : "fig-fill"} />
+          {w >= 42 ? (
+            <text x={x + w / 2 - 1} y={y + 19} textAnchor="middle" className="fig-small" style={{ fill: "var(--bg)" }}>
+              {`${p.label} ${fmt(p.secs)}`}
+            </text>
+          ) : null}
+        </g>
+      );
+      x += w;
+      return r;
+    });
+  };
+  return (
+    <Frame
+      title="Speeding up one part of a program"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">speed up</span>
+          {AS_PARTS.map((p) => (
+            <button key={p.key} type="button" className="btn btn-secondary btn-small" aria-pressed={p.key === part} onClick={() => setPart(p.key)}>
+              {p.label}
+            </button>
+          ))}
+          <Stepper label="times faster" value={factor} min={1} max={50} onChange={setFactor} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 170" role="img" aria-label={`Whole program ${fmt(speedup)} times faster, at most ${fmt(ceiling)}`}>
+        <text x={10} y={16} className="fig-small">
+          {`before: ${total} seconds`}
+        </text>
+        {bar(AS_PARTS, 24)}
+        <text x={10} y={76} className="fig-small">
+          {`after: ${fmt(newTotal)} seconds`}
+        </text>
+        {bar(after, 84)}
+        <line x1={10 + newTotal * scale} y1={80} x2={10 + newTotal * scale} y2={120} className="fig-guide" />
+        <text x={10} y={140} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`whole program: ${fmt(speedup)} times faster`}
+        </text>
+        <text x={10} y={158} className="fig-small">
+          {`limit if ${chosen.label} took no time: ${fmt(ceiling)} times`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -9857,6 +9933,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "build-graph": BuildGraph,
   "version-ranges": VersionRanges,
   "bisect-commits": BisectCommits,
+  "amdahl-speedup": AmdahlSpeedup,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
