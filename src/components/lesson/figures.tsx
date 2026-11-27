@@ -9300,6 +9300,7 @@ function SleepPoll(props: Props) {
   );
 }
 const ME_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const ME_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const ME_LENGTHS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const ME_CHOSEN: [number, number][] = [
   [5, 15],
@@ -9330,18 +9331,19 @@ function MonthEnd(props: Props) {
   const [day, setDay] = useState(clamp(Math.round(num(props.day, 73)), 1, 365));
   const [rm, rd] = meDate(day);
   const label = (m: number, d: number) => `${d} ${ME_MONTHS[m]}`;
+  const longLabel = (m: number, d: number) => `${d} ${ME_LONG[m]}`;
   const lastDays: number[] = [];
   for (let m = 0; m < 12; m++) lastDays.push(meDayOfYear(m, ME_LENGTHS[m]));
   const failedSoFar = lastDays.filter((n) => n <= day);
   const chosen = mode === "chosen";
   const failedNames = failedSoFar.map((n) => {
     const [m, d] = meDate(n);
-    return label(m, d);
+    return longLabel(m, d);
   });
   const todayFails = lastDays.includes(day);
   const summary = chosen
     ? "With the clock passed in, every run checks the same five dates: 15 June, 31 January, 28 February, 30 April and 31 December. Four of them are month ends, so every run fails, on the same dates, until the code is fixed."
-    : `The test reads the real date and has run once a day from 1 January to ${label(rm, rd)}. Today's run ${todayFails ? "fails" : "passes"}. It has failed on ${failedSoFar.length === 0 ? "no days" : plural(failedSoFar.length, "day")}${failedNames.length > 0 && failedNames.length <= 3 ? `, ${failedNames.join(" and ")},` : ""} and passed on ${plural(day - failedSoFar.length, "other day")}. Each failure looked like a flake, because the next day's run passed. Over the whole year it fails on 12 of 365 days.`;
+    : `The test reads the real date and has run once a day from 1 January to ${longLabel(rm, rd)}. Today's run ${todayFails ? "fails" : "passes"}. It has failed on ${failedSoFar.length === 0 ? "no days" : plural(failedSoFar.length, "day")}${failedNames.length > 0 && failedNames.length <= 3 ? `, ${failedNames.join(" and ")},` : ""} and passed on ${plural(day - failedSoFar.length, "other day")}. Each failure looked like a flake, because the next day's run passed. Over the whole year it fails on 12 of 365 days.`;
   const cell = 13;
   const x0 = 34;
   const y0 = 24;
@@ -9427,8 +9429,8 @@ function FuzzHeader(props: Props) {
   const guidedGot = guided.filter((n, k) => k > 0 && n <= budget).length;
   const total = 256 ** len;
   const summary =
-    `A ${plural(len, "byte")} header. After ${group(budget)} inputs, random bytes have on average got ${randomGot} of ${len} header bytes right` +
-    (randomGot === len ? "" : `; they need about ${group(total)} inputs to get past it`) +
+    `A ${len}-byte header. After ${group(budget)} inputs, random bytes have on average got ${randomGot} of ${len} header bytes right` +
+    (randomGot === len ? `, getting past it after about ${group(total)} inputs` : `; they need about ${group(total)} inputs to get past it`) +
     `. The fuzzer that keeps inputs reaching new code ` +
     (guidedGot === len ? `got past the whole header after ${group(guided[len])} inputs, and every input since has tested the code behind it.` : `has ${guidedGot} of ${len} bytes right so far.`);
   const x = (n: number) => 40 + (Math.log10(Math.max(1, n)) / 10) * 400;
@@ -9456,7 +9458,7 @@ function FuzzHeader(props: Props) {
     >
       <svg viewBox="0 0 460 190" role="img" aria-label={`After ${group(budget)} inputs: random ${randomGot} of ${len} bytes, guided ${guidedGot} of ${len}`}>
         <text x={10} y={14} className="fig-small">
-          header bytes right, against inputs tried (each mark is ten times more)
+          header bytes right, against inputs tried (marks ten times apart)
         </text>
         {Array.from({ length: len + 1 }, (_, k) => (
           <g key={k}>

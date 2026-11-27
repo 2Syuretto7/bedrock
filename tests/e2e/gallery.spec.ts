@@ -868,3 +868,105 @@ test("more runners shorten a pipeline only until the longest job decides", async
   await expect(figure).toContainText("installing takes 1 minute");
   await expect(figure).toContainText("17 minutes from push to result.");
 });
+
+test("random tests rarely land on a boundary that boundary tests always try", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="boundary-tests"]').first().getByRole("figure");
+  await expect(figure).toContainText("100 random amounts from ₹0 to ₹2,000: none is exactly ₹1,000, so every one passes");
+  await figure.getByRole("button", { name: "1,000", exact: true }).click();
+  await expect(figure).toContainText("1 test landed on ₹1,000 and failed");
+  await expect(figure).toContainText("find it 39.3% of the time");
+  await figure.getByRole("button", { name: "boundary tests", exact: true }).click();
+  await expect(figure).toContainText("the bug is found with five tests");
+});
+
+test("tests that share a cart pass only in one order, and a fixture frees them", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="test-order"]').first().getByRole("figure");
+  await expect(figure).toContainText("In the order 2, 1, 3, 2 of 3 pass: empty_at_start expects that the cart is empty but finds [chai].");
+  await figure.getByRole("button", { name: "1 2 3", exact: true }).click();
+  await expect(figure).toContainText("In the order 1, 2, 3, all three pass.");
+  await figure.getByRole("button", { name: "fresh cart per test", exact: true }).click();
+  await expect(figure).toContainText("all three pass in this order, and in all 6 possible orders");
+});
+
+test("each test double trades speed, truth and tolerance of refactoring differently", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="test-doubles"]').first().getByRole("figure");
+  await expect(figure).toContainText("With a fake outbox:");
+  await figure.getByRole("button", { name: "strict mock", exact: true }).click();
+  await expect(figure).toContainText("it fails although nothing is wrong");
+  await figure.getByRole("button", { name: "real gateway", exact: true }).click();
+  await expect(figure).toContainText("costs money every run");
+});
+
+test("more cases and a smaller range let a property find and shrink a bug", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="property-runs"]').first().getByRole("figure");
+  await expect(figure).toContainText("None of them repeats a minute, so every case passes and the bug goes unnoticed.");
+  await figure.getByRole("button", { name: "500", exact: true }).click();
+  await expect(figure).toContainText("3 lists fail the property. The first failure, [1140, 539, 1378, 1140, 619], shrinks to [1140, 1140]");
+  await figure.getByRole("button", { name: "draw from a small range", exact: true }).click();
+  await expect(figure).toContainText("360 lists fail the property.");
+});
+
+test("the triangle rule exposes an impossible distance without knowing the right one", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="triangle-check"]').first().getByRole("figure");
+  await expect(figure).toContainText("All three triangle rules hold");
+  await figure.getByRole("button", { name: "480 km", exact: true }).click();
+  await expect(figure).toContainText("so 480 cannot be the shortest distance");
+});
+
+test("a pyramid of tests runs faster and cleaner than a cone", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="test-pyramid"]').first().getByRole("figure");
+  await expect(figure).toContainText("take about 17 minutes a run on one machine");
+  await expect(figure).toContainText("67% of runs come back clean");
+  await figure.getByRole("button", { name: "mostly end-to-end", exact: true }).click();
+  await expect(figure).toContainText("take about 2.6 hours a run on one machine");
+  await expect(figure).toContainText("4% of runs come back clean");
+});
+
+test("each new test kills more mutants until none survives", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="mutation-score"]').first().getByRole("figure");
+  await expect(figure).toContainText("3 of 6 mutants killed, a mutation score of 50%.");
+  await figure.getByRole("button", { name: "1,000 gives 900", exact: true }).click();
+  await expect(figure).toContainText("4 of 6 mutants killed, a mutation score of 67%.");
+  await figure.getByRole("button", { name: "500 gives 500", exact: true }).click();
+  await expect(figure).toContainText("Every mutant is killed.");
+});
+
+test("polling never fails a correct job and waits no longer than needed", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="sleep-poll"]').first().getByRole("figure");
+  await expect(figure).toContainText("5 of the 20 runs fail");
+  await expect(figure).toContainText("In the long run, 25% of runs would fail.");
+  await figure.getByRole("button", { name: "sleeps 5 s", exact: true }).click();
+  await expect(figure).toContainText("none of the 20 runs fails, but every run waits the full 5 seconds");
+  await figure.getByRole("button", { name: "polls until done", exact: true }).click();
+  await expect(figure).toContainText("2.1 seconds on average");
+});
+
+test("a test on the real date fails on month ends, chosen dates fail every run", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="month-end"]').first().getByRole("figure");
+  await expect(figure).toContainText("It has failed on 2 days, 31 January and 28 February, and passed on 71 other days.");
+  await figure.getByRole("slider").fill("365");
+  await expect(figure).toContainText("It has failed on 12 days and passed on 353 other days.");
+  await figure.getByRole("button", { name: "is given chosen dates", exact: true }).click();
+  await expect(figure).toContainText("Four of them are month ends, so every run fails, on the same dates");
+});
+
+test("keeping inputs that reach new code gets past a header that random bytes cannot", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="fuzz-header"]').first().getByRole("figure");
+  await expect(figure).toContainText("they need about 4,29,49,67,296 inputs to get past it");
+  await expect(figure).toContainText("got past the whole header after 5,780 inputs");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Decrease header bytes" }).click();
+  await expect(figure).toContainText("A 2-byte header.");
+  await expect(figure).toContainText("got past the whole header after 903 inputs");
+  await figure.getByRole("slider").fill("10");
+  await expect(figure).toContainText("getting past it after about 65,536 inputs");
+});
