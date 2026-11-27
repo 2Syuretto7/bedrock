@@ -8666,6 +8666,833 @@ function CiPipeline(props: Props) {
     </Frame>
   );
 }
+const BT_COUNTS = [10, 100, 1000];
+
+function btDraws(n: number) {
+  // A fixed linear congruential generator, so the same tests appear on every visit.
+  const out: number[] = [];
+  let s = 1127;
+  for (let i = 0; i < n; i++) {
+    s = (s * 48271) % 2147483647;
+    out.push(Math.floor((s / 2147483647) * 2001));
+  }
+  return out;
+}
+
+/** Random tests against boundary tests for a discount whose code says > where the rule says at least. */
+function BoundaryTests(props: Props) {
+  const startN = clamp(Math.round(num(props.random, 100)), 0, 1000);
+  const [n, setN] = useState(BT_COUNTS.includes(startN) ? startN : 100);
+  const [edges, setEdges] = useState(props.boundary === true);
+  const draws = btDraws(n);
+  const hits = draws.filter((x) => x === 1000).length;
+  const boundary = [0, 999, 1000, 1001, 2000];
+  const chance = 1 - Math.pow(2000 / 2001, n);
+  const pct = (100 * chance).toLocaleString("en-IN", { maximumFractionDigits: 1 });
+  const found = hits > 0 || edges;
+  const randomPart = `${group(n)} random amounts from ₹0 to ₹2,000: ${hits === 0 ? "none is exactly ₹1,000, so every one passes" : `${plural(hits, "test")} landed on ₹1,000 and failed`}. Any one random test has a 1 in 2,001 chance of hitting the bug, so ${group(n)} of them find it ${pct}% of the time.`;
+  const edgePart = edges ? " The boundary tests try ₹0, ₹999, ₹1,000, ₹1,001 and ₹2,000, and the one at ₹1,000 fails: the bug is found with five tests." : "";
+  const summary = `The rule: 10% off orders of ₹1,000 or more. The code says amount > 1000. ${randomPart}${edgePart}`;
+  const x = (v: number) => 10 + (v / 2000) * 440;
+  return (
+    <Frame
+      title="Where the tests land"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">random tests</span>
+          {BT_COUNTS.map((c) => (
+            <button key={c} type="button" className="btn btn-secondary btn-small" aria-pressed={c === n} onClick={() => setN(c)}>
+              {group(c)}
+            </button>
+          ))}
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={edges} onClick={() => setEdges(!edges)}>
+            boundary tests
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 150" role="img" aria-label={found ? "The bug at ₹1,000 is found" : "No test lands on ₹1,000; the bug is missed"}>
+        <text x={10} y={14} className="fig-small">
+          order amount in rupees; each mark is one test
+        </text>
+        <line x1={10} y1={70} x2={450} y2={70} className="fig-axis" />
+        {draws.map((v, i) => (
+          <line key={i} x1={x(v)} y1={44} x2={x(v)} y2={68} className="fig-line" style={{ opacity: n >= 1000 ? 0.35 : 0.8 }} />
+        ))}
+        {edges
+          ? boundary.map((v) => (
+              <rect key={v} x={x(v) - 3} y={74} width={6} height={16} className={v === 1000 ? "fig-accent" : "fig-fill"} />
+            ))
+          : null}
+        <line x1={x(1000)} y1={28} x2={x(1000)} y2={96} className="fig-accent-line" />
+        <text x={x(1000)} y={24} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          bug: exactly ₹1,000
+        </text>
+        {[0, 500, 1000, 1500, 2000].map((v) => (
+          <text key={v} x={x(v)} y={110} textAnchor={v === 0 ? "start" : v === 2000 ? "end" : "middle"} className="fig-small">
+            {group(v)}
+          </text>
+        ))}
+        <text x={10} y={138} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {found ? "bug found" : "every test passes, and the bug is still there"}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+const TO_TESTS: Record<string, { name: string; adds: string | null; check: (cart: string[]) => boolean; expect: string }> = {
+  "1": { name: "empty_at_start", adds: null, check: (c) => c.length === 0, expect: "cart is empty" },
+  "2": { name: "add_chai", adds: "chai", check: (c) => c.length === 1, expect: "cart has 1 item" },
+  "3": { name: "add_samosa", adds: "samosa", check: (c) => c.includes("samosa"), expect: "cart has a samosa" },
+};
+const TO_ORDERS = ["123", "132", "213", "231", "312", "321"];
+
+/** Three tests sharing one cart: the order they run in decides which pass, unless each gets a fresh cart. */
+function TestOrder(props: Props) {
+  const [order, setOrder] = useState(typeof props.order === "string" && TO_ORDERS.includes(props.order) ? props.order : "213");
+  const [fresh, setFresh] = useState(props.fresh === true);
+  const shared: string[] = [];
+  const rows: { k: string; name: string; after: string[]; ok: boolean; expect: string }[] = [];
+  for (const k of order.split("")) {
+    const t = TO_TESTS[k];
+    const cart = fresh ? [] : shared;
+    if (t.adds) cart.push(t.adds);
+    rows.push({ k, name: t.name, after: [...cart], ok: t.check(cart), expect: t.expect });
+  }
+  const passing = rows.filter((r) => r.ok).length;
+  const allOrders = TO_ORDERS.filter((o) => {
+    const c: string[] = [];
+    return o.split("").every((k) => {
+      const cart = fresh ? [] : c;
+      if (TO_TESTS[k].adds) cart.push(TO_TESTS[k].adds as string);
+      return TO_TESTS[k].check(cart);
+    });
+  }).length;
+  const show = (c: string[]) => (c.length === 0 ? "[]" : `[${c.join(", ")}]`);
+  const fails = rows.filter((r) => !r.ok);
+  const said = passing === 3 ? "all three pass" : `${passing} of 3 pass`;
+  const why = fails.map((r) => `${r.name} expects that the ${r.expect} but finds ${show(r.after)}`).join("; ");
+  const summary = fresh
+    ? `Each test gets a fresh, empty cart from a fixture, so all three pass in this order, and in all ${allOrders} possible orders.`
+    : `All three tests share one cart. In the order ${order.split("").join(", ")}, ${said}${why ? `: ${why}` : ""}. Only ${allOrders} of the 6 possible orders lets every test pass.`;
+  return (
+    <Frame
+      title="Tests that share a cart"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">run order</span>
+          {TO_ORDERS.map((o) => (
+            <button key={o} type="button" className="btn btn-secondary btn-small" aria-pressed={o === order} onClick={() => setOrder(o)}>
+              {o.split("").join(" ")}
+            </button>
+          ))}
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={fresh} onClick={() => setFresh(!fresh)}>
+            fresh cart per test
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 150" role="img" aria-label={`${passing} of 3 tests pass in the order ${order.split("").join(", ")}`}>
+        <text x={10} y={16} className="fig-small">
+          run
+        </text>
+        <text x={44} y={16} className="fig-small">
+          test
+        </text>
+        <text x={190} y={16} className="fig-small">
+          cart when it checks
+        </text>
+        <text x={390} y={16} className="fig-small">
+          result
+        </text>
+        {rows.map((r, i) => (
+          <g key={r.k}>
+            <rect x={6} y={26 + i * 38} width={448} height={32} className={r.ok ? "fig-ghost" : "fig-fill"} />
+            <text x={14} y={46 + i * 38} className="fig-small" style={{ fill: "var(--text)" }}>
+              {`${i + 1}.`}
+            </text>
+            <text x={44} y={46 + i * 38} className="fig-small" style={{ fill: "var(--text)" }}>
+              {`${r.k}: ${r.name}`}
+            </text>
+            <text x={190} y={46 + i * 38} className="fig-small" style={{ fill: "var(--text)" }}>
+              {show(r.after)}
+            </text>
+            <text x={390} y={46 + i * 38} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+              {r.ok ? "pass" : "FAIL"}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+const TD_ROWS: { key: string; label: string; secs: string; repeat: boolean; catches: boolean; refactor: boolean; note: string }[] = [
+  {
+    key: "real",
+    label: "real gateway",
+    secs: "24",
+    repeat: false,
+    catches: true,
+    refactor: true,
+    note: "The test sends 30 real text messages at 0.8 seconds each, costs money every run, and fails whenever the network does. It checks the truth, slowly and unreliably.",
+  },
+  {
+    key: "stub",
+    label: "stub",
+    secs: "0.001",
+    repeat: true,
+    catches: false,
+    refactor: true,
+    note: 'The stub answers "sent" to anything and remembers nothing, so the test can only check what notify_delays returns. It would still pass if the code messaged nobody at all.',
+  },
+  {
+    key: "fake",
+    label: "fake outbox",
+    secs: "0.001",
+    repeat: true,
+    catches: true,
+    refactor: true,
+    note: "The fake keeps an in-memory outbox and implements both send and send_bulk, so the test asserts that every passenger's number received the message. It checks the outcome, not how it was produced, so the bulk refactor leaves it green.",
+  },
+  {
+    key: "mock",
+    label: "strict mock",
+    secs: "0.001",
+    repeat: true,
+    catches: true,
+    refactor: false,
+    note: "The mock expects exactly 30 calls to send, in order, and fails on anything else. It catches a missing message, but when the code is changed to one send_bulk call that delivers the same messages, it fails although nothing is wrong.",
+  },
+];
+
+/** Four stand-ins for an SMS gateway in a test of notify_delays, and what each one can and cannot tell you. */
+function TestDoubles(props: Props) {
+  const [key, setKey] = useState(typeof props.double === "string" && TD_ROWS.some((r) => r.key === props.double) ? props.double : "fake");
+  const row = TD_ROWS.find((r) => r.key === key) ?? TD_ROWS[2];
+  const summary = `With a ${row.label}: ${row.note}`;
+  const cols = [
+    { x: 150, head: "seconds" },
+    { x: 222, head: "repeatable" },
+    { x: 310, head: "catches a" },
+    { x: 400, head: "survives" },
+  ];
+  const yes = (b: boolean) => (b ? "yes" : "no");
+  return (
+    <Frame
+      title="Four stand-ins for an SMS gateway"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">the test uses</span>
+          {TD_ROWS.map((r) => (
+            <button key={r.key} type="button" className="btn btn-secondary btn-small" aria-pressed={r.key === key} onClick={() => setKey(r.key)}>
+              {r.label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 196" role="img" aria-label={`The test uses a ${row.label}`}>
+        {cols.map((c) => (
+          <text key={c.head} x={c.x} y={14} textAnchor="middle" className="fig-small">
+            {c.head}
+          </text>
+        ))}
+        <text x={310} y={28} textAnchor="middle" className="fig-small">
+          missing message
+        </text>
+        <text x={400} y={28} textAnchor="middle" className="fig-small">
+          bulk refactor
+        </text>
+        {TD_ROWS.map((r, i) => {
+          const y = 38 + i * 38;
+          const on = r.key === key;
+          const cells = [r.secs, yes(r.repeat), yes(r.catches), yes(r.refactor)];
+          return (
+            <g key={r.key}>
+              <rect x={4} y={y} width={452} height={32} className={on ? "fig-accent" : "fig-ghost"} />
+              <text x={12} y={y + 20} className="fig-small" style={{ fill: on ? "var(--bg)" : "var(--text)", fontWeight: on ? 600 : 400 }}>
+                {r.label}
+              </text>
+              {cells.map((v, j) => (
+                <text key={j} x={cols[j].x} y={y + 20} textAnchor="middle" className="fig-small" style={{ fill: on ? "var(--bg)" : "var(--text)" }}>
+                  {v}
+                </text>
+              ))}
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
+const PR_COUNTS = [20, 100, 500];
+
+function prCases(n: number, small: boolean) {
+  // A fixed generator, so the same cases appear on every visit.
+  const out: number[][] = [];
+  let s = 1440;
+  for (let i = 0; i < n; i++) {
+    const c: number[] = [];
+    for (let j = 0; j < 5; j++) {
+      s = (s * 48271) % 2147483647;
+      c.push(small ? s % 10 : s % 1440);
+    }
+    out.push(c);
+  }
+  return out;
+}
+
+function prFails(xs: number[]) {
+  return new Set(xs).size < xs.length;
+}
+
+function prShrink(xs: number[]) {
+  let cur = [...xs];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < cur.length; i++) {
+      const t = [...cur.slice(0, i), ...cur.slice(i + 1)];
+      if (prFails(t)) {
+        cur = t;
+        changed = true;
+        break;
+      }
+    }
+  }
+  return cur;
+}
+
+/** A property test of merge_bookings, which loses bookings made at the same minute: how the generator decides whether the bug is found. */
+function PropertyRuns(props: Props) {
+  const startN = Math.round(num(props.cases, 100));
+  const [n, setN] = useState(PR_COUNTS.includes(startN) ? startN : 100);
+  const [small, setSmall] = useState(props.gen === "small");
+  const cases = prCases(n, small);
+  const failing = cases.filter(prFails);
+  const first = failing[0];
+  const shrunk = first ? prShrink(first) : null;
+  const chance = small ? "69.8%" : "0.69%";
+  const range = small ? "minutes 0 to 9 only" : "all 1,440 minutes of a day";
+  const show = (xs: number[]) => `[${xs.join(", ")}]`;
+  const result = first && shrunk
+    ? `${plural(failing.length, "list")} ${failing.length === 1 ? "fails" : "fail"} the property. The first failure, ${show(first)}, shrinks to ${show(shrunk)}: two bookings at the same minute, and the bug is plain to see.`
+    : "None of them repeats a minute, so every case passes and the bug goes unnoticed.";
+  const summary = `The property: merging a list of bookings keeps every booking. ${group(n)} random lists of 5 booking times, drawn from ${range}, where any one list repeats a minute with chance ${chance}. ${result}`;
+  const cols = 50;
+  const cell = 440 / cols;
+  return (
+    <Frame
+      title="Random cases against one property"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">cases</span>
+          {PR_COUNTS.map((c) => (
+            <button key={c} type="button" className="btn btn-secondary btn-small" aria-pressed={c === n} onClick={() => setN(c)}>
+              {group(c)}
+            </button>
+          ))}
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={small} onClick={() => setSmall(!small)}>
+            draw from a small range
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 150" role="img" aria-label={first ? `${failing.length} of ${n} cases fail` : `All ${n} cases pass`}>
+        <text x={10} y={14} className="fig-small">
+          each square is one generated list; filled squares fail
+        </text>
+        {cases.map((c, i) => (
+          <rect key={i} x={10 + (i % cols) * cell} y={24 + Math.floor(i / cols) * cell} width={cell - 1.5} height={cell - 1.5} className={prFails(c) ? "fig-accent" : "fig-ghost"} />
+        ))}
+        <text x={10} y={130} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {shrunk ? `failing: ${failing.length} of ${group(n)}; smallest failing case: ${show(shrunk)}` : `failing: 0 of ${group(n)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+const TC_OPTIONS = [280, 315, 340, 480];
+
+/** Checking a route planner without knowing the true distances: the triangle rule as an oracle. */
+function TriangleCheck(props: Props) {
+  const start = Math.round(num(props.pn, 340));
+  const [pn, setPn] = useState(TC_OPTIONS.includes(start) ? start : 340);
+  const pm = 150;
+  const mn = 165;
+  const via = pm + mn;
+  const broken = pn > via;
+  const summary = broken
+    ? `The planner says Pune to Nashik is ${group(pn)} km, but going through Mumbai takes ${pm} + ${mn} = ${via} km, so ${group(pn)} cannot be the shortest distance. At least one of the three answers is wrong, by ${group(pn - via)} km or more in all, though the check cannot say which.`
+    : `All three triangle rules hold: ${group(pn)} ≤ ${pm} + ${mn} = ${via}, ${pm} ≤ ${group(pn)} + ${mn}, and ${mn} ≤ ${group(pn)} + ${pm}. The answers are consistent with each other, which does not prove that any of them is right.`;
+  const P = { x: 70, y: 150 };
+  const M = { x: 230, y: 50 };
+  const N = { x: 390, y: 150 };
+  return (
+    <Frame
+      title="A rule the answers must obey"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">planner says Pune to Nashik is</span>
+          {TC_OPTIONS.map((v) => (
+            <button key={v} type="button" className="btn btn-secondary btn-small" aria-pressed={v === pn} onClick={() => setPn(v)}>
+              {`${group(v)} km`}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 184" role="img" aria-label={broken ? "The triangle rule is broken" : "The triangle rule holds"}>
+        <line x1={P.x} y1={P.y} x2={M.x} y2={M.y} className="fig-line" />
+        <line x1={M.x} y1={M.y} x2={N.x} y2={N.y} className="fig-line" />
+        <line x1={P.x} y1={P.y} x2={N.x} y2={N.y} className={broken ? "fig-accent-line" : "fig-line"} style={{ strokeWidth: broken ? 3 : undefined }} />
+        {[
+          { c: P, name: "Pune" },
+          { c: M, name: "Mumbai" },
+          { c: N, name: "Nashik" },
+        ].map(({ c, name }) => (
+          <g key={name}>
+            <circle cx={c.x} cy={c.y} r={7} className="fig-fill" />
+            <text x={c.x} y={c.y + (c.y < 100 ? -14 : 24)} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+              {name}
+            </text>
+          </g>
+        ))}
+        <text x={(P.x + M.x) / 2 - 14} y={(P.y + M.y) / 2} textAnchor="end" className="fig-small">
+          {`${pm} km`}
+        </text>
+        <text x={(M.x + N.x) / 2 + 14} y={(M.y + N.y) / 2} className="fig-small">
+          {`${mn} km`}
+        </text>
+        <text x={(P.x + N.x) / 2} y={P.y - 8} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`${group(pn)} km`}
+        </text>
+        <text x={10} y={16} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {broken ? `broken: ${group(pn)} > ${via}` : `consistent: ${group(pn)} ≤ ${via}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+const TP_MIXES: Record<string, { label: string; unit: number; integ: number; e2e: number }> = {
+  units: { label: "unit tests only", unit: 5200, integ: 0, e2e: 0 },
+  pyramid: { label: "pyramid", unit: 5000, integ: 200, e2e: 20 },
+  cone: { label: "mostly end-to-end", unit: 200, integ: 100, e2e: 300 },
+};
+const TP_BUGS: { name: string; needs: "unit" | "integ" | "e2e" }[] = [
+  { name: "fare rounded the wrong way", needs: "unit" },
+  { name: "time stored without its time zone", needs: "integ" },
+  { name: "app sends rupees, server expects paise", needs: "integ" },
+  { name: "Pay button hidden on small phones", needs: "e2e" },
+];
+
+/** Three mixes of unit, integration and end-to-end tests: time per run, chance of a clean run, and which bugs each catches. */
+function TestPyramid(props: Props) {
+  const [key, setKey] = useState(typeof props.mix === "string" && props.mix in TP_MIXES ? props.mix : "pyramid");
+  const m = TP_MIXES[key];
+  const secs = m.unit * 0.005 + m.integ * 2 + m.e2e * 30;
+  const mins = Math.round(secs / 60);
+  const clean = Math.pow(0.999, m.integ) * Math.pow(0.99, m.e2e);
+  const caught = TP_BUGS.filter((b) => (b.needs === "unit" ? m.unit > 0 : b.needs === "integ" ? m.integ > 0 || m.e2e > 0 : m.e2e > 0));
+  const time = mins >= 120 ? `${(secs / 3600).toLocaleString("en-IN", { maximumFractionDigits: 1 })} hours` : plural(Math.max(mins, 1), "minute");
+  const cleanPct = Math.round(clean * 100);
+  const summary = `${group(m.unit)} unit, ${group(m.integ)} integration and ${group(m.e2e)} end-to-end tests take about ${time} a run on one machine. With integration tests failing by accident 1 time in 1,000 and end-to-end tests 1 time in 100, ${cleanPct}% of runs come back clean. The suite catches ${caught.length} of the 4 bugs${caught.length < 4 ? `, missing: ${TP_BUGS.filter((b) => !caught.includes(b)).map((b) => b.name).join("; ")}` : ""}.`;
+  const layers = [
+    { name: "end-to-end", n: m.e2e },
+    { name: "integration", n: m.integ },
+    { name: "unit", n: m.unit },
+  ];
+  return (
+    <Frame
+      title="How a test suite is balanced"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">mix</span>
+          {Object.keys(TP_MIXES).map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={k === key} onClick={() => setKey(k)}>
+              {TP_MIXES[k].label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 200" role="img" aria-label={`${TP_MIXES[key].label}: about ${time} a run, ${cleanPct}% clean, ${caught.length} of 4 bugs caught`}>
+        {layers.map((l, i) => {
+          const max = Math.max(m.unit, m.integ, m.e2e, 1);
+          const filled = l.n === 0 ? 0 : Math.max(6, (Math.log10(l.n + 1) / Math.log10(max + 1)) * 290);
+          return (
+            <g key={l.name}>
+              <text x={10} y={32 + i * 40} className="fig-small" style={{ fill: "var(--text)" }}>
+                {`${l.name}: ${group(l.n)}`}
+              </text>
+              <rect x={160} y={12 + i * 40} width={290} height={30} className="fig-ghost" />
+              <rect x={160} y={12 + i * 40} width={filled} height={30} className={l.name === "end-to-end" && m.e2e > m.unit ? "fig-accent" : "fig-fill"} />
+            </g>
+          );
+        })}
+        <text x={10} y={150} className="fig-small">
+          bar widths on a logarithmic scale
+        </text>
+        <text x={10} y={170} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`about ${time} a run; ${cleanPct}% of runs clean`}
+        </text>
+        <text x={10} y={190} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`bugs caught: ${caught.length} of 4`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+const MS_MUTANTS: { name: string; f: (a: number) => number }[] = [
+  { name: "> for >=", f: (a) => (a > 1000 ? a * 0.9 : a) },
+  { name: "0.8 for 0.9", f: (a) => (a >= 1000 ? a * 0.8 : a) },
+  { name: "100 for 1000", f: (a) => (a >= 100 ? a * 0.9 : a) },
+  { name: "0 for a", f: (a) => (a >= 1000 ? a * 0.9 : 0) },
+  { name: "<= for >=", f: (a) => (a <= 1000 ? a * 0.9 : a) },
+  { name: "- for *", f: (a) => (a >= 1000 ? a - 0.9 : a) },
+];
+const MS_TESTS: { key: string; label: string; inputs: number[]; check: boolean }[] = [
+  { key: "types", label: "types only", inputs: [1500, 500], check: false },
+  { key: "t1500", label: "1,500 gives 1,350", inputs: [1500], check: true },
+  { key: "t1000", label: "1,000 gives 900", inputs: [1000], check: true },
+  { key: "t500", label: "500 gives 500", inputs: [500], check: true },
+];
+
+function msRight(a: number) {
+  return a >= 1000 ? a * 0.9 : a;
+}
+
+/** Coverage against mutation score for a 10% discount on orders of 1,000 or more. */
+function MutationScore(props: Props) {
+  const start = Array.isArray(props.tests) ? props.tests.filter((t): t is string => typeof t === "string") : ["types"];
+  const [on, setOn] = useState<string[]>(MS_TESTS.map((t) => t.key).filter((k) => start.includes(k)));
+  const toggle = (k: string) => setOn(on.includes(k) ? on.filter((x) => x !== k) : [...on, k]);
+  const chosen = MS_TESTS.filter((t) => on.includes(t.key));
+  const inputs = chosen.flatMap((t) => t.inputs);
+  const branches = new Set(inputs.map((a) => (a >= 1000 ? "discount" : "full")));
+  const coverage = Math.round((100 * (1 + branches.size)) / 3);
+  const killedBy = (m: (a: number) => number) => chosen.some((t) => t.check && t.inputs.some((a) => Math.abs(m(a) - msRight(a)) > 1e-9));
+  const killed = MS_MUTANTS.filter((m) => killedBy(m.f));
+  const survivors = MS_MUTANTS.filter((m) => !killedBy(m.f));
+  const lineText = inputs.length === 0 ? "No tests: no line runs" : `Line coverage ${coverage}%`;
+  const summary = `${lineText}. ${killed.length} of ${MS_MUTANTS.length} mutants killed, a mutation score of ${Math.round((100 * killed.length) / MS_MUTANTS.length)}%.${survivors.length ? ` Surviving: ${survivors.map((m) => m.name).join(", ")}.` : " Every mutant is killed."}${chosen.some((t) => !t.check) && !chosen.some((t) => t.check) ? " The tests run every line but check nothing that a mutant could change." : ""}`;
+  return (
+    <Frame
+      title="Coverage against mutants"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">tests in the suite</span>
+          {MS_TESTS.map((t) => (
+            <button key={t.key} type="button" className="btn btn-secondary btn-small" aria-pressed={on.includes(t.key)} onClick={() => toggle(t.key)}>
+              {t.label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 196" role="img" aria-label={`${killed.length} of ${MS_MUTANTS.length} mutants killed`}>
+        <text x={10} y={14} className="fig-small">
+          {"discount(a): 10% off if a >= 1000; each mutant changes one thing"}
+        </text>
+        {MS_MUTANTS.map((m, i) => {
+          const dead = killed.includes(m);
+          const y = 24 + i * 26;
+          return (
+            <g key={m.name}>
+              <rect x={10} y={y} width={440} height={22} className={dead ? "fig-fill" : "fig-ghost"} />
+              <text x={20} y={y + 15} className="fig-small" style={{ fill: dead ? "var(--bg)" : "var(--text)" }}>
+                {m.name}
+              </text>
+              <text x={440} y={y + 15} textAnchor="end" className="fig-small" style={{ fill: dead ? "var(--bg)" : "var(--text)", fontWeight: 600 }}>
+                {dead ? "killed" : "survives"}
+              </text>
+            </g>
+          );
+        })}
+        <text x={10} y={190} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`${inputs.length === 0 ? "line coverage 0%" : `line coverage ${coverage}%`}; mutants killed ${killed.length} of ${MS_MUTANTS.length}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+const SP_WAITS = ["1", "2", "3", "5", "poll"];
+
+function spTimes() {
+  // Twenty runs of a background job that finishes at a random moment between 0 and 4 seconds.
+  const out: number[] = [];
+  let s = 42;
+  for (let i = 0; i < 20; i++) {
+    s = (s * 48271) % 2147483647;
+    out.push((s / 2147483647) * 4);
+  }
+  return out;
+}
+
+/** A test that sleeps a fixed time before checking a background job, against one that polls until the job is done. */
+function SleepPoll(props: Props) {
+  const startKey = typeof props.wait === "string" ? props.wait : typeof props.wait === "number" ? String(props.wait) : "3";
+  const [key, setKey] = useState(SP_WAITS.includes(startKey) ? startKey : "3");
+  const times = spTimes();
+  const poll = key === "poll";
+  const wait = poll ? null : Number(key);
+  const fails = wait === null ? 0 : times.filter((t) => t > wait).length;
+  const waited = times.map((t) => (wait === null ? Math.ceil(t / 0.1 - 1e-9) * 0.1 : wait));
+  const avg = waited.reduce((a, b) => a + b, 0) / times.length;
+  const fmt = (x: number) => x.toLocaleString("en-IN", { maximumFractionDigits: 1 });
+  const w = wait ?? 0;
+  const longRun = Math.round((Math.max(0, 4 - w) / 4) * 100);
+  const summary = poll
+    ? `Checking every 0.1 seconds, for up to 10 seconds: none of the 20 runs fails, and each waits only until its job is done, ${fmt(avg)} seconds on average.`
+    : fails === 0
+      ? `Sleeping ${plural(w, "second")} before checking: none of the 20 runs fails, but every run waits the full ${plural(w, "second")}, whenever its job actually finished.`
+      : `Sleeping ${plural(w, "second")} before checking: ${fails} of the 20 runs fail, because their job had not finished yet, and every run waits the full ${plural(w, "second")}. In the long run, ${longRun}% of runs would fail.`;
+  const x = (t: number) => 10 + (t / 5) * 440;
+  return (
+    <Frame
+      title="Sleeping against polling"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">the test</span>
+          {SP_WAITS.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={k === key} onClick={() => setKey(k)}>
+              {k === "poll" ? "polls until done" : `sleeps ${k} s`}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 150" role="img" aria-label={poll ? "No run fails" : `${fails} of 20 runs fail`}>
+        <text x={10} y={14} className="fig-small">
+          {"when each of 20 runs' background job finished, in seconds"}
+        </text>
+        {times.map((t, i) => {
+          const failed = wait !== null && t > wait;
+          return <rect key={i} x={x(t) - 3} y={28 + (i % 4) * 16} width={6} height={12} className={failed ? "fig-accent" : "fig-fill"} />;
+        })}
+        {wait !== null ? (
+          <>
+            <line x1={x(wait)} y1={22} x2={x(wait)} y2={100} className="fig-accent-line" />
+            <text x={x(wait) + (wait >= 4.5 ? -4 : 4)} y={98} textAnchor={wait >= 4.5 ? "end" : "start"} className="fig-small" style={{ fill: "var(--text)" }}>
+              check
+            </text>
+          </>
+        ) : null}
+        <line x1={10} y1={104} x2={450} y2={104} className="fig-axis" />
+        {[0, 1, 2, 3, 4, 5].map((t) => (
+          <text key={t} x={x(t)} y={120} textAnchor="middle" className="fig-small">
+            {t}
+          </text>
+        ))}
+        <text x={10} y={142} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`failed runs: ${fails} of 20; average wait: ${fmt(avg)} s`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+const ME_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const ME_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const ME_LENGTHS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const ME_CHOSEN: [number, number][] = [
+  [5, 15],
+  [0, 31],
+  [1, 28],
+  [3, 30],
+  [11, 31],
+];
+
+function meDayOfYear(month: number, day: number) {
+  let n = day;
+  for (let m = 0; m < month; m++) n += ME_LENGTHS[m];
+  return n;
+}
+
+function meDate(doy: number): [number, number] {
+  let rest = doy;
+  for (let m = 0; m < 12; m++) {
+    if (rest <= ME_LENGTHS[m]) return [m, rest];
+    rest -= ME_LENGTHS[m];
+  }
+  return [11, 31];
+}
+
+/** A test of a "tomorrow" function that is wrong on the last day of each month, run on the real date every day of 2027 or on chosen dates every run. */
+function MonthEnd(props: Props) {
+  const [mode, setMode] = useState(props.mode === "chosen" ? "chosen" : "real");
+  const [day, setDay] = useState(clamp(Math.round(num(props.day, 73)), 1, 365));
+  const [rm, rd] = meDate(day);
+  const label = (m: number, d: number) => `${d} ${ME_MONTHS[m]}`;
+  const longLabel = (m: number, d: number) => `${d} ${ME_LONG[m]}`;
+  const lastDays: number[] = [];
+  for (let m = 0; m < 12; m++) lastDays.push(meDayOfYear(m, ME_LENGTHS[m]));
+  const failedSoFar = lastDays.filter((n) => n <= day);
+  const chosen = mode === "chosen";
+  const failedNames = failedSoFar.map((n) => {
+    const [m, d] = meDate(n);
+    return longLabel(m, d);
+  });
+  const todayFails = lastDays.includes(day);
+  const summary = chosen
+    ? "With the clock passed in, every run checks the same five dates: 15 June, 31 January, 28 February, 30 April and 31 December. Four of them are month ends, so every run fails, on the same dates, until the code is fixed."
+    : `The test reads the real date and has run once a day from 1 January to ${longLabel(rm, rd)}. Today's run ${todayFails ? "fails" : "passes"}. It has failed on ${failedSoFar.length === 0 ? "no days" : plural(failedSoFar.length, "day")}${failedNames.length > 0 && failedNames.length <= 3 ? `, ${failedNames.join(" and ")},` : ""} and passed on ${plural(day - failedSoFar.length, "other day")}. Each failure looked like a flake, because the next day's run passed. Over the whole year it fails on 12 of 365 days.`;
+  const cell = 13;
+  const x0 = 34;
+  const y0 = 24;
+  return (
+    <Frame
+      title="The real clock against chosen dates"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">the test</span>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!chosen} onClick={() => setMode("real")}>
+            reads the real date
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={chosen} onClick={() => setMode("chosen")}>
+            is given chosen dates
+          </button>
+          {chosen ? null : <Slider label="today" value={day} min={1} max={365} onChange={setDay} text={label(rm, rd)} />}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 200" role="img" aria-label={chosen ? "Five chosen dates, four of them month ends, fail on every run" : `Runs up to ${label(rm, rd)}: ${failedSoFar.length} failed`}>
+        <text x={10} y={14} className="fig-small">
+          {chosen ? "2027: the dates the test checks on every run" : "2027: one run a day, failures marked"}
+        </text>
+        {ME_MONTHS.map((name, m) => (
+          <g key={name}>
+            <text x={10} y={y0 + m * cell + 10} className="fig-small">
+              {name}
+            </text>
+            {Array.from({ length: ME_LENGTHS[m] }, (_, i) => {
+              const d = i + 1;
+              const n = meDayOfYear(m, d);
+              const isLast = d === ME_LENGTHS[m];
+              const isChosen = ME_CHOSEN.some(([cm, cd]) => cm === m && cd === d);
+              let cls = "fig-ghost";
+              if (chosen) {
+                if (isChosen) cls = isLast ? "fig-accent" : "fig-fill";
+              } else if (n <= day) {
+                cls = isLast ? "fig-accent" : "fig-fill";
+              }
+              return <rect key={d} x={x0 + i * cell} y={y0 + m * cell} width={cell - 2} height={cell - 2} className={cls} />;
+            })}
+          </g>
+        ))}
+        {chosen ? null : <rect x={x0 + (rd - 1) * cell - 2} y={y0 + rm * cell - 2} width={cell + 2} height={cell + 2} className="fig-line" />}
+        <text x={10} y={y0 + 12 * cell + 20} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {chosen ? "failures: 4 of 5 dates, on every run" : `failures so far: ${failedSoFar.length} of ${day} runs`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+function fhGuidedSteps(len: number) {
+  // One run of a fuzzer that keeps inputs reaching new code: it mutates one random byte of its
+  // best input, and keeps the result when one more byte of the header is right.
+  const reached: number[] = [0];
+  let s = 2027;
+  let matched = 0;
+  let step = 0;
+  while (matched < len && step < 1000000) {
+    step += 1;
+    s = (s * 48271) % 2147483647;
+    const pos = s % len;
+    s = (s * 48271) % 2147483647;
+    const value = s % 256;
+    if (pos === matched && value === 7) {
+      matched += 1;
+      reached.push(step);
+    }
+  }
+  return reached;
+}
+
+/** How many inputs a fuzzer needs to get past a header check: random bytes against keeping inputs that reach new code. */
+function FuzzHeader(props: Props) {
+  const [len, setLen] = useState(clamp(Math.round(num(props.bytes, 4)), 1, 4));
+  const [power, setPower] = useState(clamp(Math.round(num(props.budget, 4)), 1, 10));
+  const budget = 10 ** power;
+  const guided = fhGuidedSteps(len);
+  const randomAt: number[] = [0];
+  for (let k = 1; k <= len; k++) randomAt.push(256 ** k);
+  const randomGot = randomAt.filter((n, k) => k > 0 && n <= budget).length;
+  const guidedGot = guided.filter((n, k) => k > 0 && n <= budget).length;
+  const total = 256 ** len;
+  const summary =
+    `A ${len}-byte header. After ${group(budget)} inputs, random bytes have on average got ${randomGot} of ${len} header bytes right` +
+    (randomGot === len ? `, getting past it after about ${group(total)} inputs` : `; they need about ${group(total)} inputs to get past it`) +
+    `. The fuzzer that keeps inputs reaching new code ` +
+    (guidedGot === len ? `got past the whole header after ${group(guided[len])} inputs, and every input since has tested the code behind it.` : `has ${guidedGot} of ${len} bytes right so far.`);
+  const x = (n: number) => 40 + (Math.log10(Math.max(1, n)) / 10) * 400;
+  const y = (k: number) => 130 - (k / len) * 100;
+  const stairs = (at: number[]) => {
+    const pts: string[] = [`${x(1)},${y(0)}`];
+    for (let k = 1; k < at.length; k++) {
+      if (at[k] > 1e10) break;
+      pts.push(`${x(at[k])},${y(k - 1)}`, `${x(at[k])},${y(k)}`);
+    }
+    const last = at.filter((n) => n <= 1e10).length - 1;
+    pts.push(`${x(1e10)},${y(last)}`);
+    return pts.join(" ");
+  };
+  return (
+    <Frame
+      title="Getting past a header check"
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="header bytes" value={len} min={1} max={4} onChange={setLen} />
+          <Slider label="inputs tried" value={power} min={1} max={10} onChange={setPower} text={group(budget)} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 190" role="img" aria-label={`After ${group(budget)} inputs: random ${randomGot} of ${len} bytes, guided ${guidedGot} of ${len}`}>
+        <text x={10} y={14} className="fig-small">
+          header bytes right, against inputs tried (marks ten times apart)
+        </text>
+        {Array.from({ length: len + 1 }, (_, k) => (
+          <g key={k}>
+            <line x1={40} y1={y(k)} x2={440} y2={y(k)} className="fig-grid" />
+            <text x={30} y={y(k) + 4} textAnchor="end" className="fig-small">
+              {k}
+            </text>
+          </g>
+        ))}
+        {Array.from({ length: 11 }, (_, p) => (
+          <line key={p} x1={x(10 ** p)} y1={130} x2={x(10 ** p)} y2={135} className="fig-axis" />
+        ))}
+        <text x={x(1)} y={148} className="fig-small">
+          1
+        </text>
+        <text x={x(1e5)} y={148} textAnchor="middle" className="fig-small">
+          1,00,000
+        </text>
+        <text x={x(1e10)} y={148} textAnchor="end" className="fig-small">
+          10,00,00,00,000
+        </text>
+        <polyline points={stairs(randomAt)} className="fig-line" />
+        <polyline points={stairs(guided)} className="fig-accent-line" fill="none" />
+        <line x1={x(budget)} y1={24} x2={x(budget)} y2={130} className="fig-guide" />
+        <text x={10} y={168} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`thick line: keeps new coverage, ${guidedGot} of ${len}`}
+        </text>
+        <text x={10} y={184} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`thin line: random bytes, on average, ${randomGot} of ${len}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -10014,6 +10841,16 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "bisect-commits": BisectCommits,
   "amdahl-speedup": AmdahlSpeedup,
   "ci-pipeline": CiPipeline,
+  "boundary-tests": BoundaryTests,
+  "test-order": TestOrder,
+  "test-doubles": TestDoubles,
+  "property-runs": PropertyRuns,
+  "triangle-check": TriangleCheck,
+  "test-pyramid": TestPyramid,
+  "mutation-score": MutationScore,
+  "sleep-poll": SleepPoll,
+  "month-end": MonthEnd,
+  "fuzz-header": FuzzHeader,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

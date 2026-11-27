@@ -1,0 +1,528 @@
+concept: s6.what-a-test-can-prove
+minutes: 80
+claim: You can say exactly what a passing test shows and what it cannot, count an input space and decide when testing all of it is possible, choose tests by splitting inputs into classes and probing the boundaries between them, work out how many random tests it takes to catch a bug of a given rarity and what a run of passing random tests rules out, and recognise a test that could never fail.
+recalls: [s5.continuous-integration, f4.simulation-and-pseudo-random-numbers]
+uses: [s1.testing-with-pytest, f2.quantifiers-and-their-negation, f2.direct-proof, f4.independence, f1.logarithms, s5.debugging-methodically]
+leads: [s6.unit-tests-and-fixtures, s6.property-based-testing, s6.oracles-and-invariants, s6.coverage-and-mutation-testing, s6.fuzzing]
+bridges:
+  f4.simulation-and-pseudo-random-numbers: The probability cluster ended by simulating chance. A seeded generator turns one number into a long, repeatable stream of draws, and the fraction of hits in many draws estimates a probability, more precisely the more draws there are. Testing software uses both ideas. A random test is a simulation in which a hit is a bug, so the arithmetic of rare events says how many tests a rare bug needs; and the seed is what lets a failure found at random be replayed exactly, as often as debugging needs. This cluster starts by asking what all those passing runs actually establish.
+starter: |
+  # Scratch space. The rule says "1,000 or more"; the code says "> 1000".
+  def discounted(amount):
+      return amount > 1000
+
+
+  print([a for a in range(0, 2001) if discounted(a) != (a >= 1000)])
+parts:
+  recall:
+    - text: |
+        [[s5.continuous-integration]] ended with a warning: a green pipeline is only as meaningful as the tests it runs. A pipeline can run a thousand tests on every change and still let a bug through, if none of the thousand looks in the right place. This cluster is about writing tests that are worth running, and it begins with the most basic question of all: when a test passes, what do we actually know? Three quick pulls first.
+  puzzle:
+    - text: |
+        A function that computes bus fares has a bug that shows on 1 input in 10,000. Nobody knows which inputs those are. The test suite feeds the function random inputs, each one independent of the others, and compares the answers with fares worked out another way.
+
+        **How many random inputs must the suite try to have at least a 95% chance of catching the bug?**
+  intuition:
+    - text: |
+        A sweet shop's billing rule says: 10% off orders of ₹1,000 or more. The code says `amount > 1000`. For every amount except one, the code is right; for exactly ₹1,000 it denies a discount the customer is owed. Picture a quality checker who tests the bill at random amounts between ₹0 and ₹2,000. Almost every test passes, because almost every amount is fine.
+
+        The figure places the tests on a line from ₹0 to ₹2,000. Try 10, 100 and 1,000 random tests, and then add a handful of tests chosen by reading the rule.
+    - figure: boundary-tests
+      props: { random: 100, boundary: false }
+    - text: |
+        A hundred random tests miss the bug nearly every time, and even a thousand catch it only about two times in five. Five tests chosen by reading the rule catch it every time, because the rule itself says where the interesting amount is: at ₹1,000, where the behaviour changes. Random tests are not useless; they find the bugs nobody thought to look for. But each test is a sample of the input space, and where you sample decides what you can find. A passing test tells you about the inputs it tried, and about nothing else.
+  derivation:
+    - text: |
+        **What a test is.** A test runs code on chosen inputs and compares what happens with what should happen. If they differ, something is wrong: the code, or the test, or the specification they were both written from. If they agree, the code worked on those inputs, in that environment, on that day. A specification usually makes a claim about every input, "for all amounts, the discount is correct", and a passing test checks particular cases of it. As [[f2.quantifiers-and-their-negation]] showed, one counterexample refutes a "for all"; no number of confirming examples proves one. A proof, the kind from [[f2.direct-proof]], covers every input at once, and a test covers only the ones it runs. As the computer scientist Edsger Dijkstra put it, testing can show that bugs are present, but never that they are absent.
+
+        **Counting the inputs.** Sometimes the inputs are few enough to try them all, and then a test is a proof. A function of one byte has 256 inputs; of two bytes, 65,536, a fraction of a second's work. A function of one 32-bit integer has about 4.3 billion, minutes of work for a fast function; of two such integers, about $1.8 \times 10^{19}$, longer than anyone will wait. Strings, lists and files have more inputs still. So exhaustive testing is a tool for small domains, and everything else needs a strategy.
+    - question:
+        id: derivation-exhaustive
+        type: numeric
+        system: s2
+        prompt: |
+          A function takes a weekday (7 possibilities), a seat class (3 possibilities) and a number of passengers from 1 to 6. How many inputs must an exhaustive test try?
+        answer: "126"
+        explanation: |
+          Each combination is a separate input, so the counts multiply: $7 \times 3 \times 6 = 126$, few enough to test every one.
+    - text: |
+        **Classes and boundaries.** A specification divides the inputs into classes that it treats the same way: amounts below ₹1,000 get no discount, amounts from ₹1,000 up get 10%. If the code handles one member of a class correctly, it very likely handles the others the same way, so one test per class covers a lot of ground. Bugs cluster where classes meet, because that is where a programmer writes a comparison, and `>` against `>=` or an off-by-one in a range is the commonest slip there is. So for every boundary in the specification, test just below it, at it and just above it, and test the smallest and largest valid inputs too.
+    - question:
+        id: derivation-classes
+        type: choice
+        system: s2
+        prompt: |
+          Delivery is free for orders of ₹500 or more, and orders of ₹5,000 or more need a manager's approval. Orders run from ₹1 to ₹50,000. Which set of test amounts is best?
+        options:
+          - "1, 499, 500, 501, 4,999, 5,000, 5,001 and 50,000"
+          - "100, 1,000, 10,000 and 50,000"
+          - "250, 2,500 and 25,000, one from each class"
+          - "Every amount from 490 to 510"
+        answer: 0
+        explanation: |
+          The specification has boundaries at 500 and 5,000. Testing on both sides of each and at each, plus the two ends of the valid range, probes exactly where comparisons are written. Round numbers and one point per class never touch a boundary, and twenty-one tests around 500 ignore 5,000 entirely.
+    - text: |
+        **Random tests, and how rare a bug they catch.** When the input space is huge and the specification gives few hints, random inputs explore it without anyone's assumptions. Suppose a bug shows on a fraction $\theta$ of inputs and each random test is drawn independently, as in [[f4.independence]]. Each test misses with probability $1 - \theta$, so $n$ tests all miss with probability $(1 - \theta)^n$. To catch the bug with probability at least $c$ you need $(1 - \theta)^n \le 1 - c$, which, taking logarithms as in [[f1.logarithms]], means
+        $$n \ge \frac{\ln(1 - c)}{\ln(1 - \theta)}.$$
+        For small $\theta$, $\ln(1 - \theta) \approx -\theta$, and $\ln 0.05 \approx -3$, so a 95% chance takes about $3/\theta$ tests. Turned around, this is the **rule of three**: if $n$ random tests all pass, failure rates above about $3/n$ are ruled out at 95% confidence. Rarer bugs than that may still be there.
+    - question:
+        id: derivation-rule-of-three
+        type: numeric
+        system: s2
+        prompt: |
+          3,000 independent random tests all pass. By the rule of three, above what failure rate, in per cent, can you be 95% confident the code does not fail?
+        answer: "0.1"
+        tolerance: "0.005"
+        explanation: |
+          $3/3000 = 0.001$, which is 0.1%. A bug on 1 input in 10,000 could easily survive 3,000 random tests.
+    - text: |
+        **Seeds make random tests repeatable.** A random test that fails must fail again when someone tries to debug it, which is why random tests should draw from a generator seeded with a recorded number, as [[f4.simulation-and-pseudo-random-numbers]] showed. Seed once, draw many times, and log the seed: then the failing input can be reproduced exactly, the first step of [[s5.debugging-methodically]].
+
+        **A test must be able to fail.** A test that computes its expected answer with the same code it is testing, or that catches every exception and passes anyway, or that checks only that the function returned something, passes whatever the code does. It proves nothing. The simplest check is to break the code on purpose, flip a `>=` to `>`, and see the test go red. If it stays green, the test is decoration. That idea, made systematic, becomes [[s6.coverage-and-mutation-testing]].
+    - question:
+        id: order-choosing-tests
+        type: order
+        system: s2
+        prompt: |
+          Put these steps of choosing tests for a new function in order.
+        steps:
+          - "Read the specification and list the classes of input it treats differently."
+          - "Write one test for a typical member of each class."
+          - "Add tests just below, at and just above every boundary, and at the ends of the valid range."
+          - "Add seeded random tests to explore inputs nobody listed."
+          - "Break the code on purpose and check that some test fails."
+        explanation: |
+          Classes and boundaries come from the specification, so it is read first; typical cases come before edge cases; random tests explore what reading missed; and the last step checks that the suite can actually detect a fault.
+  formal:
+    - text: |
+        **Test.** Runs code on chosen inputs and compares the outcome with the specification. A failure shows a defect in the code, the test or the specification; a pass shows correct behaviour on those inputs only.
+
+        **Exhaustive test.** Tries every input; possible only when the input space is small, and then equivalent to a proof for that environment.
+
+        **Classes and boundaries.** Inputs the specification treats alike form a class; test a member of each class and the values on both sides of, and at, every boundary.
+
+        **Random tests.** If a bug shows on a fraction $\theta$ of inputs, $n$ independent random tests all miss it with probability $(1 - \theta)^n$; reaching confidence $c$ needs $n \ge \ln(1 - c) / \ln(1 - \theta)$, about $3/\theta$ for 95%.
+
+        **Rule of three.** $n$ passing random tests rule out failure rates above about $3/n$ at 95% confidence.
+  drill:
+    - text: Seconds each. Ask which inputs a test actually touched.
+    - question:
+        id: drill-byte
+        type: numeric
+        system: s1
+        prompt: |
+          A function takes one 8-bit value. How many inputs does an exhaustive test try?
+        answer: "256"
+        explanation: Eight bits give $2^8 = 256$ possible values.
+    - question:
+        id: drill-pass
+        type: choice
+        system: s1
+        prompt: |
+          A test of `fare(km)` with `km = 12` passes. What has it shown?
+        options:
+          - "That fare is right for 12 km in this environment"
+          - "That fare is right for every distance"
+          - "That fare has no bugs near 12 km"
+          - "Nothing, since one test proves nothing"
+        answer: 0
+        explanation: A test speaks for the input it ran, no more and no less.
+    - question:
+        id: drill-three
+        type: numeric
+        system: s1
+        prompt: |
+          300 random tests pass. By the rule of three, failure rates above what percentage are ruled out at 95% confidence?
+        answer: "1"
+        explanation: $3/300 = 0.01$, or 1%.
+    - question:
+        id: predict-boundary
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(sum(1 for x in range(0, 2001) if (x > 1000) != (x >= 1000)))
+        output: "1"
+        explanation: The two comparisons differ only when `x` is exactly 1000.
+    - question:
+        id: predict-miss
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(round((1 - 0.001) ** 1000, 2))
+        output: "0.37"
+        explanation: A bug on one input in a thousand survives a thousand random tests about 37% of the time, close to $1/e$.
+  work:
+    - text: Slower now. Each problem is part of choosing and running tests.
+    - question:
+        id: fix-seed
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `random_search` compares a function with a reference on random years. The program should print `1000`. It prints `None`. Find the fault and fix it.
+        starter: |
+          import random
+
+
+          def is_leap(year):
+              # The function under test. It forgets the rules for years ending in 00.
+              return year % 4 == 0
+
+
+          def spec(year):
+              return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+
+          def random_search(f, reference, n, seed):
+              # Seed the generator with seed, then try n random years from 1 to 3000,
+              # each drawn with random.randint(1, 3000). Return the first year on which
+              # f and reference disagree, or None if all n agree.
+              for _ in range(n):
+                  random.seed(seed)
+                  year = random.randint(1, 3000)
+                  if f(year) != reference(year):
+                      return year
+              return None
+
+
+          print(random_search(is_leap, spec, 500, 7))
+        solution: |
+          import random
+
+
+          def is_leap(year):
+              # The function under test. It forgets the rules for years ending in 00.
+              return year % 4 == 0
+
+
+          def spec(year):
+              return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+
+          def random_search(f, reference, n, seed):
+              # Seed the generator with seed, then try n random years from 1 to 3000,
+              # each drawn with random.randint(1, 3000). Return the first year on which
+              # f and reference disagree, or None if all n agree.
+              random.seed(seed)
+              for _ in range(n):
+                  year = random.randint(1, 3000)
+                  if f(year) != reference(year):
+                      return year
+              return None
+
+
+          print(random_search(is_leap, spec, 500, 7))
+        tests: |
+          def _expected(_f, _g, _n, _seed):
+              random.seed(_seed)
+              for _ in range(_n):
+                  _y = random.randint(1, 3000)
+                  if _f(_y) != _g(_y):
+                      return _y
+              return None
+
+
+          _odd = lambda y: y % 2 == 1
+          _never = lambda y: False
+          for _seed in [1, 7, 42, 2026]:
+              for _f, _g, _n, _name in [(is_leap, spec, 500, "is_leap against spec"), (_odd, _never, 20, "a function that is wrong on odd years"), (spec, spec, 50, "spec against itself")]:
+                  _want = _expected(_f, _g, _n, _seed)
+                  _got = random_search(_f, _g, _n, _seed)
+                  assert _got == _want, "With seed " + str(_seed) + ", searching " + _name + " should find " + repr(_want) + ", not " + repr(_got)
+          _a = random_search(_odd, _never, 20, 5)
+          _b = random_search(_odd, _never, 20, 5)
+          assert _a == _b, "Two searches with the same seed should give the same answer, but gave " + repr(_a) + " and " + repr(_b)
+          assert random_search(is_leap, spec, 0, 3) is None, "Trying no years at all should find nothing"
+          assert output.strip() == "1000", "The program should print 1000"
+        wrong:
+          - |
+            import random
+
+
+            def is_leap(year):
+                # The function under test. It forgets the rules for years ending in 00.
+                return year % 4 == 0
+
+
+            def spec(year):
+                return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+
+            def random_search(f, reference, n, seed):
+                # Seed the generator with seed, then try n random years from 1 to 3000,
+                # each drawn with random.randint(1, 3000). Return the first year on which
+                # f and reference disagree, or None if all n agree.
+                for _ in range(n):
+                    year = random.randint(1, 3000)
+                    if f(year) != reference(year):
+                        return year
+                return None
+
+
+            print(random_search(is_leap, spec, 500, 7))
+          - |
+            import random
+
+
+            def is_leap(year):
+                # The function under test. It forgets the rules for years ending in 00.
+                return year % 4 == 0
+
+
+            def spec(year):
+                return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+
+            def random_search(f, reference, n, seed):
+                # Seed the generator with seed, then try n random years from 1 to 3000,
+                # each drawn with random.randint(1, 3000). Return the first year on which
+                # f and reference disagree, or None if all n agree.
+                random.seed(seed)
+                found = None
+                for _ in range(n):
+                    year = random.randint(1, 3000)
+                    if f(year) != reference(year):
+                        found = year
+                return found
+
+
+            print(random_search(is_leap, spec, 500, 7))
+          - |
+            import random
+
+
+            def is_leap(year):
+                # The function under test. It forgets the rules for years ending in 00.
+                return year % 4 == 0
+
+
+            def spec(year):
+                return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+
+            def random_search(f, reference, n, seed):
+                # Seed the generator with seed, then try n random years from 1 to 3000,
+                # each drawn with random.randint(1, 3000). Return the first year on which
+                # f and reference disagree, or None if all n agree.
+                random.seed(0)
+                for _ in range(n):
+                    year = random.randint(1, 3000)
+                    if f(year) != reference(year):
+                        return year
+                return None
+
+
+            print(random_search(is_leap, spec, 500, 7))
+        explanation: |
+          Seeding inside the loop resets the generator every time, so all 500 "random" years are the same year, tested 500 times. Seed once, before the loop, and the draws differ while staying repeatable. Not seeding at all makes a failure impossible to replay; keeping the last disagreement instead of the first changes the answer to a different, later year; and seeding with a fixed number ignores the seed the caller asked for.
+    - question:
+        id: write-tests-needed
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `tests_needed(rate, confidence)`, the smallest number of independent random tests that catches a bug of the given rarity with at least the given chance. The program should print `[299, 29956, 7]`.
+        starter: |
+          import math
+
+
+          def tests_needed(rate, confidence):
+              # A bug shows on a fraction rate of random inputs, independently. Return
+              # the smallest number of random tests n for which the chance of at least
+              # one failing test, 1 - (1 - rate) ** n, is at least confidence.
+              return 1
+
+
+          print([tests_needed(0.01, 0.95), tests_needed(0.0001, 0.95), tests_needed(0.5, 0.99)])
+        solution: |
+          import math
+
+
+          def tests_needed(rate, confidence):
+              # A bug shows on a fraction rate of random inputs, independently. Return
+              # the smallest number of random tests n for which the chance of at least
+              # one failing test, 1 - (1 - rate) ** n, is at least confidence.
+              return math.ceil(math.log(1 - confidence) / math.log(1 - rate))
+
+
+          print([tests_needed(0.01, 0.95), tests_needed(0.0001, 0.95), tests_needed(0.5, 0.99)])
+        tests: |
+          def _brute(_r, _c):
+              _n = 1
+              while 1 - (1 - _r) ** _n < _c:
+                  _n += 1
+              return _n
+
+
+          for _r, _c in [(0.01, 0.95), (0.001, 0.9), (0.2, 0.5), (0.5, 0.75), (0.3, 0.99), (0.05, 0.999), (0.9, 0.5), (0.0002, 0.95)]:
+              _want = _brute(_r, _c)
+              _got = tests_needed(_r, _c)
+              assert _got == _want, "For a bug on " + str(_r) + " of inputs and confidence " + str(_c) + ", tests_needed should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[299, 29956, 7]", "The program should print [299, 29956, 7]"
+        wrong:
+          - |
+            import math
+
+
+            def tests_needed(rate, confidence):
+                # A bug shows on a fraction rate of random inputs, independently. Return
+                # the smallest number of random tests n for which the chance of at least
+                # one failing test, 1 - (1 - rate) ** n, is at least confidence.
+                return math.ceil(confidence / rate)
+
+
+            print([tests_needed(0.01, 0.95), tests_needed(0.0001, 0.95), tests_needed(0.5, 0.99)])
+          - |
+            import math
+
+
+            def tests_needed(rate, confidence):
+                # A bug shows on a fraction rate of random inputs, independently. Return
+                # the smallest number of random tests n for which the chance of at least
+                # one failing test, 1 - (1 - rate) ** n, is at least confidence.
+                return math.floor(math.log(1 - confidence) / math.log(1 - rate))
+
+
+            print([tests_needed(0.01, 0.95), tests_needed(0.0001, 0.95), tests_needed(0.5, 0.99)])
+          - |
+            import math
+
+
+            def tests_needed(rate, confidence):
+                # A bug shows on a fraction rate of random inputs, independently. Return
+                # the smallest number of random tests n for which the chance of at least
+                # one failing test, 1 - (1 - rate) ** n, is at least confidence.
+                return math.ceil(math.log(confidence) / math.log(1 - rate))
+
+
+            print([tests_needed(0.01, 0.95), tests_needed(0.0001, 0.95), tests_needed(0.5, 0.99)])
+        explanation: |
+          All $n$ tests miss with probability $(1 - \text{rate})^n$, which must be at most $1 - \text{confidence}$, so $n$ is the logarithm of one divided by the logarithm of the other, rounded up. Dividing confidence by rate treats chances as if they added up; rounding down stops one test short; and taking the logarithm of the confidence instead of the chance of missing answers a different question.
+    - question:
+        id: write-boundaries
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `boundary_tests(thresholds, lo, hi)`, which lists the test inputs around every threshold and at both ends of the valid range. The program should print `[0, 499, 500, 501, 4999, 5000, 5001, 100000]`.
+        starter: |
+          def boundary_tests(thresholds, lo, hi):
+              # Valid inputs are the whole numbers from lo to hi. Behaviour changes at
+              # each threshold t, which belongs to the upper side. Return the sorted
+              # test inputs: lo and hi, and t - 1, t and t + 1 for every threshold,
+              # leaving out anything outside lo to hi and listing each input once.
+              return [lo, hi]
+
+
+          # Free delivery from 500 rupees; approval needed from 5,000; orders up to 1,00,000.
+          print(boundary_tests([500, 5000], 0, 100000))
+        solution: |
+          def boundary_tests(thresholds, lo, hi):
+              # Valid inputs are the whole numbers from lo to hi. Behaviour changes at
+              # each threshold t, which belongs to the upper side. Return the sorted
+              # test inputs: lo and hi, and t - 1, t and t + 1 for every threshold,
+              # leaving out anything outside lo to hi and listing each input once.
+              chosen = {lo, hi}
+              for t in thresholds:
+                  for x in [t - 1, t, t + 1]:
+                      if lo <= x <= hi:
+                          chosen.add(x)
+              return sorted(chosen)
+
+
+          # Free delivery from 500 rupees; approval needed from 5,000; orders up to 1,00,000.
+          print(boundary_tests([500, 5000], 0, 100000))
+        tests: |
+          _cases = [
+              (([10], 0, 20), [0, 9, 10, 11, 20]),
+              (([0], 0, 5), [0, 1, 5]),
+              (([5], 0, 5), [0, 4, 5]),
+              (([3, 4], 0, 10), [0, 2, 3, 4, 5, 10]),
+              (([], 1, 9), [1, 9]),
+              (([18, 60], 0, 120), [0, 17, 18, 19, 59, 60, 61, 120]),
+          ]
+          for (_t, _lo, _hi), _want in _cases:
+              _got = boundary_tests(list(_t), _lo, _hi)
+              assert list(_got) == _want, "boundary_tests(" + repr(_t) + ", " + str(_lo) + ", " + str(_hi) + ") should be " + repr(_want) + ", not " + repr(_got)
+          assert output.strip() == "[0, 499, 500, 501, 4999, 5000, 5001, 100000]", "The program should print [0, 499, 500, 501, 4999, 5000, 5001, 100000]"
+        wrong:
+          - |
+            def boundary_tests(thresholds, lo, hi):
+                # Valid inputs are the whole numbers from lo to hi. Behaviour changes at
+                # each threshold t, which belongs to the upper side. Return the sorted
+                # test inputs: lo and hi, and t - 1, t and t + 1 for every threshold,
+                # leaving out anything outside lo to hi and listing each input once.
+                chosen = {lo, hi}
+                for t in thresholds:
+                    for x in [t - 1, t, t + 1]:
+                        chosen.add(x)
+                return sorted(chosen)
+
+
+            # Free delivery from 500 rupees; approval needed from 5,000; orders up to 1,00,000.
+            print(boundary_tests([500, 5000], 0, 100000))
+          - |
+            def boundary_tests(thresholds, lo, hi):
+                # Valid inputs are the whole numbers from lo to hi. Behaviour changes at
+                # each threshold t, which belongs to the upper side. Return the sorted
+                # test inputs: lo and hi, and t - 1, t and t + 1 for every threshold,
+                # leaving out anything outside lo to hi and listing each input once.
+                chosen = [lo, hi]
+                for t in thresholds:
+                    for x in [t - 1, t, t + 1]:
+                        if lo <= x <= hi:
+                            chosen.append(x)
+                return sorted(chosen)
+
+
+            # Free delivery from 500 rupees; approval needed from 5,000; orders up to 1,00,000.
+            print(boundary_tests([500, 5000], 0, 100000))
+          - |
+            def boundary_tests(thresholds, lo, hi):
+                # Valid inputs are the whole numbers from lo to hi. Behaviour changes at
+                # each threshold t, which belongs to the upper side. Return the sorted
+                # test inputs: lo and hi, and t - 1, t and t + 1 for every threshold,
+                # leaving out anything outside lo to hi and listing each input once.
+                chosen = set()
+                for t in thresholds:
+                    for x in [t - 1, t, t + 1]:
+                        if lo <= x <= hi:
+                            chosen.add(x)
+                return sorted(chosen)
+
+
+            # Free delivery from 500 rupees; approval needed from 5,000; orders up to 1,00,000.
+            print(boundary_tests([500, 5000], 0, 100000))
+        explanation: |
+          Collect the ends and the three values around each threshold in a set, keep only those inside the valid range, and sort. Without the range check a threshold at the bottom produces an invalid input; a list instead of a set repeats inputs where thresholds or ends coincide; and leaving out `lo` and `hi` skips the extremes, where many bugs live.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, a bug shows on 1 input in 10,000. How many independent random tests give at least a 95% chance of catching it?
+        answer: "29956"
+        tolerance: "100"
+        explanation: |
+          $n \ge \ln 0.05 / \ln 0.9999 \approx 29{,}955.8$, so 29,956 tests, close to the rule of thumb $3/\theta = 30{,}000$.
+    - question:
+        id: work-no-bugs
+        type: choice
+        system: s2
+        prompt: |
+          All 400 tests of the new fare calculator pass. The product manager, Sneha, asks whether that means it has no bugs. What is the accurate answer?
+        options:
+          - "It works for every case the tests try; whether it works elsewhere depends on how well those cases cover the classes and boundaries of the rules."
+          - "Yes; 400 passing tests prove it correct."
+          - "No; passing tests tell us nothing at all."
+          - "Yes, as long as the tests ran in the continuous integration pipeline."
+        answer: 0
+        explanation: |
+          Tests show behaviour on the inputs they ran, so their value depends on which inputs those were. 400 tests that probe every boundary say a lot; 400 near-identical ones say little. Where they ran does not change what they checked.
+  connections:
+    - text: |
+        About 30,000. The chance that $n$ random tests all miss a bug on 1 input in 10,000 is $0.9999^n$, and pushing that below 5% needs $n \ge \ln 0.05 / \ln 0.9999 \approx 29{,}956$. The rule of thumb, three divided by the rarity, gives 30,000. Rare bugs are expensive to find at random, which is why tests chosen by reading the specification, at its boundaries, matter so much, and why random testing works best when it runs for a long time, as in [[s6.fuzzing]].
+
+        A test is a small experiment, and like any experiment it needs a controlled setting: the same starting state every time, the inputs it means to try, and an exact statement of what should happen. Writing many such experiments cleanly, each independent of the others, with the shared setup factored out, is [[s6.unit-tests-and-fixtures]].

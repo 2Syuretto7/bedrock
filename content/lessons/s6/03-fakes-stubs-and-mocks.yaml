@@ -1,0 +1,982 @@
+concept: s6.fakes-stubs-and-mocks
+minutes: 80
+claim: You can replace a slow, costly or unpredictable collaborator in a unit test with the right stand-in, telling stubs, spies, fakes and mocks apart by what they let a test check; write a stub that plays back a script and a fake that keeps the real thing's rules; keep fakes honest with contract tests run against both; and avoid tests so tied to the calls a function makes that a correct refactor breaks them.
+recalls: [s6.unit-tests-and-fixtures]
+uses: [s4.dependency-injection-and-testable-code, s4.abstraction-and-interfaces, s4.design-patterns-that-earn-their-place, s4.errors-as-part-of-the-design, f4.independence]
+leads: [s6.property-based-testing, s6.integration-and-end-to-end-tests, s6.deterministic-tests-seeds-clocks-and-fakes]
+starter: |
+  # Scratch space. A stub that always answers the same thing.
+  class StubRates:
+      def rate(self, currency):
+          return 83.0
+
+
+  def to_rupees(dollars, rates):
+      return round(dollars * rates.rate("USD"), 2)
+
+
+  print(to_rupees(12.5, StubRates()))
+parts:
+  recall:
+    - text: |
+        [[s6.unit-tests-and-fixtures]] gave every test a fresh starting state, such as a new cart or a new wallet. Some things a function depends on cannot simply be made fresh: a payment gateway, an SMS service, a bank's exchange-rate feed. They are slow, they cost money, they fail on their own, and a test cannot see inside them. This lesson is about what to put in their place. Three quick pulls first.
+  puzzle:
+    - text: |
+        A bus company's test suite for its booking service talks to the payment provider's sandbox, a test version of the real service reached over the internet. The suite makes 300 calls to it per run. Each call takes 0.8 seconds, and, independently of the others, each one fails 1 time in 200 because of the network, whatever the code does.
+
+        **What is the chance, in per cent, that a run of the suite sees no network failure at all?**
+  intuition:
+    - text: |
+        A driving school does not teach beginners on the highway. It starts in an empty ground, with cones standing in for other cars. Cones are cheap, they never move unexpectedly, and the instructor can place them exactly where a lesson needs them. Nobody pretends the cones are real traffic, but for learning to reverse into a parking space they are better than real traffic. Only at the end does the learner drive on real roads, where everything is less predictable.
+
+        Tests use stand-ins in the same way. The figure shows four ways to stand in for an SMS gateway while testing `notify_delays`, a function that texts every passenger of a delayed bus. Compare what each can tell you.
+    - figure: test-doubles
+      props: { double: fake }
+    - text: |
+        No stand-in wins on every column. The real gateway is truthful but slow and unreliable. The stub is fast and steady but blind: it cannot tell whether anyone was messaged. The fake outbox checks the result that matters, who received what, and does not care how the code got there. The strict mock checks the exact calls made, so it fails when the code is restructured even though passengers still get their messages. Choosing a stand-in means choosing what the test is really about.
+  derivation:
+    - text: |
+        **Test doubles.** Anything that takes the place of a real collaborator in a test is a **test double**, after the stunt doubles of films. They come in a few kinds, distinguished by what they do and what the test checks through them.
+
+        - A **stub** returns canned answers: an exchange-rate service that always says ₹83 per dollar, a clock that always says 9 a.m. It controls the inputs the code receives.
+        - A **spy** is a stub that also records how it was called, so the test can ask afterwards which numbers were texted and how often.
+        - A **fake** is a working, lightweight implementation: an in-memory dictionary standing in for a database, an outbox list standing in for an SMS service. It follows the real thing's rules, so code can use it naturally.
+        - A **mock** is programmed in advance with the calls it expects, and fails the test if the calls differ.
+
+        All of them depend on the code receiving its collaborators from outside, as [[s4.dependency-injection-and-testable-code]] arranged, and on those collaborators having a clear interface, as in [[s4.abstraction-and-interfaces]], so that the double can implement the same methods.
+    - question:
+        id: derivation-kind
+        type: choice
+        system: s2
+        prompt: |
+          A test of a retry function needs a payment gateway that times out on the first two calls and succeeds on the third, and it must check that the function called exactly three times. What should it use?
+        options:
+          - "A stub that plays back the script timeout, timeout, success and records each call, so the test can count them"
+          - "The real gateway, run until it happens to time out twice"
+          - "A fake database"
+          - "No double; call the retry function with no gateway"
+        answer: 0
+        explanation: |
+          The stub's script controls exactly what the code sees, and recording the calls turns it into a spy, so the test can check the count. The real gateway times out when it likes, not when the test needs it to.
+    - text: |
+        **Speed and repeatability.** A unit test with doubles runs in microseconds and gives the same verdict every time, because nothing outside the process is involved. That is what makes thousands of tests on every change possible. It also lets a test produce situations that are rare in real life but must be handled: a timeout, a declined card, a duplicate message ID, a server that returns nonsense. Errors designed into an interface, as in [[s4.errors-as-part-of-the-design]], are exactly the cases a stub can trigger on demand.
+    - question:
+        id: derivation-speed
+        type: numeric
+        system: s2
+        prompt: |
+          The puzzle's suite makes 300 calls at 0.8 seconds each. With a fake that answers each call in 1 millisecond, how many seconds do those 300 calls take?
+        answer: "0.3"
+        tolerance: "0.001"
+        explanation: |
+          $300 \times 0.001 = 0.3$ seconds, against $300 \times 0.8 = 240$ seconds with the sandbox, and no network failures at all.
+    - text: |
+        **State or interactions.** A test can check the **state** that results, such as the fake outbox's contents or the fake database's rows, or the **interactions**, the exact calls the code made. Checking state ties the test to what the code achieves; checking interactions ties it to how. Interaction checks are right when the call itself is the behaviour, such as "charge the card exactly once". Used everywhere else, they produce tests that fail whenever the code is reorganised, even when it still does the right thing, and that pass when the calls are right but the result is wrong. Such tests make refactoring expensive and teach people to ignore red builds.
+
+        **Mock what you own.** A third-party library's interface is large and changes on its own schedule. Rather than doubling it directly, wrap it in a small adapter of your own, the pattern from [[s4.design-patterns-that-earn-their-place]], and double the adapter. Then the double has a small, stable interface, and only the adapter's own tests touch the real library.
+
+        **Do not double what is already fast and certain.** A double replaces something slow, costly or uncontrollable; it is not needed for everything a function touches. A pure function that converts paise to rupees, a dataclass holding a booking, the standard library's sorting: these run in microseconds and give the same answer every time, so a test should use them as they are. Every double is a small claim about how the real thing behaves, and every such claim is one more thing that can quietly become false. The fewer the doubles, the more of the real program each test exercises.
+    - question:
+        id: derivation-state
+        type: choice
+        system: s2
+        prompt: |
+          `notify_delays` used to call `sms.send` once per passenger. It is changed to call `sms.send_bulk` once with every number, and every passenger still gets the message. Which test keeps passing, as it should?
+        options:
+          - "One that gives the function a fake outbox and asserts every passenger's number is in it"
+          - "One whose mock expects send to be called once per passenger, in order"
+          - "One that counts calls to send"
+          - "One that asserts send_bulk was never called"
+        answer: 0
+        explanation: |
+          The behaviour that matters, every passenger messaged, is unchanged, and only a check of the resulting state sees it that way. The other three check how the messages were sent, which is exactly what the change altered.
+    - text: |
+        **Keeping fakes honest.** A fake is only useful if it behaves like the real thing. If the real booking database refuses a double booking and the fake quietly overwrites, every test using the fake can pass while the code is wrong. The remedy is a **contract test**: one set of checks written against the interface, run against the fake in every unit-test run and against the real implementation in a slower job, perhaps nightly. When the real service changes behaviour, its contract run fails, and the fake is updated to match. Contract tests are where unit tests meet [[s6.integration-and-end-to-end-tests]].
+    - question:
+        id: order-contract
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of keeping a fake database honest in order.
+        steps:
+          - "Write contract tests against the database interface: book, look up, refuse double bookings, cancel."
+          - "Run the contract tests against the real database and confirm they pass."
+          - "Run the same contract tests against the fake and fix the fake until they pass."
+          - "Use the fake in the fast unit tests on every change."
+          - "Rerun the contracts against the real database nightly, and update the fake when they reveal a difference."
+        explanation: |
+          The contract must first be shown true of the real thing, or it describes nothing real; only then is the fake held to it; and the nightly run catches the real database changing after the fake was written.
+  formal:
+    - text: |
+        **Test double.** An object standing in for a real collaborator in a test, implementing the same interface.
+
+        **Stub.** Returns canned or scripted answers, controlling what the code under test receives. A **spy** is a stub that also records its calls.
+
+        **Fake.** A working, simplified implementation, such as an in-memory store, that follows the real collaborator's rules.
+
+        **Mock.** Pre-programmed with the calls it expects; the test fails if the actual calls differ.
+
+        **State and interaction checks.** Prefer checking the resulting state; check interactions only when the call itself is the required behaviour.
+
+        **Contract test.** One set of checks run against both the real implementation and its fake, so the fake cannot drift from the truth.
+  drill:
+    - text: Seconds each. Ask what the double lets the test see.
+    - question:
+        id: drill-stub
+        type: choice
+        system: s1
+        prompt: |
+          A test replaces the clock with an object whose `now()` always returns 9:00 on a Monday. What kind of double is it?
+        options:
+          - "A stub"
+          - "A fake"
+          - "A mock"
+          - "A contract"
+        answer: 0
+        explanation: It returns a canned answer and records nothing.
+    - question:
+        id: drill-fake
+        type: choice
+        system: s1
+        prompt: |
+          Which is a fake?
+        options:
+          - "A dictionary-backed store with real book, look-up and cancel methods"
+          - "An object that returns 'sent' for every call"
+          - "An object that fails the test unless send is called exactly twice"
+          - "The provider's sandbox reached over the internet"
+        answer: 0
+        explanation: A fake really works, with simplified internals; the others are a stub, a mock and a real service.
+    - question:
+        id: drill-sandbox
+        type: numeric
+        system: s1
+        prompt: |
+          A test makes 50 calls to a real service that takes 0.4 seconds per call. How many seconds does it spend waiting?
+        answer: "20"
+        explanation: $50 \times 0.4 = 20$ seconds, for a single test.
+    - question:
+        id: predict-spy
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          class Spy:
+              def __init__(self):
+                  self.calls = []
+
+              def send(self, number, text):
+                  self.calls.append(number)
+                  return "ok"
+
+
+          spy = Spy()
+          for n in ["98450", "99000", "98450"]:
+              spy.send(n, "Bus 42 is late")
+          print(len(spy.calls), len(set(spy.calls)))
+        output: "3 2"
+        explanation: The spy recorded three calls, to two different numbers, one of them twice.
+    - question:
+        id: predict-stub
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          class StubRates:
+              def rate(self, currency):
+                  return 83.0
+
+
+          def to_rupees(dollars, rates):
+              return round(dollars * rates.rate("USD"), 2)
+
+
+          print(to_rupees(12.5, StubRates()))
+        output: "1037.5"
+        explanation: The stub always answers 83.0, so the result is $12.5 \times 83 = 1037.5$, the same on every run.
+  work:
+    - text: Slower now. Each problem builds or checks a double.
+    - question:
+        id: fix-fake
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `FakeSeatStore` stands in for the booking database, which refuses to book a seat twice. The program should print `refused; holder is Ravi`. It prints `booked twice: Meena`. Find the fault and fix it.
+        starter: |
+          class SeatTaken(Exception):
+              pass
+
+
+          class FakeSeatStore:
+              # An in-memory stand-in for the booking database. Like the real one, it
+              # must refuse to book a seat that is already booked by raising SeatTaken,
+              # leaving the first booking in place.
+              def __init__(self):
+                  self.booked = {}
+
+              def holder(self, seat):
+                  return self.booked.get(seat)
+
+              def book(self, seat, passenger):
+                  self.booked[seat] = passenger
+
+
+          store = FakeSeatStore()
+          store.book("12A", "Ravi")
+          try:
+              store.book("12A", "Meena")
+              print("booked twice:", store.holder("12A"))
+          except SeatTaken:
+              print("refused; holder is", store.holder("12A"))
+        solution: |
+          class SeatTaken(Exception):
+              pass
+
+
+          class FakeSeatStore:
+              # An in-memory stand-in for the booking database. Like the real one, it
+              # must refuse to book a seat that is already booked by raising SeatTaken,
+              # leaving the first booking in place.
+              def __init__(self):
+                  self.booked = {}
+
+              def holder(self, seat):
+                  return self.booked.get(seat)
+
+              def book(self, seat, passenger):
+                  if seat in self.booked:
+                      raise SeatTaken(seat)
+                  self.booked[seat] = passenger
+
+
+          store = FakeSeatStore()
+          store.book("12A", "Ravi")
+          try:
+              store.book("12A", "Meena")
+              print("booked twice:", store.holder("12A"))
+          except SeatTaken:
+              print("refused; holder is", store.holder("12A"))
+        tests: |
+          _s = FakeSeatStore()
+          assert _s.holder("1A") is None, "A new store should have no holder for 1A"
+          _s.book("1A", "Asha")
+          assert _s.holder("1A") == "Asha", "After booking 1A for Asha, the holder should be Asha, not " + repr(_s.holder("1A"))
+          _raised = None
+          try:
+              _s.book("1A", "Bilal")
+          except SeatTaken:
+              _raised = "SeatTaken"
+          except Exception as _e:
+              _raised = type(_e).__name__
+          assert _raised == "SeatTaken", "Booking 1A a second time should raise SeatTaken, not " + repr(_raised)
+          assert _s.holder("1A") == "Asha", "A refused booking must leave Asha holding 1A, not " + repr(_s.holder("1A"))
+          _s.book("1B", "Asha")
+          assert _s.holder("1B") == "Asha", "One passenger may book two different seats"
+          _t = FakeSeatStore()
+          _t.book("2C", "Dev")
+          assert _s.holder("2C") is None, "Two stores must not share bookings"
+          assert output.strip() == "refused; holder is Ravi", "The program should print refused; holder is Ravi"
+        wrong:
+          - |
+            class SeatTaken(Exception):
+                pass
+
+
+            class FakeSeatStore:
+                # An in-memory stand-in for the booking database. Like the real one, it
+                # must refuse to book a seat that is already booked by raising SeatTaken,
+                # leaving the first booking in place.
+                def __init__(self):
+                    self.booked = {}
+
+                def holder(self, seat):
+                    return self.booked.get(seat)
+
+                def book(self, seat, passenger):
+                    old = self.booked.get(seat)
+                    self.booked[seat] = passenger
+                    if old is not None:
+                        raise SeatTaken(seat)
+
+
+            store = FakeSeatStore()
+            store.book("12A", "Ravi")
+            try:
+                store.book("12A", "Meena")
+                print("booked twice:", store.holder("12A"))
+            except SeatTaken:
+                print("refused; holder is", store.holder("12A"))
+          - |
+            class SeatTaken(Exception):
+                pass
+
+
+            class FakeSeatStore:
+                # An in-memory stand-in for the booking database. Like the real one, it
+                # must refuse to book a seat that is already booked by raising SeatTaken,
+                # leaving the first booking in place.
+                def __init__(self):
+                    self.booked = {}
+
+                def holder(self, seat):
+                    return self.booked.get(seat)
+
+                def book(self, seat, passenger):
+                    if passenger in self.booked.values():
+                        raise SeatTaken(seat)
+                    self.booked[seat] = passenger
+
+
+            store = FakeSeatStore()
+            store.book("12A", "Ravi")
+            try:
+                store.book("12A", "Meena")
+                print("booked twice:", store.holder("12A"))
+            except SeatTaken:
+                print("refused; holder is", store.holder("12A"))
+          - |
+            class SeatTaken(Exception):
+                pass
+
+
+            class FakeSeatStore:
+                # An in-memory stand-in for the booking database. Like the real one, it
+                # must refuse to book a seat that is already booked by raising SeatTaken,
+                # leaving the first booking in place.
+                def __init__(self):
+                    self.booked = {}
+
+                def holder(self, seat):
+                    return self.booked.get(seat)
+
+                def book(self, seat, passenger):
+                    if seat in self.booked:
+                        raise ValueError(seat)
+                    self.booked[seat] = passenger
+
+
+            store = FakeSeatStore()
+            store.book("12A", "Ravi")
+            try:
+                store.book("12A", "Meena")
+                print("booked twice:", store.holder("12A"))
+            except SeatTaken:
+                print("refused; holder is", store.holder("12A"))
+        explanation: |
+          A fake must follow the real store's rules, so `book` checks whether the seat is taken and raises `SeatTaken` before changing anything. Raising after overwriting refuses the booking but hands the seat to the second passenger anyway; checking whether the passenger already has a seat tests the wrong thing; and raising `ValueError` breaks callers that catch `SeatTaken`, as they would with the real database.
+    - question:
+        id: write-stub
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `ScriptedGateway`, a stub that plays back a script of outcomes and records every call, as the comment describes. The program should print `receipt-91 [450, 450, 450]`.
+        starter: |
+          class Timeout(Exception):
+              pass
+
+
+          class ScriptedGateway:
+              # A stub that plays back a script. Each call to charge(amount) records
+              # the amount in self.calls, then takes the next outcome from the script:
+              # "timeout" raises Timeout, anything else is returned. A call after the
+              # script has run out raises AssertionError("unexpected call").
+              def __init__(self, script):
+                  self.calls = []
+
+              def charge(self, amount):
+                  return "receipt"
+
+
+          def pay_with_retry(gateway, amount, attempts):
+              for _ in range(attempts - 1):
+                  try:
+                      return gateway.charge(amount)
+                  except Timeout:
+                      pass
+              return gateway.charge(amount)
+
+
+          g = ScriptedGateway(["timeout", "timeout", "receipt-91"])
+          print(pay_with_retry(g, 450, 3), g.calls)
+        solution: |
+          class Timeout(Exception):
+              pass
+
+
+          class ScriptedGateway:
+              # A stub that plays back a script. Each call to charge(amount) records
+              # the amount in self.calls, then takes the next outcome from the script:
+              # "timeout" raises Timeout, anything else is returned. A call after the
+              # script has run out raises AssertionError("unexpected call").
+              def __init__(self, script):
+                  self.script = list(script)
+                  self.calls = []
+
+              def charge(self, amount):
+                  self.calls.append(amount)
+                  if not self.script:
+                      raise AssertionError("unexpected call")
+                  outcome = self.script.pop(0)
+                  if outcome == "timeout":
+                      raise Timeout()
+                  return outcome
+
+
+          def pay_with_retry(gateway, amount, attempts):
+              for _ in range(attempts - 1):
+                  try:
+                      return gateway.charge(amount)
+                  except Timeout:
+                      pass
+              return gateway.charge(amount)
+
+
+          g = ScriptedGateway(["timeout", "timeout", "receipt-91"])
+          print(pay_with_retry(g, 450, 3), g.calls)
+        tests: |
+          _script = ["ok-1", "timeout", "ok-2"]
+          _g = ScriptedGateway(_script)
+          assert _g.charge(10) == "ok-1", "The first call should return 'ok-1'"
+          _raised = False
+          try:
+              _g.charge(20)
+          except Timeout:
+              _raised = True
+          assert _raised, "The second call should raise Timeout"
+          assert _g.charge(30) == "ok-2", "The third call should return 'ok-2'"
+          assert _g.calls == [10, 20, 30], "calls should record every amount, timeouts included: [10, 20, 30], not " + repr(_g.calls)
+          assert _script == ["ok-1", "timeout", "ok-2"], "The stub must not change the script list it was given, but it became " + repr(_script)
+          _kind = None
+          try:
+              _g.charge(40)
+          except AssertionError as _e:
+              _kind = "AssertionError: " + str(_e)
+          except Exception as _e:
+              _kind = type(_e).__name__
+          assert _kind == "AssertionError: unexpected call", "A call after the script runs out should raise AssertionError('unexpected call'), not " + repr(_kind)
+          assert _g.calls == [10, 20, 30, 40], "Even the unexpected call should be recorded"
+          _h = ScriptedGateway([])
+          assert _h.calls == [], "A new stub should have recorded no calls"
+          assert output.strip() == "receipt-91 [450, 450, 450]", "The program should print receipt-91 [450, 450, 450]"
+        wrong:
+          - |
+            class Timeout(Exception):
+                pass
+
+
+            class ScriptedGateway:
+                # A stub that plays back a script. Each call to charge(amount) records
+                # the amount in self.calls, then takes the next outcome from the script:
+                # "timeout" raises Timeout, anything else is returned. A call after the
+                # script has run out raises AssertionError("unexpected call").
+                def __init__(self, script):
+                    self.script = script
+                    self.calls = []
+
+                def charge(self, amount):
+                    self.calls.append(amount)
+                    if not self.script:
+                        raise AssertionError("unexpected call")
+                    outcome = self.script.pop(0)
+                    if outcome == "timeout":
+                        raise Timeout()
+                    return outcome
+
+
+            def pay_with_retry(gateway, amount, attempts):
+                for _ in range(attempts - 1):
+                    try:
+                        return gateway.charge(amount)
+                    except Timeout:
+                        pass
+                return gateway.charge(amount)
+
+
+            g = ScriptedGateway(["timeout", "timeout", "receipt-91"])
+            print(pay_with_retry(g, 450, 3), g.calls)
+          - |
+            class Timeout(Exception):
+                pass
+
+
+            class ScriptedGateway:
+                # A stub that plays back a script. Each call to charge(amount) records
+                # the amount in self.calls, then takes the next outcome from the script:
+                # "timeout" raises Timeout, anything else is returned. A call after the
+                # script has run out raises AssertionError("unexpected call").
+                def __init__(self, script):
+                    self.script = list(script)
+                    self.calls = []
+
+                def charge(self, amount):
+                    outcome = self.script.pop(0)
+                    if outcome == "timeout":
+                        raise Timeout()
+                    self.calls.append(amount)
+                    return outcome
+
+
+            def pay_with_retry(gateway, amount, attempts):
+                for _ in range(attempts - 1):
+                    try:
+                        return gateway.charge(amount)
+                    except Timeout:
+                        pass
+                return gateway.charge(amount)
+
+
+            g = ScriptedGateway(["timeout", "timeout", "receipt-91"])
+            print(pay_with_retry(g, 450, 3), g.calls)
+          - |
+            class Timeout(Exception):
+                pass
+
+
+            class ScriptedGateway:
+                # A stub that plays back a script. Each call to charge(amount) records
+                # the amount in self.calls, then takes the next outcome from the script:
+                # "timeout" raises Timeout, anything else is returned. A call after the
+                # script has run out raises AssertionError("unexpected call").
+                def __init__(self, script):
+                    self.script = list(script)
+                    self.calls = []
+
+                def charge(self, amount):
+                    self.calls.append(amount)
+                    if not self.script:
+                        return None
+                    outcome = self.script.pop(0)
+                    if outcome == "timeout":
+                        raise Timeout()
+                    return outcome
+
+
+            def pay_with_retry(gateway, amount, attempts):
+                for _ in range(attempts - 1):
+                    try:
+                        return gateway.charge(amount)
+                    except Timeout:
+                        pass
+                return gateway.charge(amount)
+
+
+            g = ScriptedGateway(["timeout", "timeout", "receipt-91"])
+            print(pay_with_retry(g, 450, 3), g.calls)
+        explanation: |
+          Copy the script, record the amount first, then pop the next outcome, raising `Timeout` for "timeout" and an `AssertionError` when the script is exhausted. Popping from the caller's own list empties the script the test may want to reuse; recording only successful calls hides the timed-out attempts the test needs to count; and returning `None` after the script ends lets an unexpected extra charge pass unnoticed.
+    - question:
+        id: write-contract
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `contract_failures(make_store)`, which runs the four contract checks on fresh stores and names those that fail. The program should print `[] ['double booking is refused']`.
+        starter: |
+          class SeatTaken(Exception):
+              pass
+
+
+          CHECKS = ["empty at start", "booking records the holder",
+                    "double booking is refused", "cancel frees the seat"]
+
+
+          def contract_failures(make_store):
+              # Run the four checks below, each on a fresh store from make_store(), and
+              # return the names of those that fail, in the order of CHECKS. A check
+              # fails if anything in it goes wrong, including an unexpected exception.
+              #   empty at start: holder("1A") is None.
+              #   booking records the holder: after book("1A", "Asha"), holder("1A")
+              #     is "Asha".
+              #   double booking is refused: after book("1A", "Asha"), book("1A",
+              #     "Bilal") raises SeatTaken and holder("1A") is still "Asha".
+              #   cancel frees the seat: after book("1A", "Asha") and cancel("1A"),
+              #     holder("1A") is None and book("1A", "Bilal") succeeds.
+              return []
+
+
+          class DictStore:
+              def __init__(self):
+                  self.seats = {}
+
+              def holder(self, seat):
+                  return self.seats.get(seat)
+
+              def book(self, seat, passenger):
+                  if seat in self.seats:
+                      raise SeatTaken(seat)
+                  self.seats[seat] = passenger
+
+              def cancel(self, seat):
+                  self.seats.pop(seat)
+
+
+          class OverwritingStore(DictStore):
+              def book(self, seat, passenger):
+                  self.seats[seat] = passenger
+
+
+          print(contract_failures(DictStore), contract_failures(OverwritingStore))
+        solution: |
+          class SeatTaken(Exception):
+              pass
+
+
+          CHECKS = ["empty at start", "booking records the holder",
+                    "double booking is refused", "cancel frees the seat"]
+
+
+          def contract_failures(make_store):
+              # Run the four checks below, each on a fresh store from make_store(), and
+              # return the names of those that fail, in the order of CHECKS. A check
+              # fails if anything in it goes wrong, including an unexpected exception.
+              #   empty at start: holder("1A") is None.
+              #   booking records the holder: after book("1A", "Asha"), holder("1A")
+              #     is "Asha".
+              #   double booking is refused: after book("1A", "Asha"), book("1A",
+              #     "Bilal") raises SeatTaken and holder("1A") is still "Asha".
+              #   cancel frees the seat: after book("1A", "Asha") and cancel("1A"),
+              #     holder("1A") is None and book("1A", "Bilal") succeeds.
+              failed = []
+              for name in CHECKS:
+                  store = make_store()
+                  try:
+                      if name == "empty at start":
+                          ok = store.holder("1A") is None
+                      elif name == "booking records the holder":
+                          store.book("1A", "Asha")
+                          ok = store.holder("1A") == "Asha"
+                      elif name == "double booking is refused":
+                          store.book("1A", "Asha")
+                          try:
+                              store.book("1A", "Bilal")
+                              ok = False
+                          except SeatTaken:
+                              ok = store.holder("1A") == "Asha"
+                      else:
+                          store.book("1A", "Asha")
+                          store.cancel("1A")
+                          ok = store.holder("1A") is None
+                          store.book("1A", "Bilal")
+                  except Exception:
+                      ok = False
+                  if not ok:
+                      failed.append(name)
+              return failed
+
+
+          class DictStore:
+              def __init__(self):
+                  self.seats = {}
+
+              def holder(self, seat):
+                  return self.seats.get(seat)
+
+              def book(self, seat, passenger):
+                  if seat in self.seats:
+                      raise SeatTaken(seat)
+                  self.seats[seat] = passenger
+
+              def cancel(self, seat):
+                  self.seats.pop(seat)
+
+
+          class OverwritingStore(DictStore):
+              def book(self, seat, passenger):
+                  self.seats[seat] = passenger
+
+
+          print(contract_failures(DictStore), contract_failures(OverwritingStore))
+        tests: |
+          class _Base:
+              def __init__(self):
+                  self.s = {}
+
+              def holder(self, seat):
+                  return self.s.get(seat)
+
+              def book(self, seat, who):
+                  if seat in self.s:
+                      raise SeatTaken(seat)
+                  self.s[seat] = who
+
+              def cancel(self, seat):
+                  self.s.pop(seat)
+
+
+          class _Swallow(_Base):
+              def book(self, seat, who):
+                  old = self.s.get(seat)
+                  self.s[seat] = who
+                  if old is not None:
+                      raise SeatTaken(seat)
+
+
+          class _NoCancel(_Base):
+              def cancel(self, seat):
+                  raise NotImplementedError("cancel")
+
+
+          class _Sticky(_Base):
+              def cancel(self, seat):
+                  pass
+
+
+          class _Wrong(_Base):
+              def book(self, seat, who):
+                  if seat in self.s:
+                      raise KeyError(seat)
+                  self.s[seat] = who
+
+
+          _cases = [
+              (_Base, []),
+              (_Swallow, ["double booking is refused"]),
+              (_NoCancel, ["cancel frees the seat"]),
+              (_Sticky, ["cancel frees the seat"]),
+              (_Wrong, ["double booking is refused"]),
+          ]
+          for _cls, _want in _cases:
+              _got = contract_failures(_cls)
+              assert list(_got) == _want, "For a store " + {_Base: "that keeps the contract", _Swallow: "that overwrites before refusing", _NoCancel: "whose cancel raises an error", _Sticky: "whose cancel does nothing", _Wrong: "that raises KeyError instead of SeatTaken"}[_cls] + ", the failures should be " + repr(_want) + ", not " + repr(_got)
+          assert output.strip() == "[] ['double booking is refused']", "The program should print [] ['double booking is refused']"
+        wrong:
+          - |
+            class SeatTaken(Exception):
+                pass
+
+
+            CHECKS = ["empty at start", "booking records the holder",
+                      "double booking is refused", "cancel frees the seat"]
+
+
+            def contract_failures(make_store):
+                # Run the four checks below, each on a fresh store from make_store(), and
+                # return the names of those that fail, in the order of CHECKS. A check
+                # fails if anything in it goes wrong, including an unexpected exception.
+                #   empty at start: holder("1A") is None.
+                #   booking records the holder: after book("1A", "Asha"), holder("1A")
+                #     is "Asha".
+                #   double booking is refused: after book("1A", "Asha"), book("1A",
+                #     "Bilal") raises SeatTaken and holder("1A") is still "Asha".
+                #   cancel frees the seat: after book("1A", "Asha") and cancel("1A"),
+                #     holder("1A") is None and book("1A", "Bilal") succeeds.
+                failed = []
+                store = make_store()
+                for name in CHECKS:
+                    try:
+                        if name == "empty at start":
+                            ok = store.holder("1A") is None
+                        elif name == "booking records the holder":
+                            store.book("1A", "Asha")
+                            ok = store.holder("1A") == "Asha"
+                        elif name == "double booking is refused":
+                            store.book("1A", "Asha")
+                            try:
+                                store.book("1A", "Bilal")
+                                ok = False
+                            except SeatTaken:
+                                ok = store.holder("1A") == "Asha"
+                        else:
+                            store.book("1A", "Asha")
+                            store.cancel("1A")
+                            ok = store.holder("1A") is None
+                            store.book("1A", "Bilal")
+                    except Exception:
+                        ok = False
+                    if not ok:
+                        failed.append(name)
+                return failed
+
+
+            class DictStore:
+                def __init__(self):
+                    self.seats = {}
+
+                def holder(self, seat):
+                    return self.seats.get(seat)
+
+                def book(self, seat, passenger):
+                    if seat in self.seats:
+                        raise SeatTaken(seat)
+                    self.seats[seat] = passenger
+
+                def cancel(self, seat):
+                    self.seats.pop(seat)
+
+
+            class OverwritingStore(DictStore):
+                def book(self, seat, passenger):
+                    self.seats[seat] = passenger
+
+
+            print(contract_failures(DictStore), contract_failures(OverwritingStore))
+          - |
+            class SeatTaken(Exception):
+                pass
+
+
+            CHECKS = ["empty at start", "booking records the holder",
+                      "double booking is refused", "cancel frees the seat"]
+
+
+            def contract_failures(make_store):
+                # Run the four checks below, each on a fresh store from make_store(), and
+                # return the names of those that fail, in the order of CHECKS. A check
+                # fails if anything in it goes wrong, including an unexpected exception.
+                #   empty at start: holder("1A") is None.
+                #   booking records the holder: after book("1A", "Asha"), holder("1A")
+                #     is "Asha".
+                #   double booking is refused: after book("1A", "Asha"), book("1A",
+                #     "Bilal") raises SeatTaken and holder("1A") is still "Asha".
+                #   cancel frees the seat: after book("1A", "Asha") and cancel("1A"),
+                #     holder("1A") is None and book("1A", "Bilal") succeeds.
+                failed = []
+                for name in CHECKS:
+                    store = make_store()
+                    try:
+                        if name == "empty at start":
+                            ok = store.holder("1A") is None
+                        elif name == "booking records the holder":
+                            store.book("1A", "Asha")
+                            ok = store.holder("1A") == "Asha"
+                        elif name == "double booking is refused":
+                            store.book("1A", "Asha")
+                            try:
+                                store.book("1A", "Bilal")
+                                ok = False
+                            except SeatTaken:
+                                ok = True
+                        else:
+                            store.book("1A", "Asha")
+                            store.cancel("1A")
+                            ok = store.holder("1A") is None
+                            store.book("1A", "Bilal")
+                    except Exception:
+                        ok = False
+                    if not ok:
+                        failed.append(name)
+                return failed
+
+
+            class DictStore:
+                def __init__(self):
+                    self.seats = {}
+
+                def holder(self, seat):
+                    return self.seats.get(seat)
+
+                def book(self, seat, passenger):
+                    if seat in self.seats:
+                        raise SeatTaken(seat)
+                    self.seats[seat] = passenger
+
+                def cancel(self, seat):
+                    self.seats.pop(seat)
+
+
+            class OverwritingStore(DictStore):
+                def book(self, seat, passenger):
+                    self.seats[seat] = passenger
+
+
+            print(contract_failures(DictStore), contract_failures(OverwritingStore))
+          - |
+            class SeatTaken(Exception):
+                pass
+
+
+            CHECKS = ["empty at start", "booking records the holder",
+                      "double booking is refused", "cancel frees the seat"]
+
+
+            def contract_failures(make_store):
+                # Run the four checks below, each on a fresh store from make_store(), and
+                # return the names of those that fail, in the order of CHECKS. A check
+                # fails if anything in it goes wrong, including an unexpected exception.
+                #   empty at start: holder("1A") is None.
+                #   booking records the holder: after book("1A", "Asha"), holder("1A")
+                #     is "Asha".
+                #   double booking is refused: after book("1A", "Asha"), book("1A",
+                #     "Bilal") raises SeatTaken and holder("1A") is still "Asha".
+                #   cancel frees the seat: after book("1A", "Asha") and cancel("1A"),
+                #     holder("1A") is None and book("1A", "Bilal") succeeds.
+                failed = []
+                for name in CHECKS:
+                    store = make_store()
+                    if name == "empty at start":
+                        ok = store.holder("1A") is None
+                    elif name == "booking records the holder":
+                        store.book("1A", "Asha")
+                        ok = store.holder("1A") == "Asha"
+                    elif name == "double booking is refused":
+                        store.book("1A", "Asha")
+                        try:
+                            store.book("1A", "Bilal")
+                            ok = False
+                        except SeatTaken:
+                            ok = store.holder("1A") == "Asha"
+                    else:
+                        store.book("1A", "Asha")
+                        store.cancel("1A")
+                        ok = store.holder("1A") is None
+                        store.book("1A", "Bilal")
+                    if not ok:
+                        failed.append(name)
+                return failed
+
+
+            class DictStore:
+                def __init__(self):
+                    self.seats = {}
+
+                def holder(self, seat):
+                    return self.seats.get(seat)
+
+                def book(self, seat, passenger):
+                    if seat in self.seats:
+                        raise SeatTaken(seat)
+                    self.seats[seat] = passenger
+
+                def cancel(self, seat):
+                    self.seats.pop(seat)
+
+
+            class OverwritingStore(DictStore):
+                def book(self, seat, passenger):
+                    self.seats[seat] = passenger
+
+
+            print(contract_failures(DictStore), contract_failures(OverwritingStore))
+        explanation: |
+          Each check gets its own store and its own `try`, so that one failure or unexpected exception marks only that check as failed. Sharing one store makes later checks trip over earlier bookings, so a correct store fails; accepting any `SeatTaken` without checking the holder passes a store that overwrites before refusing; and without the outer `try`, a store whose `cancel` raises crashes the whole contract run instead of failing one check.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, the suite makes 300 independent calls, each failing 1 time in 200. What is the chance, in per cent, that a run sees no network failure at all?
+        answer: "22"
+        tolerance: "0.5"
+        explanation: |
+          Each call succeeds with probability $0.995$, so all 300 do with probability $0.995^{300} \approx 0.222$, about 22%. Nearly four runs in five fail for reasons that have nothing to do with the code.
+    - question:
+        id: work-mock-breaks
+        type: choice
+        system: s2
+        prompt: |
+          Rohit tidies `place_order` so that it saves the order before charging the card instead of after, with an outcome that is identical in every case. Forty tests fail, all of them because a mock expected the calls in the old order. What should the team take from this?
+        options:
+          - "The tests check how the code works instead of what it achieves; rewrite most of them to check the resulting state, keeping interaction checks only where the order of calls is itself a requirement."
+          - "Rohit's change must be wrong, since forty tests fail."
+          - "Update the forty mocks to expect the new order and move on."
+          - "Delete the forty tests, since they were never useful."
+        answer: 0
+        explanation: |
+          A correct change that breaks forty tests is a sign of tests tied to implementation. Updating the mocks fixes today and repeats the problem at the next refactor; deleting them loses whatever they did check. Checking state keeps the protection without the brittleness.
+  connections:
+    - text: |
+        About 22%. Each call survives with probability 0.995, and all 300 together with probability $0.995^{300} \approx 0.22$. Nearly four runs in five would fail through no fault of the code, after four minutes of waiting each time. That is why unit tests use doubles, and why the real service is exercised in fewer, deliberate tests whose failures are investigated rather than shrugged off.
+
+        Doubles make each test fast and controlled, but each test still checks the handful of cases somebody thought of. The next step is to let the computer invent the cases, hundreds of them, and check a rule that must hold for all of them: [[s6.property-based-testing]].

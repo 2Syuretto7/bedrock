@@ -1,0 +1,624 @@
+concept: s6.coverage-and-mutation-testing
+minutes: 80
+claim: You can measure which lines and branches a test suite runs and say what that number does and does not mean, use mutation testing to ask the sharper question of whether the suite would notice a fault, generate mutants and compute a mutation score, recognise equivalent mutants, judge what mutation testing costs, and choose a small set of tests that still kills every mutant the full suite kills.
+recalls: [s6.integration-and-end-to-end-tests]
+uses: [s6.what-a-test-can-prove, s6.unit-tests-and-fixtures, s3.greedy-algorithms, s0.booleans-and-conditionals, s5.continuous-integration]
+leads: [s6.flaky-tests-and-their-causes, s6.fuzzing, r2.security-testing]
+starter: |
+  # Scratch space. A test that runs every line and checks almost nothing.
+  def discount(amount):
+      if amount >= 1000:
+          return amount * 0.9
+      return amount
+
+
+  print(discount(1500) > 0, discount(500) > 0)
+parts:
+  recall:
+    - text: |
+        [[s6.integration-and-end-to-end-tests]] balanced a suite across unit, integration and end-to-end tests, and ended with two questions about the result. Does the suite actually exercise the code? And would it notice if the code were wrong? The two sound alike and are not, and the gap between them is the subject of this lesson. Three quick pulls first.
+  puzzle:
+    - text: |
+        A function gives 10% off orders of ₹1,000 or more:
+
+        ```python
+        def discount(amount):
+            if amount >= 1000:
+                return amount * 0.9
+            return amount
+        ```
+
+        Its test checks that `discount(1500) > 0` and `discount(500) > 0`. Both lines that return run, so every line of the function is covered.
+
+        Five broken versions are made, each with one change: `>=` becomes `>`; `0.9` becomes `0.8`; `1000` becomes `100`; the last line returns `amount + 1`; the discount line returns `-amount * 0.9`.
+
+        **How many of the five broken versions does the test notice?**
+  intuition:
+    - text: |
+        A school inspector checks that every classroom was visited during the term. The register shows a teacher walked into every room: full coverage. But walking in is not teaching. A sharper inspector does something else: secretly removes a page from each textbook and waits to see whether anyone complains. If nobody notices the missing chapter on fractions, the fractions were never really being taught, however many times the teacher entered the room.
+
+        Tests are inspected in the same two ways. **Coverage** records which lines the tests ran. **Mutation testing** plants small faults, called mutants, and checks whether some test fails. The figure lists six mutants of the discount function. Choose which tests are in the suite.
+    - figure: mutation-score
+      props: { tests: [t1500] }
+    - text: |
+        One test at ₹1,500 runs two of the three lines and kills three mutants. Adding the "types only" test brings coverage to 100% and kills nothing more, because it checks nothing a mutant could change. Adding tests at ₹1,000 and ₹500 kills every mutant, and the coverage number does not move at all while it happens. Coverage tells you what was run; mutation testing tells you what was checked.
+  derivation:
+    - text: |
+        **Coverage.** A coverage tool records which parts of the code run while the tests run. **Line coverage** is the fraction of lines executed at least once. **Branch coverage** is the fraction of decision outcomes taken: every `if` has a true branch and a false branch, and both should be exercised, which matters because an `if` without an `else` can have every line covered while its false branch was never tried. Coverage is cheap to measure, and continuous integration in [[s5.continuous-integration]] often reports it on every pull request.
+
+        **What coverage means.** Uncovered code is certainly untested: nothing can check a line that never ran. That makes low coverage a useful warning and a map of where tests are missing. High coverage, however, proves very little. A test that calls every function and asserts nothing reaches 100%. Coverage is necessary for good testing, never sufficient, and a team that sets a coverage target will soon get tests written to hit it rather than to check anything.
+
+        **Using coverage well.** The most useful way to read a coverage report is line by line, not as one number. Which branches of the fare rules never ran? Which error handlers have never been triggered? Those are questions with answers a person can act on, by writing a test for that branch or that error. Many teams also look at the coverage of each pull request's changed lines, which keeps new code tested without demanding that years of old code be covered first. And code that no test can reach, even in principle, is often code that nothing else reaches either, and can be deleted.
+    - question:
+        id: derivation-branches
+        type: numeric
+        system: s2
+        prompt: |
+          A function contains three `if` statements, each with a true and a false outcome. The tests take the true outcome of all three and the false outcome of one. What is the branch coverage, in per cent?
+        answer: "67"
+        tolerance: "1"
+        explanation: |
+          There are $3 \times 2 = 6$ branches and the tests take $3 + 1 = 4$ of them: $4/6 \approx 67\%$.
+    - text: |
+        **Mutation testing.** A mutation tool makes many copies of the code, each with one small, plausible change, the kind of slip a programmer makes: `>=` to `>`, `+` to `-`, a constant changed by one, a condition negated, a line deleted, a return value replaced. Each copy is a **mutant**. The tests run against each mutant. If some test fails, the mutant is **killed**: the suite noticed the fault. If every test passes, the mutant **survives**, and a survivor points at a specific weakness, such as no test at the boundary or an assertion too loose to tell 0.8 from 0.9. The **mutation score** is the percentage of mutants killed. It is the experiment that [[s6.what-a-test-can-prove]] recommended doing by hand, break the code on purpose and see whether a test goes red, done systematically.
+    - question:
+        id: derivation-equivalent
+        type: choice
+        system: s2
+        prompt: |
+          Which mutant of `total = price * 2` can no test ever kill?
+        options:
+          - "total = price + price"
+          - "total = price * 3"
+          - "total = price / 2"
+          - "total = price - 2"
+        answer: 0
+        explanation: |
+          Doubling and adding a number to itself give the same result for every number, so the mutant behaves exactly like the original. Such equivalent mutants survive every suite and should be left out of the score.
+    - text: |
+        **Equivalent mutants.** Some mutants change the code without changing what it does, such as `price * 2` against `price + price`, or a changed constant in code that can never run. They cannot be killed, so they are excluded from the score once a person has confirmed them, and part of the cost of mutation testing is that confirmation.
+
+        **The cost.** Every mutant runs the test suite, or at least the tests that reach the mutated line. A module with 200 mutants and a 30-second suite needs 100 minutes. Tools reduce this by running only the tests that cover each mutated line, stopping at the first failure, and mutating only the lines a pull request changed. Mutation testing is therefore used selectively: on the code where a missed bug is expensive, such as fares, payments and permissions, and to judge a suite rather than on every run.
+    - question:
+        id: derivation-cost
+        type: numeric
+        system: s2
+        prompt: |
+          A module has 200 mutants and its test suite takes 30 seconds. Running the whole suite against every mutant, how many minutes does mutation testing take?
+        answer: "100"
+        explanation: |
+          $200 \times 30 = 6000$ seconds, which is 100 minutes, against half a minute for the suite alone.
+    - text: |
+        **A smaller suite that kills as much.** Once you know which mutants each test kills, you can ask which tests are actually earning their keep. Choosing the fewest tests that together kill every killable mutant is a set-cover problem, hard to solve exactly, but the greedy method of [[s3.greedy-algorithms]], repeatedly take the test that kills the most mutants not yet killed, does well in practice. It is useful for picking a fast subset to run first, and for spotting tests that add nothing, though a test that kills no mutant may still document behaviour a reader needs.
+    - question:
+        id: order-mutation
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of using mutation testing on a fare module in order.
+        steps:
+          - "Generate mutants, each with one small change to the fare code."
+          - "Run the tests that reach each mutated line against that mutant."
+          - "List the surviving mutants and set aside any that are equivalent."
+          - "For each remaining survivor, write a test that the original passes and the mutant fails."
+          - "Rerun mutation testing and confirm the new tests kill those mutants."
+        explanation: |
+          Mutants must exist before tests can run against them; survivors are the output; equivalent ones are removed before anyone writes tests for the impossible; and the rerun confirms the new tests do the job.
+  formal:
+    - text: |
+        **Line coverage.** Lines executed by the tests divided by all executable lines. **Branch coverage.** Decision outcomes taken divided by all outcomes.
+
+        **Mutant.** A copy of the code with one small, deliberate change. It is **killed** if some test fails against it and **survives** otherwise.
+
+        **Mutation score.** Killed mutants divided by all mutants that are not equivalent, as a percentage.
+
+        **Equivalent mutant.** A mutant whose behaviour is identical to the original's for every input; no test can kill it.
+
+        **Cost.** Roughly the number of mutants times the time of the tests run against each.
+  drill:
+    - text: Seconds each. Ask whether the test would notice a change.
+    - question:
+        id: drill-line
+        type: choice
+        system: s1
+        prompt: |
+          What does line coverage measure?
+        options:
+          - "Which lines ran at least once during the tests"
+          - "Which lines are correct"
+          - "Which lines have a comment"
+          - "Which lines a test asserts about"
+        answer: 0
+        explanation: It records execution only, whatever the tests checked.
+    - question:
+        id: drill-percent
+        type: numeric
+        system: s1
+        prompt: |
+          Tests execute 45 of a module's 60 lines. What is the line coverage, in per cent?
+        answer: "75"
+        explanation: $45 / 60 = 0.75$.
+    - question:
+        id: drill-score
+        type: numeric
+        system: s1
+        prompt: |
+          Of 40 mutants, 4 are equivalent and the suite kills 30. What is the mutation score, in per cent, to the nearest whole number?
+        answer: "83"
+        tolerance: "1"
+        explanation: Equivalent mutants are left out, so the score is $30 / 36 \approx 83\%$.
+    - question:
+        id: predict-mutate
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          src = "a >= b"
+          print(src.replace(">=", ">"), src.split(">="))
+        output: "a > b ['a ', ' b']"
+        explanation: Replacing gives the mutant; splitting on the operator gives the pieces around it, which is how a tool can change one occurrence at a time.
+    - question:
+        id: predict-kills
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          kills = {"t1": {1, 2}, "t2": {2, 3}}
+          print(len(kills["t1"] | kills["t2"]), kills["t2"] - kills["t1"])
+        output: "3 {3}"
+        explanation: Together the two tests kill mutants 1, 2 and 3; the only mutant t2 adds beyond t1 is mutant 3.
+  work:
+    - text: Slower now. Each problem is part of a mutation tool.
+    - question:
+        id: fix-mutants
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `mutants` should make one mutant for each occurrence of each operator. The program should print 3, then the mutant that changes only the second `>=`. It prints 2, then a mutant that changes `*`. Find the fault and fix it.
+        starter: |
+          def mutants(source, swaps):
+              # swaps maps an operator to its replacement, such as ">=" to ">". Return
+              # every mutant: a copy of source with exactly one occurrence of one
+              # operator replaced. List them operator by operator, in the order of
+              # swaps, and within an operator from left to right.
+              out = []
+              for op, rep in swaps.items():
+                  if op in source:
+                      out.append(source.replace(op, rep))
+              return out
+
+
+          source = "if a >= 10 and b >= 20: total = a * 2"
+          found = mutants(source, {">=": ">", "*": "/"})
+          print(len(found))
+          print(found[1])
+        solution: |
+          def mutants(source, swaps):
+              # swaps maps an operator to its replacement, such as ">=" to ">". Return
+              # every mutant: a copy of source with exactly one occurrence of one
+              # operator replaced. List them operator by operator, in the order of
+              # swaps, and within an operator from left to right.
+              out = []
+              for op, rep in swaps.items():
+                  parts = source.split(op)
+                  for i in range(1, len(parts)):
+                      out.append(op.join(parts[:i]) + rep + op.join(parts[i:]))
+              return out
+
+
+          source = "if a >= 10 and b >= 20: total = a * 2"
+          found = mutants(source, {">=": ">", "*": "/"})
+          print(len(found))
+          print(found[1])
+        tests: |
+          _cases = [
+              ("x + y + z", {"+": "-"}, ["x - y + z", "x + y - z"]),
+              ("a < b", {"<": "<=", "*": "/"}, ["a <= b"]),
+              ("n", {"+": "-"}, []),
+              ("p * q < r * s", {"*": "/", "<": ">"}, ["p / q < r * s", "p * q < r / s", "p * q > r * s"]),
+              ("1 == 1 == 1", {"==": "!="}, ["1 != 1 == 1", "1 == 1 != 1"]),
+          ]
+          for _src, _sw, _want in _cases:
+              _got = mutants(_src, dict(_sw))
+              assert list(_got) == _want, "mutants(" + repr(_src) + ", " + repr(_sw) + ") should be " + repr(_want) + ", not " + repr(_got)
+          assert output.strip() == "3\nif a >= 10 and b > 20: total = a * 2", "The program should print 3, then the mutant that changes only the second >="
+        wrong:
+          - |
+            def mutants(source, swaps):
+                # swaps maps an operator to its replacement, such as ">=" to ">". Return
+                # every mutant: a copy of source with exactly one occurrence of one
+                # operator replaced. List them operator by operator, in the order of
+                # swaps, and within an operator from left to right.
+                out = []
+                for op, rep in swaps.items():
+                    if op in source:
+                        out.append(source.replace(op, rep, 1))
+                return out
+
+
+            source = "if a >= 10 and b >= 20: total = a * 2"
+            found = mutants(source, {">=": ">", "*": "/"})
+            print(len(found))
+            print(found[1])
+          - |
+            def mutants(source, swaps):
+                # swaps maps an operator to its replacement, such as ">=" to ">". Return
+                # every mutant: a copy of source with exactly one occurrence of one
+                # operator replaced. List them operator by operator, in the order of
+                # swaps, and within an operator from left to right.
+                out = []
+                for op, rep in swaps.items():
+                    parts = source.split(op)
+                    for i in range(1, len(parts)):
+                        out.append(source.replace(op, rep))
+                return out
+
+
+            source = "if a >= 10 and b >= 20: total = a * 2"
+            found = mutants(source, {">=": ">", "*": "/"})
+            print(len(found))
+            print(found[1])
+          - |
+            def mutants(source, swaps):
+                # swaps maps an operator to its replacement, such as ">=" to ">". Return
+                # every mutant: a copy of source with exactly one occurrence of one
+                # operator replaced. List them operator by operator, in the order of
+                # swaps, and within an operator from left to right.
+                out = []
+                for op, rep in swaps.items():
+                    parts = source.split(op)
+                    for i in range(len(parts) - 1, 0, -1):
+                        out.append(op.join(parts[:i]) + rep + op.join(parts[i:]))
+                return out
+
+
+            source = "if a >= 10 and b >= 20: total = a * 2"
+            found = mutants(source, {">=": ">", "*": "/"})
+            print(len(found))
+            print(found[1])
+        explanation: |
+          `replace` changes every occurrence at once, giving one mutant with two changes instead of two mutants with one each. Splitting on the operator and rejoining with the replacement at one gap at a time gives exactly one change per mutant. Replacing only the first occurrence misses the second `>=`; replacing all occurrences once per occurrence repeats the same double mutant; and walking the gaps from the right lists the mutants in the wrong order.
+    - question:
+        id: write-report
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `mutation_report(mutants, tests)`, which runs every mutant against the tests and reports which were killed, which survived, and the score. The program should print `(['0 for a', '0.8 for 0.9', '100 for 1000', '<= for >='], ['> for >='], 80)`.
+        starter: |
+          def mutation_report(mutants, tests):
+              # mutants maps a name to a mutated version of a function. tests is a
+              # list of (x, expected) pairs. A mutant is killed if, for some test,
+              # calling it on x raises an exception or returns something other than
+              # expected. Return (sorted killed names, sorted surviving names, score),
+              # where score is the percentage killed, rounded to a whole number.
+              return [], sorted(mutants), 0
+
+
+          mutants = {
+              "> for >=": lambda a: a * 0.9 if a > 1000 else a,
+              "0.8 for 0.9": lambda a: a * 0.8 if a >= 1000 else a,
+              "100 for 1000": lambda a: a * 0.9 if a >= 100 else a,
+              "0 for a": lambda a: a * 0.9 if a >= 1000 else 0,
+              "<= for >=": lambda a: a * 0.9 if a <= 1000 else a,
+          }
+          tests = [(1500, 1350), (500, 500)]
+          print(mutation_report(mutants, tests))
+        solution: |
+          def mutation_report(mutants, tests):
+              # mutants maps a name to a mutated version of a function. tests is a
+              # list of (x, expected) pairs. A mutant is killed if, for some test,
+              # calling it on x raises an exception or returns something other than
+              # expected. Return (sorted killed names, sorted surviving names, score),
+              # where score is the percentage killed, rounded to a whole number.
+              killed = []
+              for name, f in mutants.items():
+                  for x, expected in tests:
+                      try:
+                          dead = f(x) != expected
+                      except Exception:
+                          dead = True
+                      if dead:
+                          killed.append(name)
+                          break
+              survived = [name for name in mutants if name not in killed]
+              score = round(100 * len(killed) / len(mutants)) if mutants else 0
+              return sorted(killed), sorted(survived), score
+
+
+          mutants = {
+              "> for >=": lambda a: a * 0.9 if a > 1000 else a,
+              "0.8 for 0.9": lambda a: a * 0.8 if a >= 1000 else a,
+              "100 for 1000": lambda a: a * 0.9 if a >= 100 else a,
+              "0 for a": lambda a: a * 0.9 if a >= 1000 else 0,
+              "<= for >=": lambda a: a * 0.9 if a <= 1000 else a,
+          }
+          tests = [(1500, 1350), (500, 500)]
+          print(mutation_report(mutants, tests))
+        tests: |
+          def _boom(x):
+              return 1 // (x - x)
+
+
+          _ms = {"same": lambda x: x * 2, "plus": lambda x: x * 2 + 1, "zero": lambda x: 0, "crash": _boom, "odd": lambda x: x * 2 if x < 5 else x * 3}
+          _got = mutation_report(_ms, [(1, 2), (3, 6), (7, 14)])
+          _want = (["crash", "odd", "plus", "zero"], ["same"], 80)
+          assert tuple(_got) == _want, "mutation_report should return " + repr(_want) + ", not " + repr(_got)
+          _got = mutation_report(_ms, [(1, 2)])
+          _want = (["crash", "plus", "zero"], ["odd", "same"], 60)
+          assert tuple(_got) == _want, "With only the test (1, 2), mutation_report should return " + repr(_want) + ", not " + repr(_got)
+          _got = mutation_report({"a": lambda x: x, "b": lambda x: x + 0}, [(4, 4)])
+          assert tuple(_got) == ([], ["a", "b"], 0), "Mutants that behave like the original survive, giving ([], ['a', 'b'], 0), not " + repr(_got)
+          _got = mutation_report({"p": lambda x: 1, "q": lambda x: 2, "r": lambda x: 3}, [(0, 1)])
+          assert tuple(_got) == (["q", "r"], ["p"], 67), "Two of three killed is a score of 67, not " + repr(_got)
+          assert output.strip() == "(['0 for a', '0.8 for 0.9', '100 for 1000', '<= for >='], ['> for >='], 80)", "The program should print (['0 for a', '0.8 for 0.9', '100 for 1000', '<= for >='], ['> for >='], 80)"
+        wrong:
+          - |
+            def mutation_report(mutants, tests):
+                # mutants maps a name to a mutated version of a function. tests is a
+                # list of (x, expected) pairs. A mutant is killed if, for some test,
+                # calling it on x raises an exception or returns something other than
+                # expected. Return (sorted killed names, sorted surviving names, score),
+                # where score is the percentage killed, rounded to a whole number.
+                killed = []
+                for name, f in mutants.items():
+                    for x, expected in tests:
+                        try:
+                            dead = f(x) != expected
+                        except Exception:
+                            dead = True
+                        if dead:
+                            killed.append(name)
+                survived = [name for name in mutants if name not in killed]
+                score = round(100 * len(killed) / len(mutants)) if mutants else 0
+                return sorted(killed), sorted(survived), score
+
+
+            mutants = {
+                "> for >=": lambda a: a * 0.9 if a > 1000 else a,
+                "0.8 for 0.9": lambda a: a * 0.8 if a >= 1000 else a,
+                "100 for 1000": lambda a: a * 0.9 if a >= 100 else a,
+                "0 for a": lambda a: a * 0.9 if a >= 1000 else 0,
+                "<= for >=": lambda a: a * 0.9 if a <= 1000 else a,
+            }
+            tests = [(1500, 1350), (500, 500)]
+            print(mutation_report(mutants, tests))
+          - |
+            def mutation_report(mutants, tests):
+                # mutants maps a name to a mutated version of a function. tests is a
+                # list of (x, expected) pairs. A mutant is killed if, for some test,
+                # calling it on x raises an exception or returns something other than
+                # expected. Return (sorted killed names, sorted surviving names, score),
+                # where score is the percentage killed, rounded to a whole number.
+                killed = []
+                for name, f in mutants.items():
+                    if all(f(x) != expected for x, expected in tests):
+                        killed.append(name)
+                survived = [name for name in mutants if name not in killed]
+                score = round(100 * len(killed) / len(mutants)) if mutants else 0
+                return sorted(killed), sorted(survived), score
+
+
+            mutants = {
+                "> for >=": lambda a: a * 0.9 if a > 1000 else a,
+                "0.8 for 0.9": lambda a: a * 0.8 if a >= 1000 else a,
+                "100 for 1000": lambda a: a * 0.9 if a >= 100 else a,
+                "0 for a": lambda a: a * 0.9 if a >= 1000 else 0,
+                "<= for >=": lambda a: a * 0.9 if a <= 1000 else a,
+            }
+            tests = [(1500, 1350), (500, 500)]
+            print(mutation_report(mutants, tests))
+          - |
+            def mutation_report(mutants, tests):
+                # mutants maps a name to a mutated version of a function. tests is a
+                # list of (x, expected) pairs. A mutant is killed if, for some test,
+                # calling it on x raises an exception or returns something other than
+                # expected. Return (sorted killed names, sorted surviving names, score),
+                # where score is the percentage killed, rounded to a whole number.
+                killed = []
+                for name, f in mutants.items():
+                    for x, expected in tests:
+                        try:
+                            dead = f(x) != expected
+                        except Exception:
+                            dead = False
+                        if dead:
+                            killed.append(name)
+                            break
+                survived = [name for name in mutants if name not in killed]
+                score = round(100 * len(killed) / len(mutants)) if mutants else 0
+                return sorted(killed), sorted(survived), score
+
+
+            mutants = {
+                "> for >=": lambda a: a * 0.9 if a > 1000 else a,
+                "0.8 for 0.9": lambda a: a * 0.8 if a >= 1000 else a,
+                "100 for 1000": lambda a: a * 0.9 if a >= 100 else a,
+                "0 for a": lambda a: a * 0.9 if a >= 1000 else 0,
+                "<= for >=": lambda a: a * 0.9 if a <= 1000 else a,
+            }
+            tests = [(1500, 1350), (500, 500)]
+            print(mutation_report(mutants, tests))
+        explanation: |
+          A mutant dies at the first test that fails against it, whether by a wrong answer or an exception, so stop testing it there. Without the `break`, a mutant killed by two tests is counted twice; requiring every test to fail lets most mutants survive and crashes on one that raises; and treating an exception as a pass lets a mutant that crashes survive, though a crash is exactly what a test should notice. The survivor here, `>` for `>=`, needs a test at exactly ₹1,000.
+    - question:
+        id: write-smallest
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `smallest_suite(kills)`, which picks tests greedily until every mutant that any test kills has been killed. The program should print `['500 gives 500', '1000 gives 900']`.
+        starter: |
+          def smallest_suite(kills):
+              # kills maps each test's name to the set of mutants it kills. Choose
+              # tests greedily: repeatedly take the test that kills the most mutants
+              # not yet killed, breaking ties by name, until no test kills anything
+              # new. Return the chosen names in the order chosen.
+              return sorted(kills)
+
+
+          kills = {
+              "types only": set(),
+              "1500 gives 1350": {"0.8 for 0.9", "<= for >="},
+              "1000 gives 900": {"> for >=", "0.8 for 0.9"},
+              "500 gives 500": {"100 for 1000", "0 for a", "<= for >="},
+              "999 gives 999": {"100 for 1000"},
+          }
+          print(smallest_suite(kills))
+        solution: |
+          def smallest_suite(kills):
+              # kills maps each test's name to the set of mutants it kills. Choose
+              # tests greedily: repeatedly take the test that kills the most mutants
+              # not yet killed, breaking ties by name, until no test kills anything
+              # new. Return the chosen names in the order chosen.
+              killed = set()
+              chosen = []
+              while True:
+                  best = None
+                  gain = 0
+                  for name in sorted(kills):
+                      new = len(kills[name] - killed)
+                      if new > gain:
+                          best = name
+                          gain = new
+                  if best is None:
+                      return chosen
+                  chosen.append(best)
+                  killed = killed | kills[best]
+
+
+          kills = {
+              "types only": set(),
+              "1500 gives 1350": {"0.8 for 0.9", "<= for >="},
+              "1000 gives 900": {"> for >=", "0.8 for 0.9"},
+              "500 gives 500": {"100 for 1000", "0 for a", "<= for >="},
+              "999 gives 999": {"100 for 1000"},
+          }
+          print(smallest_suite(kills))
+        tests: |
+          _cases = [
+              ({"a": {1, 2}, "b": {3}, "c": {2, 3}}, ["a", "b"]),
+              ({"x": {1, 2, 3, 4}, "y": {1, 2, 3, 5}, "z": {4, 5}}, ["x", "y"]),
+              ({"t1": {1, 2, 3}, "t2": {1, 2, 3, 4}, "t3": {5}}, ["t2", "t3"]),
+              ({"p": set(), "q": set()}, []),
+              ({"m": {1}, "n": {1}}, ["m"]),
+              ({"big": {1, 2, 3, 4}, "l": {1, 2, 5}, "r": {3, 4, 6}}, ["big", "l", "r"]),
+              ({"b": {1, 2}, "a": {1, 2}, "c": {3}}, ["a", "c"]),
+          ]
+          for _k, _want in _cases:
+              _got = smallest_suite({n: set(s) for n, s in _k.items()})
+              assert list(_got) == _want, "For kills " + repr(_k) + ", smallest_suite should choose " + repr(_want) + ", not " + repr(_got)
+          assert output.strip() == "['500 gives 500', '1000 gives 900']", "The program should print ['500 gives 500', '1000 gives 900']"
+        wrong:
+          - |
+            def smallest_suite(kills):
+                # kills maps each test's name to the set of mutants it kills. Choose
+                # tests greedily: repeatedly take the test that kills the most mutants
+                # not yet killed, breaking ties by name, until no test kills anything
+                # new. Return the chosen names in the order chosen.
+                chosen = []
+                for name in sorted(kills, key=lambda n: -len(kills[n])):
+                    if kills[name]:
+                        chosen.append(name)
+                return chosen
+
+
+            kills = {
+                "types only": set(),
+                "1500 gives 1350": {"0.8 for 0.9", "<= for >="},
+                "1000 gives 900": {"> for >=", "0.8 for 0.9"},
+                "500 gives 500": {"100 for 1000", "0 for a", "<= for >="},
+                "999 gives 999": {"100 for 1000"},
+            }
+            print(smallest_suite(kills))
+          - |
+            def smallest_suite(kills):
+                # kills maps each test's name to the set of mutants it kills. Choose
+                # tests greedily: repeatedly take the test that kills the most mutants
+                # not yet killed, breaking ties by name, until no test kills anything
+                # new. Return the chosen names in the order chosen.
+                killed = set()
+                chosen = []
+                while True:
+                    best = None
+                    gain = 0
+                    for name in sorted(kills):
+                        new = len(kills[name] - killed)
+                        if new >= gain and new > 0:
+                            best = name
+                            gain = new
+                    if best is None:
+                        return chosen
+                    chosen.append(best)
+                    killed = killed | kills[best]
+
+
+            kills = {
+                "types only": set(),
+                "1500 gives 1350": {"0.8 for 0.9", "<= for >="},
+                "1000 gives 900": {"> for >=", "0.8 for 0.9"},
+                "500 gives 500": {"100 for 1000", "0 for a", "<= for >="},
+                "999 gives 999": {"100 for 1000"},
+            }
+            print(smallest_suite(kills))
+          - |
+            def smallest_suite(kills):
+                # kills maps each test's name to the set of mutants it kills. Choose
+                # tests greedily: repeatedly take the test that kills the most mutants
+                # not yet killed, breaking ties by name, until no test kills anything
+                # new. Return the chosen names in the order chosen.
+                killed = set()
+                chosen = []
+                while True:
+                    best = None
+                    gain = 0
+                    for name in sorted(kills):
+                        new = len(kills[name])
+                        if name not in chosen and new > gain and kills[name] - killed:
+                            best = name
+                            gain = new
+                    if best is None:
+                        return chosen
+                    chosen.append(best)
+                    killed = killed | kills[best]
+
+
+            kills = {
+                "types only": set(),
+                "1500 gives 1350": {"0.8 for 0.9", "<= for >="},
+                "1000 gives 900": {"> for >=", "0.8 for 0.9"},
+                "500 gives 500": {"100 for 1000", "0 for a", "<= for >="},
+                "999 gives 999": {"100 for 1000"},
+            }
+            print(smallest_suite(kills))
+        explanation: |
+          Each round, count only the mutants a test would newly kill, take the best, breaking ties by the first name, and stop when no test adds anything. Sorting once by total kills keeps tests that add nothing new; letting a later name win ties breaks the tie rule; and counting total kills instead of new ones prefers a test whose mutants are already dead.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, the test checks only that `discount(1500) > 0` and `discount(500) > 0`. How many of the five broken versions does it notice?
+        answer: "1"
+        explanation: |
+          Only the version returning `-amount * 0.9` makes a result negative, so only it fails the test. With `>`, 0.8, 100 or `amount + 1`, both results stay positive and the test passes, despite 100% line coverage.
+    - question:
+        id: work-coverage-target
+        type: choice
+        system: s2
+        prompt: |
+          A manager proposes making 90% line coverage a requirement for every pull request. What is the best response?
+        options:
+          - "Coverage can show what is untested, but tests written to hit a number may check little; use it as a guide, and use mutation testing on critical code to see whether the tests check anything."
+          - "Agree; 90% coverage means 90% of bugs are caught."
+          - "Ask for 100% instead, since more is always better."
+          - "Refuse to measure coverage at all, since it proves nothing."
+        answer: 0
+        explanation: |
+          Coverage is a useful warning about untested code but a poor target, because executing a line is not checking it. Mutation testing measures checking directly, at a cost that is worth paying where bugs are expensive.
+  connections:
+    - text: |
+        One. Every broken version except the one that returns a negative number still returns positive amounts for ₹1,500 and ₹500, so a test that checks only "greater than zero" cannot tell them from the original. The suite runs every line, and notices almost nothing. Tests at ₹999, ₹1,000 and ₹1,500 with exact expected values would kill all five.
+
+        A suite that kills its mutants has one more way to fail its team: by failing when nothing is wrong. A test that passes and fails at random on the same code teaches everyone to ignore red runs, and a suite nobody believes protects nothing. Where such tests come from is [[s6.flaky-tests-and-their-causes]].

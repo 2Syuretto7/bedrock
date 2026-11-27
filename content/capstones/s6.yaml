@@ -1,0 +1,458 @@
+cluster: S6
+title: Making a cinema-booking service's tests worth trusting
+minutes: 100
+claim: You will have taken a cinema chain's booking service from a green suite that missed a double-booked seat to tests worth trusting, estimating what random examples could catch, giving every test fresh state, replacing a payment sandbox with an honest fake, checking the hall's invariants after every step of a seeded random run, rebalancing a slow end-to-end suite, reading a mutation score, making a time-dependent test deterministic, and turning a pile of fuzzing crashes into one fix.
+brief: |
+  This cluster was about tests: what they can and cannot prove, unit tests and fixtures, test doubles, properties and oracles, integration and end-to-end tests, coverage and mutation testing, flaky tests, deterministic tests, and fuzzing.
+
+  **The project.** A cinema chain in Chennai sells tickets through its own booking service. Its test suite has 600 tests, takes 45 minutes, and goes red about once a day for reasons nobody can explain, so people have learnt to rerun it until it is green. Last Saturday, two families were sold the same two seats for the evening show of a new film, and the suite was green that morning. You have been asked to find out why the tests missed it and to make them worth trusting.
+
+  Each stage below is one step of that work. Every stage draws on one or more lessons of this cluster, and the skill being tested is choosing the change that makes a test tell the truth more often, faster, and every time.
+starter: |
+  # Scratch space for the cinema-booking service.
+  import random
+
+  rng = random.Random(1)
+  free = set(range(8))
+  wanted = [rng.randint(0, 7) for _ in range(3)]
+  print("wanted:", wanted, "all free:", all(s in free for s in wanted))
+stages:
+  - title: All green, still wrong
+    blocks:
+      - text: |
+          The double booking needs a rare request: two seats asked for at once where one of them was just released by a cancellation. Replaying real traffic, the team estimates that about 1 random booking request in 2,000 can trigger it. The suite's booking tests send 40 requests generated at random, fresh each run.
+      - question:
+          id: chance-caught
+          type: numeric
+          system: s2
+          concepts: [s6.what-a-test-can-prove]
+          prompt: |
+            On any one run, what is the chance, in per cent, that the 40 requests include at least one that triggers the bug?
+          answer: "2"
+          tolerance: "0.2"
+          explanation: |
+            All 40 miss with probability $(1 - 1/2000)^{40} \approx 0.980$, so at least one triggers it with probability about 0.020, or 2%. A green run says very little about a bug this rare; passing tests show that the cases they tried work, not that the code is correct.
+  - title: Tests that pass alone
+    blocks:
+      - text: |
+          Several booking tests pass when run one at a time and fail when the whole file runs, and which ones fail depends on the order the runner picks. They all use a hall created once at the top of the test file, and each test books or cancels seats in it.
+      - question:
+          id: fresh-hall
+          type: choice
+          system: s2
+          concepts: [s6.unit-tests-and-fixtures, s6.flaky-tests-and-their-causes]
+          prompt: |
+            What change makes these tests independent of each other and of their order?
+          options:
+            - "A fixture that builds a fresh hall for every test, so no test sees seats another one booked."
+            - "Running the tests in alphabetical order every time."
+            - "Cancelling every booking at the end of each test."
+            - "Retrying each failing test up to three times."
+          answer: 0
+          explanation: |
+            The shared hall is a hidden input: each test's result depends on what earlier tests left in it. A fresh hall per test removes it. A fixed order hides the dependence without removing it; cleaning up at the end fails as soon as one test stops halfway; and retries hide the problem along with any real bug.
+  - title: The payment sandbox
+    blocks:
+      - text: |
+          Every booking test charges a card through the payment provider's sandbox, a test version of its real service. Each call takes about 2 seconds, the sandbox is down for maintenance for an hour most nights, and it cannot be made to decline a card on demand, so the "payment declined" path has never been tested.
+      - question:
+          id: payment-double
+          type: choice
+          system: s2
+          concepts: [s6.fakes-stubs-and-mocks, s6.integration-and-end-to-end-tests]
+          prompt: |
+            What is the best way to test the booking code's use of payments?
+          options:
+            - "Use an in-memory fake gateway that follows the provider's rules and can be told to decline, and run a small contract test suite against both the fake and the real sandbox each night."
+            - "Keep calling the sandbox, and skip the tests when it is down."
+            - "Replace the gateway with a mock that checks the exact sequence of calls the booking code makes."
+            - "Stop testing payments, since the provider tests its own service."
+          answer: 0
+          explanation: |
+            A fake makes the tests fast and lets them reach the declined path, and the contract tests keep the fake honest by checking it against the real thing. Skipping tests when the sandbox is down makes green meaningless at night; a mock of exact calls breaks whenever the code is correctly restructured; and the provider's tests say nothing about how this code handles a declined card.
+  - title: The rule that must always hold
+    blocks:
+      - text: |
+          Instead of more examples, the team decides to check the hall's invariants. Every seat must be either free or sold, never both and never neither, and no seat outside the hall may appear at all. A seeded random run of bookings and cancellations will check these rules after every step, so any failure can be replayed exactly from its seed.
+      - question:
+          id: hall-invariants
+          type: code
+          mode: write
+          system: s2
+          concepts: [s6.oracles-and-invariants, s6.property-based-testing, s6.deterministic-tests-seeds-clocks-and-fakes]
+          prompt: |
+            Write `invariant_errors`, which lists every broken rule of the hall. The program replays a seeded run against the current booking code and should print `(5, ['seat 0 is free and sold', 'seat 3 is free and sold'])`: at step 5, a cancellation returned two seats to the free set without removing them from the sold ones, which is how one seat ended up sold twice.
+          starter: |
+            import random
+
+
+            def invariant_errors(free, sold, n):
+                # free is the set of free seat numbers; sold maps each sold seat to its
+                # booking id. Real seats are numbered 0 to n - 1. Return a sorted list
+                # with one message for each broken rule:
+                #   "seat S is free and sold"   if S is in both
+                #   "seat S is missing"         if a real seat S is in neither
+                #   "seat S does not exist"     if S is free or sold but not a real seat
+                return []
+
+
+            class Hall:
+                def __init__(self, n):
+                    self.free = set(range(n))
+                    self.sold = {}
+
+                def book(self, booking, seats):
+                    # Book all the seats, or none of them if any is taken.
+                    if all(s in self.free for s in seats):
+                        for s in seats:
+                            self.free.remove(s)
+                            self.sold[s] = booking
+                        return True
+                    return False
+
+                def cancel(self, booking):
+                    for s in [s for s, b in self.sold.items() if b == booking]:
+                        self.free.add(s)
+
+
+            rng = random.Random(4)
+            hall = Hall(8)
+            broken = None
+            for step in range(1, 31):
+                if rng.random() < 0.7 or not hall.sold:
+                    seats = [rng.randint(0, 7) for _ in range(rng.randint(1, 2))]
+                    hall.book("b" + str(step), seats)
+                else:
+                    hall.cancel(rng.choice(sorted(set(hall.sold.values()))))
+                errors = invariant_errors(hall.free, hall.sold, 8)
+                if errors:
+                    broken = (step, errors)
+                    break
+            print(broken)
+          solution: |
+            import random
+
+
+            def invariant_errors(free, sold, n):
+                # free is the set of free seat numbers; sold maps each sold seat to its
+                # booking id. Real seats are numbered 0 to n - 1. Return a sorted list
+                # with one message for each broken rule:
+                #   "seat S is free and sold"   if S is in both
+                #   "seat S is missing"         if a real seat S is in neither
+                #   "seat S does not exist"     if S is free or sold but not a real seat
+                errors = []
+                for s in free:
+                    if s in sold:
+                        errors.append("seat " + str(s) + " is free and sold")
+                for s in range(n):
+                    if s not in free and s not in sold:
+                        errors.append("seat " + str(s) + " is missing")
+                for s in set(free) | set(sold):
+                    if not 0 <= s < n:
+                        errors.append("seat " + str(s) + " does not exist")
+                return sorted(errors)
+
+
+            class Hall:
+                def __init__(self, n):
+                    self.free = set(range(n))
+                    self.sold = {}
+
+                def book(self, booking, seats):
+                    # Book all the seats, or none of them if any is taken.
+                    if all(s in self.free for s in seats):
+                        for s in seats:
+                            self.free.remove(s)
+                            self.sold[s] = booking
+                        return True
+                    return False
+
+                def cancel(self, booking):
+                    for s in [s for s, b in self.sold.items() if b == booking]:
+                        self.free.add(s)
+
+
+            rng = random.Random(4)
+            hall = Hall(8)
+            broken = None
+            for step in range(1, 31):
+                if rng.random() < 0.7 or not hall.sold:
+                    seats = [rng.randint(0, 7) for _ in range(rng.randint(1, 2))]
+                    hall.book("b" + str(step), seats)
+                else:
+                    hall.cancel(rng.choice(sorted(set(hall.sold.values()))))
+                errors = invariant_errors(hall.free, hall.sold, 8)
+                if errors:
+                    broken = (step, errors)
+                    break
+            print(broken)
+          tests: |
+            assert invariant_errors({0, 1, 2}, {}, 3) == [], "A hall with every seat free breaks no rule"
+            assert invariant_errors({1}, {0: "b1", 2: "b2"}, 3) == [], "Seats split between free and sold break no rule"
+            _got = invariant_errors({0, 1, 2}, {1: "b1"}, 3)
+            assert _got == ["seat 1 is free and sold"], "Seat 1 is in both, so the result should be ['seat 1 is free and sold'], not " + repr(_got)
+            _got = invariant_errors({0}, {2: "b1"}, 3)
+            assert _got == ["seat 1 is missing"], "Seat 1 is neither free nor sold, so the result should be ['seat 1 is missing'], not " + repr(_got)
+            _got = invariant_errors({0, 1, 2, 3}, {}, 3)
+            assert _got == ["seat 3 does not exist"], "With 3 seats numbered 0 to 2, a free seat 3 does not exist; got " + repr(_got)
+            _got = invariant_errors({0, 1}, {-1: "b9"}, 3)
+            assert _got == ["seat -1 does not exist", "seat 2 is missing"], "A sold seat -1 does not exist and seat 2 is missing; got " + repr(_got)
+            _got = invariant_errors({0, 1, 2, 4}, {1: "b1", 2: "b1", 5: "b2"}, 6)
+            assert _got == sorted(["seat 1 is free and sold", "seat 2 is free and sold", "seat 3 is missing"]), "Every broken rule should be reported, in sorted order; got " + repr(_got)
+            assert output.strip() == "(5, ['seat 0 is free and sold', 'seat 3 is free and sold'])", "The program should print (5, ['seat 0 is free and sold', 'seat 3 is free and sold'])"
+          wrong:
+            - |
+              import random
+
+
+              def invariant_errors(free, sold, n):
+                  # free is the set of free seat numbers; sold maps each sold seat to its
+                  # booking id. Real seats are numbered 0 to n - 1. Return a sorted list
+                  # with one message for each broken rule:
+                  #   "seat S is free and sold"   if S is in both
+                  #   "seat S is missing"         if a real seat S is in neither
+                  #   "seat S does not exist"     if S is free or sold but not a real seat
+                  errors = []
+                  for s in free:
+                      if s in sold:
+                          errors.append("seat " + str(s) + " is free and sold")
+                  for s in set(free) | set(sold):
+                      if not 0 <= s < n:
+                          errors.append("seat " + str(s) + " does not exist")
+                  return sorted(errors)
+
+
+              class Hall:
+                  def __init__(self, n):
+                      self.free = set(range(n))
+                      self.sold = {}
+
+                  def book(self, booking, seats):
+                      # Book all the seats, or none of them if any is taken.
+                      if all(s in self.free for s in seats):
+                          for s in seats:
+                              self.free.remove(s)
+                              self.sold[s] = booking
+                          return True
+                      return False
+
+                  def cancel(self, booking):
+                      for s in [s for s, b in self.sold.items() if b == booking]:
+                          self.free.add(s)
+
+
+              rng = random.Random(4)
+              hall = Hall(8)
+              broken = None
+              for step in range(1, 31):
+                  if rng.random() < 0.7 or not hall.sold:
+                      seats = [rng.randint(0, 7) for _ in range(rng.randint(1, 2))]
+                      hall.book("b" + str(step), seats)
+                  else:
+                      hall.cancel(rng.choice(sorted(set(hall.sold.values()))))
+                  errors = invariant_errors(hall.free, hall.sold, 8)
+                  if errors:
+                      broken = (step, errors)
+                      break
+              print(broken)
+            - |
+              import random
+
+
+              def invariant_errors(free, sold, n):
+                  # free is the set of free seat numbers; sold maps each sold seat to its
+                  # booking id. Real seats are numbered 0 to n - 1. Return a sorted list
+                  # with one message for each broken rule:
+                  #   "seat S is free and sold"   if S is in both
+                  #   "seat S is missing"         if a real seat S is in neither
+                  #   "seat S does not exist"     if S is free or sold but not a real seat
+                  errors = []
+                  for s in free:
+                      if s in sold:
+                          errors.append("seat " + str(s) + " is free and sold")
+                  for s in range(n):
+                      if s not in free and s not in sold:
+                          errors.append("seat " + str(s) + " is missing")
+                  for s in set(free) | set(sold):
+                      if not 0 <= s <= n:
+                          errors.append("seat " + str(s) + " does not exist")
+                  return sorted(errors)
+
+
+              class Hall:
+                  def __init__(self, n):
+                      self.free = set(range(n))
+                      self.sold = {}
+
+                  def book(self, booking, seats):
+                      # Book all the seats, or none of them if any is taken.
+                      if all(s in self.free for s in seats):
+                          for s in seats:
+                              self.free.remove(s)
+                              self.sold[s] = booking
+                          return True
+                      return False
+
+                  def cancel(self, booking):
+                      for s in [s for s, b in self.sold.items() if b == booking]:
+                          self.free.add(s)
+
+
+              rng = random.Random(4)
+              hall = Hall(8)
+              broken = None
+              for step in range(1, 31):
+                  if rng.random() < 0.7 or not hall.sold:
+                      seats = [rng.randint(0, 7) for _ in range(rng.randint(1, 2))]
+                      hall.book("b" + str(step), seats)
+                  else:
+                      hall.cancel(rng.choice(sorted(set(hall.sold.values()))))
+                  errors = invariant_errors(hall.free, hall.sold, 8)
+                  if errors:
+                      broken = (step, errors)
+                      break
+              print(broken)
+            - |
+              import random
+
+
+              def invariant_errors(free, sold, n):
+                  # free is the set of free seat numbers; sold maps each sold seat to its
+                  # booking id. Real seats are numbered 0 to n - 1. Return a sorted list
+                  # with one message for each broken rule:
+                  #   "seat S is free and sold"   if S is in both
+                  #   "seat S is missing"         if a real seat S is in neither
+                  #   "seat S does not exist"     if S is free or sold but not a real seat
+                  errors = []
+                  for s in free:
+                      if s in sold:
+                          return ["seat " + str(s) + " is free and sold"]
+                  for s in range(n):
+                      if s not in free and s not in sold:
+                          errors.append("seat " + str(s) + " is missing")
+                  for s in set(free) | set(sold):
+                      if not 0 <= s < n:
+                          errors.append("seat " + str(s) + " does not exist")
+                  return sorted(errors)
+
+
+              class Hall:
+                  def __init__(self, n):
+                      self.free = set(range(n))
+                      self.sold = {}
+
+                  def book(self, booking, seats):
+                      # Book all the seats, or none of them if any is taken.
+                      if all(s in self.free for s in seats):
+                          for s in seats:
+                              self.free.remove(s)
+                              self.sold[s] = booking
+                          return True
+                      return False
+
+                  def cancel(self, booking):
+                      for s in [s for s, b in self.sold.items() if b == booking]:
+                          self.free.add(s)
+
+
+              rng = random.Random(4)
+              hall = Hall(8)
+              broken = None
+              for step in range(1, 31):
+                  if rng.random() < 0.7 or not hall.sold:
+                      seats = [rng.randint(0, 7) for _ in range(rng.randint(1, 2))]
+                      hall.book("b" + str(step), seats)
+                  else:
+                      hall.cancel(rng.choice(sorted(set(hall.sold.values()))))
+                  errors = invariant_errors(hall.free, hall.sold, 8)
+                  if errors:
+                      broken = (step, errors)
+                      break
+              print(broken)
+          explanation: |
+            Check each rule over the seats it concerns: free seats that are also sold, real seats that are in neither, and any seat in either that lies outside 0 to n - 1; then sort the messages. Leaving out the "missing" rule lets a seat silently vanish from the hall; allowing seat n accepts a seat that does not exist; and returning at the first broken rule hides how much is wrong. The invariants need no list of expected answers, which is what lets a random run check thousands of steps.
+  - title: Forty-five minutes per run
+    blocks:
+      - text: |
+          Of the 600 tests, 400 drive a real browser through the booking website, each taking 5 to 10 seconds, and they cause most of the daily red runs. Most of them check things like seat-price rules and refund amounts. There are 150 unit tests and 50 integration tests that run against a real database.
+      - question:
+          id: rebalance
+          type: choice
+          system: s2
+          concepts: [s6.integration-and-end-to-end-tests]
+          prompt: |
+            How should the suite be rebalanced?
+          options:
+            - "Move the price and refund checks down into unit and integration tests, and keep a handful of browser tests for the journeys customers actually take."
+            - "Run the 400 browser tests in parallel on more machines and change nothing else."
+            - "Delete the browser tests, since unit tests are faster."
+            - "Turn the unit tests into browser tests so that everything is tested end to end."
+          answer: 0
+          explanation: |
+            Rules about prices and refunds are checked faster and more reliably close to the code that computes them; a few end-to-end journeys still prove the pieces work together. More machines make the suite quicker but no less flaky; deleting every browser test loses the only check of the whole journey; and moving everything up makes the suite slower and flakier still.
+  - title: Full coverage, surviving mutants
+    blocks:
+      - text: |
+          The refund module has 100% line coverage. A mutation tool makes 40 small changes to it, such as turning `<` into `<=`. The tests catch 30 of them. Of the 10 that survive, 4 turn out to be equivalent mutants that cannot change any result.
+      - question:
+          id: mutation-score
+          type: numeric
+          system: s2
+          concepts: [s6.coverage-and-mutation-testing]
+          prompt: |
+            What is the refund module's mutation score, in per cent, counting only mutants that could be caught?
+          answer: "83"
+          tolerance: "1"
+          explanation: |
+            Equivalent mutants cannot be caught by any test, so they leave the count: $30 / (40 - 4) = 30/36 \approx 83\%$. The 6 real survivors are changes the tests would not notice despite running every line, such as a refund window one hour too long.
+  - title: The reminder that fails at night
+    blocks:
+      - text: |
+          One test schedules a reminder for 2 hours before a show, sleeps 3 seconds, and checks that the reminder is in the queue. It reads the real clock throughout. It fails a few times a week, always between midnight and 5:30 a.m. India time, and sometimes on a busy build machine during the day.
+      - question:
+          id: reminder-test
+          type: choice
+          system: s2
+          concepts: [s6.flaky-tests-and-their-causes, s6.deterministic-tests-seeds-clocks-and-fakes]
+          prompt: |
+            What is the best fix?
+          options:
+            - "Give the reminder code a clock, and in the test use a fake clock with timers that the test advances, checking chosen instants such as just before and after midnight in India."
+            - "Increase the sleep to 10 seconds."
+            - "Run the test only during office hours."
+            - "Mark the test as flaky and retry it automatically."
+          answer: 0
+          explanation: |
+            The test has two hidden inputs, real time passing and the real date, and the failures point at both: a slow machine loses the race with the sleep, and the night-time window points at a date computed in UTC instead of India time. A fake clock removes both and lets the test choose the awkward instants on purpose. A longer sleep only makes the race rarer and the suite slower; office hours hide the date bug; and retries hide everything.
+  - title: The seat-code parser
+    blocks:
+      - text: |
+          Customers can type a seat code such as "H12" to jump straight to a seat. The team fuzzes the parser overnight, and in the morning there are 312 crashing inputs, several hundred bytes long each. All 312 crash with an `IndexError` on the same line of the parser.
+      - question:
+          id: fuzz-findings
+          type: choice
+          system: s2
+          concepts: [s6.fuzzing]
+          prompt: |
+            What should the team do with the 312 findings?
+          options:
+            - "Treat them as one bug: minimise one input to the few characters that still crash, keep it as a regression test, and fix the parser so that bad codes raise the documented ValueError."
+            - "Write 312 separate regression tests from the raw inputs."
+            - "Catch IndexError around the parser and return an empty seat."
+            - "Fuzz for another night to see whether the number grows."
+          answer: 0
+          explanation: |
+            Findings that crash at the same place are almost always one bug. A minimised input shows the cause and makes a small, readable test. Hundreds of raw inputs test the same thing hundreds of times; swallowing the exception hides this bug and future ones; and another night of the same crash adds nothing.
+review: |
+  The suite is now one you can trust, and each step came from a lesson of this cluster:
+
+  - A green run with 40 random requests had only a 2% chance of meeting the bug, because tests show the cases they try, not correctness, as [[s6.what-a-test-can-prove]] warned.
+  - Tests that depended on each other got a fresh hall each, from [[s6.unit-tests-and-fixtures]], removing one of the causes listed in [[s6.flaky-tests-and-their-causes]].
+  - The payment sandbox became an honest fake checked by contract tests, from [[s6.fakes-stubs-and-mocks]].
+  - The hall's invariants, the oracle of [[s6.oracles-and-invariants]], were checked after every step of a seeded random run, as in [[s6.property-based-testing]], and the bug was found at step 5 and can be replayed at will, as [[s6.deterministic-tests-seeds-clocks-and-fakes]] requires.
+  - The browser tests shrank to a few real journeys, with the rules tested lower down, the balance of [[s6.integration-and-end-to-end-tests]].
+  - A mutation score of 83% showed what full line coverage hid, from [[s6.coverage-and-mutation-testing]].
+  - The night-time reminder failure ended with a fake clock and chosen instants.
+  - Three hundred crashes became one minimised test and one fix, as [[s6.fuzzing]] recommends.
+
+  Notice what the wrong answers had in common: retry it, sleep longer, run it at a better time, catch the exception, add more machines. Each one made the symptom rarer or quieter while leaving the cause in place. The right answers removed a hidden input, moved a check to where it is cheapest, or gave the test a sharper oracle. A test is worth trusting when its result changes only because the code changed. The next cluster turns to the code that reads code: how a language is split into tokens, parsed, and run.

@@ -1,0 +1,674 @@
+concept: s6.property-based-testing
+minutes: 80
+claim: You can test a function against rules that must hold for every input instead of a handful of examples, recognising the common kinds of property, round trips, invariants, idempotence and agreement with a simpler model; generate inputs from a seeded generator that reaches the cases where bugs hide; run many cases and stop at the first failure; and shrink that failure to a small example someone can read.
+recalls: [s6.fakes-stubs-and-mocks]
+uses: [s6.what-a-test-can-prove, f2.quantifiers-and-their-negation, f4.the-birthday-problem-and-collisions, s5.debugging-methodically, s4.dependency-injection-and-testable-code, h0.characters-unicode-and-utf-8]
+leads: [s6.oracles-and-invariants, s6.fuzzing, s6.deterministic-tests-seeds-clocks-and-fakes]
+starter: |
+  # Scratch space. One property, many generated cases.
+  import random
+
+  rng = random.Random(1)
+  for _ in range(5):
+      xs = [rng.randint(0, 9) for _ in range(5)]
+      print(xs, sorted(set(xs)) == sorted(xs))
+parts:
+  recall:
+    - text: |
+        [[s6.fakes-stubs-and-mocks]] made each test fast and controlled by standing in for slow and unreliable collaborators. But every test so far has checked cases that someone thought of, and [[s6.what-a-test-can-prove]] showed that the cases nobody thought of are where bugs live. This lesson hands the job of thinking up cases to the computer. Three quick pulls first.
+  puzzle:
+    - text: |
+        `merge_bookings` combines a bus's seat bookings into one list sorted by time. It has a bug: it quietly drops a booking when two bookings were made in the same minute.
+
+        A test generates random lists of 5 bookings, each time drawn uniformly from the 1,440 minutes of a day, and checks that no booking goes missing.
+
+        **What is the chance, in per cent, that a single generated list contains two bookings in the same minute, so that the bug can show?**
+  intuition:
+    - text: |
+        A good tiffin service does not test its new dabba lid by closing it three times in the kitchen. It hands a hundred lids to delivery riders for a week: dropped, stacked, squashed in a crowded local train, opened by impatient children. Nobody writes down each of those situations in advance. What they write down is the rule that must survive all of them: the dal does not leak. The rule is the test; the week of rough handling supplies the cases.
+
+        A **property-based test** works the same way. It states a rule that must hold for every input, then generates many inputs and checks the rule on each. The figure tests `merge_bookings` with the rule "merging keeps every booking". Try more cases, and then draw the booking times from a small range instead of the whole day.
+    - figure: property-runs
+      props: { cases: 100, gen: minutes }
+    - text: |
+        Drawn from all 1,440 minutes, collisions are rare, so a hundred cases usually find nothing and even five hundred find only a few. Drawn from ten minutes, most lists repeat a minute and the bug appears at once. The rule did not change; the generator did. Whatever generator is used, the first failure is shrunk: items are removed while it still fails, until a two-element list remains that shows the problem plainly. This is the shrinking of [[s5.debugging-methodically]], done automatically.
+  derivation:
+    - text: |
+        **From examples to properties.** An example-based test says: for this input, expect this output. A property says: for every input, this relationship holds. It is a "for all" statement of the kind met in [[f2.quantifiers-and-their-negation]], and checking it on random inputs is a search for a counterexample. A property usually does not say what the exact output should be, only something that must be true of it, which is why it can be checked on inputs nobody has worked out by hand.
+
+        **Kinds of property.** A few shapes cover most of what is useful.
+
+        - **Round trip**: decoding what was encoded gives back the original. `decode(encode(x)) == x` for text and UTF-8, as in [[h0.characters-unicode-and-utf-8]], for saving and loading a file, for a value sent over a network and parsed back.
+        - **Invariants of the output**: whatever the input, the output of a sort is in order and holds the same items, repeats included; a discount never makes a price negative; a shuffled deck still has 52 cards.
+        - **Idempotence**: doing it twice is the same as doing it once. Normalising a phone number that is already normalised changes nothing.
+        - **Agreement with a model**: a fast, clever implementation gives the same answers as a slow, obviously correct one. This is a powerful idea with a lesson of its own, [[s6.oracles-and-invariants]].
+    - question:
+        id: derivation-kind
+        type: choice
+        system: s2
+        prompt: |
+          `to_csv(rows)` writes rows to text, and `from_csv(text)` reads them back. Which property tests the pair best?
+        options:
+          - "For any list of rows, from_csv(to_csv(rows)) equals rows"
+          - "to_csv of an empty list is an empty string"
+          - "to_csv(rows) always ends with a newline"
+          - "from_csv never raises an exception"
+        answer: 0
+        explanation: |
+          The round trip checks both functions together on every generated input, including rows containing commas, quotes and newlines, which is exactly where CSV code goes wrong. The others are true facts, but each checks one narrow thing.
+    - text: |
+        **Generators decide what is found.** The cases come from a generator, a function that builds a random input from a seeded random number generator. How it draws matters enormously. In the puzzle, a bug that needs two equal values in a list of 5 shows on about 0.7% of lists when values range over 1,440 minutes, the birthday problem of [[f4.the-birthday-problem-and-collisions]], but on about 70% when they range over 10. Good generators therefore favour the places where bugs hide: small numbers and repeats, empty lists and single items, zero and negative values, the largest allowed size, strings with spaces, accents and emoji. Libraries such as Hypothesis for Python come with generators built this way, and they let you compose generators for your own types from smaller ones.
+    - question:
+        id: derivation-cases
+        type: numeric
+        system: s2
+        prompt: |
+          Each generated list of 5 bookings repeats a minute with probability 0.0069, independently. How many lists must the test generate for at least a 95% chance that one of them repeats a minute?
+        answer: "431"
+        tolerance: "2"
+        explanation: |
+          All $n$ lists avoid a repeat with probability $(1 - 0.0069)^n$, which falls below 0.05 when $n \ge \ln 0.05 / \ln 0.9931 \approx 431$, the arithmetic of [[s6.what-a-test-can-prove]] once more.
+    - text: |
+        **Seeds and replay.** The generator draws from a random number generator that the test creates from a seed, rather than from the shared one in the `random` module. Passing the generator in, as in [[s4.dependency-injection-and-testable-code]], means that a run can be repeated exactly from its seed, and that nothing else in the program disturbs the sequence. A property-test library prints the seed, or saves the failing case, whenever a property fails.
+
+        **Shrinking.** A randomly generated failing case is usually large and noisy: a list of forty bookings, two of which collide. Before reporting it, the library tries smaller versions, fewer items, smaller numbers, shorter strings, and keeps any that still fail, until no simpler variant fails. The report then shows something like `[0, 0]`, which points straight at the cause. Once fixed, that small case is worth keeping as an ordinary example-based test, so the bug can never return unnoticed.
+    - question:
+        id: order-failure
+        type: order
+        system: s2
+        prompt: |
+          Put the events of a property test finding a bug in order.
+        steps:
+          - "The generator, seeded with a recorded number, produces a list of bookings."
+          - "The property is checked on it and is false."
+          - "The failing list is shrunk until no smaller variant fails."
+          - "The seed and the shrunk case are reported."
+          - "After the fix, the shrunk case is added as an example-based regression test."
+        explanation: |
+          Generation and checking come first; shrinking needs a failing case to work on; the report carries the shrunk case and the seed to replay it; and the regression test keeps the lesson after the fix.
+    - text: |
+        **What properties cannot do.** A property is only as strong as the rule it states. "The output is sorted" passes a function that returns an empty list; "the output has the same length" passes one that returns the input unchanged; both together still pass one that returns a list of zeros of the right length. Strong properties combine several facts, or compare with a model. And properties do not replace a few well-chosen examples: an example states what the answer is, which a reader can check at a glance, while a property states only what it must be like. The two work best side by side: a few examples that a person can read and check, and properties that sweep through thousands of inputs looking for the case that the examples missed.
+  formal:
+    - text: |
+        **Property.** A statement that must hold for every valid input, checked on many generated inputs; a failing input is a counterexample.
+
+        **Common properties.** Round trip, `decode(encode(x)) == x`; invariants of the output; idempotence, `f(f(x)) == f(x)`; agreement with a simpler model.
+
+        **Generator.** A function from a seeded random number generator to a valid input, biased towards small values, repeats, empty and extreme cases.
+
+        **Shrinking.** Repeatedly simplifying a failing input, keeping each simplification that still fails, until none does.
+
+        **Replay.** A run is reproducible from its seed; the shrunk counterexample becomes a regression test.
+  drill:
+    - text: Seconds each. Ask what must be true of every output.
+    - question:
+        id: drill-idempotent
+        type: choice
+        system: s1
+        prompt: |
+          `normalise(s)` is idempotent. What does that mean?
+        options:
+          - "normalise(normalise(s)) == normalise(s) for every s"
+          - "normalise(s) == s for every s"
+          - "normalise never raises an exception"
+          - "normalise returns the same type it was given"
+        answer: 0
+        explanation: Applying it a second time changes nothing, though the first application may.
+    - question:
+        id: drill-shrink
+        type: choice
+        system: s1
+        prompt: |
+          A property fails on a generated list of 37 numbers. What does shrinking aim to report?
+        options:
+          - "A smallest list that still fails, such as [0, 0]"
+          - "The 37-number list exactly as generated"
+          - "Every list that was generated before it"
+          - "The property's source code"
+        answer: 0
+        explanation: Shrinking keeps simplifying while the failure persists, so the report shows the bug with nothing else in the way.
+    - question:
+        id: drill-cases
+        type: numeric
+        system: s1
+        prompt: |
+          A suite has 30 properties and checks each on 100 generated cases. How many cases does one run check?
+        answer: "3000"
+        explanation: $30 \times 100 = 3000$ cases, from a few dozen lines of tests.
+    - question:
+        id: predict-sort-props
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          xs = [4, 1, 3]
+          print(sorted(xs) == sorted(sorted(xs)), sorted(xs, reverse=True)[::-1] == sorted(xs))
+        output: "True True"
+        explanation: Sorting is idempotent, and reversing a descending sort gives the ascending one.
+    - question:
+        id: predict-round-trip
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          text = "chai ₹20"
+          print(text.encode("utf-8").decode("utf-8") == text, len("₹".encode("utf-8")))
+        output: "True 3"
+        explanation: Encoding to UTF-8 and decoding gives the text back, and the rupee sign takes three bytes.
+  work:
+    - text: Slower now. Each problem is part of a property-testing tool.
+    - question:
+        id: fix-property
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `sort_property` should catch any function that fails to sort correctly. The program should print `[9, 9]`. It prints `None`, because the property lets `merge_bookings` pass. Find the fault and fix it.
+        starter: |
+          def merge_bookings(times):
+              # Under test: should return all booking times, sorted. It has a bug.
+              return sorted(set(times))
+
+
+          def sort_property(f, xs):
+              # True if f(xs) is a correct sort of xs: in order, and holding exactly
+              # the same items as xs, repeats included.
+              out = f(list(xs))
+              return all(out[i] <= out[i + 1] for i in range(len(out) - 1))
+
+
+          def first_counterexample(prop, f, cases):
+              for xs in cases:
+                  if not prop(f, xs):
+                      return xs
+              return None
+
+
+          cases = [[540, 75, 1310], [], [9, 9], [600, 30, 30, 1200], [5, 4, 3, 2, 1]]
+          print(first_counterexample(sort_property, merge_bookings, cases))
+        solution: |
+          def merge_bookings(times):
+              # Under test: should return all booking times, sorted. It has a bug.
+              return sorted(set(times))
+
+
+          def sort_property(f, xs):
+              # True if f(xs) is a correct sort of xs: in order, and holding exactly
+              # the same items as xs, repeats included.
+              out = f(list(xs))
+              in_order = all(out[i] <= out[i + 1] for i in range(len(out) - 1))
+              return in_order and sorted(out) == sorted(xs)
+
+
+          def first_counterexample(prop, f, cases):
+              for xs in cases:
+                  if not prop(f, xs):
+                      return xs
+              return None
+
+
+          cases = [[540, 75, 1310], [], [9, 9], [600, 30, 30, 1200], [5, 4, 3, 2, 1]]
+          print(first_counterexample(sort_property, merge_bookings, cases))
+        tests: |
+          _cases = [
+              (lambda xs: sorted(xs), [3, 1, 2], True),
+              (lambda xs: sorted(set(xs)), [2, 2, 1], False),
+              (lambda xs: sorted(set(xs)), [3, 1], True),
+              (lambda xs: [], [4, 1], False),
+              (lambda xs: xs, [2, 1], False),
+              (lambda xs: sorted(xs)[:-1] + [0] if xs else [], [5, 7], False),
+              (lambda xs: [1] * len(xs), [1, 2], False),
+              (lambda xs: sorted(xs), [], True),
+          ]
+          for _f, _xs, _want in _cases:
+              _got = sort_property(_f, list(_xs))
+              assert _got == _want, "For input " + repr(_xs) + " and output " + repr(_f(list(_xs))) + ", sort_property should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[9, 9]", "The program should print [9, 9]"
+        wrong:
+          - |
+            def merge_bookings(times):
+                # Under test: should return all booking times, sorted. It has a bug.
+                return sorted(set(times))
+
+
+            def sort_property(f, xs):
+                # True if f(xs) is a correct sort of xs: in order, and holding exactly
+                # the same items as xs, repeats included.
+                out = f(list(xs))
+                in_order = all(out[i] <= out[i + 1] for i in range(len(out) - 1))
+                return in_order and set(out) == set(xs)
+
+
+            def first_counterexample(prop, f, cases):
+                for xs in cases:
+                    if not prop(f, xs):
+                        return xs
+                return None
+
+
+            cases = [[540, 75, 1310], [], [9, 9], [600, 30, 30, 1200], [5, 4, 3, 2, 1]]
+            print(first_counterexample(sort_property, merge_bookings, cases))
+          - |
+            def merge_bookings(times):
+                # Under test: should return all booking times, sorted. It has a bug.
+                return sorted(set(times))
+
+
+            def sort_property(f, xs):
+                # True if f(xs) is a correct sort of xs: in order, and holding exactly
+                # the same items as xs, repeats included.
+                out = f(list(xs))
+                in_order = all(out[i] <= out[i + 1] for i in range(len(out) - 1))
+                return in_order and len(out) == len(xs)
+
+
+            def first_counterexample(prop, f, cases):
+                for xs in cases:
+                    if not prop(f, xs):
+                        return xs
+                return None
+
+
+            cases = [[540, 75, 1310], [], [9, 9], [600, 30, 30, 1200], [5, 4, 3, 2, 1]]
+            print(first_counterexample(sort_property, merge_bookings, cases))
+          - |
+            def merge_bookings(times):
+                # Under test: should return all booking times, sorted. It has a bug.
+                return sorted(set(times))
+
+
+            def sort_property(f, xs):
+                # True if f(xs) is a correct sort of xs: in order, and holding exactly
+                # the same items as xs, repeats included.
+                out = f(list(xs))
+                return sorted(out) == sorted(xs)
+
+
+            def first_counterexample(prop, f, cases):
+                for xs in cases:
+                    if not prop(f, xs):
+                        return xs
+                return None
+
+
+            cases = [[540, 75, 1310], [], [9, 9], [600, 30, 30, 1200], [5, 4, 3, 2, 1]]
+            print(first_counterexample(sort_property, merge_bookings, cases))
+        explanation: |
+          Being in order is only half of being sorted; the output must also hold exactly the input's items, repeats included, which `sorted(out) == sorted(xs)` checks. Comparing sets ignores repeats, so the lost booking still goes unnoticed; comparing lengths passes an output that replaced items; and dropping the order check passes a function that returns its input unsorted.
+    - question:
+        id: write-check
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `check(prop, gen, n, seed)`, the loop at the heart of a property-testing library. The program should print `(73, [968, 497, 968, 833])`.
+        starter: |
+          import random
+
+
+          def check(prop, gen, n, seed):
+              # Make one generator with random.Random(seed), leaving the random
+              # module's own generator alone. Generate up to n cases with gen(rng),
+              # stopping at the first case for which prop is False. Return
+              # (number of cases that passed, failing case or None).
+              return n, None
+
+
+          def merge_bookings(times):
+              return sorted(set(times))
+
+
+          def bookings(rng):
+              return [rng.randint(0, 1439) for _ in range(rng.randint(0, 5))]
+
+
+          def keeps_all(times):
+              return len(merge_bookings(times)) == len(times)
+
+
+          print(check(keeps_all, bookings, 1000, 42))
+        solution: |
+          import random
+
+
+          def check(prop, gen, n, seed):
+              # Make one generator with random.Random(seed), leaving the random
+              # module's own generator alone. Generate up to n cases with gen(rng),
+              # stopping at the first case for which prop is False. Return
+              # (number of cases that passed, failing case or None).
+              rng = random.Random(seed)
+              for i in range(n):
+                  case = gen(rng)
+                  if not prop(case):
+                      return i, case
+              return n, None
+
+
+          def merge_bookings(times):
+              return sorted(set(times))
+
+
+          def bookings(rng):
+              return [rng.randint(0, 1439) for _ in range(rng.randint(0, 5))]
+
+
+          def keeps_all(times):
+              return len(merge_bookings(times)) == len(times)
+
+
+          print(check(keeps_all, bookings, 1000, 42))
+        tests: |
+          def _ref(_prop, _gen, _n, _seed):
+              _r = random.Random(_seed)
+              for _i in range(_n):
+                  _c = _gen(_r)
+                  if not _prop(_c):
+                      return _i, _c
+              return _n, None
+
+
+          _small = lambda r: [r.randint(0, 3) for _ in range(r.randint(0, 4))]
+          _nodup = lambda xs: len(set(xs)) == len(xs)
+          _always = lambda xs: True
+          for _seed in [0, 1, 7, 99]:
+              for _p, _g, _n in [(_nodup, _small, 50), (_always, _small, 20), (_nodup, bookings, 30)]:
+                  _want = _ref(_p, _g, _n, _seed)
+                  _got = check(_p, _g, _n, _seed)
+                  assert tuple(_got) == _want, "With seed " + str(_seed) + ", check should return " + repr(_want) + ", not " + repr(_got)
+          random.seed(2026)
+          _expected_next = random.random()
+          random.seed(2026)
+          check(_nodup, _small, 50, 5)
+          assert random.random() == _expected_next, "check must use its own random.Random(seed) and leave the random module's generator untouched"
+          assert tuple(check(_nodup, _small, 0, 3)) == (0, None), "With n = 0, check should return (0, None)"
+          assert output.strip() == "(73, [968, 497, 968, 833])", "The program should print (73, [968, 497, 968, 833])"
+        wrong:
+          - |
+            import random
+
+
+            def check(prop, gen, n, seed):
+                # Make one generator with random.Random(seed), leaving the random
+                # module's own generator alone. Generate up to n cases with gen(rng),
+                # stopping at the first case for which prop is False. Return
+                # (number of cases that passed, failing case or None).
+                random.seed(seed)
+                for i in range(n):
+                    case = gen(random)
+                    if not prop(case):
+                        return i, case
+                return n, None
+
+
+            def merge_bookings(times):
+                return sorted(set(times))
+
+
+            def bookings(rng):
+                return [rng.randint(0, 1439) for _ in range(rng.randint(0, 5))]
+
+
+            def keeps_all(times):
+                return len(merge_bookings(times)) == len(times)
+
+
+            print(check(keeps_all, bookings, 1000, 42))
+          - |
+            import random
+
+
+            def check(prop, gen, n, seed):
+                # Make one generator with random.Random(seed), leaving the random
+                # module's own generator alone. Generate up to n cases with gen(rng),
+                # stopping at the first case for which prop is False. Return
+                # (number of cases that passed, failing case or None).
+                for i in range(n):
+                    rng = random.Random(seed)
+                    case = gen(rng)
+                    if not prop(case):
+                        return i, case
+                return n, None
+
+
+            def merge_bookings(times):
+                return sorted(set(times))
+
+
+            def bookings(rng):
+                return [rng.randint(0, 1439) for _ in range(rng.randint(0, 5))]
+
+
+            def keeps_all(times):
+                return len(merge_bookings(times)) == len(times)
+
+
+            print(check(keeps_all, bookings, 1000, 42))
+          - |
+            import random
+
+
+            def check(prop, gen, n, seed):
+                # Make one generator with random.Random(seed), leaving the random
+                # module's own generator alone. Generate up to n cases with gen(rng),
+                # stopping at the first case for which prop is False. Return
+                # (number of cases that passed, failing case or None).
+                rng = random.Random(seed)
+                for i in range(n):
+                    case = gen(rng)
+                    if not prop(case):
+                        return i + 1, case
+                return n, None
+
+
+            def merge_bookings(times):
+                return sorted(set(times))
+
+
+            def bookings(rng):
+                return [rng.randint(0, 1439) for _ in range(rng.randint(0, 5))]
+
+
+            def keeps_all(times):
+                return len(merge_bookings(times)) == len(times)
+
+
+            print(check(keeps_all, bookings, 1000, 42))
+        explanation: |
+          Create one `random.Random(seed)` before the loop and pass it to the generator for every case, returning at the first failure with the number of cases that passed before it. Seeding the shared `random` module disturbs every other user of it; creating a new generator inside the loop generates the same case every time; and counting the failing case among the passes is off by one.
+    - question:
+        id: write-properties
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `violated(f, s)`, which checks three properties of a phone-number normaliser on one input and names those that fail. The program should print `[[], ['ten digits', 'keeps the number'], []]`.
+        starter: |
+          def violated(f, s):
+              # f normalises an Indian mobile number written in any style. Return the
+              # names of the properties f breaks on input s, in this order:
+              #   "idempotent": f(f(s)) == f(s)
+              #   "ten digits": f(s) is 10 characters long, every one a digit
+              #   "keeps the number": f(s) equals the last 10 digits that appear in s
+              return []
+
+
+          def normalise(s):
+              s = s.replace(" ", "").replace("-", "")
+              if s.startswith("+91"):
+                  s = s[3:]
+              return s
+
+
+          inputs = ["+91 98450 12345", "098450-12345", "98450 12345"]
+          print([violated(normalise, s) for s in inputs])
+        solution: |
+          def violated(f, s):
+              # f normalises an Indian mobile number written in any style. Return the
+              # names of the properties f breaks on input s, in this order:
+              #   "idempotent": f(f(s)) == f(s)
+              #   "ten digits": f(s) is 10 characters long, every one a digit
+              #   "keeps the number": f(s) equals the last 10 digits that appear in s
+              out = f(s)
+              broken = []
+              if f(out) != out:
+                  broken.append("idempotent")
+              if not (len(out) == 10 and all(c.isdigit() for c in out)):
+                  broken.append("ten digits")
+              digits = "".join(c for c in s if c.isdigit())
+              if out != digits[-10:]:
+                  broken.append("keeps the number")
+              return broken
+
+
+          def normalise(s):
+              s = s.replace(" ", "").replace("-", "")
+              if s.startswith("+91"):
+                  s = s[3:]
+              return s
+
+
+          inputs = ["+91 98450 12345", "098450-12345", "98450 12345"]
+          print([violated(normalise, s) for s in inputs])
+        tests: |
+          def _good(s):
+              d = "".join(c for c in s if c.isdigit())
+              return d[-10:]
+
+
+          def _letters(s):
+              return s.replace(" ", "")
+
+
+          def _grows(s):
+              return "0" + s
+
+
+          _cases = [
+              (_good, "+91 98450 12345", []),
+              (_good, "98450-12345", []),
+              (_letters, "98450 1234x", ["ten digits", "keeps the number"]),
+              (_grows, "9845012345", ["idempotent", "ten digits", "keeps the number"]),
+              (_letters, "9845012345", []),
+              (_good, "12345", ["ten digits"]),
+              (lambda s: "9999999999", "98450 12345", ["keeps the number"]),
+          ]
+          for _f, _s, _want in _cases:
+              _got = violated(_f, _s)
+              assert list(_got) == _want, "For input " + repr(_s) + " and output " + repr(_f(_s)) + ", the broken properties should be " + repr(_want) + ", not " + repr(_got)
+          assert output.strip() == "[[], ['ten digits', 'keeps the number'], []]", "The program should print [[], ['ten digits', 'keeps the number'], []]"
+        wrong:
+          - |
+            def violated(f, s):
+                # f normalises an Indian mobile number written in any style. Return the
+                # names of the properties f breaks on input s, in this order:
+                #   "idempotent": f(f(s)) == f(s)
+                #   "ten digits": f(s) is 10 characters long, every one a digit
+                #   "keeps the number": f(s) equals the last 10 digits that appear in s
+                out = f(s)
+                broken = []
+                if out != s:
+                    broken.append("idempotent")
+                if not (len(out) == 10 and all(c.isdigit() for c in out)):
+                    broken.append("ten digits")
+                digits = "".join(c for c in s if c.isdigit())
+                if out != digits[-10:]:
+                    broken.append("keeps the number")
+                return broken
+
+
+            def normalise(s):
+                s = s.replace(" ", "").replace("-", "")
+                if s.startswith("+91"):
+                    s = s[3:]
+                return s
+
+
+            inputs = ["+91 98450 12345", "098450-12345", "98450 12345"]
+            print([violated(normalise, s) for s in inputs])
+          - |
+            def violated(f, s):
+                # f normalises an Indian mobile number written in any style. Return the
+                # names of the properties f breaks on input s, in this order:
+                #   "idempotent": f(f(s)) == f(s)
+                #   "ten digits": f(s) is 10 characters long, every one a digit
+                #   "keeps the number": f(s) equals the last 10 digits that appear in s
+                out = f(s)
+                broken = []
+                if f(out) != out:
+                    broken.append("idempotent")
+                if len(out) != 10:
+                    broken.append("ten digits")
+                digits = "".join(c for c in s if c.isdigit())
+                if out != digits[-10:]:
+                    broken.append("keeps the number")
+                return broken
+
+
+            def normalise(s):
+                s = s.replace(" ", "").replace("-", "")
+                if s.startswith("+91"):
+                    s = s[3:]
+                return s
+
+
+            inputs = ["+91 98450 12345", "098450-12345", "98450 12345"]
+            print([violated(normalise, s) for s in inputs])
+          - |
+            def violated(f, s):
+                # f normalises an Indian mobile number written in any style. Return the
+                # names of the properties f breaks on input s, in this order:
+                #   "idempotent": f(f(s)) == f(s)
+                #   "ten digits": f(s) is 10 characters long, every one a digit
+                #   "keeps the number": f(s) equals the last 10 digits that appear in s
+                out = f(s)
+                broken = []
+                if f(out) != out:
+                    broken.append("idempotent")
+                if not (len(out) == 10 and all(c.isdigit() for c in out)):
+                    broken.append("ten digits")
+                digits = "".join(c for c in s if c.isdigit())
+                if out != digits[:10]:
+                    broken.append("keeps the number")
+                return broken
+
+
+            def normalise(s):
+                s = s.replace(" ", "").replace("-", "")
+                if s.startswith("+91"):
+                    s = s[3:]
+                return s
+
+
+            inputs = ["+91 98450 12345", "098450-12345", "98450 12345"]
+            print([violated(normalise, s) for s in inputs])
+        explanation: |
+          Idempotence compares a second application with the first, not the output with the input; "ten digits" needs both the length and every character a digit; and the number to keep is the last ten digits, since prefixes such as +91 or 0 come first. The normaliser fails on "098450-12345" because it never removes the leading 0.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, each list holds 5 booking times drawn uniformly from 1,440 minutes. What is the chance, in per cent, that a list repeats a minute?
+        answer: "0.69"
+        tolerance: "0.02"
+        explanation: |
+          All five differ with probability $\frac{1440 \times 1439 \times 1438 \times 1437 \times 1436}{1440^5} \approx 0.99307$, so a repeat has probability about 0.0069, or 0.69%.
+    - question:
+        id: work-generator
+        type: choice
+        system: s2
+        prompt: |
+          A property test of a fare calculator draws distances uniformly from 1 to 10,000 km and has never failed. The fare rules change at 5 km and at 100 km. What would most improve it?
+        options:
+          - "Bias the generator to draw often near 5 and 100 km and at the ends of the range, as well as across it"
+          - "Generate a million cases instead of a thousand"
+          - "Draw distances from 1 to 1,00,000 km"
+          - "Replace the property with one example at 50 km"
+        answer: 0
+        explanation: |
+          Uniform draws land within a kilometre of 5 or 100 only about 6 times in 10,000, so boundary bugs stay hidden. Biasing the generator towards boundaries finds them in a few hundred cases; more cases or a wider range spend effort where the rules do not change, and one example tests far less.
+  connections:
+    - text: |
+        About 0.69%. Five times from 1,440 minutes all differ with probability $\frac{1440 \cdot 1439 \cdot 1438 \cdot 1437 \cdot 1436}{1440^5} \approx 0.9931$, so a hundred lists find the bug only about half the time. Drawn from ten minutes, 70% of lists collide. The property was right all along; it was the generator that decided whether anyone saw it fail.
+
+        The strongest property of all is agreement with something you already trust: a slow, simple version of the same computation, or a rule about the state of the system that must never be broken. Using such a reference, called an oracle, and checking invariants while the system runs, is [[s6.oracles-and-invariants]]. When the generator's inputs are hostile rather than merely random, the same machinery becomes [[s6.fuzzing]].

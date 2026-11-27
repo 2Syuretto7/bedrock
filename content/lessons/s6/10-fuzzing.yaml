@@ -1,0 +1,870 @@
+concept: s6.fuzzing
+minutes: 80
+claim: You can fuzz code that reads untrusted input, feeding it huge numbers of generated inputs and treating any failure other than a clean rejection as a bug; write a seeded fuzz harness; explain why random bytes rarely get past headers and checksums, and how mutating real samples, generating from a grammar, and keeping inputs that reach new code each get deeper; estimate the inputs a check costs a fuzzer; and turn a crash into a fix by minimising it, keeping it as a regression test, and using round-trip and differential oracles to catch wrong answers as well as crashes.
+recalls: [s6.deterministic-tests-seeds-clocks-and-fakes]
+uses: [s6.property-based-testing, s6.coverage-and-mutation-testing, s6.oracles-and-invariants, s6.what-a-test-can-prove, s4.errors-as-part-of-the-design, s1.exceptions, h0.characters-unicode-and-utf-8, f4.expectation-and-linearity, f4.common-discrete-distributions]
+leads: [s7.tokenising, r2.validating-input, d0.interleavings-and-race-conditions, m1.experiments-as-data]
+starter: |
+  # Scratch space. Throw random strings at a parser and count what happens.
+  import random
+
+  rng = random.Random(1)
+  outcomes = {}
+  for _ in range(1000):
+      text = "".join(rng.choice("0123456789:") for _ in range(rng.randint(0, 5)))
+      try:
+          int(text)
+          result = "parsed"
+      except ValueError:
+          result = "rejected"
+      outcomes[result] = outcomes.get(result, 0) + 1
+  print(outcomes)
+parts:
+  recall:
+    - text: |
+        [[s6.deterministic-tests-seeds-clocks-and-fakes]] made random inputs replayable: seed every generator, log the seed, and a failure can be rerun at will. This lesson takes that idea to its extreme. Instead of a few hundred generated cases checked against careful properties, a fuzzer throws millions of inputs at code and watches for anything going wrong. Three quick pulls first.
+  puzzle:
+    - text: |
+        A photo-upload service checks that every file begins with a particular 4-byte header, and rejects anything else before any of its interesting code runs. A fuzzer sends it files made of random bytes. Each byte has 256 possible values, all equally likely.
+
+        **On average, how many random files must the fuzzer send before one gets past the header check?**
+  intuition:
+    - text: |
+        A suitcase lock has four wheels of ten digits each. Trying combinations blindly means up to 10,000 attempts, about 5,000 on average. Now imagine a cheap lock that clicks softly whenever the first wheel is right, then again when the second is right, and so on. Turn the first wheel until it clicks, keep it, turn the second, and the lock opens in at most 40 turns. The click changes the search from guessing four digits at once to guessing one digit four times.
+
+        A program that checks its input step by step gives a fuzzer the same kind of click, if the fuzzer listens: an input that gets one byte further through the check reaches code that no earlier input reached. The figure compares random bytes with a fuzzer that keeps every input reaching new code and builds on it. Change the length of the header and the number of inputs.
+    - figure: fuzz-header
+      props: { bytes: 4, budget: 4 }
+    - text: |
+        Random bytes pay for the whole header at once: every extra byte multiplies the cost by 256, so 4 bytes cost billions of inputs. The fuzzer that listens for the click pays for one byte at a time, so each extra byte adds roughly the same cost again. That difference, multiplying against adding, is why modern fuzzers measure which code each input reaches.
+  derivation:
+    - text: |
+        **What fuzzing is.** **Fuzzing** means running code on very large numbers of generated inputs, often malformed ones, and reporting any input that makes it misbehave. The targets are programs that read data from outside: parsers, file and image decoders, network protocol handlers, anything that takes text from a form. That data can come from an attacker, so every crash is a possible security hole, the subject of [[r2.validating-input]].
+
+        The oracle is deliberately cheap, because it has to run millions of times. It asks only whether the program misbehaved: a crash, an exception it was not meant to raise, a hang, a broken assertion inside the code. A parser that meets garbage should reject it cleanly, in Python by raising the `ValueError` its documentation promises, the design of [[s4.errors-as-part-of-the-design]]. An `IndexError` or a `KeyError` escaping from deep inside means the code met a case its author never imagined.
+
+        The piece of code that connects a fuzzer to its target is the **harness**: it takes one generated input, calls the target, and sorts the outcome into clean or crash. Like every test in this cluster, it should be deterministic, so the same input always takes the same path; otherwise the fuzzer cannot tell what an input really did, and a crash cannot be replayed.
+    - question:
+        id: derivation-report
+        type: choice
+        system: s2
+        prompt: |
+          A fuzz harness calls a date parser that is documented to raise `ValueError` for bad input. Which outcome should it report as a bug?
+        options:
+          - "An `IndexError` raised from inside the parser"
+          - "A `ValueError` saying the month is out of range"
+          - "A correct date returned for a valid input"
+          - "A `ValueError` for an empty string"
+        answer: 0
+        explanation: |
+          `ValueError` is the parser's promised way of saying no, so those inputs were handled. An `IndexError` means the code indexed past the end of something it assumed was there, an unhandled case and possibly a security problem.
+    - text: |
+        **Where the inputs come from.** There are three main ways to make inputs, and serious fuzzers mix them.
+
+        - **Random** inputs, bytes or characters drawn at random. Cheap and unbiased, and almost always rejected at the first check.
+        - **Mutation-based** inputs, made by taking real samples, a **seed corpus** of valid files, and changing them: flipping bits, replacing bytes, inserting or deleting runs, splicing two samples together. Starting from a valid file means most of its structure survives each change.
+        - **Generation-based** inputs, built from a description of the format, often a grammar that says which pieces may follow which. They get deep into the program, but only along paths the description allows.
+
+        Random inputs die at two kinds of gate. A **magic number**, a fixed header such as the first bytes of every image file, costs $256^k$ tries for $k$ bytes. A **checksum**, a value computed from the rest of the file, is right for only one value in 256 per byte, so almost every mutated file is rejected for a bad checksum before anything interesting runs. Harnesses often recompute the checksum after mutating, or turn the check off in the build being fuzzed.
+    - question:
+        id: derivation-checksum
+        type: numeric
+        system: s2
+        prompt: |
+          A file format ends with a 1-byte checksum of everything before it. A fuzzer mutates valid files at random without fixing the checksum. Roughly what percentage of mutated files still pass the checksum?
+        answer: "0.39"
+        tolerance: "0.02"
+        explanation: |
+          After a change, the stored checksum is effectively a random byte compared with the new correct one, a match with probability $1/256 \approx 0.0039$, or 0.39%. The other 99.6% of the fuzzer's effort dies at the checksum.
+    - text: |
+        **Coverage guidance.** The breakthrough of modern fuzzers is to measure which parts of the program each input reaches, the coverage of [[s6.coverage-and-mutation-testing]], and to use it as the click of the lock. The fuzzer keeps a corpus. On each step it picks an input from the corpus, mutates it, and runs the target. If the new input reaches a branch that no earlier input reached, it joins the corpus; otherwise it is thrown away. Inputs that crash are saved as findings.
+
+        This is a search that keeps its progress. An input that gets one byte further through a header is kept, and its children start from there. A header checked byte by byte costs roughly one byte's worth of guessing per byte, instead of all of them at once. The same happens deeper in: a kept input that reaches the code for one kind of record becomes the parent of inputs that explore that code. Coverage-guided fuzzers run for hours or days, millions of inputs per hour, and public fuzzing services that run them continuously on open-source projects have reported tens of thousands of bugs.
+    - question:
+        id: derivation-loop
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of one round of a coverage-guided fuzzer in order.
+        steps:
+          - "Pick an input from the corpus."
+          - "Mutate it into a new input."
+          - "Run the target on the new input, recording the branches it reaches."
+          - "If it crashed, save it as a finding."
+          - "If it reached a branch never reached before, add it to the corpus."
+        explanation: |
+          The corpus supplies a parent, mutation makes a child, the instrumented run measures it, and the two checks decide whether it is a bug, a new stepping stone, or neither.
+    - text: |
+        **From crash to fix.** A raw finding is often a long, ugly input: 4 KB of mangled bytes. The first job is to **minimise** it, removing pieces as long as the crash still happens, the same shrinking as in [[s6.property-based-testing]], until a few bytes remain that a person can read. Many findings turn out to be the same bug, so fuzzers group them by where they crashed. The minimised input then becomes an ordinary unit test, run on every merge, so the fix can never quietly undo itself.
+
+        Crashes are only the bugs that announce themselves. Two cheap oracles let a fuzzer catch wrong answers too. A **round-trip** oracle checks that turning a parsed value back into text and parsing it again gives the same value. A **differential** oracle runs two implementations of the same thing, an old parser and a new one, or two libraries, on every input and reports any disagreement, one of the oracles of [[s6.oracles-and-invariants]]. Neither needs to know the right answer; each only needs two things that ought to agree.
+    - question:
+        id: derivation-differential
+        type: choice
+        system: s2
+        prompt: |
+          A team is replacing a slow fare-rule parser with a fast new one. What is the cheapest way to fuzz the new parser for wrong answers, not just crashes?
+        options:
+          - "Run both parsers on every generated input and report any input where their results differ"
+          - "Write down the correct result for each of a million generated inputs"
+          - "Fuzz only for crashes, since wrong answers cannot be detected"
+          - "Run the new parser twice on each input and compare"
+        answer: 0
+        explanation: |
+          The old parser is an oracle that already exists. Any disagreement is a bug in one of them, worth a look either way. Running one parser twice only checks determinism, and writing down a million answers by hand is impossible.
+  formal:
+    - text: |
+        **Fuzzing.** Running a target on very many generated inputs and reporting any that make it misbehave: a crash, an unexpected exception, a hang or a failed assertion.
+
+        **Harness.** The code that feeds one input to the target and classifies the outcome. Clean rejections, such as a documented `ValueError`, are not bugs.
+
+        **Input sources.** Random; mutation of a seed corpus; generation from a grammar or other description of the format.
+
+        **Gates.** A $k$-byte magic number costs random inputs about $256^k$ tries; a 1-byte checksum passes about 1 in 256 mutated inputs.
+
+        **Coverage-guided fuzzing.** Mutate inputs from a corpus, and add a new input to the corpus whenever it reaches a branch no earlier input reached.
+
+        **After a finding.** Minimise the input, group findings by crash site, and keep the minimised input as a regression test. Round-trip and differential oracles detect wrong answers as well as crashes.
+  drill:
+    - text: Seconds each. For every input, ask whether the program said no properly.
+    - question:
+        id: drill-keep
+        type: choice
+        system: s1
+        prompt: |
+          Which inputs does a coverage-guided fuzzer add to its corpus?
+        options:
+          - "Inputs that reach a branch no earlier input reached"
+          - "Every input it generates"
+          - "Only inputs that the target accepts"
+          - "Only inputs that crash the target"
+        answer: 0
+        explanation: New coverage is the click; inputs that reach nothing new are thrown away, and crashing inputs are saved separately as findings.
+    - question:
+        id: drill-night
+        type: numeric
+        system: s1
+        prompt: |
+          A fuzzer runs 2,000 inputs a second. How many inputs does it try in a 12-hour night?
+        answer: "86400000"
+        explanation: $2{,}000 \times 12 \times 3{,}600 = 8{,}64{,}00{,}000$ inputs, which is why a cheap oracle matters.
+    - question:
+        id: predict-two-bytes
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(256 ** 2)
+        output: "65536"
+        explanation: A 2-byte magic number has 65,536 possible values, so random inputs pass it about once in 65,536 tries.
+    - question:
+        id: predict-error-name
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          try:
+              "07"[5]
+          except Exception as error:
+              print(type(error).__name__)
+        output: "IndexError"
+        explanation: Indexing past the end of a string raises `IndexError`, the kind of exception a harness reports as a crash.
+  work:
+    - text: Slower now. Build a fuzzer, fix what it finds, then make it listen for the click.
+    - question:
+        id: write-harness
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `fuzz`, a seeded harness that throws random strings at a target and reports the first crash. The program fuzzes a time parser and should print `(':', 'IndexError')`.
+        starter: |
+          import random
+
+
+          def fuzz(target, alphabet, seed, runs, max_len):
+              # Call target on `runs` random strings, using rng = random.Random(seed).
+              # For each string, draw its length with rng.randint(0, max_len), then
+              # each character with rng.choice(alphabet). A ValueError means the input
+              # was rejected cleanly, which is fine. Any other exception is a crash:
+              # return (input, name of the exception's type) for the first crash, or
+              # None if nothing crashed.
+              return None
+
+
+          def minutes(text):
+              # "7:45" or "07:45" -> 465. Anything else should raise ValueError.
+              parts = text.split(":")
+              if len(parts) != 2:
+                  raise ValueError("expected one colon")
+              hours, mins = parts
+              if hours[0] == "0":
+                  hours = hours[1:]
+              if not (hours.isdigit() and mins.isdigit() and len(mins) == 2):
+                  raise ValueError("expected digits")
+              if int(hours) > 23 or int(mins) > 59:
+                  raise ValueError("out of range")
+              return int(hours) * 60 + int(mins)
+
+
+          print(fuzz(minutes, "0123456789:", 7, 1000, 5))
+        solution: |
+          import random
+
+
+          def fuzz(target, alphabet, seed, runs, max_len):
+              # Call target on `runs` random strings, using rng = random.Random(seed).
+              # For each string, draw its length with rng.randint(0, max_len), then
+              # each character with rng.choice(alphabet). A ValueError means the input
+              # was rejected cleanly, which is fine. Any other exception is a crash:
+              # return (input, name of the exception's type) for the first crash, or
+              # None if nothing crashed.
+              rng = random.Random(seed)
+              for _ in range(runs):
+                  n = rng.randint(0, max_len)
+                  text = "".join(rng.choice(alphabet) for _ in range(n))
+                  try:
+                      target(text)
+                  except ValueError:
+                      pass
+                  except Exception as error:
+                      return text, type(error).__name__
+              return None
+
+
+          def minutes(text):
+              # "7:45" or "07:45" -> 465. Anything else should raise ValueError.
+              parts = text.split(":")
+              if len(parts) != 2:
+                  raise ValueError("expected one colon")
+              hours, mins = parts
+              if hours[0] == "0":
+                  hours = hours[1:]
+              if not (hours.isdigit() and mins.isdigit() and len(mins) == 2):
+                  raise ValueError("expected digits")
+              if int(hours) > 23 or int(mins) > 59:
+                  raise ValueError("out of range")
+              return int(hours) * 60 + int(mins)
+
+
+          print(fuzz(minutes, "0123456789:", 7, 1000, 5))
+        tests: |
+          def _ref(_t, _a, _seed, _runs, _max):
+              _r = random.Random(_seed)
+              for _ in range(_runs):
+                  _n = _r.randint(0, _max)
+                  _s = "".join(_r.choice(_a) for _ in range(_n))
+                  try:
+                      _t(_s)
+                  except ValueError:
+                      pass
+                  except Exception as _e:
+                      return _s, type(_e).__name__
+              return None
+
+
+          def _clean(_s):
+              raise ValueError("rejected")
+
+
+          assert fuzz(_clean, "ab", 1, 300, 4) is None, "A target that only ever raises ValueError never crashes, so fuzz should return None"
+
+
+          def _empty(_s):
+              if _s == "":
+                  return {}["missing"]
+              raise ValueError("rejected")
+
+
+          _got = fuzz(_empty, "ab", 3, 200, 4)
+          assert _got == ("", "KeyError"), "A target that crashes only on the empty string should be caught with ('', 'KeyError'), since lengths start at 0; got " + repr(_got)
+
+
+          def _three(_s):
+              if len(_s) == 3:
+                  return 1 // 0
+              return len(_s)
+
+
+          for _seed in [1, 2, 3, 4, 5]:
+              _got = fuzz(_three, "abc", _seed, 100, 6)
+              assert _got is not None and len(_got[0]) == 3 and _got[1] == "ZeroDivisionError", "With seed " + str(_seed) + ", a target that crashes on every string of length 3 should be caught; got " + repr(_got)
+
+
+          def _xy(_s):
+              if "x" in _s:
+                  return [][0]
+              if "y" in _s:
+                  return {}["y"]
+              raise ValueError("rejected")
+
+
+          for _seed in [10, 11, 12]:
+              _want = _ref(_xy, "xyz", _seed, 50, 3)
+              _got = fuzz(_xy, "xyz", _seed, 50, 3)
+              assert _got == _want, "With seed " + str(_seed) + ", the first crash is " + repr(_want) + ", but fuzz returned " + repr(_got)
+              assert fuzz(_xy, "xyz", _seed, 50, 3) == _got, "The same seed should give the same result every time"
+          assert output.strip() == "(':', 'IndexError')", "The program should print (':', 'IndexError')"
+        wrong:
+          - |
+            import random
+
+
+            def fuzz(target, alphabet, seed, runs, max_len):
+                # Call target on `runs` random strings, using rng = random.Random(seed).
+                # For each string, draw its length with rng.randint(0, max_len), then
+                # each character with rng.choice(alphabet). A ValueError means the input
+                # was rejected cleanly, which is fine. Any other exception is a crash:
+                # return (input, name of the exception's type) for the first crash, or
+                # None if nothing crashed.
+                rng = random.Random(seed)
+                for _ in range(runs):
+                    n = rng.randint(0, max_len)
+                    text = "".join(rng.choice(alphabet) for _ in range(n))
+                    try:
+                        target(text)
+                    except Exception as error:
+                        return text, type(error).__name__
+                return None
+
+
+            def minutes(text):
+                # "7:45" or "07:45" -> 465. Anything else should raise ValueError.
+                parts = text.split(":")
+                if len(parts) != 2:
+                    raise ValueError("expected one colon")
+                hours, mins = parts
+                if hours[0] == "0":
+                    hours = hours[1:]
+                if not (hours.isdigit() and mins.isdigit() and len(mins) == 2):
+                    raise ValueError("expected digits")
+                if int(hours) > 23 or int(mins) > 59:
+                    raise ValueError("out of range")
+                return int(hours) * 60 + int(mins)
+
+
+            print(fuzz(minutes, "0123456789:", 7, 1000, 5))
+          - |
+            import random
+
+
+            def fuzz(target, alphabet, seed, runs, max_len):
+                # Call target on `runs` random strings, using rng = random.Random(seed).
+                # For each string, draw its length with rng.randint(1, max_len), then
+                # each character with rng.choice(alphabet). A ValueError means the input
+                # was rejected cleanly, which is fine. Any other exception is a crash:
+                # return (input, name of the exception's type) for the first crash, or
+                # None if nothing crashed.
+                rng = random.Random(seed)
+                for _ in range(runs):
+                    n = rng.randint(1, max_len)
+                    text = "".join(rng.choice(alphabet) for _ in range(n))
+                    try:
+                        target(text)
+                    except ValueError:
+                        pass
+                    except Exception as error:
+                        return text, type(error).__name__
+                return None
+
+
+            def minutes(text):
+                # "7:45" or "07:45" -> 465. Anything else should raise ValueError.
+                parts = text.split(":")
+                if len(parts) != 2:
+                    raise ValueError("expected one colon")
+                hours, mins = parts
+                if hours[0] == "0":
+                    hours = hours[1:]
+                if not (hours.isdigit() and mins.isdigit() and len(mins) == 2):
+                    raise ValueError("expected digits")
+                if int(hours) > 23 or int(mins) > 59:
+                    raise ValueError("out of range")
+                return int(hours) * 60 + int(mins)
+
+
+            print(fuzz(minutes, "0123456789:", 7, 1000, 5))
+          - |
+            import random
+
+
+            def fuzz(target, alphabet, seed, runs, max_len):
+                # Call target on `runs` random strings, using rng = random.Random(seed).
+                # For each string, draw its length with rng.randint(0, max_len), then
+                # each character with rng.choice(alphabet). A ValueError means the input
+                # was rejected cleanly, which is fine. Any other exception is a crash:
+                # return (input, name of the exception's type) for the first crash, or
+                # None if nothing crashed.
+                rng = random.Random(seed)
+                n = rng.randint(0, max_len)
+                for _ in range(runs):
+                    text = "".join(rng.choice(alphabet) for _ in range(n))
+                    try:
+                        target(text)
+                    except ValueError:
+                        pass
+                    except Exception as error:
+                        return text, type(error).__name__
+                return None
+
+
+            def minutes(text):
+                # "7:45" or "07:45" -> 465. Anything else should raise ValueError.
+                parts = text.split(":")
+                if len(parts) != 2:
+                    raise ValueError("expected one colon")
+                hours, mins = parts
+                if hours[0] == "0":
+                    hours = hours[1:]
+                if not (hours.isdigit() and mins.isdigit() and len(mins) == 2):
+                    raise ValueError("expected digits")
+                if int(hours) > 23 or int(mins) > 59:
+                    raise ValueError("out of range")
+                return int(hours) * 60 + int(mins)
+
+
+            print(fuzz(minutes, "0123456789:", 7, 1000, 5))
+        explanation: |
+          Make one generator from the seed, and for each run draw a length and then that many characters. Call the target inside `try`: a `ValueError` is a clean rejection and the loop moves on, and any other exception is returned with its type's name. Treating `ValueError` as a crash reports correct behaviour as a bug; starting lengths at 1 never tries the empty string, a favourite crash; and drawing one length for every run tests only strings of that length.
+    - question:
+        id: fix-time-parser
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The fuzzer found that `minutes(":")` raises `IndexError` instead of rejecting the input. The program should print five lines, from `07:45 465` to `24:00 rejected`. Its second line is `0:05 rejected`, a second bug, and then it crashes. Fix both without letting anything but `ValueError` escape.
+        starter: |
+          def minutes(text):
+              # "7:45" or "07:45" -> 465: one or two digits of hours from 0 to 23, a
+              # colon, and exactly two digits of minutes from 00 to 59. Anything else
+              # must raise ValueError, never any other exception.
+              parts = text.split(":")
+              if len(parts) != 2:
+                  raise ValueError("expected one colon")
+              hours, mins = parts
+              if hours[0] == "0":
+                  hours = hours[1:]
+              if not (hours.isdigit() and mins.isdigit() and len(hours) <= 2 and len(mins) == 2):
+                  raise ValueError("expected digits")
+              if int(hours) > 23 or int(mins) > 59:
+                  raise ValueError("out of range")
+              return int(hours) * 60 + int(mins)
+
+
+          for text in ["07:45", "0:05", ":45", "7:5", "24:00"]:
+              try:
+                  print(text, minutes(text))
+              except ValueError:
+                  print(text, "rejected")
+        solution: |
+          def minutes(text):
+              # "7:45" or "07:45" -> 465: one or two digits of hours from 0 to 23, a
+              # colon, and exactly two digits of minutes from 00 to 59. Anything else
+              # must raise ValueError, never any other exception.
+              parts = text.split(":")
+              if len(parts) != 2:
+                  raise ValueError("expected one colon")
+              hours, mins = parts
+              if not (hours.isdigit() and mins.isdigit() and len(hours) <= 2 and len(mins) == 2):
+                  raise ValueError("expected digits")
+              if int(hours) > 23 or int(mins) > 59:
+                  raise ValueError("out of range")
+              return int(hours) * 60 + int(mins)
+
+
+          for text in ["07:45", "0:05", ":45", "7:5", "24:00"]:
+              try:
+                  print(text, minutes(text))
+              except ValueError:
+                  print(text, "rejected")
+        tests: |
+          import random as _random
+
+
+          def _spec(_t):
+              if _t.count(":") != 1:
+                  return None
+              _h, _m = _t.split(":")
+              if not (1 <= len(_h) <= 2 and len(_m) == 2 and all(_c in "0123456789" for _c in _h + _m)):
+                  return None
+              if int(_h) > 23 or int(_m) > 59:
+                  return None
+              return int(_h) * 60 + int(_m)
+
+
+          def _call(_t):
+              try:
+                  return minutes(_t)
+              except ValueError:
+                  return None
+
+
+          for _t in ["07:45", "7:45", "0:05", "00:00", "23:59", "9:00", ":45", ":", "", "0:", "24:00", "12:60", "7:5", "007:45", "+7:45", "-1:30", " 7:45", "7:45 ", "1:2:3"]:
+              try:
+                  _got = _call(_t)
+              except Exception as _e:
+                  raise AssertionError("minutes(" + repr(_t) + ") should return a number or raise ValueError, not raise " + type(_e).__name__)
+              _want = _spec(_t)
+              assert _got == _want, "minutes(" + repr(_t) + ") should " + ("give " + str(_want) if _want is not None else "raise ValueError") + ", not " + ("raise ValueError" if _got is None else "give " + str(_got))
+
+          _rng = _random.Random(11)
+          for _ in range(3000):
+              _t = "".join(_rng.choice("0123456789: +-") for _ in range(_rng.randint(0, 6)))
+              try:
+                  _got = _call(_t)
+              except Exception as _e:
+                  raise AssertionError("minutes(" + repr(_t) + ") raised " + type(_e).__name__ + "; it should only ever raise ValueError")
+              assert _got == _spec(_t), "minutes(" + repr(_t) + ") gave " + repr(_got) + " but should give " + repr(_spec(_t)) + " (None meaning ValueError)"
+          assert output.splitlines() == ["07:45 465", "0:05 5", ":45 rejected", "7:5 rejected", "24:00 rejected"], "The program should print five lines, from 07:45 465 to 24:00 rejected"
+        wrong:
+          - |
+            def minutes(text):
+                # "7:45" or "07:45" -> 465: one or two digits of hours from 0 to 23, a
+                # colon, and exactly two digits of minutes from 00 to 59. Anything else
+                # must raise ValueError, never any other exception.
+                parts = text.split(":")
+                if len(parts) != 2:
+                    raise ValueError("expected one colon")
+                hours, mins = parts
+                if hours and hours[0] == "0":
+                    hours = hours[1:]
+                if not (hours.isdigit() and mins.isdigit() and len(hours) <= 2 and len(mins) == 2):
+                    raise ValueError("expected digits")
+                if int(hours) > 23 or int(mins) > 59:
+                    raise ValueError("out of range")
+                return int(hours) * 60 + int(mins)
+
+
+            for text in ["07:45", "0:05", ":45", "7:5", "24:00"]:
+                try:
+                    print(text, minutes(text))
+                except ValueError:
+                    print(text, "rejected")
+          - |
+            def minutes(text):
+                # "7:45" or "07:45" -> 465: one or two digits of hours from 0 to 23, a
+                # colon, and exactly two digits of minutes from 00 to 59. Anything else
+                # must raise ValueError, never any other exception.
+                try:
+                    parts = text.split(":")
+                    if len(parts) != 2:
+                        raise ValueError("expected one colon")
+                    hours, mins = parts
+                    if hours[0] == "0":
+                        hours = hours[1:]
+                    if not (hours.isdigit() and mins.isdigit() and len(hours) <= 2 and len(mins) == 2):
+                        raise ValueError("expected digits")
+                    if int(hours) > 23 or int(mins) > 59:
+                        raise ValueError("out of range")
+                    return int(hours) * 60 + int(mins)
+                except IndexError:
+                    raise ValueError("bad input")
+
+
+            for text in ["07:45", "0:05", ":45", "7:5", "24:00"]:
+                try:
+                    print(text, minutes(text))
+                except ValueError:
+                    print(text, "rejected")
+          - |
+            def minutes(text):
+                # "7:45" or "07:45" -> 465: one or two digits of hours from 0 to 23, a
+                # colon, and exactly two digits of minutes from 00 to 59. Anything else
+                # must raise ValueError, never any other exception.
+                parts = text.split(":")
+                if len(parts) != 2:
+                    raise ValueError("expected one colon")
+                hours, mins = parts
+                if len(hours) > 2 or len(mins) != 2:
+                    raise ValueError("expected digits")
+                if int(hours) > 23 or int(mins) > 59:
+                    raise ValueError("out of range")
+                return int(hours) * 60 + int(mins)
+
+
+            for text in ["07:45", "0:05", ":45", "7:5", "24:00"]:
+                try:
+                    print(text, minutes(text))
+                except ValueError:
+                    print(text, "rejected")
+        explanation: |
+          The lines that strip a leading zero by hand index an empty string when the hours are missing, and turn "0" into nothing, so midnight hours are rejected. `int` already accepts a leading zero, so delete the two lines and let the digit and length checks do their work. Guarding the index stops the crash but still rejects 0:05; catching `IndexError` and raising `ValueError` hides the crash the same way; and dropping the digit check lets `int` accept "+7" and "-1".
+    - question:
+        id: write-guided
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `guided`, a fuzzer that keeps only inputs reaching new branches and builds on them. The program should print two lines: the corpus, five inputs from AAAA up to BDRK, and then the six branch names it reached.
+        starter: |
+          import random
+
+
+          def guided(target, start, mutate, rng, steps):
+              # target(text) returns the set of branch names that the input reached.
+              # The corpus starts as [start], and seen as the branches start reached.
+              # On each step, pick an input from the corpus with rng.choice, mutate it
+              # with mutate(text, rng), and run target on the result. If it reaches
+              # any branch not in seen, add it to the corpus and its branches to seen.
+              # Return (corpus, seen).
+              return [start], target(start)
+
+
+          def header(text):
+              # A file must begin "BDRK". The check goes letter by letter, so each
+              # correct letter reaches a new branch.
+              reached = {"start"}
+              for i in range(4):
+                  if i >= len(text) or text[i] != "BDRK"[i]:
+                      return reached
+                  reached.add("letter " + str(i + 1))
+              reached.add("body")
+              return reached
+
+
+          def mutate(text, rng):
+              # Replace one random character with a random capital letter.
+              i = rng.randint(0, len(text) - 1)
+              return text[:i] + rng.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + text[i + 1:]
+
+
+          corpus, seen = guided(header, "AAAA", mutate, random.Random(1), 20000)
+          print(corpus)
+          print(sorted(seen))
+        solution: |
+          import random
+
+
+          def guided(target, start, mutate, rng, steps):
+              # target(text) returns the set of branch names that the input reached.
+              # The corpus starts as [start], and seen as the branches start reached.
+              # On each step, pick an input from the corpus with rng.choice, mutate it
+              # with mutate(text, rng), and run target on the result. If it reaches
+              # any branch not in seen, add it to the corpus and its branches to seen.
+              # Return (corpus, seen).
+              corpus = [start]
+              seen = set(target(start))
+              for _ in range(steps):
+                  child = mutate(rng.choice(corpus), rng)
+                  reached = target(child)
+                  if not reached <= seen:
+                      corpus.append(child)
+                      seen = seen | reached
+              return corpus, seen
+
+
+          def header(text):
+              # A file must begin "BDRK". The check goes letter by letter, so each
+              # correct letter reaches a new branch.
+              reached = {"start"}
+              for i in range(4):
+                  if i >= len(text) or text[i] != "BDRK"[i]:
+                      return reached
+                  reached.add("letter " + str(i + 1))
+              reached.add("body")
+              return reached
+
+
+          def mutate(text, rng):
+              # Replace one random character with a random capital letter.
+              i = rng.randint(0, len(text) - 1)
+              return text[:i] + rng.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + text[i + 1:]
+
+
+          corpus, seen = guided(header, "AAAA", mutate, random.Random(1), 20000)
+          print(corpus)
+          print(sorted(seen))
+        tests: |
+          _c, _s = guided(header, "AAAA", mutate, random.Random(5), 0)
+          assert _c == ["AAAA"] and _s == {"start"}, "With 0 steps the corpus is just the start input and seen is what it reached; got " + repr((_c, _s))
+          for _seed in [1, 2, 3]:
+              _c, _s = guided(header, "QQQQ", mutate, random.Random(_seed), 20000)
+              assert _c[0] == "QQQQ", "The corpus should begin with the start input"
+              assert "body" in _s, "With seed " + str(_seed) + " and 20,000 steps, building on kept inputs should get past the whole header and reach 'body'; seen was " + repr(sorted(_s))
+              _union = set()
+              for _i, _x in enumerate(_c):
+                  _r = header(_x)
+                  assert _i == 0 or not _r <= _union, "Corpus entry " + repr(_x) + " reaches nothing that earlier entries did not, so it should not have been kept"
+                  _union = _union | _r
+              assert _union == _s, "seen should be exactly the branches the corpus reaches"
+              assert len(_c) == 5, "Each kept input should add one more correct letter, so the corpus should end with 5 entries, not " + str(len(_c))
+
+
+          def _tri(_t):
+              _r = {"in"}
+              if _t.count("A") >= 1:
+                  _r.add("a1")
+              if _t.count("A") >= 2:
+                  _r.add("a2")
+              if _t.count("B") >= 1:
+                  _r.add("b1")
+              return _r
+
+
+          _c, _s = guided(_tri, "ZZZ", mutate, random.Random(9), 5000)
+          assert _s == {"in", "a1", "a2", "b1"}, "On a target with four branches, all four should be reached; got " + repr(sorted(_s))
+          assert len(_c) <= 4, "Only inputs that reach something new should be kept, so at most 4 entries; got " + str(len(_c))
+          assert output.splitlines()[0] == "['AAAA', 'BAAA', 'BDAA', 'BDRA', 'BDRK']", "The program's first line should be the corpus, from AAAA up to BDRK"
+        wrong:
+          - |
+            import random
+
+
+            def guided(target, start, mutate, rng, steps):
+                # target(text) returns the set of branch names that the input reached.
+                # The corpus starts as [start], and seen as the branches start reached.
+                # On each step, pick an input from the corpus with rng.choice, mutate it
+                # with mutate(text, rng), and run target on the result. If it reaches
+                # any branch not in seen, add it to the corpus and its branches to seen.
+                # Return (corpus, seen).
+                corpus = [start]
+                seen = set(target(start))
+                for _ in range(steps):
+                    child = mutate(start, rng)
+                    rng.choice(corpus)
+                    reached = target(child)
+                    if not reached <= seen:
+                        corpus.append(child)
+                        seen = seen | reached
+                return corpus, seen
+
+
+            def header(text):
+                # A file must begin "BDRK". The check goes letter by letter, so each
+                # correct letter reaches a new branch.
+                reached = {"start"}
+                for i in range(4):
+                    if i >= len(text) or text[i] != "BDRK"[i]:
+                        return reached
+                    reached.add("letter " + str(i + 1))
+                reached.add("body")
+                return reached
+
+
+            def mutate(text, rng):
+                # Replace one random character with a random capital letter.
+                i = rng.randint(0, len(text) - 1)
+                return text[:i] + rng.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + text[i + 1:]
+
+
+            corpus, seen = guided(header, "AAAA", mutate, random.Random(1), 20000)
+            print(corpus)
+            print(sorted(seen))
+          - |
+            import random
+
+
+            def guided(target, start, mutate, rng, steps):
+                # target(text) returns the set of branch names that the input reached.
+                # The corpus starts as [start], and seen as the branches start reached.
+                # On each step, pick an input from the corpus with rng.choice, mutate it
+                # with mutate(text, rng), and run target on the result. If it reaches
+                # any branch not in seen, add it to the corpus and its branches to seen.
+                # Return (corpus, seen).
+                corpus = [start]
+                seen = set(target(start))
+                for _ in range(steps):
+                    child = mutate(rng.choice(corpus), rng)
+                    reached = target(child)
+                    if True:
+                        corpus.append(child)
+                        seen = seen | reached
+                return corpus, seen
+
+
+            def header(text):
+                # A file must begin "BDRK". The check goes letter by letter, so each
+                # correct letter reaches a new branch.
+                reached = {"start"}
+                for i in range(4):
+                    if i >= len(text) or text[i] != "BDRK"[i]:
+                        return reached
+                    reached.add("letter " + str(i + 1))
+                reached.add("body")
+                return reached
+
+
+            def mutate(text, rng):
+                # Replace one random character with a random capital letter.
+                i = rng.randint(0, len(text) - 1)
+                return text[:i] + rng.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + text[i + 1:]
+
+
+            corpus, seen = guided(header, "AAAA", mutate, random.Random(1), 20000)
+            print(corpus)
+            print(sorted(seen))
+          - |
+            import random
+
+
+            def guided(target, start, mutate, rng, steps):
+                # target(text) returns the set of branch names that the input reached.
+                # The corpus starts as [start], and seen as the branches start reached.
+                # On each step, pick an input from the corpus with rng.choice, mutate it
+                # with mutate(text, rng), and run target on the result. If it reaches
+                # any branch not in seen, add it to the corpus and its branches to seen.
+                # Return (corpus, seen).
+                corpus = [start]
+                seen = set(target(start))
+                for _ in range(steps):
+                    parent = rng.choice(corpus)
+                    child = mutate(parent, rng)
+                    reached = target(child)
+                    if not reached <= target(parent):
+                        corpus.append(child)
+                        seen = seen | reached
+                return corpus, seen
+
+
+            def header(text):
+                # A file must begin "BDRK". The check goes letter by letter, so each
+                # correct letter reaches a new branch.
+                reached = {"start"}
+                for i in range(4):
+                    if i >= len(text) or text[i] != "BDRK"[i]:
+                        return reached
+                    reached.add("letter " + str(i + 1))
+                reached.add("body")
+                return reached
+
+
+            def mutate(text, rng):
+                # Replace one random character with a random capital letter.
+                i = rng.randint(0, len(text) - 1)
+                return text[:i] + rng.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + text[i + 1:]
+
+
+            corpus, seen = guided(header, "AAAA", mutate, random.Random(1), 20000)
+            print(corpus)
+            print(sorted(seen))
+        explanation: |
+          Each step mutates an input chosen from the corpus, and the child is kept only if its branches are not all in `seen`. Mutating the start input every time is blind fuzzing again, and stalls after the first letter; keeping every child buries the few useful inputs among thousands of useless ones; and comparing a child with its own parent instead of with everything seen keeps duplicates of inputs already in the corpus.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, random files must begin with one particular 4-byte header, each byte having 256 equally likely values. On average, how many random files must the fuzzer send before one gets past the check?
+        answer: "4294967296"
+        tolerance: "100000000"
+        explanation: |
+          A random file has the right header with probability $1/256^4 = 1/4{,}29{,}49{,}67{,}296$, and the number of tries until the first success is geometric with mean $256^4$, about 4.3 billion files.
+    - question:
+        id: work-finding
+        type: choice
+        system: s2
+        prompt: |
+          Priya's overnight fuzzing run reports a crash in an image decoder on a 4 KB input. What should she do first?
+        options:
+          - "Minimise the input to the few bytes that still crash, and keep it as a regression test before fixing the bug."
+          - "Fix whatever looks wrong near the crash and rerun the fuzzer with a new seed."
+          - "Ignore it unless it happens again tomorrow."
+          - "Add a try block around the decoder that returns an empty image on any exception."
+        answer: 0
+        explanation: |
+          A minimised input shows the cause and becomes a test that proves the fix and guards it for ever. Rerunning with a new seed may never hit the bug again; ignoring a reproducible crash wastes the finding; and swallowing every exception hides this bug and every future one.
+  connections:
+    - text: |
+        About 4.3 billion. A random file has the right 4-byte header once in $256^4 = 4{,}29{,}49{,}67{,}296$ tries, so the fuzzer spends almost all its time being rejected at the door. A fuzzer that keeps inputs reaching new code gets through a header checked byte by byte in a few thousand inputs, and then spends its millions on the code behind it.
+
+        Fuzzing finishes the testing toolkit: examples pin down behaviour, properties generalise it, fakes and seeds make it repeatable, and fuzzers search the inputs nobody thought to write. The first code that a fuzzer usually meets in a language implementation is the part that splits raw text into words and symbols, which is where the next cluster begins, in [[s7.tokenising]]. Treating outside input as hostile, the attitude a fuzzer takes, returns in [[r2.validating-input]]; and the habit of recording seeds and corpora so that runs can be compared returns in [[m1.experiments-as-data]].
