@@ -8928,6 +8928,94 @@ function TestDoubles(props: Props) {
     </Frame>
   );
 }
+const PR_COUNTS = [20, 100, 500];
+
+function prCases(n: number, small: boolean) {
+  // A fixed generator, so the same cases appear on every visit.
+  const out: number[][] = [];
+  let s = 1440;
+  for (let i = 0; i < n; i++) {
+    const c: number[] = [];
+    for (let j = 0; j < 5; j++) {
+      s = (s * 48271) % 2147483647;
+      c.push(small ? s % 10 : s % 1440);
+    }
+    out.push(c);
+  }
+  return out;
+}
+
+function prFails(xs: number[]) {
+  return new Set(xs).size < xs.length;
+}
+
+function prShrink(xs: number[]) {
+  let cur = [...xs];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < cur.length; i++) {
+      const t = [...cur.slice(0, i), ...cur.slice(i + 1)];
+      if (prFails(t)) {
+        cur = t;
+        changed = true;
+        break;
+      }
+    }
+  }
+  return cur;
+}
+
+/** A property test of merge_bookings, which loses bookings made at the same minute: how the generator decides whether the bug is found. */
+function PropertyRuns(props: Props) {
+  const startN = Math.round(num(props.cases, 100));
+  const [n, setN] = useState(PR_COUNTS.includes(startN) ? startN : 100);
+  const [small, setSmall] = useState(props.gen === "small");
+  const cases = prCases(n, small);
+  const failing = cases.filter(prFails);
+  const first = failing[0];
+  const shrunk = first ? prShrink(first) : null;
+  const chance = small ? "69.8%" : "0.69%";
+  const range = small ? "minutes 0 to 9 only" : "all 1,440 minutes of a day";
+  const show = (xs: number[]) => `[${xs.join(", ")}]`;
+  const result = first && shrunk
+    ? `${plural(failing.length, "list")} ${failing.length === 1 ? "fails" : "fail"} the property. The first failure, ${show(first)}, shrinks to ${show(shrunk)}: two bookings at the same minute, and the bug is plain to see.`
+    : "None of them repeats a minute, so every case passes and the bug goes unnoticed.";
+  const summary = `The property: merging a list of bookings keeps every booking. ${group(n)} random lists of 5 booking times, drawn from ${range}, where any one list repeats a minute with chance ${chance}. ${result}`;
+  const cols = 50;
+  const cell = 440 / cols;
+  return (
+    <Frame
+      title="Random cases against one property"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">cases</span>
+          {PR_COUNTS.map((c) => (
+            <button key={c} type="button" className="btn btn-secondary btn-small" aria-pressed={c === n} onClick={() => setN(c)}>
+              {group(c)}
+            </button>
+          ))}
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={small} onClick={() => setSmall(!small)}>
+            draw from a small range
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 150" role="img" aria-label={first ? `${failing.length} of ${n} cases fail` : `All ${n} cases pass`}>
+        <text x={10} y={14} className="fig-small">
+          each square is one generated list; filled squares fail
+        </text>
+        {cases.map((c, i) => (
+          <rect key={i} x={10 + (i % cols) * cell} y={24 + Math.floor(i / cols) * cell} width={cell - 1.5} height={cell - 1.5} className={prFails(c) ? "fig-accent" : "fig-ghost"} />
+        ))}
+        <text x={10} y={130} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {shrunk ? `failing: ${failing.length} of ${group(n)}; smallest failing case: ${show(shrunk)}` : `failing: 0 of ${group(n)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -10279,6 +10367,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "boundary-tests": BoundaryTests,
   "test-order": TestOrder,
   "test-doubles": TestDoubles,
+  "property-runs": PropertyRuns,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

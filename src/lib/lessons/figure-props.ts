@@ -136,6 +136,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "boundary-tests": z.strictObject({ random: z.number().optional(), boundary: z.boolean().optional() }),
   "test-order": z.strictObject({ order: z.string().optional(), fresh: z.boolean().optional() }),
   "test-doubles": z.strictObject({ double: z.string().optional() }),
+  "property-runs": z.strictObject({ cases: z.number().optional(), gen: z.string().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
