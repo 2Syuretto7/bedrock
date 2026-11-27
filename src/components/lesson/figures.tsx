@@ -9394,6 +9394,103 @@ function MonthEnd(props: Props) {
     </Frame>
   );
 }
+function fhGuidedSteps(len: number) {
+  // One run of a fuzzer that keeps inputs reaching new code: it mutates one random byte of its
+  // best input, and keeps the result when one more byte of the header is right.
+  const reached: number[] = [0];
+  let s = 2027;
+  let matched = 0;
+  let step = 0;
+  while (matched < len && step < 1000000) {
+    step += 1;
+    s = (s * 48271) % 2147483647;
+    const pos = s % len;
+    s = (s * 48271) % 2147483647;
+    const value = s % 256;
+    if (pos === matched && value === 7) {
+      matched += 1;
+      reached.push(step);
+    }
+  }
+  return reached;
+}
+
+/** How many inputs a fuzzer needs to get past a header check: random bytes against keeping inputs that reach new code. */
+function FuzzHeader(props: Props) {
+  const [len, setLen] = useState(clamp(Math.round(num(props.bytes, 4)), 1, 4));
+  const [power, setPower] = useState(clamp(Math.round(num(props.budget, 4)), 1, 10));
+  const budget = 10 ** power;
+  const guided = fhGuidedSteps(len);
+  const randomAt: number[] = [0];
+  for (let k = 1; k <= len; k++) randomAt.push(256 ** k);
+  const randomGot = randomAt.filter((n, k) => k > 0 && n <= budget).length;
+  const guidedGot = guided.filter((n, k) => k > 0 && n <= budget).length;
+  const total = 256 ** len;
+  const summary =
+    `A ${plural(len, "byte")} header. After ${group(budget)} inputs, random bytes have on average got ${randomGot} of ${len} header bytes right` +
+    (randomGot === len ? "" : `; they need about ${group(total)} inputs to get past it`) +
+    `. The fuzzer that keeps inputs reaching new code ` +
+    (guidedGot === len ? `got past the whole header after ${group(guided[len])} inputs, and every input since has tested the code behind it.` : `has ${guidedGot} of ${len} bytes right so far.`);
+  const x = (n: number) => 40 + (Math.log10(Math.max(1, n)) / 10) * 400;
+  const y = (k: number) => 130 - (k / len) * 100;
+  const stairs = (at: number[]) => {
+    const pts: string[] = [`${x(1)},${y(0)}`];
+    for (let k = 1; k < at.length; k++) {
+      if (at[k] > 1e10) break;
+      pts.push(`${x(at[k])},${y(k - 1)}`, `${x(at[k])},${y(k)}`);
+    }
+    const last = at.filter((n) => n <= 1e10).length - 1;
+    pts.push(`${x(1e10)},${y(last)}`);
+    return pts.join(" ");
+  };
+  return (
+    <Frame
+      title="Getting past a header check"
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="header bytes" value={len} min={1} max={4} onChange={setLen} />
+          <Slider label="inputs tried" value={power} min={1} max={10} onChange={setPower} text={group(budget)} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 190" role="img" aria-label={`After ${group(budget)} inputs: random ${randomGot} of ${len} bytes, guided ${guidedGot} of ${len}`}>
+        <text x={10} y={14} className="fig-small">
+          header bytes right, against inputs tried (each mark is ten times more)
+        </text>
+        {Array.from({ length: len + 1 }, (_, k) => (
+          <g key={k}>
+            <line x1={40} y1={y(k)} x2={440} y2={y(k)} className="fig-grid" />
+            <text x={30} y={y(k) + 4} textAnchor="end" className="fig-small">
+              {k}
+            </text>
+          </g>
+        ))}
+        {Array.from({ length: 11 }, (_, p) => (
+          <line key={p} x1={x(10 ** p)} y1={130} x2={x(10 ** p)} y2={135} className="fig-axis" />
+        ))}
+        <text x={x(1)} y={148} className="fig-small">
+          1
+        </text>
+        <text x={x(1e5)} y={148} textAnchor="middle" className="fig-small">
+          1,00,000
+        </text>
+        <text x={x(1e10)} y={148} textAnchor="end" className="fig-small">
+          10,00,00,00,000
+        </text>
+        <polyline points={stairs(randomAt)} className="fig-line" />
+        <polyline points={stairs(guided)} className="fig-accent-line" fill="none" />
+        <line x1={x(budget)} y1={24} x2={x(budget)} y2={130} className="fig-guide" />
+        <text x={10} y={168} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`thick line: keeps new coverage, ${guidedGot} of ${len}`}
+        </text>
+        <text x={10} y={184} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`thin line: random bytes, on average, ${randomGot} of ${len}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -10751,6 +10848,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "mutation-score": MutationScore,
   "sleep-poll": SleepPoll,
   "month-end": MonthEnd,
+  "fuzz-header": FuzzHeader,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

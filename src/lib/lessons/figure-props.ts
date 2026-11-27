@@ -142,6 +142,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "mutation-score": z.strictObject({ tests: z.array(z.string()).optional() }),
   "sleep-poll": z.strictObject({ wait: z.union([z.string(), z.number()]).optional() }),
   "month-end": z.strictObject({ mode: z.enum(["real", "chosen"]).optional(), day: z.number().optional() }),
+  "fuzz-header": z.strictObject({ bytes: z.number().optional(), budget: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
