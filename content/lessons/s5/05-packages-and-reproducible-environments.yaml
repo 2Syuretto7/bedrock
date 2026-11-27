@@ -1,0 +1,574 @@
+concept: s5.packages-and-reproducible-environments
+minutes: 80
+claim: You can read and write semantic version numbers and the ranges built from them, compare versions correctly, predict which version a resolver will choose and when two ranges cannot be satisfied together, explain why a lock file with exact versions and hashes makes an install reproducible, verify downloaded packages against a lock, isolate each project's packages in its own environment, and judge the cost of every dependency you add.
+recalls: [s5.build-systems-and-dependency-graphs]
+uses: [s4.designing-apis, s1.modules-and-imports, s5.version-control-as-a-content-addressed-store, f4.independence]
+leads: [s5.debugging-methodically, m1.reproducible-environments, r2.dependencies-and-the-supply-chain, d7.images-and-layers]
+starter: |
+  # Scratch space. Versions compared as text and as numbers.
+  versions = ["1.2.0", "1.10.0", "1.9.3"]
+  print(max(versions))
+  print(max(versions, key=lambda v: tuple(int(p) for p in v.split("."))))
+parts:
+  recall:
+    - text: |
+        [[s5.build-systems-and-dependency-graphs]] ended by noting that a build's inputs include more than the project's own files: the interpreter, the compiler and every library the code imports are inputs too. If they differ between two machines, the same sources can build into different programs. This lesson is about naming those inputs exactly, so that "it works on my machine" becomes "it works on every machine". Three quick pulls first.
+  puzzle:
+    - text: |
+        A project's installer is given only version ranges, such as "pay-sdk 1.4 or newer, below 2.0", and always installs the newest version that fits each range. Counting the libraries its libraries use, it installs 40 packages.
+
+        Over any one month, suppose each of the 40, independently, has a 10% chance of publishing a new release that still fits its range.
+
+        **What is the chance, in per cent, that a fresh install one month from now gets exactly the same 40 versions as today's?**
+  intuition:
+    - text: |
+        A family's biryani recipe says "a cup of basmati, some garam masala". Made by an aunt in Lucknow with her own spice box, it tastes one way; made by a cousin in Pune with a different brand of masala bought last week, another. Both followed the recipe. To get the same biryani every time, the recipe would have to say which brand, which batch, and how many grams, and the cook would need a separate spice box for this recipe, not the shared one that everybody dips into.
+
+        Software has the same problem. A project says which libraries it needs, usually as ranges of acceptable versions, and an installer chooses actual versions within those ranges. The figure shows two packages in one project that both use a payments library, each with its own range. Choose what the second one asks for.
+    - figure: version-ranges
+      props: { other: ge16 }
+    - text: |
+        A **resolver** must find one version of each library that satisfies every package that uses it. When the ranges overlap, it usually picks the newest version in the overlap. When they do not, as with `^2.0.0` against `^1.4.0`, no installation is possible until someone changes a requirement. And notice that the answer depends on what has been published so far: when version 1.11.0 appears next week, the same ranges will pick it instead.
+  derivation:
+    - text: |
+        **Packages and their graph.** A package is a named, versioned bundle of code published to a registry, such as PyPI for Python or npm for JavaScript, together with a list of the packages it needs. Those need others in turn, so installing a dozen direct dependencies commonly brings in a hundred or more. They form a dependency graph much like the build graph of [[s5.build-systems-and-dependency-graphs]], and [[s1.modules-and-imports]] is how your code finally reaches them.
+
+        **Semantic versioning.** Most packages number releases as MAJOR.MINOR.PATCH and use the numbers as a promise about compatibility, the promise of [[s4.designing-apis]]. A PATCH release fixes bugs without changing the interface. A MINOR release adds things in a compatible way. A MAJOR release may break callers. Version numbers are compared part by part as numbers, so 1.10.0 is newer than 1.9.3, even though "1.10.0" sorts before "1.9.3" as text. Before 1.0.0, by convention, anything may change, so tools treat the minor number as if it were the major one.
+    - question:
+        id: derivation-bump
+        type: choice
+        system: s2
+        prompt: |
+          A library at version 2.4.1 removes a function that callers use. What should its next version be under semantic versioning?
+        options:
+          - "3.0.0"
+          - "2.5.0"
+          - "2.4.2"
+          - "2.4.1-fixed"
+        answer: 0
+        explanation: |
+          Removing a function breaks callers, so the major number goes up and the others reset. A minor bump would promise compatibility the release does not have.
+    - text: |
+        **Ranges.** Packages state ranges rather than exact versions so that compatible fixes arrive without anyone editing anything, and so that two packages can share one copy of a library. Common forms are `^1.4.0`, meaning 1.4.0 or newer but below 2.0.0, any compatible release; `~1.5.2`, meaning 1.5.2 or newer but below 1.6.0, patches only; and `==1.4.0`, exactly one version. For versions below 1.0.0, `^0.3.1` stops below 0.4.0, since in that range a minor release may break things.
+
+        **Resolution.** The resolver chooses one version per package so that every range is satisfied. Where several packages share a dependency with overlapping ranges it can usually find one; where ranges conflict, it must try older versions of the packages that impose them, backtracking until a consistent choice is found or none exists. In general this search can be very hard, but real dependency graphs are usually forgiving.
+    - question:
+        id: derivation-caret
+        type: numeric
+        system: s2
+        prompt: |
+          Published versions of a library are 1.3.0, 1.4.2, 1.8.0, 1.12.1, 2.0.0 and 2.2.0. A package requires `^1.4.0`, and the resolver picks the newest version that fits. Which version does it pick? Give its middle number.
+        answer: "12"
+        explanation: |
+          `^1.4.0` allows 1.4.0 up to but not including 2.0.0, so 1.4.2, 1.8.0 and 1.12.1 fit; the newest, comparing 12 with 8 as numbers, is 1.12.1.
+    - text: |
+        **Lock files.** Ranges make installs drift: install the same project next month and some versions will have moved, as the puzzle measures. A **lock file** fixes this. After resolving once, the tool writes down the exact version of every package in the whole graph, transitive ones included, together with a cryptographic hash of each package's file. Later installs read the lock file instead of resolving again. Every machine, the build server included, then gets byte-for-byte the same packages, and a downloaded file whose hash does not match is refused: the content addressing of [[s5.version-control-as-a-content-addressed-store]], protecting the install against a corrupted mirror or a tampered upload.
+
+        Applications commit their lock files to version control, so that the lock changes only through a reviewed pull request: upgrading a dependency becomes a deliberate, visible change, tested like any other, rather than something that happens silently on Tuesday.
+    - question:
+        id: order-upgrade
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of upgrading a dependency in a project with a lock file in order.
+        steps:
+          - "Read the dependency's release notes for the versions you are moving across."
+          - "Change the range if needed and run the tool's update for that package, which rewrites the lock file."
+          - "Install from the new lock file in a clean environment and run the tests."
+          - "Open a pull request containing the lock file change for review."
+        explanation: |
+          Knowing what changed comes first; the lock file records the decision; a clean install tests exactly what everyone will get; and review makes the upgrade visible to the team.
+    - text: |
+        **Isolated environments.** If every project on a machine shares one set of installed packages, upgrading a library for one project can break another. A **virtual environment** gives each project its own folder of packages and its own link to a chosen interpreter version, so projects cannot disturb each other, and deleting and recreating it from the lock file is cheap. Some differences lie below the language, in the operating system's libraries and tools; containers capture those too, packing the whole file system an application needs into an image built in layers named by their hashes, as [[d7.images-and-layers]] will show.
+
+        **Every dependency has a cost.** Each package you add is code you did not write, cannot fully review, and must keep updating, and it brings its own dependencies along. A package that pads a string with spaces saves ten lines and adds a stranger to your supply chain. Prefer the standard library and a few well-maintained packages, and add the rest deliberately. How attackers exploit dependency chains, with look-alike package names and compromised releases, is the subject of [[r2.dependencies-and-the-supply-chain]].
+  formal:
+    - text: |
+        **Semantic version.** MAJOR.MINOR.PATCH: breaking changes raise MAJOR, compatible additions MINOR, fixes PATCH. Versions compare part by part as integers.
+
+        **Ranges.** `^X.Y.Z`: at least X.Y.Z, below (X+1).0.0, or below 0.(Y+1).0 when X is 0. `~X.Y.Z`: at least X.Y.Z, below X.(Y+1).0. `==X.Y.Z`: exactly that version.
+
+        **Resolver.** Chooses one version of each package satisfying every range in the graph, usually the newest that fits; fails when ranges cannot all be met.
+
+        **Lock file.** The exact version and file hash of every package in the resolved graph, committed to version control; installs from it are reproducible and verified.
+
+        **Virtual environment.** A per-project set of installed packages and a chosen interpreter, isolated from other projects.
+  drill:
+    - text: Seconds each. Compare numbers, not strings.
+    - question:
+        id: drill-newer
+        type: choice
+        system: s1
+        prompt: |
+          Which version is newest?
+        options:
+          - "2.10.0"
+          - "2.9.9"
+          - "2.1.10"
+          - "2.2.0"
+        answer: 0
+        explanation: All have major 2; the minor numbers are 10, 9, 1 and 2, and 10 is the largest.
+    - question:
+        id: drill-tilde
+        type: choice
+        system: s1
+        prompt: |
+          Does 1.6.0 satisfy `~1.5.2`?
+        options:
+          - "No; ~1.5.2 allows only 1.5.x from 1.5.2"
+          - "Yes; it is newer than 1.5.2"
+          - "Yes; it has the same major number"
+          - "Only if 1.6.0 is a patch release"
+        answer: 0
+        explanation: A tilde range accepts patches only, so it stops below 1.6.0.
+    - question:
+        id: drill-zero
+        type: choice
+        system: s1
+        prompt: |
+          Does 0.4.0 satisfy `^0.3.1`?
+        options:
+          - "No; below 1.0.0 a caret range stops at the next minor version"
+          - "Yes; the major number is the same"
+          - "Yes; carets allow any newer version"
+          - "Only if 0.4.0 is marked stable"
+        answer: 0
+        explanation: Before 1.0.0, a minor release may break things, so ^0.3.1 means at least 0.3.1 and below 0.4.0.
+    - question:
+        id: drill-same
+        type: numeric
+        system: s1
+        prompt: |
+          A project's lock file pins 120 packages. On a new laptop you install from the lock file. How many of the 120 can come out at a different version from your colleague's install?
+        answer: "0"
+        explanation: The lock file names every exact version and hash, so both installs get the same 120 packages.
+    - question:
+        id: predict-text
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print("1.10.0" > "1.9.0", (1, 10, 0) > (1, 9, 0))
+        output: "False True"
+        explanation: As text, "1" is less than "9" at the third character, so "1.10.0" sorts first; as tuples of numbers, 10 beats 9.
+    - question:
+        id: predict-caret
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def key(v):
+              return tuple(int(p) for p in v.split("."))
+
+
+          low, high = key("1.4.0"), key("2.0.0")
+          print([v for v in ["1.3.9", "1.4.0", "1.12.0", "2.0.0"] if low <= key(v) < high])
+        output: "['1.4.0', '1.12.0']"
+        explanation: These are the versions `^1.4.0` allows; 1.3.9 is too old and 2.0.0 is the next major version.
+  work:
+    - text: Slower now. Each problem is part of an installer.
+    - question:
+        id: fix-newest
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `newest` should return the newest version in a list of MAJOR.MINOR.PATCH strings. The program should print `1.10.0 0.9.12`. It prints `1.9.3 0.9.2`. Find the fault and fix it.
+        starter: |
+          def newest(versions):
+              # versions are strings like "1.9.0", in MAJOR.MINOR.PATCH form.
+              best = versions[0]
+              for v in versions:
+                  if v > best:
+                      best = v
+              return best
+
+
+          print(newest(["1.2.0", "1.10.0", "1.9.3", "1.9.0"]), newest(["0.9.12", "0.9.2"]))
+        solution: |
+          def key(version):
+              return tuple(int(part) for part in version.split("."))
+
+
+          def newest(versions):
+              # versions are strings like "1.9.0", in MAJOR.MINOR.PATCH form.
+              best = versions[0]
+              for v in versions:
+                  if key(v) > key(best):
+                      best = v
+              return best
+
+
+          print(newest(["1.2.0", "1.10.0", "1.9.3", "1.9.0"]), newest(["0.9.12", "0.9.2"]))
+        tests: |
+          _cases = [
+              (["1.2.0", "1.10.0", "1.9.3"], "1.10.0"),
+              (["2.0.0", "10.0.0", "9.9.9"], "10.0.0"),
+              (["1.9.10", "1.9.9", "1.9.2"], "1.9.10"),
+              (["3.1.4"], "3.1.4"),
+              (["1.2.10", "1.10.2"], "1.10.2"),
+              (["0.1.0", "0.0.99"], "0.1.0"),
+          ]
+          for _vs, _want in _cases:
+              _got = newest(list(_vs))
+              assert _got == _want, "newest(" + str(_vs) + ") should be " + _want + ", not " + str(_got) + "; versions compare part by part as numbers"
+          assert output.strip() == "1.10.0 0.9.12", "The program should print 1.10.0 0.9.12"
+        wrong:
+          - |
+            def newest(versions):
+                # versions are strings like "1.9.0", in MAJOR.MINOR.PATCH form.
+                return max(versions, key=len)
+
+
+            print(newest(["1.2.0", "1.10.0", "1.9.3", "1.9.0"]), newest(["0.9.12", "0.9.2"]))
+          - |
+            def key(version):
+                return float(version.split(".")[0] + "." + version.split(".")[1])
+
+
+            def newest(versions):
+                # versions are strings like "1.9.0", in MAJOR.MINOR.PATCH form.
+                best = versions[0]
+                for v in versions:
+                    if key(v) > key(best):
+                        best = v
+                return best
+
+
+            print(newest(["1.2.0", "1.10.0", "1.9.3", "1.9.0"]), newest(["0.9.12", "0.9.2"]))
+          - |
+            def key(version):
+                return version.split(".")
+
+
+            def newest(versions):
+                # versions are strings like "1.9.0", in MAJOR.MINOR.PATCH form.
+                best = versions[0]
+                for v in versions:
+                    if key(v) > key(best):
+                        best = v
+                return best
+
+
+            print(newest(["1.2.0", "1.10.0", "1.9.3", "1.9.0"]), newest(["0.9.12", "0.9.2"]))
+        explanation: |
+          Comparing the strings compares character by character, so "1.9.3" beats "1.10.0" at the "9". Turning each version into a tuple of integers compares major, then minor, then patch, as numbers. Picking the longest string happens to work for the sample and fails on 1.2.10 against 1.10.2; reading "1.10" as the decimal 1.1 makes it older than 1.9; and splitting without converting to integers still compares text.
+    - question:
+        id: write-satisfies
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `satisfies(version, spec)` for specs of the form `==X.Y.Z`, `~X.Y.Z` and `^X.Y.Z`, with the meanings given in the comment, using `key` to compare versions. The program should print `[True, False, True, False, True, False, True, False]`.
+        starter: |
+          def key(version):
+              return tuple(int(part) for part in version.split("."))
+
+
+          def satisfies(version, spec):
+              # spec is "==X.Y.Z", "~X.Y.Z" or "^X.Y.Z".
+              #   ==X.Y.Z  exactly that version
+              #   ~X.Y.Z   at least X.Y.Z and below X.(Y+1).0
+              #   ^X.Y.Z   at least X.Y.Z and below (X+1).0.0, except that when X is 0
+              #            the upper bound is 0.(Y+1).0
+              return True
+
+
+          checks = [("1.9.0", "^1.4.0"), ("2.0.0", "^1.4.0"), ("1.5.9", "~1.5.2"), ("1.6.0", "~1.5.2"),
+                    ("0.3.9", "^0.3.1"), ("0.4.0", "^0.3.1"), ("1.4.0", "==1.4.0"), ("1.3.9", "^1.4.0")]
+          print([satisfies(v, s) for v, s in checks])
+        solution: |
+          def key(version):
+              return tuple(int(part) for part in version.split("."))
+
+
+          def satisfies(version, spec):
+              if spec.startswith("=="):
+                  return key(version) == key(spec[2:])
+              low = key(spec[1:])
+              if spec.startswith("~"):
+                  high = (low[0], low[1] + 1, 0)
+              elif low[0] == 0:
+                  high = (0, low[1] + 1, 0)
+              else:
+                  high = (low[0] + 1, 0, 0)
+              return low <= key(version) < high
+
+
+          checks = [("1.9.0", "^1.4.0"), ("2.0.0", "^1.4.0"), ("1.5.9", "~1.5.2"), ("1.6.0", "~1.5.2"),
+                    ("0.3.9", "^0.3.1"), ("0.4.0", "^0.3.1"), ("1.4.0", "==1.4.0"), ("1.3.9", "^1.4.0")]
+          print([satisfies(v, s) for v, s in checks])
+        tests: |
+          _cases = [
+              ("1.4.0", "^1.4.0", True), ("1.99.99", "^1.4.0", True), ("2.0.0", "^1.4.0", False), ("1.3.99", "^1.4.0", False),
+              ("1.5.2", "~1.5.2", True), ("1.5.30", "~1.5.2", True), ("1.6.0", "~1.5.2", False), ("1.5.1", "~1.5.2", False),
+              ("0.3.1", "^0.3.1", True), ("0.3.20", "^0.3.1", True), ("0.4.0", "^0.3.1", False), ("1.0.0", "^0.3.1", False),
+              ("2.1.0", "==2.1.0", True), ("2.1.1", "==2.1.0", False), ("10.0.0", "^9.1.0", False), ("9.10.0", "^9.1.0", True),
+          ]
+          for _v, _s, _want in _cases:
+              _got = satisfies(_v, _s)
+              assert _got == _want, "satisfies(" + repr(_v) + ", " + repr(_s) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "[True, False, True, False, True, False, True, False]", "The program should print [True, False, True, False, True, False, True, False]"
+        wrong:
+          - |
+            def key(version):
+                return tuple(int(part) for part in version.split("."))
+
+
+            def satisfies(version, spec):
+                if spec.startswith("=="):
+                    return key(version) == key(spec[2:])
+                low = key(spec[1:])
+                if spec.startswith("~"):
+                    high = (low[0], low[1] + 1, 0)
+                else:
+                    high = (low[0] + 1, 0, 0)
+                return low <= key(version) < high
+
+
+            checks = [("1.9.0", "^1.4.0"), ("2.0.0", "^1.4.0"), ("1.5.9", "~1.5.2"), ("1.6.0", "~1.5.2"),
+                      ("0.3.9", "^0.3.1"), ("0.4.0", "^0.3.1"), ("1.4.0", "==1.4.0"), ("1.3.9", "^1.4.0")]
+            print([satisfies(v, s) for v, s in checks])
+          - |
+            def key(version):
+                return tuple(int(part) for part in version.split("."))
+
+
+            def satisfies(version, spec):
+                if spec.startswith("=="):
+                    return key(version) == key(spec[2:])
+                low = key(spec[1:])
+                if spec.startswith("~"):
+                    high = (low[0], low[1] + 1, 0)
+                elif low[0] == 0:
+                    high = (0, low[1] + 1, 0)
+                else:
+                    high = (low[0] + 1, 0, 0)
+                return low <= key(version) <= high
+
+
+            checks = [("1.9.0", "^1.4.0"), ("2.0.0", "^1.4.0"), ("1.5.9", "~1.5.2"), ("1.6.0", "~1.5.2"),
+                      ("0.3.9", "^0.3.1"), ("0.4.0", "^0.3.1"), ("1.4.0", "==1.4.0"), ("1.3.9", "^1.4.0")]
+            print([satisfies(v, s) for v, s in checks])
+          - |
+            def key(version):
+                return tuple(int(part) for part in version.split("."))
+
+
+            def satisfies(version, spec):
+                if spec.startswith("=="):
+                    return key(version) == key(spec[2:])
+                low = key(spec[1:])
+                if spec.startswith("~"):
+                    high = (low[0], low[1] + 1, 0)
+                elif low[0] == 0:
+                    high = (0, low[1] + 1, 0)
+                else:
+                    high = (low[0] + 1, 0, 0)
+                return key(version) < high
+
+
+            checks = [("1.9.0", "^1.4.0"), ("2.0.0", "^1.4.0"), ("1.5.9", "~1.5.2"), ("1.6.0", "~1.5.2"),
+                      ("0.3.9", "^0.3.1"), ("0.4.0", "^0.3.1"), ("1.4.0", "==1.4.0"), ("1.3.9", "^1.4.0")]
+            print([satisfies(v, s) for v, s in checks])
+        explanation: |
+          Each spec becomes a lower bound and an exclusive upper bound, and the version must fall between them. Forgetting the 0.x rule lets `^0.3.1` accept a breaking 0.4.0; including the upper bound accepts 2.0.0 for `^1.4.0`; and checking only the upper bound accepts versions older than the minimum.
+    - question:
+        id: write-verify
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `verify(lock, downloads)`, which returns the sorted names of locked packages that are missing from `downloads`, were downloaded at a different version, or whose contents do not hash to the locked SHA-256. The program should print `['colour', 'requests']`.
+        starter: |
+          import hashlib
+
+
+          def sha(data):
+              return hashlib.sha256(data.encode()).hexdigest()
+
+
+          def verify(lock, downloads):
+              # lock maps each package name to (version, sha256 of its file).
+              # downloads maps each package name to (version, file contents).
+              # Return the sorted names of locked packages that are missing, have the
+              # wrong version, or whose contents do not match the locked hash.
+              return []
+
+
+          lock = {
+              "pay-sdk": ("1.9.0", sha("pay-sdk 1.9.0 code")),
+              "requests": ("2.32.3", sha("requests 2.32.3 code")),
+              "colour": ("0.4.1", sha("colour 0.4.1 code")),
+          }
+          downloads = {
+              "pay-sdk": ("1.9.0", "pay-sdk 1.9.0 code"),
+              "requests": ("2.32.3", "requests 2.32.3 code, plus something extra"),
+              "colour": ("0.4.2", "colour 0.4.2 code"),
+              "left-pad": ("1.3.0", "left-pad 1.3.0 code"),
+          }
+          print(verify(lock, downloads))
+        solution: |
+          import hashlib
+
+
+          def sha(data):
+              return hashlib.sha256(data.encode()).hexdigest()
+
+
+          def verify(lock, downloads):
+              bad = []
+              for name in lock:
+                  version, digest = lock[name]
+                  if name not in downloads:
+                      bad.append(name)
+                  elif downloads[name][0] != version or sha(downloads[name][1]) != digest:
+                      bad.append(name)
+              return sorted(bad)
+
+
+          lock = {
+              "pay-sdk": ("1.9.0", sha("pay-sdk 1.9.0 code")),
+              "requests": ("2.32.3", sha("requests 2.32.3 code")),
+              "colour": ("0.4.1", sha("colour 0.4.1 code")),
+          }
+          downloads = {
+              "pay-sdk": ("1.9.0", "pay-sdk 1.9.0 code"),
+              "requests": ("2.32.3", "requests 2.32.3 code, plus something extra"),
+              "colour": ("0.4.2", "colour 0.4.2 code"),
+              "left-pad": ("1.3.0", "left-pad 1.3.0 code"),
+          }
+          print(verify(lock, downloads))
+        tests: |
+          _lock = {"a": ("1.0.0", sha("a1")), "b": ("2.0.0", sha("b2")), "c": ("3.0.0", sha("c3")), "d": ("4.0.0", sha("d4"))}
+          _dl = {"a": ("1.0.0", "a1"), "b": ("2.0.0", "b2 tampered"), "d": ("4.0.1", "d4")}
+          _got = verify(_lock, _dl)
+          assert _got == ["b", "c", "d"], "b's contents do not match its hash, c is missing and d has the wrong version, so the answer is ['b', 'c', 'd'], not " + str(_got)
+          _got = verify(_lock, {"a": ("1.0.0", "a1"), "b": ("2.0.0", "b2"), "c": ("3.0.0", "c3"), "d": ("4.0.0", "d4"), "zz": ("9.9.9", "extra")})
+          assert _got == [], "Every locked package matches, so nothing is reported; an extra download that is not in the lock is not a locked package. Got " + str(_got)
+          _got = verify({"x": ("1.0.0", sha("x"))}, {"x": ("1.0.0", "X")})
+          assert _got == ["x"], "Contents that differ only in one letter still fail the hash check; got " + str(_got)
+          assert output.strip() == "['colour', 'requests']", "The program should print ['colour', 'requests']"
+        wrong:
+          - |
+            import hashlib
+
+
+            def sha(data):
+                return hashlib.sha256(data.encode()).hexdigest()
+
+
+            def verify(lock, downloads):
+                bad = []
+                for name in lock:
+                    version, digest = lock[name]
+                    if name not in downloads:
+                        bad.append(name)
+                    elif downloads[name][0] != version:
+                        bad.append(name)
+                return sorted(bad)
+
+
+            lock = {
+                "pay-sdk": ("1.9.0", sha("pay-sdk 1.9.0 code")),
+                "requests": ("2.32.3", sha("requests 2.32.3 code")),
+                "colour": ("0.4.1", sha("colour 0.4.1 code")),
+            }
+            downloads = {
+                "pay-sdk": ("1.9.0", "pay-sdk 1.9.0 code"),
+                "requests": ("2.32.3", "requests 2.32.3 code, plus something extra"),
+                "colour": ("0.4.2", "colour 0.4.2 code"),
+                "left-pad": ("1.3.0", "left-pad 1.3.0 code"),
+            }
+            print(verify(lock, downloads))
+          - |
+            import hashlib
+
+
+            def sha(data):
+                return hashlib.sha256(data.encode()).hexdigest()
+
+
+            def verify(lock, downloads):
+                bad = []
+                for name in downloads:
+                    version, data = downloads[name]
+                    if name not in lock:
+                        bad.append(name)
+                    elif lock[name][0] != version or lock[name][1] != sha(data):
+                        bad.append(name)
+                return sorted(bad)
+
+
+            lock = {
+                "pay-sdk": ("1.9.0", sha("pay-sdk 1.9.0 code")),
+                "requests": ("2.32.3", sha("requests 2.32.3 code")),
+                "colour": ("0.4.1", sha("colour 0.4.1 code")),
+            }
+            downloads = {
+                "pay-sdk": ("1.9.0", "pay-sdk 1.9.0 code"),
+                "requests": ("2.32.3", "requests 2.32.3 code, plus something extra"),
+                "colour": ("0.4.2", "colour 0.4.2 code"),
+                "left-pad": ("1.3.0", "left-pad 1.3.0 code"),
+            }
+            print(verify(lock, downloads))
+          - |
+            import hashlib
+
+
+            def sha(data):
+                return hashlib.sha256(data.encode()).hexdigest()
+
+
+            def verify(lock, downloads):
+                bad = []
+                for name in lock:
+                    version, digest = lock[name]
+                    if name in downloads and sha(downloads[name][1]) != digest:
+                        bad.append(name)
+                return sorted(bad)
+
+
+            lock = {
+                "pay-sdk": ("1.9.0", sha("pay-sdk 1.9.0 code")),
+                "requests": ("2.32.3", sha("requests 2.32.3 code")),
+                "colour": ("0.4.1", sha("colour 0.4.1 code")),
+            }
+            downloads = {
+                "pay-sdk": ("1.9.0", "pay-sdk 1.9.0 code"),
+                "requests": ("2.32.3", "requests 2.32.3 code, plus something extra"),
+                "colour": ("0.4.2", "colour 0.4.2 code"),
+                "left-pad": ("1.3.0", "left-pad 1.3.0 code"),
+            }
+            print(verify(lock, downloads))
+        explanation: |
+          Walk the lock, since it says what must be installed, and check presence, version and hash for each package. Checking only versions lets a tampered file with the right version number through; walking the downloads never notices a locked package that did not arrive; and skipping missing packages and versions catches only altered contents.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          What is the chance, in per cent, that the puzzle's install a month from now gets exactly the same 40 versions?
+        answer: "1.5"
+        tolerance: "0.1"
+        explanation: |
+          Each package stays the same with probability 0.9, independently, so all 40 do with probability $0.9^{40} \approx 0.0148$, about 1.5%.
+    - question:
+        id: work-works-on-mine
+        type: choice
+        system: s2
+        prompt: |
+          A test passes on Kavya's laptop and fails on the build server for the same commit. The project has ranges in its requirements but no lock file. What should the team do first?
+        options:
+          - "Generate a lock file, commit it, and make both the laptop and the server install from it, then rerun the test."
+          - "Mark the test as flaky and skip it on the server."
+          - "Copy Kavya's installed packages folder to the server."
+          - "Upgrade every package to its newest version on both machines."
+        answer: 0
+        explanation: |
+          Without a lock, the two machines very likely resolved different versions. Installing from one committed lock file removes that difference, and if the test still fails, the cause lies elsewhere. Skipping the test hides the problem; copying a folder by hand cannot be repeated or reviewed; and upgrading everything only moves both machines to a new, still unpinned state.
+  connections:
+    - text: |
+        About 1.5%. Each of the 40 packages stays put with probability 0.9, so all of them do with probability $0.9^{40} \approx 0.015$. Without a lock file, a fresh install a month from now almost certainly differs from today's somewhere, usually harmlessly, occasionally not. With one, the chance of a difference is zero until someone changes the lock on purpose.
+
+        Pinning the environment removes one whole class of "it works on my machine" mysteries. The rest still need finding: a test that fails, a crash that happens only on Fridays, a number that comes out slightly wrong. Finding them by reasoning rather than by guessing is [[s5.debugging-methodically]]. The same discipline of pinning every input reappears when the inputs are datasets and trained models, [[m1.reproducible-environments]].

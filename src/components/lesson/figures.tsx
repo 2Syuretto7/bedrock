@@ -8349,6 +8349,88 @@ function BuildGraph(props: Props) {
   );
 }
 
+const VR_VERSIONS = ["1.2.0", "1.4.0", "1.5.2", "1.6.0", "1.7.1", "1.9.0", "1.10.0", "2.0.0", "2.1.0"];
+const VR_SPECS: Record<string, { label: string; lo: string; hi: string | null }> = {
+  ge16: { label: ">=1.6.0", lo: "1.6.0", hi: null },
+  tilde15: { label: "~1.5.0", lo: "1.5.0", hi: "1.6.0" },
+  caret2: { label: "^2.0.0", lo: "2.0.0", hi: "3.0.0" },
+  caret14: { label: "^1.4.0", lo: "1.4.0", hi: "2.0.0" },
+};
+
+function vrParse(v: string) {
+  return v.split(".").map((x) => Number(x));
+}
+function vrCmp(a: string, b: string) {
+  const x = vrParse(a);
+  const y = vrParse(b);
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return 0;
+}
+
+/** Two packages' version ranges for a shared library, and the version a resolver picks. */
+function VersionRanges(props: Props) {
+  const keys = Object.keys(VR_SPECS).filter((k) => k !== "caret14");
+  const [key, setKey] = useState(typeof props.other === "string" && keys.includes(props.other) ? props.other : "ge16");
+  const ok = (spec: { lo: string; hi: string | null }, v: string) => vrCmp(v, spec.lo) >= 0 && (spec.hi === null || vrCmp(v, spec.hi) < 0);
+  const a = VR_SPECS.caret14;
+  const b = VR_SPECS[key];
+  const both = VR_VERSIONS.filter((v) => ok(a, v) && ok(b, v));
+  const pick = both.length ? both[both.length - 1] : null;
+  const summary = pick
+    ? `orders needs pay-sdk ^1.4.0, from 1.4.0 up to but not including 2.0.0; receipts needs ${b.label}. ${both.length === 1 ? "Only" : "Both allow"} ${both.join(", ")}${both.length === 1 ? " satisfies both" : ""}. The resolver picks the newest, ${pick}, and the lock file records it, so every later install gets ${pick} too.`
+    : `orders needs pay-sdk ^1.4.0, below 2.0.0; receipts needs ${b.label}. No published version satisfies both, so installation fails until one of the two packages changes its requirement.`;
+  const x = (i: number) => 26 + i * 51;
+  return (
+    <Frame
+      title="Two version ranges for one library"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">receipts needs</span>
+          {keys.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={k === key} onClick={() => setKey(k)}>
+              {VR_SPECS[k].label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 184" role="img" aria-label={pick ? `The resolver picks pay-sdk ${pick}` : "No version satisfies both ranges"}>
+        <text x={8} y={14} className="fig-small">
+          published versions of pay-sdk, oldest to newest
+        </text>
+        {VR_VERSIONS.map((v, i) => (
+          <text key={v} x={x(i)} y={32} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)", fontWeight: v === pick ? 600 : 400 }}>
+            {v}
+          </text>
+        ))}
+        {[
+          { name: "orders allows (^1.4.0)", spec: a, y: 40 },
+          { name: `receipts allows (${b.label})`, spec: b, y: 80 },
+        ].map((row) => (
+          <g key={row.name}>
+            <text x={8} y={row.y + 10} className="fig-small">
+              {row.name}
+            </text>
+            {VR_VERSIONS.map((v, i) => (
+              <rect key={v} x={x(i) - 22} y={row.y + 16} width={44} height={16} rx={2} className={ok(row.spec, v) ? "fig-fill" : "fig-ghost"} />
+            ))}
+          </g>
+        ))}
+        <text x={8} y={130} className="fig-small">
+          {"allowed by both (the resolver's pick is highlighted)"}
+        </text>
+        {VR_VERSIONS.map((v, i) => (
+          <rect key={`b${v}`} x={x(i) - 22} y={136} width={44} height={16} rx={2} className={v === pick ? "fig-accent" : both.includes(v) ? "fig-fill" : "fig-ghost"} />
+        ))}
+        <text x={8} y={174} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {pick ? `allowed by both: ${both.length}; picked: ${pick}` : "allowed by both: none; nothing can be installed"}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -9693,6 +9775,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "three-way-merge": ThreeWayMerge,
   "review-size": ReviewSize,
   "build-graph": BuildGraph,
+  "version-ranges": VersionRanges,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

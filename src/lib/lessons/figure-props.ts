@@ -129,6 +129,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "three-way-merge": z.strictObject({ scenario: z.enum(["separate", "same", "identical", "oneside"]).optional() }),
   "review-size": z.strictObject({ prs: z.number().optional() }),
   "build-graph": z.strictObject({ changed: z.enum(["utils.h", "utils.c", "menu.c", "orders.c", "pay.c"]).optional() }),
+  "version-ranges": z.strictObject({ other: z.enum(["ge16", "tilde15", "caret2"]).optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
