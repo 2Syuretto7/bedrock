@@ -130,6 +130,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "review-size": z.strictObject({ prs: z.number().optional() }),
   "build-graph": z.strictObject({ changed: z.enum(["utils.h", "utils.c", "menu.c", "orders.c", "pay.c"]).optional() }),
   "version-ranges": z.strictObject({ other: z.enum(["ge16", "tilde15", "caret2"]).optional() }),
+  "bisect-commits": z.strictObject({ bad: z.number().optional(), steps: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),

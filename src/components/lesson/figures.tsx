@@ -8431,6 +8431,86 @@ function VersionRanges(props: Props) {
   );
 }
 
+/** Bisecting 64 commits for the first bad one: each test halves the range that can contain it. */
+function BisectCommits(props: Props) {
+  const n = 64;
+  const [bad, setBad] = useState(clamp(Math.round(num(props.bad, 41)), 1, n - 1));
+  const [steps, setSteps] = useState(clamp(Math.round(num(props.steps, 0)), 0, 6));
+  const history: { mid: number; isBad: boolean; lo: number; hi: number }[] = [];
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    const isBad = mid >= bad;
+    if (isBad) hi = mid;
+    else lo = mid;
+    history.push({ mid, isBad, lo, hi });
+  }
+  const total = history.length;
+  const shown = Math.min(steps, total);
+  const now = shown === 0 ? { lo: 0, hi: n - 1 } : history[shown - 1];
+  const next = shown < total ? Math.floor((now.lo + now.hi) / 2) : null;
+  const last = shown === 0 ? null : history[shown - 1];
+  const remaining = now.hi - now.lo;
+  const summary =
+    shown === 0
+      ? `Commit 0 is known good and commit 63 known bad. The first bad commit could be any of commits 1 to 63. The first test is commit ${next}, halfway.`
+      : shown === total
+        ? `After ${total} tests, commit ${now.lo} is good and commit ${now.hi} is bad, so commit ${now.hi} introduced the bug. Testing every commit in turn could have taken up to 63 tests.`
+        : `Test ${shown}: commit ${last?.mid} is ${last?.isBad ? "bad, so the first bad commit is at or before it" : "good, so the first bad commit comes after it"}. ${remaining} ${remaining === 1 ? "commit remains" : "commits remain"} as candidates, ${now.lo + 1} to ${now.hi}; next, test commit ${next}.`;
+  const cell = 440 / n;
+  return (
+    <Frame
+      title="Bisecting history for the commit that broke it"
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="tests done" value={shown} min={0} max={total} onChange={setSteps} />
+          <Stepper label="first bad commit (hidden in real life)" value={bad} min={1} max={n - 1} onChange={(v) => {
+              setBad(v);
+              setSteps(0);
+            }} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 150" role="img" aria-label={`${shown} of ${total} tests done; candidates ${now.lo + 1} to ${now.hi}`}>
+        <text x={10} y={16} className="fig-small">
+          commits 0 to 63: shaded good, outlined candidate, filled bad
+        </text>
+        {Array.from({ length: n }, (_, i) => {
+          const knownBad = i >= now.hi;
+          const knownGood = i <= now.lo;
+          const candidate = !knownBad && !knownGood;
+          return (
+            <rect
+              key={i}
+              x={10 + i * cell}
+              y={28}
+              width={cell - 1.5}
+              height={36}
+              className={knownBad ? "fig-accent" : candidate ? "fig-ghost" : "fig-fill"}
+              style={i === next ? { stroke: "var(--text)", strokeWidth: 2.5 } : undefined}
+            />
+          );
+        })}
+        {[0, 16, 32, 48, 63].map((i) => (
+          <text key={i} x={10 + i * cell + cell / 2} y={80} textAnchor="middle" className="fig-small">
+            {i}
+          </text>
+        ))}
+        {next !== null ? (
+          <text x={10 + next * cell + cell / 2} y={98} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+            test next
+          </text>
+        ) : null}
+        <text x={10} y={136} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`tests: ${shown} of ${total}; candidates left: ${remaining === 1 ? "1, found" : remaining}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -9776,6 +9856,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "review-size": ReviewSize,
   "build-graph": BuildGraph,
   "version-ranges": VersionRanges,
+  "bisect-commits": BisectCommits,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

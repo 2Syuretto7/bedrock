@@ -1,0 +1,577 @@
+concept: s5.debugging-methodically
+minutes: 80
+claim: You can debug by method rather than by guessing. You can make a failure happen on demand, bisect a project's history to find the commit that introduced it, shrink a failing input to the smallest one that still fails, rank possible causes by how well they explain the evidence, choose the experiment that tells you the most, and finish every fix with a test that keeps the bug from coming back.
+recalls: [s5.packages-and-reproducible-environments]
+uses: [s0.reading-errors-and-debugging, s3.binary-search, f4.bayes-rule, s1.testing-with-pytest, s5.branches-merges-and-rebases]
+leads: [s5.profiling-programs, s5.continuous-integration, r3.logs-metrics-and-traces, r5.detecting-and-declaring-incidents]
+starter: |
+  # Scratch space. Halving a range of candidates until one is left.
+  candidates = 1000
+  tests = 0
+  while candidates > 1:
+      candidates = (candidates + 1) // 2
+      tests += 1
+  print(tests)
+parts:
+  recall:
+    - text: |
+        [[s5.packages-and-reproducible-environments]] pinned every input of a build: the exact version of each package, checked by hash, installed into an environment of its own. That removes one family of mysteries. What remains are the bugs that really are in the code, and finding those is a skill with a method, not a talent some people are born with. Three quick pulls first.
+  puzzle:
+    - text: |
+        A check that passed at the last release now fails. Since that release, 1,000 commits have been merged, and the last of them is the one that fails. Running the check at any one commit takes 4 minutes.
+
+        You could test the commits one by one, newest first, until you find a good one. Or you could test the commit in the middle, learn which half the trouble started in, and repeat.
+
+        **Working the second way, how many minutes does it take, in the worst case, to name the commit that broke the check?**
+  intuition:
+    - text: |
+        Before Diwali, someone in the house pulls out last year's string of fairy lights, plugs it in, and nothing happens. The bulbs are wired one after another, so a single dead bulb darkens all hundred. The hopeless way to find it is to stare at the string and guess. The slow way is to test bulb 1, then bulb 2, then bulb 3. The quick way is to check whether current reaches the middle of the string: if it does, the fault is in the second half; if not, the first. Each check halves the bulbs that could be guilty, and seven checks find one bulb among a hundred.
+
+        A project's history is a string of commits, and when a check that used to pass now fails, some commit along that string broke it. The figure shows 64 commits: commit 0 is known good, commit 63 known bad. Step through the tests and watch the candidates shrink.
+    - figure: bisect-commits
+      props: { bad: 41, steps: 0 }
+    - text: |
+        Each test halves the candidates: 63, then 32, 16, 8, 4, 2 and 1, so six tests always suffice for 64 commits, wherever the bad one hides. Move the hidden first bad commit and the path changes, but never its length by more than a step. Nothing here needed you to understand the bug. You needed only a good end, a bad end, and a reliable way to tell them apart. That is the spirit of the whole lesson: replace guessing with steps that are guaranteed to make progress.
+  derivation:
+    - text: |
+        **Start by making it fail on demand.** A bug you cannot reproduce is a bug you cannot test a theory against. So the first job is a short, reliable recipe that shows the failure: this input, this command, this version, this output. Pinned environments from [[s5.packages-and-reproducible-environments]] make the recipe hold on other machines. Read the error message and its traceback in full, as [[s0.reading-errors-and-debugging]] taught; the line it names is where the failure surfaced, which is often not where it began. Write down what you expected and what you got. "The total is wrong" is a complaint; "for this order the total is 412 rupees and should be 432" is a fact you can work with.
+
+        Some failures appear only sometimes: on one run in ten, or under load, or on Fridays. Then each passing run is weak evidence, and you need several in a row before you believe the bug is absent.
+    - question:
+        id: derivation-flaky
+        type: numeric
+        system: s2
+        prompt: |
+          At any commit that contains a bug, a test fails on 30% of runs, independently. At one commit you rerun the test and it passes every time. How many passes in a row do you need before the chance that a buggy commit would produce them falls below 1%?
+        answer: "13"
+        explanation: |
+          A buggy commit passes $n$ runs in a row with probability $0.7^n$. $0.7^{12} \approx 0.014$ is still above 1%, and $0.7^{13} \approx 0.0097$ is below it, so 13 passes are needed.
+    - text: |
+        **Bisect the history.** Once the failure is reproducible and you know a good commit and a bad one, the commit that introduced it can be found by the binary search of [[s3.binary-search]], run over history instead of over a sorted list. Check out the commit halfway between; run the recipe; mark it good or bad; repeat in the half that still contains the change from good to bad. With $n$ candidates that takes $\lceil \log_2 n \rceil$ tests. Version control tools do the bookkeeping for you, choosing each midpoint and checking it out, and can even run a script at every step and mark the result automatically, so a bisection of a thousand commits can finish while you have lunch.
+
+        Two details matter. History with merges is a graph, not a line, as [[s5.branches-merges-and-rebases]] showed, so bisecting tools choose commits that split the graph's candidates in half rather than taking a simple midpoint. And bisecting finds the first commit at which the test fails, which works only if every commit can be built and tested. Small commits that each leave the project working, the habit code review encourages, pay off here: the commit you land on is small enough to read in a minute.
+    - question:
+        id: derivation-bisect-count
+        type: numeric
+        system: s2
+        prompt: |
+          A known good commit and a known bad one have 300 commits between them, and the first bad commit is one of those 300 or the known bad one itself. How many tests does bisection need in the worst case?
+        answer: "9"
+        explanation: |
+          There are 301 candidates. Each test halves them, so the worst case is $\lceil \log_2 301 \rceil = 9$, since $2^8 = 256$ is too few and $2^9 = 512$ is enough.
+    - text: |
+        **Shrink the input.** Bisection narrows down when the bug arrived. Shrinking narrows down what triggers it. A customer's order of 60 lines makes the billing code crash; somewhere in those 60 lines is the combination that matters. Remove one line and run again. If it still fails, the line was irrelevant, so leave it out; if the failure disappears, that line is involved, so put it back. Keep going until no single line can be removed. What remains is often two or three lines, and the cause is usually obvious once you see them together. Automated versions of this idea, known as delta debugging, also try removing larger chunks first, which is faster on big inputs.
+
+        **Rank the hypotheses.** With a small failing case in hand, you will have several possible causes in mind. Bayes' rule from [[f4.bayes-rule]] says how to weigh them: a cause's credibility after the evidence is proportional to how credible it was before, multiplied by how likely that cause makes the evidence you actually saw. A configuration change that was likely to begin with, and which explains the evidence moderately well, can outrank a new library version that explains the evidence a little better but seemed less likely beforehand. You will rarely write down numbers while debugging, but thinking in these terms stops you from fixating on the first idea that fits.
+    - question:
+        id: derivation-posterior
+        type: choice
+        system: s2
+        prompt: |
+          Two causes seem equally likely before you look closer. Then you notice the failure happens only on machines in one data centre. If cause A were true, that would happen 80% of the time; if cause B were true, 20% of the time. Which is now more credible, and by how much?
+        options:
+          - "A, four times as credible as B"
+          - "A, 60 percentage points more credible than B"
+          - "Neither; the priors were equal, so they still are"
+          - "B, since the evidence was surprising under it"
+        answer: 0
+        explanation: |
+          With equal priors, the posteriors are in the ratio of the likelihoods, 0.8 to 0.2, so A becomes four times as credible: 80% against 20%.
+    - text: |
+        **Test the most informative idea, not the favourite.** Choose the next experiment by what it would tell you. An experiment whose result you can already predict confidently is wasted. The best ones split your remaining hypotheses roughly in half, as each bisection step does, and are cheap to run. Change one thing at a time, so that a change in the outcome has only one possible explanation, and keep notes: what you tried, what happened, what you concluded. An hour into a hard bug, the notes are the only reliable record of what you have already ruled out.
+
+        **Finish with a test.** When you find the cause, first write a test that fails because of it, using the tools of [[s1.testing-with-pytest]]. Then fix the code and watch the test pass. The test proves the fix addresses this failure rather than some other, and it stays in the suite so that the same bug cannot quietly return in a later change. A fix with no test is a fix you will make twice.
+    - question:
+        id: order-method
+        type: order
+        system: s2
+        prompt: |
+          Put these steps of fixing a bug methodically in order.
+        steps:
+          - "Write down a recipe that makes the failure happen every time."
+          - "Find the commit that introduced it by bisecting between a good and a bad commit."
+          - "Shrink the failing input until no single part can be removed."
+          - "Write a test that fails because of the bug."
+          - "Change the code so the new test passes, and run the whole suite."
+        explanation: |
+          Nothing can be tested without a reproduction; bisection and shrinking both rely on it to mark each step good or bad; the test captures the bug before the fix, so its passing afterwards means something; and the full suite checks that the fix broke nothing else.
+  formal:
+    - text: |
+        **Reproduction.** A recipe of input, command, environment and expected versus actual output that shows the failure every time, or with a known frequency.
+
+        **Bisection.** Given a good commit and a bad commit with $n$ candidates for the first bad one, testing the middle and keeping the half that contains the change from good to bad finds it in $\lceil \log_2 n \rceil$ tests.
+
+        **Shrinking.** Repeatedly remove parts of a failing input, keeping each removal after which it still fails, until no single removal keeps the failure. The result is minimal in that sense, though not necessarily the smallest possible.
+
+        **Ranking hypotheses.** Posterior credibility of a cause is proportional to its prior times the likelihood of the evidence under it; normalise by the sum over all causes.
+
+        **Regression test.** A test, written before the fix, that fails because of the bug and passes once it is fixed, and stays in the suite.
+  drill:
+    - text: Seconds each. Count halvings, and weigh evidence by what it was likely to be.
+    - question:
+        id: drill-halvings
+        type: numeric
+        system: s1
+        prompt: |
+          Bisection starts with 128 candidate commits. How many tests does it take to find the first bad one?
+        answer: "7"
+        explanation: $2^7 = 128$, so seven halvings bring 128 candidates down to one.
+    - question:
+        id: drill-linear
+        type: numeric
+        system: s1
+        prompt: |
+          With the same 128 candidates, testing commits one at a time from the oldest, how many tests could it take in the worst case?
+        answer: "127"
+        explanation: If the last candidate is the first bad one, the 127 commits before it must all be tested and found good; the last needs no test because it is the known bad commit.
+    - question:
+        id: drill-one-thing
+        type: choice
+        system: s1
+        prompt: |
+          You change the timeout setting and also upgrade a library, and the failure goes away. What have you learnt?
+        options:
+          - "That one or both changes matter, but not which"
+          - "That the timeout was the cause"
+          - "That the library was the cause"
+          - "That the bug is fixed for good"
+        answer: 0
+        explanation: Changing two things at once leaves two explanations for one result. Change one at a time.
+    - question:
+        id: predict-ceil
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import math
+          print(math.ceil(math.log2(1000)), math.ceil(math.log2(1024)), math.ceil(math.log2(1025)))
+        output: "10 10 11"
+        explanation: Ten halvings handle up to 1,024 candidates; one more candidate needs an eleventh test.
+    - question:
+        id: predict-step
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          lo, hi = 0, 63
+          for is_bad in [True, False, True]:
+              mid = (lo + hi) // 2
+              if is_bad:
+                  hi = mid
+              else:
+                  lo = mid
+          print(lo, hi)
+        output: "15 23"
+        explanation: Commit 31 is bad, so hi becomes 31; commit 15 is good, so lo becomes 15; commit 23 is bad, so hi becomes 23.
+    - question:
+        id: predict-joint
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          prior = {"cache": 0.7, "clock": 0.3}
+          like = {"cache": 0.1, "clock": 0.8}
+          joint = {k: prior[k] * like[k] for k in prior}
+          print(max(joint, key=joint.get))
+        output: "clock"
+        explanation: The products are 0.07 for the cache and 0.24 for the clock. The clock seemed less likely at first, but it explains the evidence so much better that it wins.
+  work:
+    - text: Slower now. Each problem automates one step of the method.
+    - question:
+        id: fix-bisect
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `first_bad` bisects a list of commits whose first is known good and last known bad, returning the first bad commit and the number of tests run. The program should print `(120, 6)`. It prints `(119, 6)`. Find the fault and fix it.
+        starter: |
+          def first_bad(commits, is_bad):
+              # commits run oldest to newest; commits[0] is known good and
+              # commits[-1] known bad. Return the first bad commit and the number
+              # of commits tested.
+              lo = 0
+              hi = len(commits) - 1
+              tests = 0
+              while hi - lo > 1:
+                  mid = (lo + hi) // 2
+                  tests += 1
+                  if is_bad(commits[mid]):
+                      hi = mid - 1
+                  else:
+                      lo = mid
+              return commits[hi], tests
+
+
+          commits = list(range(100, 164))  # 64 commits
+          print(first_bad(commits, lambda c: c >= 120))
+        solution: |
+          def first_bad(commits, is_bad):
+              # commits run oldest to newest; commits[0] is known good and
+              # commits[-1] known bad. Return the first bad commit and the number
+              # of commits tested.
+              lo = 0
+              hi = len(commits) - 1
+              tests = 0
+              while hi - lo > 1:
+                  mid = (lo + hi) // 2
+                  tests += 1
+                  if is_bad(commits[mid]):
+                      hi = mid
+                  else:
+                      lo = mid
+              return commits[hi], tests
+
+
+          commits = list(range(100, 164))  # 64 commits
+          print(first_bad(commits, lambda c: c >= 120))
+        tests: |
+          import math as _m
+
+          for _n in [2, 3, 5, 8, 64, 100, 1000]:
+              _cs = list(range(_n))
+              for _b in sorted(set([1, _n // 3, _n // 2, _n - 1])):
+                  if _b < 1:
+                      continue
+                  _seen = []
+
+                  def _check(c, _b=_b, _seen=_seen):
+                      _seen.append(c)
+                      return c >= _b
+
+                  _got, _t = first_bad(list(_cs), _check)
+                  assert _got == _b, "With " + str(_n) + " commits and commit " + str(_b) + " the first bad one, first_bad returned " + str(_got)
+                  assert _t == len(_seen), "The count of tests should match how many commits were tested: " + str(_t) + " reported, " + str(len(_seen)) + " tested"
+                  assert _t <= _m.ceil(_m.log2(_n - 1)) if _n > 2 else _t == 0, "Bisecting " + str(_n) + " commits should take at most " + str(_m.ceil(_m.log2(max(_n - 1, 1)))) + " tests, not " + str(_t)
+          assert output.strip() == "(120, 6)", "The program should print (120, 6)"
+        wrong:
+          - |
+            def first_bad(commits, is_bad):
+                # commits run oldest to newest; commits[0] is known good and
+                # commits[-1] known bad. Return the first bad commit and the number
+                # of commits tested.
+                lo = 0
+                hi = len(commits) - 1
+                tests = 0
+                while hi - lo > 1:
+                    mid = (lo + hi) // 2
+                    tests += 1
+                    if is_bad(commits[mid]):
+                        hi = mid
+                    else:
+                        lo = mid + 1
+                return commits[hi], tests
+
+
+            commits = list(range(100, 164))  # 64 commits
+            print(first_bad(commits, lambda c: c >= 120))
+          - |
+            def first_bad(commits, is_bad):
+                # commits run oldest to newest; commits[0] is known good and
+                # commits[-1] known bad. Return the first bad commit and the number
+                # of commits tested.
+                tests = 0
+                for c in commits[1:-1]:
+                    tests += 1
+                    if is_bad(c):
+                        return c, tests
+                return commits[-1], tests
+
+
+            commits = list(range(100, 164))  # 64 commits
+            print(first_bad(commits, lambda c: c >= 120))
+          - |
+            def first_bad(commits, is_bad):
+                # commits run oldest to newest; commits[0] is known good and
+                # commits[-1] known bad. Return the first bad commit and the number
+                # of commits tested.
+                lo = 0
+                hi = len(commits) - 1
+                tests = 0
+                while hi - lo > 1:
+                    mid = (lo + hi) // 2
+                    tests += 1
+                    if is_bad(commits[mid]):
+                        hi = mid
+                    else:
+                        lo = mid
+                return commits[lo], tests
+
+
+            commits = list(range(100, 164))  # 64 commits
+            print(first_bad(commits, lambda c: c >= 120))
+        explanation: |
+          The invariant is that `commits[lo]` is good and `commits[hi]` is bad. When the middle commit is bad, it becomes the new `hi`; setting `hi = mid - 1` throws away a commit that might be the first bad one, and makes `hi` point at a commit nobody has tested. Moving `lo` past a good commit breaks the invariant the other way; testing every commit in turn finds the answer but uses up to 62 tests instead of 6; and returning `commits[lo]` names the last good commit instead of the first bad one.
+    - question:
+        id: write-shrink
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `shrink(items, fails)`, which removes items one at a time, keeping each removal after which `fails` is still true, until no single removal keeps the failure. The program should print `['coupon FEST10', 'ghee x0']`.
+        starter: |
+          def shrink(items, fails):
+              # fails(items) is True. Try removing one item at a time, and keep any
+              # removal after which fails is still True. Stop when no single removal
+              # keeps the failure. Return what is left, in the original order.
+              return items
+
+
+          def fails(order):
+              # The billing bug: a zero-quantity line together with a coupon.
+              has_zero = any(line[-3:] == " x0" for line in order)
+              has_coupon = any(line.startswith("coupon") for line in order)
+              return has_zero and has_coupon
+
+
+          order = ["rice x2", "dal x1", "coupon FEST10", "ghee x0", "salt x1", "atta x3"]
+          print(shrink(order, fails))
+        solution: |
+          def shrink(items, fails):
+              # fails(items) is True. Try removing one item at a time, and keep any
+              # removal after which fails is still True. Stop when no single removal
+              # keeps the failure. Return what is left, in the original order.
+              current = list(items)
+              changed = True
+              while changed:
+                  changed = False
+                  for i in range(len(current)):
+                      trial = current[:i] + current[i + 1:]
+                      if fails(trial):
+                          current = trial
+                          changed = True
+                          break
+              return current
+
+
+          def fails(order):
+              # The billing bug: a zero-quantity line together with a coupon.
+              has_zero = any(line[-3:] == " x0" for line in order)
+              has_coupon = any(line.startswith("coupon") for line in order)
+              return has_zero and has_coupon
+
+
+          order = ["rice x2", "dal x1", "coupon FEST10", "ghee x0", "salt x1", "atta x3"]
+          print(shrink(order, fails))
+        tests: |
+          def _subsequence(small, big):
+              _i = 0
+              for _x in big:
+                  if _i < len(small) and small[_i] == _x:
+                      _i += 1
+              return _i == len(small)
+
+
+          def _check(_items, _pred, _name):
+              _before = list(_items)
+              _got = shrink(list(_items), _pred)
+              assert isinstance(_got, list), "shrink should return a list, not " + type(_got).__name__
+              assert _pred(_got), "For " + _name + ", the shrunk list " + repr(_got) + " no longer fails"
+              assert _subsequence(_got, _before), "For " + _name + ", " + repr(_got) + " should keep the remaining items in their original order"
+              for _i in range(len(_got)):
+                  _less = _got[:_i] + _got[_i + 1:]
+                  assert not _pred(_less), "For " + _name + ", " + repr(_got) + " can still lose " + repr(_got[_i]) + " and fail, so it is not fully shrunk"
+              return _got
+
+
+          _check(["rice x2", "dal x1", "coupon FEST10", "ghee x0", "salt x1", "atta x3"], fails, "the sample order")
+          _check(["salt x1", "ghee x0", "coupon A", "coupon B", "milk x0"], fails, "an order with two coupons and two zero lines")
+          _got = _check(list(range(20)), lambda xs: 3 in xs and 11 in xs and 17 in xs, "numbers that must include 3, 11 and 17")
+          assert _got == [3, 11, 17], "Shrinking 0 to 19 when 3, 11 and 17 matter should give [3, 11, 17], not " + repr(_got)
+          _check(list(range(1, 13)), lambda xs: sum(xs) >= 30, "numbers whose sum must stay at least 30")
+          _check([5, 1, 4, 2, 3], lambda xs: len(xs) >= 1 and xs[0] > xs[-1], "lists whose first item is larger than the last")
+          assert output.strip() == "['coupon FEST10', 'ghee x0']", "The program should print ['coupon FEST10', 'ghee x0']"
+        wrong:
+          - |
+            def shrink(items, fails):
+                # fails(items) is True. Try removing one item at a time, and keep any
+                # removal after which fails is still True. Stop when no single removal
+                # keeps the failure. Return what is left, in the original order.
+                current = list(items)
+                changed = True
+                while changed:
+                    changed = False
+                    for i in range(len(current)):
+                        trial = current[:i] + current[i + 1:]
+                        if not fails(trial):
+                            current = trial
+                            changed = True
+                            break
+                return current
+
+
+            def fails(order):
+                # The billing bug: a zero-quantity line together with a coupon.
+                has_zero = any(line[-3:] == " x0" for line in order)
+                has_coupon = any(line.startswith("coupon") for line in order)
+                return has_zero and has_coupon
+
+
+            order = ["rice x2", "dal x1", "coupon FEST10", "ghee x0", "salt x1", "atta x3"]
+            print(shrink(order, fails))
+          - |
+            def shrink(items, fails):
+                # fails(items) is True. Try removing one item at a time, and keep any
+                # removal after which fails is still True. Stop when no single removal
+                # keeps the failure. Return what is left, in the original order.
+                return [item for item in items if fails([item])]
+
+
+            def fails(order):
+                # The billing bug: a zero-quantity line together with a coupon.
+                has_zero = any(line[-3:] == " x0" for line in order)
+                has_coupon = any(line.startswith("coupon") for line in order)
+                return has_zero and has_coupon
+
+
+            order = ["rice x2", "dal x1", "coupon FEST10", "ghee x0", "salt x1", "atta x3"]
+            print(shrink(order, fails))
+          - |
+            def shrink(items, fails):
+                # fails(items) is True. Try removing one item at a time, and keep any
+                # removal after which fails is still True. Stop when no single removal
+                # keeps the failure. Return what is left, in the original order.
+                current = list(items)
+                for item in current:
+                    trial = [x for x in current if x != item]
+                    if fails(trial):
+                        current.remove(item)
+                return current
+
+
+            def fails(order):
+                # The billing bug: a zero-quantity line together with a coupon.
+                has_zero = any(line[-3:] == " x0" for line in order)
+                has_coupon = any(line.startswith("coupon") for line in order)
+                return has_zero and has_coupon
+
+
+            order = ["rice x2", "dal x1", "coupon FEST10", "ghee x0", "salt x1", "atta x3"]
+            print(shrink(order, fails))
+        explanation: |
+          Try each removal on a copy, keep it only if the failure survives, and start the scan again after every success, stopping when a full pass removes nothing. Keeping removals that make the failure disappear throws away exactly the items that matter; testing each item on its own misses failures that need two items together; and removing from a list while looping over it skips the item after each removal, leaving the result only partly shrunk.
+    - question:
+        id: write-posteriors
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `posteriors(priors, likelihoods)`, which applies Bayes' rule to a set of possible causes and returns `(cause, posterior)` pairs, rounded to 2 places, most likely first. The program should print `[('config change', 0.51), ('new library version', 0.46), ('bad data', 0.03)]`.
+        starter: |
+          def posteriors(priors, likelihoods):
+              # priors[cause]: how likely each cause seemed before the evidence.
+              # likelihoods[cause]: the chance of seeing the evidence if that cause
+              # were the real one. Return (cause, posterior) pairs, posteriors rounded
+              # to 2 places, most likely first.
+              return []
+
+
+          priors = {"config change": 0.5, "new library version": 0.3, "bad data": 0.2}
+          # The evidence: the failure appears only on servers that were redeployed.
+          likelihoods = {"config change": 0.6, "new library version": 0.9, "bad data": 0.1}
+          print(posteriors(priors, likelihoods))
+        solution: |
+          def posteriors(priors, likelihoods):
+              # priors[cause]: how likely each cause seemed before the evidence.
+              # likelihoods[cause]: the chance of seeing the evidence if that cause
+              # were the real one. Return (cause, posterior) pairs, posteriors rounded
+              # to 2 places, most likely first.
+              joint = {cause: priors[cause] * likelihoods[cause] for cause in priors}
+              total = sum(joint.values())
+              pairs = [(cause, round(joint[cause] / total, 2)) for cause in joint]
+              return sorted(pairs, key=lambda pair: -pair[1])
+
+
+          priors = {"config change": 0.5, "new library version": 0.3, "bad data": 0.2}
+          # The evidence: the failure appears only on servers that were redeployed.
+          likelihoods = {"config change": 0.6, "new library version": 0.9, "bad data": 0.1}
+          print(posteriors(priors, likelihoods))
+        tests: |
+          def _close(_got, _want, _name):
+              assert isinstance(_got, list), "posteriors should return a list, not " + type(_got).__name__
+              assert [c for c, _ in _got] == [c for c, _ in _want], "For " + _name + ", the causes should come out in the order " + repr([c for c, _ in _want]) + ", not " + repr([c for c, _ in _got])
+              for (_c, _p), (_, _q) in zip(_got, _want):
+                  assert abs(_p - _q) < 0.006, "For " + _name + ", the posterior of " + repr(_c) + " should be " + str(_q) + ", not " + str(_p)
+
+
+          _close(posteriors({"a": 0.5, "b": 0.5}, {"a": 0.8, "b": 0.2}), [("a", 0.8), ("b", 0.2)], "equal priors")
+          _close(posteriors({"disk": 0.8, "network": 0.2}, {"disk": 0.2, "network": 0.9}), [("network", 0.53), ("disk", 0.47)], "a strong prior against strong evidence")
+          _close(posteriors({"x": 0.1, "y": 0.6, "z": 0.3}, {"x": 0.9, "y": 0.05, "z": 0.5}), [("z", 0.56), ("x", 0.33), ("y", 0.11)], "three causes")
+          _close(posteriors({"only": 1.0}, {"only": 0.3}), [("only", 1.0)], "a single cause")
+          assert output.strip() == "[('config change', 0.51), ('new library version', 0.46), ('bad data', 0.03)]", "The program should print [('config change', 0.51), ('new library version', 0.46), ('bad data', 0.03)]"
+        wrong:
+          - |
+            def posteriors(priors, likelihoods):
+                # priors[cause]: how likely each cause seemed before the evidence.
+                # likelihoods[cause]: the chance of seeing the evidence if that cause
+                # were the real one. Return (cause, posterior) pairs, posteriors rounded
+                # to 2 places, most likely first.
+                joint = {cause: priors[cause] * likelihoods[cause] for cause in priors}
+                pairs = [(cause, round(joint[cause], 2)) for cause in joint]
+                return sorted(pairs, key=lambda pair: -pair[1])
+
+
+            priors = {"config change": 0.5, "new library version": 0.3, "bad data": 0.2}
+            # The evidence: the failure appears only on servers that were redeployed.
+            likelihoods = {"config change": 0.6, "new library version": 0.9, "bad data": 0.1}
+            print(posteriors(priors, likelihoods))
+          - |
+            def posteriors(priors, likelihoods):
+                # priors[cause]: how likely each cause seemed before the evidence.
+                # likelihoods[cause]: the chance of seeing the evidence if that cause
+                # were the real one. Return (cause, posterior) pairs, posteriors rounded
+                # to 2 places, most likely first.
+                total = sum(likelihoods.values())
+                pairs = [(cause, round(likelihoods[cause] / total, 2)) for cause in likelihoods]
+                return sorted(pairs, key=lambda pair: -pair[1])
+
+
+            priors = {"config change": 0.5, "new library version": 0.3, "bad data": 0.2}
+            # The evidence: the failure appears only on servers that were redeployed.
+            likelihoods = {"config change": 0.6, "new library version": 0.9, "bad data": 0.1}
+            print(posteriors(priors, likelihoods))
+          - |
+            def posteriors(priors, likelihoods):
+                # priors[cause]: how likely each cause seemed before the evidence.
+                # likelihoods[cause]: the chance of seeing the evidence if that cause
+                # were the real one. Return (cause, posterior) pairs, posteriors rounded
+                # to 2 places, most likely first.
+                joint = {cause: priors[cause] * likelihoods[cause] for cause in priors}
+                total = sum(likelihoods.values())
+                pairs = [(cause, round(joint[cause] / total, 2)) for cause in joint]
+                return sorted(pairs, key=lambda pair: -pair[1])
+
+
+            priors = {"config change": 0.5, "new library version": 0.3, "bad data": 0.2}
+            # The evidence: the failure appears only on servers that were redeployed.
+            likelihoods = {"config change": 0.6, "new library version": 0.9, "bad data": 0.1}
+            print(posteriors(priors, likelihoods))
+        explanation: |
+          Multiply each prior by its likelihood, then divide by the total of those products so the posteriors add to 1. Leaving out the division gives numbers that rank correctly but are not probabilities; ignoring the priors lets the new library version win on likelihood alone, though it seemed less likely to begin with; and dividing by the sum of the likelihoods mixes two different totals.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, 1,000 commits were merged since the release and each test takes 4 minutes. Bisecting, how many minutes does it take in the worst case to name the commit that broke the check?
+        answer: "40"
+        explanation: |
+          The first bad commit is one of the 1,000. Bisection needs $\lceil \log_2 1000 \rceil = 10$ tests, since $2^{10} = 1024$, and 10 tests at 4 minutes each take 40 minutes.
+    - question:
+        id: work-next-step
+        type: choice
+        system: s2
+        prompt: |
+          Bisection points at a commit that changed how discounts are rounded, and the shrunk failing order has just two lines. What should you do next?
+        options:
+          - "Write a test using the two-line order that fails now, then fix the rounding and see the test pass."
+          - "Revert the whole commit and close the bug report."
+          - "Fix the rounding, check the customer's original order by hand, and move on."
+          - "Add a log line to the rounding code and wait for the failure to recur in production."
+        answer: 0
+        explanation: |
+          The shrunk order is a ready-made regression test. Writing it first proves it catches the bug, and keeping it stops the bug from returning. Reverting may be a sensible emergency measure, but it also throws away the commit's intended change and leaves no test; a manual check protects nothing in future; and waiting for production to fail again is slower than the test you already have.
+  connections:
+    - text: |
+        Forty minutes. The first bad commit is one of the 1,000, and ten halvings bring 1,000 candidates down to one, since $2^{10} = 1024$. At 4 minutes a test, that is 40 minutes. Testing newest first could take 999 tests, more than 66 hours, and staring at the code could take any amount of time at all.
+
+        Bisection, shrinking and hypothesis ranking share one idea: every step must reduce what you do not know, and you should be able to say by how much. Not every problem is a wrong answer, though. Sometimes the answer is right and simply takes too long, and then the same discipline applies to time: measure where it goes before changing anything, which is [[s5.profiling-programs]]. In a running service with real users, the evidence comes from logs, metrics and traces rather than from a debugger, [[r3.logs-metrics-and-traces]].
