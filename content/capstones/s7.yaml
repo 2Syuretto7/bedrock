@@ -1,0 +1,466 @@
+cluster: S7
+title: A safe fare-rule language for a city bus company
+minutes: 100
+claim: You will have replaced a bus company's dangerous fare rules, run with Python's eval, by a small language of its own, counting a rule's tokens, checking route codes with a regular expression, settling precedence and associativity in a grammar, choosing an evaluator that can see only the fare variables, writing the stack machine that runs compiled rules, catching a rule whose branches disagree before it is used, fixing closures that all charge the last route's rate, and finding why memory leaks once the cycle collector is switched off.
+brief: |
+  This cluster was about how a language is implemented: tokenising, regular expressions and finite automata, grammars and parsing, syntax trees and evaluation, bytecode and the interpreter loop, scope and closures, static and dynamic types, and memory management.
+
+  **The project.** A city bus company in Pune lets its fares team write rules as short formulas, such as `if km > 10 then 15 + 2 * km else 25`, one per route, edited in a web form and applied to every ticket. Today the formulas are run by passing the text to Python's `eval`. Last week a test rule typed into the form deleted a log file on the server, and the fares were briefly wrong on three routes because of a precedence mistake. You have been asked to give the rules a small, safe language of their own.
+
+  Each stage below is one step of that work. Every stage draws on one or more lessons of this cluster, and the skill being tested is turning text into something a program can check and run, without letting the text do anything it should not.
+starter: |
+  # Scratch space for the fare-rule language.
+  rule = "rate*km+toll>=150"
+  print(rule.replace("*", " * ").replace("+", " + ").replace(">=", " >= ").split())
+stages:
+  - title: Splitting a rule into tokens
+    blocks:
+      - text: |
+          The new language starts with a tokeniser that takes the longest token it can at each position and skips spaces. Rules may be typed with or without spaces, so it must handle `rate*km+toll>=150` exactly as it handles `rate * km + toll >= 150`.
+      - question:
+          id: token-count
+          type: numeric
+          system: s2
+          concepts: [s7.tokenising]
+          prompt: |
+            How many tokens does the tokeniser produce for `rate*km+toll>=150`?
+          answer: "7"
+          explanation: |
+            The tokens are `rate`, `*`, `km`, `+`, `toll`, `>=` and `150`. Taking the longest match makes `>=` one operator rather than `>` followed by `=`, and makes `150` one number.
+  - title: Route codes in the form
+    blocks:
+      - text: |
+          Each rule is saved against a route code, such as `PMT-101A` or `PU-7`: two to four capital letters, a hyphen, one to three digits, and at most one capital letter at the end. Codes like `xPMT-101A`, `PMT-1010` and `pmt-101` have been slipping through and creating rules that no route ever uses.
+      - question:
+          id: route-regex
+          type: choice
+          system: s2
+          concepts: [s7.regular-expressions-and-finite-automata]
+          prompt: |
+            Which check accepts exactly the valid route codes?
+          options:
+            - "re.fullmatch(r\"[A-Z]{2,4}-[0-9]{1,3}[A-Z]?\", code)"
+            - "re.search(r\"[A-Z]{2,4}-[0-9]{1,3}[A-Z]?\", code)"
+            - "re.fullmatch(r\"[A-Z]+-[0-9]+[A-Z]*\", code)"
+            - "re.fullmatch(r\"[A-Z]{2,4}-[0-9]{1,3}[A-Z]\", code)"
+          answer: 0
+          explanation: |
+            `fullmatch` insists that the whole code matches, the counted repeats bound each part, and `?` makes the final letter optional. `search` accepts a valid code buried inside junk such as `xPMT-101A`; unbounded `+` and `*` accept `PMT-1010`; and the last pattern rejects `PU-7`, which has no final letter.
+  - title: The precedence mistake
+    blocks:
+      - text: |
+          The wrong fares came from a rule with a discount, `40 - 2 * km - 5`. The new grammar has two levels, `expr = term (("+" | "-") term)*` and `term = factor ("*" factor)*`, and the parser builds each level's operations from left to right.
+      - question:
+          id: grammar-value
+          type: numeric
+          system: s2
+          concepts: [s7.grammars-and-parsing, s7.syntax-trees-and-evaluation]
+          prompt: |
+            With this grammar, what does `40 - 2 * km - 5` give for km = 10?
+          answer: "15"
+          explanation: |
+            The term level makes `2 * km` one subtree worth 20, and the expression level groups the subtractions to the left, `(40 - 20) - 5`, giving 15. Grouping them to the right would give `40 - (20 - 5)` = 25, and ignoring precedence altogether would give `((40 - 2) * 10) - 5` = 375.
+  - title: Getting rid of eval
+    blocks:
+      - text: |
+          The current code runs `eval(rule_text, {"km": km, "toll": toll})`. The rule that deleted the log file was `__import__("os").remove("fares.log")`, typed in by someone testing the form.
+      - question:
+          id: replace-eval
+          type: choice
+          system: s2
+          concepts: [s7.syntax-trees-and-evaluation, s7.scope-closures-and-higher-order-functions]
+          prompt: |
+            What is the safe replacement?
+          options:
+            - "Parse each rule with the new tokeniser and grammar, and evaluate the tree with an environment that holds only the fare variables, so any other name is an error."
+            - "Keep eval, but reject any rule whose text contains the word import."
+            - "Keep eval, and pass an empty dictionary as the globals."
+            - "Replace eval with ast.literal_eval."
+          answer: 0
+          explanation: |
+            A tree-walking evaluator can do only what its cases do, and the environment is the only place it looks names up. `eval` resolves names through the globals it is given and then the built-ins, which Python supplies even when the dictionary is empty, so `__import__` is always within reach; a blocked word is easy to spell another way; and `literal_eval` accepts no names at all, so `km` would be rejected.
+  - title: The machine that runs the rules
+    blocks:
+      - text: |
+          The new language compiles each rule's tree into a short list of instructions for a stack machine, as Python does with its own code, so that a rule is parsed once and run for every ticket. The compiler is done; the machine is not.
+      - question:
+          id: rule-machine
+          type: code
+          mode: write
+          system: s2
+          concepts: [s7.how-python-runs-bytecode-and-the-interpreter-loop, s7.syntax-trees-and-evaluation]
+          prompt: |
+            Write `run`, which executes compiled rule code on a stack and returns the value left on top. The program should print three lines, the fares for 4 km, 10 km and 18 km: `4 km: 25`, `10 km: 25` and `18 km: 51`.
+          starter: |
+            def run(code, env):
+                # Run compiled fare-rule code on a stack machine and return the value
+                # left on top of the stack at the end. Instructions:
+                #   ("PUSH", n)            push the number n
+                #   ("LOAD", name)         push env[name]
+                #   ("ADD",) ("SUB",) ("MUL",) ("GT",)
+                #                          pop the right operand, then the left one, and
+                #                          push left + right, left - right, left * right
+                #                          or left > right
+                #   ("JUMP", i)            continue at instruction i
+                #   ("JUMP_IF_FALSE", i)   pop a value; if it is false, continue at i
+                # Execution ends when the program counter runs past the last instruction.
+                return None
+
+
+            # The rule "if km > 10 then 15 + 2 * km else 25", compiled.
+            code = [
+                ("LOAD", "km"),
+                ("PUSH", 10),
+                ("GT",),
+                ("JUMP_IF_FALSE", 10),
+                ("PUSH", 15),
+                ("PUSH", 2),
+                ("LOAD", "km"),
+                ("MUL",),
+                ("ADD",),
+                ("JUMP", 11),
+                ("PUSH", 25),
+            ]
+            for km in [4, 10, 18]:
+                try:
+                    print(km, "km:", run(code, {"km": km}))
+                except (IndexError, KeyError, TypeError) as error:
+                    print(km, "km: failed with", type(error).__name__)
+          solution: |
+            def run(code, env):
+                # Run compiled fare-rule code on a stack machine and return the value
+                # left on top of the stack at the end. Instructions:
+                #   ("PUSH", n)            push the number n
+                #   ("LOAD", name)         push env[name]
+                #   ("ADD",) ("SUB",) ("MUL",) ("GT",)
+                #                          pop the right operand, then the left one, and
+                #                          push left + right, left - right, left * right
+                #                          or left > right
+                #   ("JUMP", i)            continue at instruction i
+                #   ("JUMP_IF_FALSE", i)   pop a value; if it is false, continue at i
+                # Execution ends when the program counter runs past the last instruction.
+                stack = []
+                pc = 0
+                while pc < len(code):
+                    instruction = code[pc]
+                    op = instruction[0]
+                    pc += 1
+                    if op == "PUSH":
+                        stack.append(instruction[1])
+                    elif op == "LOAD":
+                        stack.append(env[instruction[1]])
+                    elif op == "JUMP":
+                        pc = instruction[1]
+                    elif op == "JUMP_IF_FALSE":
+                        if not stack.pop():
+                            pc = instruction[1]
+                    else:
+                        right = stack.pop()
+                        left = stack.pop()
+                        if op == "ADD":
+                            stack.append(left + right)
+                        elif op == "SUB":
+                            stack.append(left - right)
+                        elif op == "MUL":
+                            stack.append(left * right)
+                        else:
+                            stack.append(left > right)
+                return stack.pop()
+
+
+            # The rule "if km > 10 then 15 + 2 * km else 25", compiled.
+            code = [
+                ("LOAD", "km"),
+                ("PUSH", 10),
+                ("GT",),
+                ("JUMP_IF_FALSE", 10),
+                ("PUSH", 15),
+                ("PUSH", 2),
+                ("LOAD", "km"),
+                ("MUL",),
+                ("ADD",),
+                ("JUMP", 11),
+                ("PUSH", 25),
+            ]
+            for km in [4, 10, 18]:
+                try:
+                    print(km, "km:", run(code, {"km": km}))
+                except (IndexError, KeyError, TypeError) as error:
+                    print(km, "km: failed with", type(error).__name__)
+          tests: |
+            def _run(_code, _env):
+                try:
+                    return run(_code, _env)
+                except (IndexError, KeyError, TypeError) as _e:
+                    raise AssertionError("run(" + repr(_code) + ") raised " + type(_e).__name__ + ": " + str(_e))
+
+
+            assert _run([("PUSH", 7)], {}) == 7, "A program that pushes 7 should give 7"
+            assert _run([("PUSH", 10), ("PUSH", 3), ("SUB",)], {}) == 7, "10 - 3 should give 7: pop the right operand first"
+            assert _run([("PUSH", 2), ("PUSH", 5), ("GT",)], {}) is False, "2 > 5 should give False"
+            assert _run([("LOAD", "x"), ("LOAD", "y"), ("MUL",)], {"x": 6, "y": 7}) == 42, "x * y with x = 6 and y = 7 should give 42"
+            _branch = [("LOAD", "ok"), ("JUMP_IF_FALSE", 4), ("PUSH", 1), ("JUMP", 5), ("PUSH", 2)]
+            assert _run(_branch, {"ok": True}) == 1, "With ok true, the branch should give 1"
+            assert _run(_branch, {"ok": False}) == 2, "With ok false, the branch should jump and give 2"
+            _tail = [("PUSH", 5), ("PUSH", 1), ("JUMP", 3), ("ADD",)]
+            assert _run(_tail, {}) == 6, "A jump to the last instruction should still run it: 5 + 1 = 6"
+            _skip = [("PUSH", 0), ("JUMP_IF_FALSE", 3), ("PUSH", 99), ("PUSH", 4)]
+            assert _run(_skip, {}) == 4, "JUMP_IF_FALSE should pop its value and jump when it is false"
+            assert output.splitlines() == ["4 km: 25", "10 km: 25", "18 km: 51"], "The program should print 25 for 4 km and 10 km, and 51 for 18 km"
+          wrong:
+            - |
+              def run(code, env):
+                  # Run compiled fare-rule code on a stack machine and return the value
+                  # left on top of the stack at the end. Instructions:
+                  #   ("PUSH", n)            push the number n
+                  #   ("LOAD", name)         push env[name]
+                  #   ("ADD",) ("SUB",) ("MUL",) ("GT",)
+                  #                          pop the right operand, then the left one, and
+                  #                          push left + right, left - right, left * right
+                  #                          or left > right
+                  #   ("JUMP", i)            continue at instruction i
+                  #   ("JUMP_IF_FALSE", i)   pop a value; if it is false, continue at i
+                  # Execution ends when the program counter runs past the last instruction.
+                  stack = []
+                  pc = 0
+                  while pc < len(code):
+                      instruction = code[pc]
+                      op = instruction[0]
+                      pc += 1
+                      if op == "PUSH":
+                          stack.append(instruction[1])
+                      elif op == "LOAD":
+                          stack.append(env[instruction[1]])
+                      elif op == "JUMP":
+                          pc = instruction[1]
+                      elif op == "JUMP_IF_FALSE":
+                          if not stack.pop():
+                              pc = instruction[1]
+                      else:
+                          left = stack.pop()
+                          right = stack.pop()
+                          if op == "ADD":
+                              stack.append(left + right)
+                          elif op == "SUB":
+                              stack.append(left - right)
+                          elif op == "MUL":
+                              stack.append(left * right)
+                          else:
+                              stack.append(left > right)
+                  return stack.pop()
+
+
+              # The rule "if km > 10 then 15 + 2 * km else 25", compiled.
+              code = [
+                  ("LOAD", "km"),
+                  ("PUSH", 10),
+                  ("GT",),
+                  ("JUMP_IF_FALSE", 10),
+                  ("PUSH", 15),
+                  ("PUSH", 2),
+                  ("LOAD", "km"),
+                  ("MUL",),
+                  ("ADD",),
+                  ("JUMP", 11),
+                  ("PUSH", 25),
+              ]
+              for km in [4, 10, 18]:
+                  try:
+                      print(km, "km:", run(code, {"km": km}))
+                  except (IndexError, KeyError, TypeError) as error:
+                      print(km, "km: failed with", type(error).__name__)
+            - |
+              def run(code, env):
+                  # Run compiled fare-rule code on a stack machine and return the value
+                  # left on top of the stack at the end. Instructions:
+                  #   ("PUSH", n)            push the number n
+                  #   ("LOAD", name)         push env[name]
+                  #   ("ADD",) ("SUB",) ("MUL",) ("GT",)
+                  #                          pop the right operand, then the left one, and
+                  #                          push left + right, left - right, left * right
+                  #                          or left > right
+                  #   ("JUMP", i)            continue at instruction i
+                  #   ("JUMP_IF_FALSE", i)   pop a value; if it is false, continue at i
+                  # Execution ends when the program counter runs past the last instruction.
+                  stack = []
+                  pc = 0
+                  while pc < len(code):
+                      instruction = code[pc]
+                      op = instruction[0]
+                      pc += 1
+                      if op == "PUSH":
+                          stack.append(instruction[1])
+                      elif op == "LOAD":
+                          stack.append(env[instruction[1]])
+                      elif op == "JUMP":
+                          pc = instruction[1]
+                      elif op == "JUMP_IF_FALSE":
+                          if stack.pop():
+                              pc = instruction[1]
+                      else:
+                          right = stack.pop()
+                          left = stack.pop()
+                          if op == "ADD":
+                              stack.append(left + right)
+                          elif op == "SUB":
+                              stack.append(left - right)
+                          elif op == "MUL":
+                              stack.append(left * right)
+                          else:
+                              stack.append(left > right)
+                  return stack.pop()
+
+
+              # The rule "if km > 10 then 15 + 2 * km else 25", compiled.
+              code = [
+                  ("LOAD", "km"),
+                  ("PUSH", 10),
+                  ("GT",),
+                  ("JUMP_IF_FALSE", 10),
+                  ("PUSH", 15),
+                  ("PUSH", 2),
+                  ("LOAD", "km"),
+                  ("MUL",),
+                  ("ADD",),
+                  ("JUMP", 11),
+                  ("PUSH", 25),
+              ]
+              for km in [4, 10, 18]:
+                  try:
+                      print(km, "km:", run(code, {"km": km}))
+                  except (IndexError, KeyError, TypeError) as error:
+                      print(km, "km: failed with", type(error).__name__)
+            - |
+              def run(code, env):
+                  # Run compiled fare-rule code on a stack machine and return the value
+                  # left on top of the stack at the end. Instructions:
+                  #   ("PUSH", n)            push the number n
+                  #   ("LOAD", name)         push env[name]
+                  #   ("ADD",) ("SUB",) ("MUL",) ("GT",)
+                  #                          pop the right operand, then the left one, and
+                  #                          push left + right, left - right, left * right
+                  #                          or left > right
+                  #   ("JUMP", i)            continue at instruction i
+                  #   ("JUMP_IF_FALSE", i)   pop a value; if it is false, continue at i
+                  # Execution ends when the program counter runs past the last instruction.
+                  stack = []
+                  pc = 0
+                  while pc < len(code) - 1:
+                      instruction = code[pc]
+                      op = instruction[0]
+                      pc += 1
+                      if op == "PUSH":
+                          stack.append(instruction[1])
+                      elif op == "LOAD":
+                          stack.append(env[instruction[1]])
+                      elif op == "JUMP":
+                          pc = instruction[1]
+                      elif op == "JUMP_IF_FALSE":
+                          if not stack.pop():
+                              pc = instruction[1]
+                      else:
+                          right = stack.pop()
+                          left = stack.pop()
+                          if op == "ADD":
+                              stack.append(left + right)
+                          elif op == "SUB":
+                              stack.append(left - right)
+                          elif op == "MUL":
+                              stack.append(left * right)
+                          else:
+                              stack.append(left > right)
+                  return stack.pop()
+
+
+              # The rule "if km > 10 then 15 + 2 * km else 25", compiled.
+              code = [
+                  ("LOAD", "km"),
+                  ("PUSH", 10),
+                  ("GT",),
+                  ("JUMP_IF_FALSE", 10),
+                  ("PUSH", 15),
+                  ("PUSH", 2),
+                  ("LOAD", "km"),
+                  ("MUL",),
+                  ("ADD",),
+                  ("JUMP", 11),
+                  ("PUSH", 25),
+              ]
+              for km in [4, 10, 18]:
+                  try:
+                      print(km, "km:", run(code, {"km": km}))
+                  except (IndexError, KeyError, TypeError) as error:
+                      print(km, "km: failed with", type(error).__name__)
+          explanation: |
+            Keep a stack and a program counter, and loop while the counter is inside the code: fetch the instruction, move the counter on, then act on it. Jumps overwrite the counter, and `JUMP_IF_FALSE` pops its condition first. Popping the left operand first reverses `-` and `>`, so the test becomes `10 > km`; jumping when the condition is true runs the wrong branch; and stopping one instruction early skips `PUSH 25`, leaving the stack empty.
+  - title: The rule that said free
+    blocks:
+      - text: |
+          On a Friday someone saves `if km > 10 then 15 + 2 * km else "free"` for a short feeder route. It works for every long trip. On Sunday the first short trip reaches the payment step, which adds a toll to the fare, and the payment crashes with a TypeError, far from the rule that caused it.
+      - question:
+          id: rule-types
+          type: choice
+          system: s2
+          concepts: [s7.static-and-dynamic-types]
+          prompt: |
+            What change stops a rule like this from reaching passengers?
+          options:
+            - "Type-check each rule when it is saved, giving every node of its tree a type and rejecting a conditional whose branches differ, so the person writing it sees the error."
+            - "Catch the TypeError in the payment step and charge 0."
+            - "Convert every fare with int() wherever it is used."
+            - "Run each new rule once with a distance of 20 km before saving it."
+          answer: 0
+          explanation: |
+            A static check looks at both branches whatever the distance, and reports the mistake at the moment and place it was made. Charging 0 silently guesses, as weak typing does; `int("free")` just moves the crash; and one sample distance takes only one branch, the one that works.
+  - title: Every route at the same rate
+    blocks:
+      - text: |
+          To make the simplest rules faster, a developer turns each flat per-kilometre rate into a Python function at start-up:
+
+          ```python
+          rules = {}
+          for route, rate in [("101", 2), ("205", 3), ("330", 5)]:
+              rules[route] = lambda km: rate * km
+          ```
+      - question:
+          id: late-binding
+          type: numeric
+          system: s2
+          concepts: [s7.scope-closures-and-higher-order-functions]
+          prompt: |
+            After the loop, what does `rules["101"](10)` return?
+          answer: "50"
+          explanation: |
+            All three lambdas capture the same variable `rate`, and read it when they are called, after the loop has left it at 5. Route 101 charges 5 per km instead of 2. Writing `lambda km, rate=rate: rate * km` gives each function its own value.
+  - title: Memory that never comes back
+    blocks:
+      - text: |
+          The parser now builds trees in which every node refers to its children and also to its parent, so that error messages can show the surrounding rule. To cut pauses, someone added `gc.disable()` at start-up. The rule server's memory now grows by about 2 MB for every thousand rules it parses and never shrinks, although no list or dictionary keeps the old trees.
+      - question:
+          id: tree-cycles
+          type: choice
+          system: s2
+          concepts: [s7.memory-management-and-garbage-collection]
+          prompt: |
+            What is happening, and what is the fix?
+          options:
+            - "Parent and child links make every tree a cycle, which reference counting cannot free and the disabled cycle collector never visits; turn the collector back on, or make the parent links weak references."
+            - "Reference counts overflow after many rules; restart the server every night."
+            - "Python never frees objects created inside a loop; move the parsing into a function."
+            - "The trees are still named; call del on each tree's root when it is finished with."
+          answer: 0
+          explanation: |
+            Once a tree is dropped, its nodes are unreachable but each still has a count above 0 from its parent or a child, so only a tracing pass can free them, and that pass was switched off. Reference counts do not overflow; objects made in loops are freed like any others; and `del` removes a name, which leaves the cycle exactly as it was.
+review: |
+  The fare rules now have a language of their own, and each step came from a lesson of this cluster:
+
+  - The tokeniser turned `rate*km+toll>=150` into 7 tokens by taking the longest match, as in [[s7.tokenising]].
+  - Route codes are checked with `fullmatch` and bounded repeats, a finite automaton from [[s7.regular-expressions-and-finite-automata]].
+  - A two-level grammar from [[s7.grammars-and-parsing]] made `40 - 2 * km - 5` give 15 for 10 km, the tree that [[s7.syntax-trees-and-evaluation]] evaluates.
+  - `eval` gave way to an evaluator whose only names are the fare variables, closing the route to the built-ins that the lookup rules of [[s7.scope-closures-and-higher-order-functions]] leave open.
+  - Rules compile to instructions that a stack machine runs, the design of [[s7.how-python-runs-bytecode-and-the-interpreter-loop]].
+  - A rule whose branches disagree is rejected when it is saved, a static check from [[s7.static-and-dynamic-types]].
+  - The closures that all charged 5 per km now each keep their own rate.
+  - The parse trees' cycles are freed again once the collector is back on, as [[s7.memory-management-and-garbage-collection]] explains.
+
+  Notice what the wrong answers had in common: block a word, catch the error, convert the value, restart the server, test one example. Each treated a symptom where it appeared, far from its cause. The right answers decided, at the moment a rule is read, exactly what it is allowed to mean, and left nothing to be guessed later. The next cluster goes below the interpreter, to the machine itself: logic gates, arithmetic circuits, and a processor that fetches and runs instructions of its own.

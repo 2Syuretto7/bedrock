@@ -1,0 +1,806 @@
+concept: s7.how-python-runs-bytecode-and-the-interpreter-loop
+minutes: 80
+claim: You can follow Python from source to running program, through tokens, a syntax tree and bytecode in a code object, to the interpreter loop that fetches, decodes and executes one instruction at a time; compile an expression tree into code for a stack machine and run it with a program counter, a stack and jumps for loops and conditions; tidy bytecode with a peephole pass; inspect real bytecode with the dis module; and explain where an interpreter's time goes and why moving loops into built-ins or compiled libraries makes Python code faster.
+recalls: [s7.syntax-trees-and-evaluation]
+uses: [s7.tokenising, s7.grammars-and-parsing, s2.stacks-and-queues, s3.measuring-and-predicting-running-time, s5.profiling-programs, s0.functions, s0.loops]
+leads: [s7.scope-closures-and-higher-order-functions, s7.memory-management-and-garbage-collection]
+starter: |
+  # Scratch space. dis shows the instructions Python compiled a function into.
+  # The exact names differ between Python versions.
+  import dis
+
+
+  def fare(price, tip, qty):
+      return (price + tip) * qty
+
+
+  dis.dis(fare)
+parts:
+  recall:
+    - text: |
+        [[s7.syntax-trees-and-evaluation]] worked out a program's value by walking its tree, and ended by noting that walking is slow: every visit chases pointers and decides afresh what kind of node it has reached. Python avoids that by translating each tree once into a flat list of simple instructions. Three quick pulls first.
+  puzzle:
+    - text: |
+        A stack machine evaluates `(a + b) * (c + d)` by pushing values onto a stack and letting each operator pop its two operands and push the result. The instructions are: push a, push b, add, push c, push d, add, multiply.
+
+        **What is the largest number of values on the stack at any moment during the run?**
+  intuition:
+    - text: |
+        A clerk at a ration shop totals bills with a pile of paper slips. Reading the instruction card from top to bottom, he either writes a number on a new slip and puts it on the pile, or takes the top two slips, combines them, and puts one slip with the result back. He never needs to look anywhere but the top of the pile, and the card never says "first work out the bracket": the order of the instructions already took care of that.
+
+        Python's interpreter works the same way. The figure runs two small programs on a stack machine, one instruction per step. Watch the stack, and in the loop, watch the highlighted instruction jump backwards.
+    - figure: stack-machine
+      props: { program: fare, step: 0 }
+    - text: |
+        The tree has gone. What is left is a list of instructions, a **program counter** saying which one runs next, a stack for values in flight, and a table of variables. A loop is nothing special to the machine: an instruction that jumps back to an earlier index. This is the shape of Python's own interpreter, with more instructions, more types of value and much more care.
+  derivation:
+    - text: |
+        **From tree to bytecode.** When Python runs a file, it tokenises it as in [[s7.tokenising]], parses it into a syntax tree, and then **compiles** the tree into **bytecode**: a list of instructions for an imaginary machine, stored with the constants and names it uses in a **code object**. Every function has one, reachable as `f.__code__`, and the `dis` module prints its instructions. Python saves compiled bytecode in `.pyc` files inside `__pycache__` folders, so a module that has not changed is not compiled again.
+
+        Compiling an expression for a stack machine is a post-order walk of its tree: emit the code for the left operand, then the right operand, then the operator. Each operand's code leaves exactly one value on the stack, so by the time the operator runs, its two operands are the top two values. For `a - b` the code is push `a`, push `b`, subtract, and the subtract must pop `b` first, because it is on top, and then `a`.
+    - question:
+        id: derivation-compile
+        type: choice
+        system: s2
+        prompt: |
+          Which instruction sequence evaluates `x - y * 2` on a stack machine?
+        options:
+          - "LOAD x, LOAD y, PUSH 2, MUL, SUB"
+          - "LOAD x, LOAD y, SUB, PUSH 2, MUL"
+          - "SUB, LOAD x, MUL, LOAD y, PUSH 2"
+          - "LOAD y, PUSH 2, MUL, LOAD x, SUB"
+        answer: 0
+        explanation: |
+          The multiplication is below the subtraction in the tree, so its code comes first, inside the subtraction's right operand: x, then y * 2, then SUB. The last option computes the product first but then subtracts in the wrong order, giving y * 2 - x.
+    - text: |
+        **The interpreter loop.** At the heart of Python is a loop that does the same three things millions of times a second. It **fetches** the instruction at the program counter and moves the counter on; it **decodes** it, choosing what to do from the instruction's code, in effect one large branch; and it **executes** it, pushing, popping, looking up names or calling functions. Then it goes round again.
+
+        Control flow turns into jumps. A `while` loop becomes the test's code, an instruction that pops the test's value and jumps past the loop if it is false, the body's code, and an unconditional jump back to the test. An `if` becomes a conditional jump over the branch not taken.
+
+        Each function call gets a **frame**: its own program counter, its own value stack, and its own local variables, which Python keeps in an array indexed by position rather than a dictionary, so reading a local is fast. Calling a function pushes a new frame, and returning pops it, which is the call stack that a traceback prints, frame by frame.
+    - question:
+        id: derivation-count
+        type: numeric
+        system: s2
+        prompt: |
+          In the figure's loop program, two instructions set total to 0, each round runs the 4 test instructions, 8 body instructions and the jump back, and the final failed test runs 4 more. With n = 3, how many instructions run in all?
+        answer: "45"
+        explanation: |
+          $2 + 3 \times (4 + 8 + 1) + 4 = 45$. The loop adds three numbers, but the machine runs 45 instructions to do it, which is where an interpreter's time goes.
+    - text: |
+        **Where the time goes.** Adding two numbers in compiled C is roughly one machine instruction. In Python, the same `+` costs a trip round the interpreter loop: fetch, decode, pop two objects, check what types they are, find the right addition for those types, create a new integer object for the result, push it, and adjust reference counts. Values are **boxed**: even an integer is an object with a type and a count of references, which [[s7.memory-management-and-garbage-collection]] will explain. Global names are looked up in dictionaries on every use.
+
+        The cure is rarely to tune each instruction by hand. Recent versions of Python watch which types an instruction actually meets and replace it with a specialised version, an adding instruction that assumes two integers and checks only that, which removes much of the decoding work. Just-in-time compilers such as PyPy go further, turning hot loops into machine code. And the simplest speed-up is to run fewer Python instructions: `sum(prices)` loops in C, one Python instruction for the whole list, where a `for` loop runs several per element. Profiling, as in [[s5.profiling-programs]], tells you which loops deserve it.
+    - question:
+        id: derivation-steps
+        type: order
+        system: s2
+        prompt: |
+          Put the stages of running a Python file in order.
+        steps:
+          - "Read the source text from the file."
+          - "Split it into tokens."
+          - "Parse the tokens into a syntax tree."
+          - "Compile the tree into bytecode in a code object."
+          - "Run the bytecode in the interpreter loop, one instruction at a time."
+        explanation: |
+          Each stage consumes the previous stage's output. A cached `.pyc` file lets Python skip the middle three for a module that has not changed.
+  formal:
+    - text: |
+        **Bytecode.** A list of simple instructions for a virtual machine, produced by compiling a syntax tree; Python keeps it in a code object with its constants and names, and `dis` lists it.
+
+        **Stack machine.** Operands are pushed on a stack; an operator pops its operands, right one first, and pushes its result. Compiling an expression is a post-order walk: left code, right code, operator.
+
+        **Interpreter loop.** Repeat: fetch the instruction at the program counter, advance the counter, decode it, execute it. Jumps set the counter; loops and conditionals compile to jumps.
+
+        **Frame.** Per call: program counter, value stack and local variables.
+
+        **Peephole optimisation.** A pass that looks at a few neighbouring instructions at a time and replaces a pattern with a cheaper one with the same effect, such as two constant pushes followed by an operator, which become one push of the result.
+
+        **Costs.** Dispatch per instruction, boxed values, dynamic type checks and dictionary lookups; reduced by specialised instructions, just-in-time compilation and loops that run inside built-ins.
+  drill:
+    - text: Seconds each. Think like the machine.
+    - question:
+        id: drill-instructions
+        type: numeric
+        system: s1
+        prompt: |
+          How many stack-machine instructions does `a * b + c` compile to, one per name and one per operator?
+        answer: "5"
+        explanation: LOAD a, LOAD b, MUL, LOAD c, ADD.
+    - question:
+        id: drill-pc
+        type: choice
+        system: s1
+        prompt: |
+          What does the program counter hold?
+        options:
+          - "The position of the next instruction to run"
+          - "The number of instructions run so far"
+          - "The value on top of the stack"
+          - "The number of the current line of source"
+        answer: 0
+        explanation: Fetching reads the instruction at the counter, and a jump works by setting it.
+    - question:
+        id: predict-varnames
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def fare(price, qty):
+              total = price * qty
+              return total
+          print(fare.__code__.co_varnames)
+        output: "('price', 'qty', 'total')"
+        explanation: The code object lists the function's local variables, parameters first; the interpreter keeps their values in an array in that order.
+    - question:
+        id: predict-compile
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          code = compile("1 + 2", "<sum>", "eval")
+          print(type(code).__name__)
+        output: "code"
+        explanation: compile turns source text into a code object holding bytecode, without running it.
+  work:
+    - text: Slower now. Build the compiler, the machine and a tidy-up pass.
+    - question:
+        id: write-compile
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `compile_expr`, which turns an expression tree into stack-machine instructions. The program should print seven instructions for `(price + tip) * qty - 10`, from `('LOAD', 'price')` to `('SUB',)`.
+        starter: |
+          def compile_expr(node):
+              # Turn an expression tree into instructions for a stack machine:
+              #   ("num", v)               ->  ("PUSH", v)
+              #   ("var", name)            ->  ("LOAD", name)
+              #   ("bin", op, left, right) ->  the left operand's code, the right
+              #                                operand's code, then ("ADD",), ("SUB",),
+              #                                ("MUL",) or ("DIV",) for + - * /
+              # Return a list of instruction tuples.
+              return []
+
+
+          # (price + tip) * qty - 10
+          tree = ("bin", "-",
+                  ("bin", "*", ("bin", "+", ("var", "price"), ("var", "tip")), ("var", "qty")),
+                  ("num", 10))
+          for instruction in compile_expr(tree):
+              print(instruction)
+        solution: |
+          def compile_expr(node):
+              # Turn an expression tree into instructions for a stack machine:
+              #   ("num", v)               ->  ("PUSH", v)
+              #   ("var", name)            ->  ("LOAD", name)
+              #   ("bin", op, left, right) ->  the left operand's code, the right
+              #                                operand's code, then ("ADD",), ("SUB",),
+              #                                ("MUL",) or ("DIV",) for + - * /
+              # Return a list of instruction tuples.
+              kind = node[0]
+              if kind == "num":
+                  return [("PUSH", node[1])]
+              if kind == "var":
+                  return [("LOAD", node[1])]
+              names = {"+": "ADD", "-": "SUB", "*": "MUL", "/": "DIV"}
+              return compile_expr(node[2]) + compile_expr(node[3]) + [(names[node[1]],)]
+
+
+          # (price + tip) * qty - 10
+          tree = ("bin", "-",
+                  ("bin", "*", ("bin", "+", ("var", "price"), ("var", "tip")), ("var", "qty")),
+                  ("num", 10))
+          for instruction in compile_expr(tree):
+              print(instruction)
+        tests: |
+          def _run(_code, _env):
+              _st = []
+              for _ins in _code:
+                  if _ins[0] == "PUSH":
+                      _st.append(_ins[1])
+                  elif _ins[0] == "LOAD":
+                      if not isinstance(_ins[1], str) or _ins[1] not in _env:
+                          raise AssertionError("LOAD should name a variable, but got " + repr(_ins))
+                      _st.append(_env[_ins[1]])
+                  else:
+                      _b = _st.pop()
+                      _a = _st.pop()
+                      _st.append({"ADD": _a + _b, "SUB": _a - _b, "MUL": _a * _b, "DIV": _a / _b if _b else None}[_ins[0]])
+              return _st
+
+
+          assert compile_expr(("num", 7)) == [("PUSH", 7)], "A number should compile to a single PUSH"
+          assert compile_expr(("var", "x")) == [("LOAD", "x")], "A variable should compile to a single LOAD"
+          _want = [("PUSH", 8), ("PUSH", 3), ("SUB",)]
+          _got = compile_expr(("bin", "-", ("num", 8), ("num", 3)))
+          assert _got == _want, "8 - 3 should compile to " + repr(_want) + ", not " + repr(_got)
+          _env = {"a": 7, "b": 2, "c": 5, "d": 4}
+          for _tree, _value in [
+              (("bin", "-", ("var", "a"), ("var", "b")), 5),
+              (("bin", "/", ("var", "c"), ("var", "b")), 2.5),
+              (("bin", "-", ("bin", "-", ("var", "a"), ("var", "b")), ("var", "c")), 0),
+              (("bin", "-", ("var", "a"), ("bin", "-", ("var", "b"), ("var", "c"))), 10),
+              (("bin", "*", ("bin", "+", ("var", "a"), ("num", 1)), ("bin", "-", ("var", "d"), ("var", "b"))), 16),
+          ]:
+              _code = compile_expr(_tree)
+              try:
+                  _st = _run(_code, _env)
+              except IndexError:
+                  raise AssertionError("The code for " + repr(_tree) + " pops from an empty stack: " + repr(_code))
+              assert _st == [_value], "Running the code for " + repr(_tree) + " should leave just " + repr(_value) + " on the stack, not " + repr(_st)
+          assert output.splitlines()[0] == "('LOAD', 'price')", "The program's first line should be ('LOAD', 'price')"
+          assert len(output.splitlines()) == 7, "The program should print seven instructions"
+        wrong:
+          - |
+            def compile_expr(node):
+                # Turn an expression tree into instructions for a stack machine:
+                #   ("num", v)               ->  ("PUSH", v)
+                #   ("var", name)            ->  ("LOAD", name)
+                #   ("bin", op, left, right) ->  the left operand's code, the right
+                #                                operand's code, then ("ADD",), ("SUB",),
+                #                                ("MUL",) or ("DIV",) for + - * /
+                # Return a list of instruction tuples.
+                kind = node[0]
+                if kind == "num":
+                    return [("PUSH", node[1])]
+                if kind == "var":
+                    return [("LOAD", node[1])]
+                names = {"+": "ADD", "-": "SUB", "*": "MUL", "/": "DIV"}
+                return [(names[node[1]],)] + compile_expr(node[2]) + compile_expr(node[3])
+
+
+            # (price + tip) * qty - 10
+            tree = ("bin", "-",
+                    ("bin", "*", ("bin", "+", ("var", "price"), ("var", "tip")), ("var", "qty")),
+                    ("num", 10))
+            for instruction in compile_expr(tree):
+                print(instruction)
+          - |
+            def compile_expr(node):
+                # Turn an expression tree into instructions for a stack machine:
+                #   ("num", v)               ->  ("PUSH", v)
+                #   ("var", name)            ->  ("LOAD", name)
+                #   ("bin", op, left, right) ->  the left operand's code, the right
+                #                                operand's code, then ("ADD",), ("SUB",),
+                #                                ("MUL",) or ("DIV",) for + - * /
+                # Return a list of instruction tuples.
+                kind = node[0]
+                if kind == "num":
+                    return [("PUSH", node[1])]
+                if kind == "var":
+                    return [("LOAD", node[1])]
+                names = {"+": "ADD", "-": "SUB", "*": "MUL", "/": "DIV"}
+                return compile_expr(node[3]) + compile_expr(node[2]) + [(names[node[1]],)]
+
+
+            # (price + tip) * qty - 10
+            tree = ("bin", "-",
+                    ("bin", "*", ("bin", "+", ("var", "price"), ("var", "tip")), ("var", "qty")),
+                    ("num", 10))
+            for instruction in compile_expr(tree):
+                print(instruction)
+          - |
+            def compile_expr(node):
+                # Turn an expression tree into instructions for a stack machine:
+                #   ("num", v)               ->  ("PUSH", v)
+                #   ("var", name)            ->  ("LOAD", name)
+                #   ("bin", op, left, right) ->  the left operand's code, the right
+                #                                operand's code, then ("ADD",), ("SUB",),
+                #                                ("MUL",) or ("DIV",) for + - * /
+                # Return a list of instruction tuples.
+                kind = node[0]
+                if kind == "num":
+                    return [("PUSH", node[1])]
+                if kind == "var":
+                    return [("PUSH", node[1])]
+                names = {"+": "ADD", "-": "SUB", "*": "MUL", "/": "DIV"}
+                return compile_expr(node[2]) + compile_expr(node[3]) + [(names[node[1]],)]
+
+
+            # (price + tip) * qty - 10
+            tree = ("bin", "-",
+                    ("bin", "*", ("bin", "+", ("var", "price"), ("var", "tip")), ("var", "qty")),
+                    ("num", 10))
+            for instruction in compile_expr(tree):
+                print(instruction)
+        explanation: |
+          A number becomes one PUSH and a name one LOAD; an operation becomes its left operand's code, then its right operand's code, then its instruction. Putting the operator first gives code that pops an empty stack; compiling the right operand first reverses every subtraction and division; and pushing a name as if it were a value pushes the string `'price'` instead of 450.
+    - question:
+        id: fix-pop-order
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This stack machine should sum 5 + 4 + 3 + 2 + 1 with a loop. The program should print `{'n': 0, 'total': 15}`. It prints `{'n': 5, 'total': 0}`: the loop never runs. Find the fault and fix it.
+        starter: |
+          def run(code, env):
+              # A stack machine. pc is the index of the next instruction.
+              #   ("PUSH", v)            push v
+              #   ("LOAD", name)         push env[name]
+              #   ("STORE", name)        pop a value into env[name]
+              #   ("ADD",) ("SUB",) ("MUL",) ("LT",)
+              #                          pop the right operand, then the left one, and
+              #                          push left + right, left - right, left * right
+              #                          or left < right
+              #   ("JUMP_IF_FALSE", t)   pop a value; if it is false, go to index t
+              #   ("JUMP", t)            go to index t
+              # Run until pc passes the end, then return env.
+              stack = []
+              pc = 0
+              while pc < len(code):
+                  ins = code[pc]
+                  pc += 1
+                  op = ins[0]
+                  if op == "PUSH":
+                      stack.append(ins[1])
+                  elif op == "LOAD":
+                      stack.append(env[ins[1]])
+                  elif op == "STORE":
+                      env[ins[1]] = stack.pop()
+                  elif op == "JUMP_IF_FALSE":
+                      if not stack.pop():
+                          pc = ins[1]
+                  elif op == "JUMP":
+                      pc = ins[1]
+                  else:
+                      left = stack.pop()
+                      right = stack.pop()
+                      if op == "ADD":
+                          stack.append(left + right)
+                      elif op == "SUB":
+                          stack.append(left - right)
+                      elif op == "MUL":
+                          stack.append(left * right)
+                      else:
+                          stack.append(left < right)
+              return env
+
+
+          # total = 0
+          # while 0 < n:
+          #     total = total + n
+          #     n = n - 1
+          code = [
+              ("PUSH", 0), ("STORE", "total"),                         # 0, 1
+              ("PUSH", 0), ("LOAD", "n"), ("LT",),                      # 2, 3, 4
+              ("JUMP_IF_FALSE", 15),                                    # 5
+              ("LOAD", "total"), ("LOAD", "n"), ("ADD",), ("STORE", "total"),  # 6 to 9
+              ("LOAD", "n"), ("PUSH", 1), ("SUB",), ("STORE", "n"),     # 10 to 13
+              ("JUMP", 2),                                              # 14
+          ]
+          print(run(code, {"n": 5}))
+        solution: |
+          def run(code, env):
+              # A stack machine. pc is the index of the next instruction.
+              #   ("PUSH", v)            push v
+              #   ("LOAD", name)         push env[name]
+              #   ("STORE", name)        pop a value into env[name]
+              #   ("ADD",) ("SUB",) ("MUL",) ("LT",)
+              #                          pop the right operand, then the left one, and
+              #                          push left + right, left - right, left * right
+              #                          or left < right
+              #   ("JUMP_IF_FALSE", t)   pop a value; if it is false, go to index t
+              #   ("JUMP", t)            go to index t
+              # Run until pc passes the end, then return env.
+              stack = []
+              pc = 0
+              while pc < len(code):
+                  ins = code[pc]
+                  pc += 1
+                  op = ins[0]
+                  if op == "PUSH":
+                      stack.append(ins[1])
+                  elif op == "LOAD":
+                      stack.append(env[ins[1]])
+                  elif op == "STORE":
+                      env[ins[1]] = stack.pop()
+                  elif op == "JUMP_IF_FALSE":
+                      if not stack.pop():
+                          pc = ins[1]
+                  elif op == "JUMP":
+                      pc = ins[1]
+                  else:
+                      right = stack.pop()
+                      left = stack.pop()
+                      if op == "ADD":
+                          stack.append(left + right)
+                      elif op == "SUB":
+                          stack.append(left - right)
+                      elif op == "MUL":
+                          stack.append(left * right)
+                      else:
+                          stack.append(left < right)
+              return env
+
+
+          # total = 0
+          # while 0 < n:
+          #     total = total + n
+          #     n = n - 1
+          code = [
+              ("PUSH", 0), ("STORE", "total"),                         # 0, 1
+              ("PUSH", 0), ("LOAD", "n"), ("LT",),                      # 2, 3, 4
+              ("JUMP_IF_FALSE", 15),                                    # 5
+              ("LOAD", "total"), ("LOAD", "n"), ("ADD",), ("STORE", "total"),  # 6 to 9
+              ("LOAD", "n"), ("PUSH", 1), ("SUB",), ("STORE", "n"),     # 10 to 13
+              ("JUMP", 2),                                              # 14
+          ]
+          print(run(code, {"n": 5}))
+        tests: |
+          def _try(_code, _env):
+              try:
+                  return run(_code, _env)
+              except (IndexError, KeyError) as _e:
+                  raise AssertionError("Running " + repr(_code) + " failed with " + type(_e).__name__ + "; the stack or the jumps are off")
+
+
+          _got = _try([("PUSH", 10), ("PUSH", 3), ("SUB",), ("STORE", "d")], {})
+          assert _got == {"d": 7}, "10 - 3 should store 7, not " + repr(_got)
+          _got = _try([("PUSH", 2), ("PUSH", 5), ("LT",), ("STORE", "t"), ("PUSH", 5), ("PUSH", 2), ("LT",), ("STORE", "f"), ("PUSH", 4), ("PUSH", 4), ("LT",), ("STORE", "e")], {})
+          assert _got == {"t": True, "f": False, "e": False}, "2 < 5, 5 < 2 and 4 < 4 should store True, False and False, not " + repr(_got)
+          _if = [("PUSH", 0), ("LOAD", "a"), ("LT",), ("JUMP_IF_FALSE", 7), ("PUSH", 3), ("STORE", "x"), ("JUMP", 9), ("PUSH", 7), ("STORE", "x")]
+          assert _try(_if, {"a": 4})["x"] == 3, "With a = 4, the if-else program should set x to 3"
+          assert _try(_if, {"a": -1})["x"] == 7, "With a = -1, the if-else program should jump to index 7 and set x to 7"
+          for _n, _want in [(0, 0), (1, 1), (5, 15), (10, 55)]:
+              _got = _try(code, {"n": _n})
+              assert _got == {"n": 0, "total": _want}, "Summing down from n = " + str(_n) + " should end with n 0 and total " + str(_want) + ", not " + repr(_got)
+          assert output.strip() == "{'n': 0, 'total': 15}", "The program should print {'n': 0, 'total': 15}"
+        wrong:
+          - |
+            def run(code, env):
+                # A stack machine. pc is the index of the next instruction.
+                #   ("PUSH", v)            push v
+                #   ("LOAD", name)         push env[name]
+                #   ("STORE", name)        pop a value into env[name]
+                #   ("ADD",) ("SUB",) ("MUL",) ("LT",)
+                #                          pop the right operand, then the left one, and
+                #                          push left + right, left - right, left * right
+                #                          or left < right
+                #   ("JUMP_IF_FALSE", t)   pop a value; if it is false, go to index t
+                #   ("JUMP", t)            go to index t
+                # Run until pc passes the end, then return env.
+                stack = []
+                pc = 0
+                while pc < len(code):
+                    ins = code[pc]
+                    pc += 1
+                    op = ins[0]
+                    if op == "PUSH":
+                        stack.append(ins[1])
+                    elif op == "LOAD":
+                        stack.append(env[ins[1]])
+                    elif op == "STORE":
+                        env[ins[1]] = stack.pop()
+                    elif op == "JUMP_IF_FALSE":
+                        if not stack.pop():
+                            pc = ins[1]
+                    elif op == "JUMP":
+                        pc = ins[1]
+                    else:
+                        left = stack.pop()
+                        right = stack.pop()
+                        if op == "ADD":
+                            stack.append(left + right)
+                        elif op == "SUB":
+                            stack.append(right - left)
+                        elif op == "MUL":
+                            stack.append(left * right)
+                        else:
+                            stack.append(left < right)
+                return env
+
+
+            # total = 0
+            # while 0 < n:
+            #     total = total + n
+            #     n = n - 1
+            code = [
+                ("PUSH", 0), ("STORE", "total"),                         # 0, 1
+                ("PUSH", 0), ("LOAD", "n"), ("LT",),                      # 2, 3, 4
+                ("JUMP_IF_FALSE", 15),                                    # 5
+                ("LOAD", "total"), ("LOAD", "n"), ("ADD",), ("STORE", "total"),  # 6 to 9
+                ("LOAD", "n"), ("PUSH", 1), ("SUB",), ("STORE", "n"),     # 10 to 13
+                ("JUMP", 2),                                              # 14
+            ]
+            print(run(code, {"n": 5}))
+          - |
+            def run(code, env):
+                # A stack machine. pc is the index of the next instruction.
+                #   ("PUSH", v)            push v
+                #   ("LOAD", name)         push env[name]
+                #   ("STORE", name)        pop a value into env[name]
+                #   ("ADD",) ("SUB",) ("MUL",) ("LT",)
+                #                          pop the right operand, then the left one, and
+                #                          push left + right, left - right, left * right
+                #                          or left < right
+                #   ("JUMP_IF_FALSE", t)   pop a value; if it is false, go to index t
+                #   ("JUMP", t)            go to index t
+                # Run until pc passes the end, then return env.
+                stack = []
+                pc = 0
+                while pc < len(code):
+                    ins = code[pc]
+                    pc += 1
+                    op = ins[0]
+                    if op == "PUSH":
+                        stack.append(ins[1])
+                    elif op == "LOAD":
+                        stack.append(env[ins[1]])
+                    elif op == "STORE":
+                        env[ins[1]] = stack.pop()
+                    elif op == "JUMP_IF_FALSE":
+                        if not stack.pop():
+                            pc = ins[1] + 1
+                    elif op == "JUMP":
+                        pc = ins[1]
+                    else:
+                        right = stack.pop()
+                        left = stack.pop()
+                        if op == "ADD":
+                            stack.append(left + right)
+                        elif op == "SUB":
+                            stack.append(left - right)
+                        elif op == "MUL":
+                            stack.append(left * right)
+                        else:
+                            stack.append(left < right)
+                return env
+
+
+            # total = 0
+            # while 0 < n:
+            #     total = total + n
+            #     n = n - 1
+            code = [
+                ("PUSH", 0), ("STORE", "total"),                         # 0, 1
+                ("PUSH", 0), ("LOAD", "n"), ("LT",),                      # 2, 3, 4
+                ("JUMP_IF_FALSE", 15),                                    # 5
+                ("LOAD", "total"), ("LOAD", "n"), ("ADD",), ("STORE", "total"),  # 6 to 9
+                ("LOAD", "n"), ("PUSH", 1), ("SUB",), ("STORE", "n"),     # 10 to 13
+                ("JUMP", 2),                                              # 14
+            ]
+            print(run(code, {"n": 5}))
+          - |
+            def run(code, env):
+                # A stack machine. pc is the index of the next instruction.
+                #   ("PUSH", v)            push v
+                #   ("LOAD", name)         push env[name]
+                #   ("STORE", name)        pop a value into env[name]
+                #   ("ADD",) ("SUB",) ("MUL",) ("LT",)
+                #                          pop the right operand, then the left one, and
+                #                          push left + right, left - right, left * right
+                #                          or left < right
+                #   ("JUMP_IF_FALSE", t)   pop a value; if it is false, go to index t
+                #   ("JUMP", t)            go to index t
+                # Run until pc passes the end, then return env.
+                stack = []
+                pc = 0
+                while pc < len(code):
+                    ins = code[pc]
+                    pc += 1
+                    op = ins[0]
+                    if op == "PUSH":
+                        stack.append(ins[1])
+                    elif op == "LOAD":
+                        stack.append(env[ins[1]])
+                    elif op == "STORE":
+                        env[ins[1]] = stack.pop()
+                    elif op == "JUMP_IF_FALSE":
+                        if not stack.pop():
+                            pc = ins[1]
+                    elif op == "JUMP":
+                        pc = ins[1]
+                    else:
+                        right = stack.pop()
+                        left = stack.pop()
+                        if op == "ADD":
+                            stack.append(left + right)
+                        elif op == "SUB":
+                            stack.append(left - right)
+                        elif op == "MUL":
+                            stack.append(left * right)
+                        else:
+                            stack.append(left <= right)
+                return env
+
+
+            # total = 0
+            # while 0 < n:
+            #     total = total + n
+            #     n = n - 1
+            code = [
+                ("PUSH", 0), ("STORE", "total"),                         # 0, 1
+                ("PUSH", 0), ("LOAD", "n"), ("LT",),                      # 2, 3, 4
+                ("JUMP_IF_FALSE", 15),                                    # 5
+                ("LOAD", "total"), ("LOAD", "n"), ("ADD",), ("STORE", "total"),  # 6 to 9
+                ("LOAD", "n"), ("PUSH", 1), ("SUB",), ("STORE", "n"),     # 10 to 13
+                ("JUMP", 2),                                              # 14
+            ]
+            print(run(code, {"n": 5}))
+        explanation: |
+          The right operand was pushed last, so it is on top and must be popped first; the machine pops the left operand first, so `0 < n` is computed as `n < 0`, which is false, and the loop is skipped. Pop `right`, then `left`. Swapping only the subtraction fixes `n - 1` but leaves the comparison reversed; jumping to one past the target skips the instruction the jump was aimed at; and `<=` instead of `<` runs one extra round with n at 0.
+    - question:
+        id: write-peephole
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `peephole`, which replaces each PUSH, PUSH, operator window by a single PUSH of the result, repeating until none is left. The program should print five instructions, starting with `('PUSH', 20)` and including `('PUSH', 82)`.
+        starter: |
+          def peephole(code):
+              # Straight-line stack code, with no jumps. Wherever two PUSH
+              # instructions are followed by ADD, SUB or MUL, replace the three by a
+              # single PUSH of the result, computed as left op right with the first
+              # PUSH as the left operand. Keep going until no such window remains,
+              # and return the new list. Leave every other instruction as it is.
+              return code
+
+
+          code = [("PUSH", 2), ("PUSH", 3), ("ADD",), ("PUSH", 4), ("MUL",),
+                  ("LOAD", "qty"), ("MUL",), ("PUSH", 100), ("PUSH", 18), ("SUB",), ("ADD",)]
+          for instruction in peephole(code):
+              print(instruction)
+        solution: |
+          def peephole(code):
+              # Straight-line stack code, with no jumps. Wherever two PUSH
+              # instructions are followed by ADD, SUB or MUL, replace the three by a
+              # single PUSH of the result, computed as left op right with the first
+              # PUSH as the left operand. Keep going until no such window remains,
+              # and return the new list. Leave every other instruction as it is.
+              code = list(code)
+              changed = True
+              while changed:
+                  changed = False
+                  i = 0
+                  while i + 2 < len(code):
+                      a, b, op = code[i], code[i + 1], code[i + 2]
+                      if a[0] == "PUSH" and b[0] == "PUSH" and op[0] in ("ADD", "SUB", "MUL"):
+                          x, y = a[1], b[1]
+                          value = x + y if op[0] == "ADD" else x - y if op[0] == "SUB" else x * y
+                          code[i:i + 3] = [("PUSH", value)]
+                          changed = True
+                      else:
+                          i += 1
+              return code
+
+
+          code = [("PUSH", 2), ("PUSH", 3), ("ADD",), ("PUSH", 4), ("MUL",),
+                  ("LOAD", "qty"), ("MUL",), ("PUSH", 100), ("PUSH", 18), ("SUB",), ("ADD",)]
+          for instruction in peephole(code):
+              print(instruction)
+        tests: |
+          for _code, _want in [
+              ([], []),
+              ([("PUSH", 1)], [("PUSH", 1)]),
+              ([("PUSH", 9), ("PUSH", 4), ("SUB",)], [("PUSH", 5)]),
+              ([("PUSH", 1), ("PUSH", 2), ("PUSH", 3), ("ADD",), ("ADD",)], [("PUSH", 6)]),
+              ([("PUSH", 2), ("PUSH", 3), ("MUL",), ("PUSH", 1), ("SUB",)], [("PUSH", 5)]),
+              ([("LOAD", "x"), ("PUSH", 3), ("MUL",)], [("LOAD", "x"), ("PUSH", 3), ("MUL",)]),
+              ([("PUSH", 3), ("LOAD", "x"), ("PUSH", 1), ("PUSH", 1), ("ADD",), ("MUL",), ("ADD",)], [("PUSH", 3), ("LOAD", "x"), ("PUSH", 2), ("MUL",), ("ADD",)]),
+              ([("PUSH", 8), ("PUSH", 2), ("DIV",)], [("PUSH", 8), ("PUSH", 2), ("DIV",)]),
+          ]:
+              _copy = list(_code)
+              _got = peephole(_code)
+              assert _got == _want, "peephole(" + repr(_code) + ") should give " + repr(_want) + ", not " + repr(_got)
+              assert _code == _copy, "peephole should return a new list and leave its argument unchanged"
+          assert output.splitlines() == ["('PUSH', 20)", "('LOAD', 'qty')", "('MUL',)", "('PUSH', 82)", "('ADD',)"], "The program should print five instructions, starting with ('PUSH', 20)"
+        wrong:
+          - |
+            def peephole(code):
+                # Straight-line stack code, with no jumps. Wherever two PUSH
+                # instructions are followed by ADD, SUB or MUL, replace the three by a
+                # single PUSH of the result, computed as left op right with the first
+                # PUSH as the left operand. Keep going until no such window remains,
+                # and return the new list. Leave every other instruction as it is.
+                code = list(code)
+                changed = True
+                if changed:
+                    changed = False
+                    i = 0
+                    while i + 2 < len(code):
+                        a, b, op = code[i], code[i + 1], code[i + 2]
+                        if a[0] == "PUSH" and b[0] == "PUSH" and op[0] in ("ADD", "SUB", "MUL"):
+                            x, y = a[1], b[1]
+                            value = x + y if op[0] == "ADD" else x - y if op[0] == "SUB" else x * y
+                            code[i:i + 3] = [("PUSH", value)]
+                            changed = True
+                            i += 1
+                        else:
+                            i += 1
+                return code
+
+
+            code = [("PUSH", 2), ("PUSH", 3), ("ADD",), ("PUSH", 4), ("MUL",),
+                    ("LOAD", "qty"), ("MUL",), ("PUSH", 100), ("PUSH", 18), ("SUB",), ("ADD",)]
+            for instruction in peephole(code):
+                print(instruction)
+          - |
+            def peephole(code):
+                # Straight-line stack code, with no jumps. Wherever two PUSH
+                # instructions are followed by ADD, SUB or MUL, replace the three by a
+                # single PUSH of the result, computed as left op right with the first
+                # PUSH as the left operand. Keep going until no such window remains,
+                # and return the new list. Leave every other instruction as it is.
+                code = list(code)
+                changed = True
+                while changed:
+                    changed = False
+                    i = 0
+                    while i + 2 < len(code):
+                        a, b, op = code[i], code[i + 1], code[i + 2]
+                        if a[0] == "PUSH" and b[0] == "PUSH" and op[0] in ("ADD", "SUB", "MUL"):
+                            x, y = a[1], b[1]
+                            value = x + y if op[0] == "ADD" else y - x if op[0] == "SUB" else x * y
+                            code[i:i + 3] = [("PUSH", value)]
+                            changed = True
+                        else:
+                            i += 1
+                return code
+
+
+            code = [("PUSH", 2), ("PUSH", 3), ("ADD",), ("PUSH", 4), ("MUL",),
+                    ("LOAD", "qty"), ("MUL",), ("PUSH", 100), ("PUSH", 18), ("SUB",), ("ADD",)]
+            for instruction in peephole(code):
+                print(instruction)
+          - |
+            def peephole(code):
+                # Straight-line stack code, with no jumps. Wherever two PUSH
+                # instructions are followed by ADD, SUB or MUL, replace the three by a
+                # single PUSH of the result, computed as left op right with the first
+                # PUSH as the left operand. Keep going until no such window remains,
+                # and return the new list. Leave every other instruction as it is.
+                code = list(code)
+                changed = True
+                while changed:
+                    changed = False
+                    i = 0
+                    while i + 2 < len(code):
+                        a, b, op = code[i], code[i + 1], code[i + 2]
+                        if a[0] == "PUSH" and b[0] == "PUSH" and op[0] in ("ADD", "SUB", "MUL"):
+                            x, y = a[1], b[1]
+                            value = x + y if op[0] == "ADD" else x - y if op[0] == "SUB" else x * y
+                            code[i:i + 2] = [("PUSH", value)]
+                            changed = True
+                        else:
+                            i += 1
+                return code
+
+
+            code = [("PUSH", 2), ("PUSH", 3), ("ADD",), ("PUSH", 4), ("MUL",),
+                    ("LOAD", "qty"), ("MUL",), ("PUSH", 100), ("PUSH", 18), ("SUB",), ("ADD",)]
+            for instruction in peephole(code):
+                print(instruction)
+        explanation: |
+          Scan for a window of two PUSHes and an operator; replace all three by one PUSH of the result, and after a change look at the same position again, since the new PUSH may complete a window with the instructions around it; repeat until a full scan changes nothing. One pass leaves `PUSH 5, PUSH 4, MUL` unfolded; computing `right - left` folds `100 - 18` to -82; and replacing only the two PUSHes leaves an operator with nothing to work on.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, what is the largest number of values on the stack while the machine evaluates `(a + b) * (c + d)`?
+        answer: "3"
+        explanation: |
+          After `a + b` the stack holds one value. Pushing c and d makes three, the maximum; then the addition leaves two and the multiplication one. A compiler works out this maximum for each code object, so the frame can be given exactly enough room.
+    - question:
+        id: work-speed
+        type: choice
+        system: s2
+        prompt: |
+          Sneha's Python function adds up 1 crore prices with a `for` loop and takes about half a second. What change is most likely to make it several times faster, staying in Python?
+        options:
+          - "Replace the loop with sum(prices), so the loop runs inside a built-in written in C."
+          - "Rename the variables to shorter names so they are looked up faster."
+          - "Put the loop body on one line."
+          - "Add type hints to the loop variable."
+        answer: 0
+        explanation: |
+          Each turn of a Python loop costs several trips round the interpreter loop; `sum` makes one call and loops in C. Name length and line layout do not change the bytecode's work, and type hints are not checked or used by the interpreter when it runs.
+  connections:
+    - text: |
+        3. The first sum is folded down to one value before c and d arrive, so the stack never holds more than that value plus the two operands of the second sum. The order of the instructions, fixed by the tree, is what keeps the stack small.
+
+        The design you have seen is not special to Python. Java compiles to bytecode for its virtual machine, C# to bytecode for .NET, and the JavaScript engine in every browser starts with a bytecode interpreter before it compiles the functions that run most often to machine code. The pattern repeats because it divides the work cleanly: a compiler that runs once and can afford to think, and a small loop that runs all the time and must be quick. When you next see a program that is slow in a loop and fast in a library call, the explanation is the one this lesson gave: the loop pays for every instruction it dispatches, and the library call dispatches one.
+
+        Bytecode refers to variables by name or by position in a frame, but which variable does a name mean? A function can read names from the function around it, from the module, or from the built-ins, and an inner function can keep using a variable after the outer function has returned. [[s7.scope-closures-and-higher-order-functions]] sorts out those rules, and shows what they make possible.

@@ -1,0 +1,1079 @@
+concept: s7.grammars-and-parsing
+minutes: 85
+claim: You can describe the structure of a language with a context-free grammar, derive strings and draw their parse trees; recognise an ambiguous grammar and remove the ambiguity with levels for precedence and loops or recursion for associativity; write a recursive-descent parser with one function per rule, one token of lookahead and errors that say where; rewrite left-recursive rules so such a parser cannot loop for ever; and parse nested structures that no regular expression can check.
+recalls: [s7.regular-expressions-and-finite-automata]
+uses: [s7.tokenising, s1.recursion, s2.stacks-and-queues, f3.recurrences, f3.trees-and-their-properties, s1.classes-and-objects, f3.the-pigeonhole-principle]
+leads: [s7.syntax-trees-and-evaluation, s7.how-python-runs-bytecode-and-the-interpreter-loop]
+starter: |
+  # Scratch space. The same tokens, grouped two ways.
+  print((8 - 4) - 2)
+  print(8 - (4 - 2))
+  print(2 ** 3 ** 2, (2 ** 3) ** 2)
+parts:
+  recall:
+    - text: |
+        [[s7.regular-expressions-and-finite-automata]] ended with a limit: a finite automaton cannot check that brackets are balanced, because it cannot count without end. Programs nest all the time, brackets inside brackets and blocks inside blocks, so reading them needs rules that can refer to themselves. Three quick pulls first.
+  puzzle:
+    - text: |
+        A careless grammar for subtraction says only that an expression is a number, or an expression, a minus sign and another expression. It does not say which subtraction happens first, so the line `8 - 4 - 2 - 1` can be grouped in several ways, each a different tree, such as `((8 - 4) - 2) - 1` and `8 - (4 - (2 - 1))`.
+
+        **How many different groupings, that is, parse trees, does `8 - 4 - 2 - 1` have under this grammar?**
+  intuition:
+    - text: |
+        The Hindi sentence "मैंने दूरबीन से आदमी को देखा" can mean "I saw the man through the binoculars" or "I saw the man who had the binoculars". The words are the same; the grouping is different, and so is the meaning. Readers settle it from context. A computer has no context to fall back on, so a programming language must be designed so that every line has exactly one grouping.
+
+        The figure shows two lines of arithmetic, each grouped in two ways. Switch between the trees and watch the answer at the root.
+    - figure: parse-tree
+      props: { case: sub-left }
+    - text: |
+        In a tree, the lower operators run first and pass their results up, so the shape of the tree is the meaning of the line. `8 − 4 − 2` must lean left so that the first subtraction runs first, and `2 + 3 × 4` must put the multiplication lower so that it runs first. A parser's job is to build the right tree from the tokens, and a grammar is how we say exactly which tree is right.
+  derivation:
+    - text: |
+        **Grammars.** A **context-free grammar** is a set of rules, each saying how one named piece of the language, a **nonterminal**, may be made of tokens, the **terminals**, and other nonterminals. A notation called BNF writes them like this:
+
+        ```
+        list  -> "[" items "]" | "[" "]"
+        items -> NUMBER | NUMBER "," items
+        ```
+
+        A list is either brackets around some items, or empty brackets; items are one number, or a number, a comma and more items. Starting from `list` and replacing nonterminals by the right-hand sides of their rules, one at a time, is a **derivation**, and every string reachable this way is in the language. The record of which rule produced what is the **parse tree**.
+
+        The power that regular expressions lacked is that a rule may mention itself, directly or through other rules. `value -> NUMBER | "[" items "]"` with `items` containing `value` lets lists nest inside lists to any depth, and checking that is exactly what a finite automaton could not do. Underneath, the parser will use a stack, explicitly or as the call stack of [[s1.recursion]], which is the unbounded memory the automaton lacked.
+    - question:
+        id: derivation-language
+        type: choice
+        system: s2
+        prompt: |
+          Which string can the grammar `S -> "(" S ")" S | ""` derive, where `""` means nothing at all?
+        options:
+          - "(()())"
+          - "())("
+          - "(()"
+          - ")("
+        answer: 0
+        explanation: |
+          The grammar derives exactly the balanced bracket strings: each `(` is paired with a `)` around a balanced inside, followed by more balanced brackets. `(()())` is `( S ) S` with the inside `()()` balanced; the others each have a bracket without a partner.
+    - text: |
+        **Ambiguity.** A grammar is **ambiguous** if some string has more than one parse tree. `E -> E "-" E | NUMBER` is ambiguous, as the puzzle shows, and so is `E -> E "+" E | E "*" E | NUMBER`, which cannot decide whether `2 + 3 * 4` multiplies first. The number of trees grows quickly: with $n$ operators, it obeys a recurrence of the kind in [[f3.recurrences]], since the last operation to happen splits the line into two shorter lines, each grouped in its own ways.
+
+        The cure is to write the grammar so that only the intended tree fits. **Precedence** comes from levels: one rule for sums of terms, one for products of factors, one for single factors.
+
+        ```
+        expr   -> term (("+" | "-") term)*
+        term   -> factor (("*" | "/") factor)*
+        factor -> NUMBER | "(" expr ")"
+        ```
+
+        A product can only appear inside a term, so it always ends up lower in the tree and runs first. **Associativity** comes from the direction of repetition: reading `term (- term)*` as a loop that keeps folding the next term onto the tree so far builds `((8 - 4) - 2)`, leaning left, which is right for subtraction. Exponentiation is the exception in Python, where `2 ** 3 ** 2` means `2 ** (3 ** 2)`, so its rule recurses on the right instead.
+    - question:
+        id: derivation-right
+        type: numeric
+        system: s2
+        prompt: |
+          A language groups subtraction from the right, so that `20 - 8 - 5 - 2` means `20 - (8 - (5 - 2))`. What does the line evaluate to?
+        answer: "15"
+        explanation: |
+          From the inside out: $5 - 2 = 3$, $8 - 3 = 5$ and $20 - 5 = 15$. Grouped from the left, as in Python, the answer would be $20 - 8 - 5 - 2 = 5$.
+    - text: |
+        **Recursive descent.** The most direct way to parse is to write one function per rule. `expr` calls `term`, then, while the next token is `+` or `-`, takes the operator, calls `term` again and folds the result into the tree so far. `term` does the same with `factor`. `factor` looks at the next token: a number becomes a leaf, and an opening bracket means calling `expr` and then insisting on a closing bracket. The functions call each other in the shape of the grammar, and the call stack tracks how deeply nested the parser is.
+
+        One token of **lookahead**, peeking at the next token without taking it, is enough for each function to choose what to do. Two checks make the parser trustworthy. Every place where a particular token is required must raise an error, with its position, if something else is there. And after the top rule returns, there must be no tokens left over; otherwise `1 2` would quietly parse as `1`.
+
+        **Left recursion.** The grammar for left-leaning subtraction is often written `expr -> expr "-" term | term`. As a function, that rule's first act would be to call itself, without taking a token, and it would recurse until the stack overflowed. Recursive-descent parsers therefore rewrite such rules into the loop form `term ("-" term)*`, which describes the same strings and, by folding as it goes, still builds the left-leaning tree.
+    - question:
+        id: derivation-steps
+        type: order
+        system: s2
+        prompt: |
+          Put in order what the `factor` function does when the next token is an opening bracket.
+        steps:
+          - "Peek at the next token and see that it is an opening bracket."
+          - "Take the opening bracket."
+          - "Call expr to parse whatever is inside."
+          - "Check that the next token is a closing bracket, raising an error if not."
+          - "Take the closing bracket and return the tree that expr built."
+        explanation: |
+          Lookahead chooses the branch, the bracket is consumed, the inside is a whole expression in its own right, and the closing bracket is required, not hoped for.
+    - text: |
+        **Beyond hand-written parsers.** Real languages have many levels of operators. Writing a function per level gets tedious, so many parsers use **precedence climbing**, a single loop driven by a table of operator strengths, which builds the same trees. Others are generated by tools from the grammar itself. Python's own parser, since version 3.9, is generated from a grammar of the kind called a PEG, which tries alternatives in order and commits to the first that succeeds. For the grammars of programming languages, all of these run in time proportional to the number of tokens; general context-free grammars, which allow any ambiguity, need cubic time in the worst case.
+
+        A parser also decides what the user sees when something is wrong. A good one says where the problem is and what it expected there, "expected ) at token 7", rather than failing somewhere later, and the best ones recover and keep going so that one mistake does not hide the next.
+  formal:
+    - text: |
+        **Context-free grammar.** Rules `A -> α`, where `A` is a nonterminal and `α` a sequence of terminals and nonterminals; a start symbol; the language is every string of terminals derivable from it.
+
+        **Parse tree.** The tree of rule applications that derives a string. A grammar is **ambiguous** if some string has two parse trees.
+
+        **Precedence and associativity.** Encoded by levels of rules, with tighter operators lower down, and by the direction of repetition or recursion: a loop that folds gives left grouping, recursion on the right gives right grouping.
+
+        **Recursive descent.** One function per nonterminal, choosing with one token of lookahead, raising errors at required tokens and checking that no tokens are left over. Left-recursive rules `A -> A x | y` must be rewritten as `A -> y x*`.
+  drill:
+    - text: Seconds each. Picture the tree before you compute.
+    - question:
+        id: drill-tree
+        type: numeric
+        system: s1
+        prompt: |
+          Using the usual precedence, what does `2 + 3 * 4 - 5` evaluate to?
+        answer: "9"
+        explanation: The multiplication sits lowest in the tree, $3 \times 4 = 12$; then from the left, $2 + 12 = 14$ and $14 - 5 = 9$.
+    - question:
+        id: drill-left-recursion
+        type: choice
+        system: s1
+        prompt: |
+          Why does a recursive-descent function for `expr -> expr "-" term | term` never finish?
+        options:
+          - "Its first step is to call itself without taking a token"
+          - "Subtraction is not associative"
+          - "The grammar is ambiguous"
+          - "It needs two tokens of lookahead"
+        answer: 0
+        explanation: Each call immediately makes the same call on the same input, so the recursion never reaches a token.
+    - question:
+        id: predict-power
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(2 ** 3 ** 2)
+        output: "512"
+        explanation: Python groups ** from the right, so this is 2 ** 9.
+    - question:
+        id: predict-minus-power
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(-2 ** 2)
+        output: "-4"
+        explanation: "`**` binds tighter than a minus on its left, so this is -(2 ** 2)."
+  work:
+    - text: Slower now. Each function below is one grammar rule.
+    - question:
+        id: write-parser
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Finish `Parser`, a recursive-descent parser for sums, products and brackets. The program should print two trees: `('+', 2, ('*', 3, ('-', 4, 1)))`, then `('-', ('-', 8, 4), 2)`.
+        starter: |
+          class Parser:
+              # Grammar, where NUMBER is a token of digits:
+              #   expr   -> term (("+" | "-") term)*
+              #   term   -> factor (("*" | "/") factor)*
+              #   factor -> NUMBER | "(" expr ")"
+              # parse() returns a tree of nested tuples, such as ("+", 2, ("*", 3, 4)),
+              # with numbers as ints. Operators of the same level group from the left.
+              # Any token out of place, or left over at the end, raises ValueError.
+              def __init__(self, tokens):
+                  self.tokens = tokens
+                  self.pos = 0
+
+              def peek(self):
+                  return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+              def take(self):
+                  token = self.peek()
+                  self.pos += 1
+                  return token
+
+              def parse(self):
+                  return None
+
+
+          print(Parser(["2", "+", "3", "*", "(", "4", "-", "1", ")"]).parse())
+          print(Parser(["8", "-", "4", "-", "2"]).parse())
+        solution: |
+          class Parser:
+              # Grammar, where NUMBER is a token of digits:
+              #   expr   -> term (("+" | "-") term)*
+              #   term   -> factor (("*" | "/") factor)*
+              #   factor -> NUMBER | "(" expr ")"
+              # parse() returns a tree of nested tuples, such as ("+", 2, ("*", 3, 4)),
+              # with numbers as ints. Operators of the same level group from the left.
+              # Any token out of place, or left over at the end, raises ValueError.
+              def __init__(self, tokens):
+                  self.tokens = tokens
+                  self.pos = 0
+
+              def peek(self):
+                  return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+              def take(self):
+                  token = self.peek()
+                  self.pos += 1
+                  return token
+
+              def parse(self):
+                  tree = self.expr()
+                  if self.peek() is not None:
+                      raise ValueError("unexpected " + self.peek() + " at token " + str(self.pos))
+                  return tree
+
+              def expr(self):
+                  left = self.term()
+                  while self.peek() in ("+", "-"):
+                      op = self.take()
+                      left = (op, left, self.term())
+                  return left
+
+              def term(self):
+                  left = self.factor()
+                  while self.peek() in ("*", "/"):
+                      op = self.take()
+                      left = (op, left, self.factor())
+                  return left
+
+              def factor(self):
+                  token = self.take()
+                  if token is not None and token.isdigit():
+                      return int(token)
+                  if token == "(":
+                      tree = self.expr()
+                      if self.take() != ")":
+                          raise ValueError("expected ) at token " + str(self.pos - 1))
+                      return tree
+                  raise ValueError("unexpected " + str(token) + " at token " + str(self.pos - 1))
+
+
+          print(Parser(["2", "+", "3", "*", "(", "4", "-", "1", ")"]).parse())
+          print(Parser(["8", "-", "4", "-", "2"]).parse())
+        tests: |
+          def _p(_s):
+              return Parser(_s.split()).parse()
+
+
+          for _s, _want in [
+              ("7", 7),
+              ("1 + 2", ("+", 1, 2)),
+              ("2 + 3 * 4", ("+", 2, ("*", 3, 4))),
+              ("2 * 3 + 4", ("+", ("*", 2, 3), 4)),
+              ("8 - 4 - 2", ("-", ("-", 8, 4), 2)),
+              ("16 / 4 / 2", ("/", ("/", 16, 4), 2)),
+              ("( 1 + 2 ) * 3", ("*", ("+", 1, 2), 3)),
+              ("( ( 5 ) )", 5),
+              ("1 - 2 * 3 - 4", ("-", ("-", 1, ("*", 2, 3)), 4)),
+          ]:
+              try:
+                  _got = _p(_s)
+              except ValueError as _e:
+                  raise AssertionError("Parsing " + repr(_s) + " should give " + repr(_want) + ", but it raised ValueError: " + str(_e))
+              assert _got == _want, "Parsing " + repr(_s) + " should give " + repr(_want) + ", not " + repr(_got)
+          for _s in ["", "1 +", "( 1 + 2", "1 2", "1 + 2 )", "* 3", "( )"]:
+              try:
+                  _got = _p(_s)
+              except ValueError:
+                  continue
+              raise AssertionError("Parsing " + repr(_s) + " should raise ValueError, not give " + repr(_got))
+          assert output.splitlines() == ["('+', 2, ('*', 3, ('-', 4, 1)))", "('-', ('-', 8, 4), 2)"], "The program should print two trees: ('+', 2, ('*', 3, ('-', 4, 1))) and ('-', ('-', 8, 4), 2)"
+        wrong:
+          - |
+            class Parser:
+                # Grammar, where NUMBER is a token of digits:
+                #   expr   -> term (("+" | "-") term)*
+                #   term   -> factor (("*" | "/") factor)*
+                #   factor -> NUMBER | "(" expr ")"
+                # parse() returns a tree of nested tuples, such as ("+", 2, ("*", 3, 4)),
+                # with numbers as ints. Operators of the same level group from the left.
+                # Any token out of place, or left over at the end, raises ValueError.
+                def __init__(self, tokens):
+                    self.tokens = tokens
+                    self.pos = 0
+
+                def peek(self):
+                    return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+                def take(self):
+                    token = self.peek()
+                    self.pos += 1
+                    return token
+
+                def parse(self):
+                    tree = self.expr()
+                    if self.peek() is not None:
+                        raise ValueError("unexpected " + self.peek() + " at token " + str(self.pos))
+                    return tree
+
+                def expr(self):
+                    left = self.factor()
+                    while self.peek() in ("+", "-", "*", "/"):
+                        op = self.take()
+                        left = (op, left, self.factor())
+                    return left
+
+                def term(self):
+                    left = self.factor()
+                    while self.peek() in ("*", "/"):
+                        op = self.take()
+                        left = (op, left, self.factor())
+                    return left
+
+                def factor(self):
+                    token = self.take()
+                    if token is not None and token.isdigit():
+                        return int(token)
+                    if token == "(":
+                        tree = self.expr()
+                        if self.take() != ")":
+                            raise ValueError("expected ) at token " + str(self.pos - 1))
+                        return tree
+                    raise ValueError("unexpected " + str(token) + " at token " + str(self.pos - 1))
+
+
+            print(Parser(["2", "+", "3", "*", "(", "4", "-", "1", ")"]).parse())
+            print(Parser(["8", "-", "4", "-", "2"]).parse())
+          - |
+            class Parser:
+                # Grammar, where NUMBER is a token of digits:
+                #   expr   -> term (("+" | "-") term)*
+                #   term   -> factor (("*" | "/") factor)*
+                #   factor -> NUMBER | "(" expr ")"
+                # parse() returns a tree of nested tuples, such as ("+", 2, ("*", 3, 4)),
+                # with numbers as ints. Operators of the same level group from the left.
+                # Any token out of place, or left over at the end, raises ValueError.
+                def __init__(self, tokens):
+                    self.tokens = tokens
+                    self.pos = 0
+
+                def peek(self):
+                    return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+                def take(self):
+                    token = self.peek()
+                    self.pos += 1
+                    return token
+
+                def parse(self):
+                    tree = self.expr()
+                    if self.peek() is not None:
+                        raise ValueError("unexpected " + self.peek() + " at token " + str(self.pos))
+                    return tree
+
+                def expr(self):
+                    left = self.term()
+                    if self.peek() in ("+", "-"):
+                        op = self.take()
+                        return (op, left, self.expr())
+                    return left
+
+                def term(self):
+                    left = self.factor()
+                    while self.peek() in ("*", "/"):
+                        op = self.take()
+                        left = (op, left, self.factor())
+                    return left
+
+                def factor(self):
+                    token = self.take()
+                    if token is not None and token.isdigit():
+                        return int(token)
+                    if token == "(":
+                        tree = self.expr()
+                        if self.take() != ")":
+                            raise ValueError("expected ) at token " + str(self.pos - 1))
+                        return tree
+                    raise ValueError("unexpected " + str(token) + " at token " + str(self.pos - 1))
+
+
+            print(Parser(["2", "+", "3", "*", "(", "4", "-", "1", ")"]).parse())
+            print(Parser(["8", "-", "4", "-", "2"]).parse())
+          - |
+            class Parser:
+                # Grammar, where NUMBER is a token of digits:
+                #   expr   -> term (("+" | "-") term)*
+                #   term   -> factor (("*" | "/") factor)*
+                #   factor -> NUMBER | "(" expr ")"
+                # parse() returns a tree of nested tuples, such as ("+", 2, ("*", 3, 4)),
+                # with numbers as ints. Operators of the same level group from the left.
+                # Any token out of place, or left over at the end, raises ValueError.
+                def __init__(self, tokens):
+                    self.tokens = tokens
+                    self.pos = 0
+
+                def peek(self):
+                    return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+                def take(self):
+                    token = self.peek()
+                    self.pos += 1
+                    return token
+
+                def parse(self):
+                    return self.expr()
+
+                def expr(self):
+                    left = self.term()
+                    while self.peek() in ("+", "-"):
+                        op = self.take()
+                        left = (op, left, self.term())
+                    return left
+
+                def term(self):
+                    left = self.factor()
+                    while self.peek() in ("*", "/"):
+                        op = self.take()
+                        left = (op, left, self.factor())
+                    return left
+
+                def factor(self):
+                    token = self.take()
+                    if token is not None and token.isdigit():
+                        return int(token)
+                    if token == "(":
+                        tree = self.expr()
+                        if self.take() != ")":
+                            raise ValueError("expected ) at token " + str(self.pos - 1))
+                        return tree
+                    raise ValueError("unexpected " + str(token) + " at token " + str(self.pos - 1))
+
+
+            print(Parser(["2", "+", "3", "*", "(", "4", "-", "1", ")"]).parse())
+            print(Parser(["8", "-", "4", "-", "2"]).parse())
+        explanation: |
+          Write `expr`, `term` and `factor` as the grammar says, each loop folding the next operand onto the tree so far, and have `parse` call `expr` and then insist that no tokens remain. Treating all four operators at one level loses precedence, so `2 + 3 * 4` adds first; recursing on the right of a minus groups `8 - 4 - 2` as `8 - (4 - 2)`; and skipping the final check accepts `1 2` as just `1`.
+    - question:
+        id: fix-power
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This parser for powers and minus signs should follow Python's rules. The program should print four lines, giving 512, -4, 0.5 and 64. It prints 64 for `2 ** 3 ** 2` and an error for `2 ** - 1`. Find the fault and fix it.
+        starter: |
+          class Parser:
+              # Grammar, as in Python:
+              #   unary -> "-" unary | power
+              #   power -> atom ("**" unary)?
+              #   atom  -> NUMBER | "(" unary ")"
+              # So ** groups from the right, 2 ** 3 ** 2 meaning 2 ** (3 ** 2), and
+              # binds tighter than a minus on its left but not one on its right:
+              # -2 ** 2 is -(2 ** 2), and 2 ** -1 is allowed.
+              def __init__(self, tokens):
+                  self.tokens = tokens
+                  self.pos = 0
+
+              def peek(self):
+                  return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+              def take(self):
+                  token = self.peek()
+                  self.pos += 1
+                  return token
+
+              def parse(self):
+                  tree = self.unary()
+                  if self.peek() is not None:
+                      raise ValueError("unexpected " + self.peek())
+                  return tree
+
+              def unary(self):
+                  if self.peek() == "-":
+                      self.take()
+                      return ("neg", self.unary())
+                  return self.power()
+
+              def power(self):
+                  left = self.atom()
+                  while self.peek() == "**":
+                      self.take()
+                      left = ("**", left, self.atom())
+                  return left
+
+              def atom(self):
+                  token = self.take()
+                  if token is not None and token.isdigit():
+                      return int(token)
+                  if token == "(":
+                      tree = self.unary()
+                      if self.take() != ")":
+                          raise ValueError("expected )")
+                      return tree
+                  raise ValueError("unexpected " + str(token))
+
+
+          def calc(tree):
+              if isinstance(tree, int):
+                  return tree
+              if tree[0] == "neg":
+                  return -calc(tree[1])
+              return calc(tree[1]) ** calc(tree[2])
+
+
+          for text in ["2 ** 3 ** 2", "- 2 ** 2", "2 ** - 1", "( 2 ** 3 ) ** 2"]:
+              try:
+                  print(text, "=", calc(Parser(text.split()).parse()))
+              except ValueError:
+                  print(text, "= error")
+        solution: |
+          class Parser:
+              # Grammar, as in Python:
+              #   unary -> "-" unary | power
+              #   power -> atom ("**" unary)?
+              #   atom  -> NUMBER | "(" unary ")"
+              # So ** groups from the right, 2 ** 3 ** 2 meaning 2 ** (3 ** 2), and
+              # binds tighter than a minus on its left but not one on its right:
+              # -2 ** 2 is -(2 ** 2), and 2 ** -1 is allowed.
+              def __init__(self, tokens):
+                  self.tokens = tokens
+                  self.pos = 0
+
+              def peek(self):
+                  return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+              def take(self):
+                  token = self.peek()
+                  self.pos += 1
+                  return token
+
+              def parse(self):
+                  tree = self.unary()
+                  if self.peek() is not None:
+                      raise ValueError("unexpected " + self.peek())
+                  return tree
+
+              def unary(self):
+                  if self.peek() == "-":
+                      self.take()
+                      return ("neg", self.unary())
+                  return self.power()
+
+              def power(self):
+                  left = self.atom()
+                  if self.peek() == "**":
+                      self.take()
+                      return ("**", left, self.unary())
+                  return left
+
+              def atom(self):
+                  token = self.take()
+                  if token is not None and token.isdigit():
+                      return int(token)
+                  if token == "(":
+                      tree = self.unary()
+                      if self.take() != ")":
+                          raise ValueError("expected )")
+                      return tree
+                  raise ValueError("unexpected " + str(token))
+
+
+          def calc(tree):
+              if isinstance(tree, int):
+                  return tree
+              if tree[0] == "neg":
+                  return -calc(tree[1])
+              return calc(tree[1]) ** calc(tree[2])
+
+
+          for text in ["2 ** 3 ** 2", "- 2 ** 2", "2 ** - 1", "( 2 ** 3 ) ** 2"]:
+              try:
+                  print(text, "=", calc(Parser(text.split()).parse()))
+              except ValueError:
+                  print(text, "= error")
+        tests: |
+          def _p(_s):
+              return Parser(_s.split()).parse()
+
+
+          for _s, _want in [
+              ("5", 5),
+              ("2 ** 3", ("**", 2, 3)),
+              ("2 ** 3 ** 2", ("**", 2, ("**", 3, 2))),
+              ("2 ** 3 ** 2 ** 1", ("**", 2, ("**", 3, ("**", 2, 1)))),
+              ("- 2 ** 2", ("neg", ("**", 2, 2))),
+              ("2 ** - 1", ("**", 2, ("neg", 1))),
+              ("2 ** - 3 ** 2", ("**", 2, ("neg", ("**", 3, 2)))),
+              ("- - 3", ("neg", ("neg", 3))),
+              ("( 2 ** 3 ) ** 2", ("**", ("**", 2, 3), 2)),
+              ("( - 2 ) ** 2", ("**", ("neg", 2), 2)),
+          ]:
+              try:
+                  _got = _p(_s)
+              except ValueError as _e:
+                  raise AssertionError("Parsing " + repr(_s) + " should give " + repr(_want) + ", but it raised ValueError: " + str(_e))
+              assert _got == _want, "Parsing " + repr(_s) + " should give " + repr(_want) + ", not " + repr(_got)
+          for _s in ["2 **", "** 2", "2 2", "( 2"]:
+              try:
+                  _got = _p(_s)
+              except ValueError:
+                  continue
+              raise AssertionError("Parsing " + repr(_s) + " should raise ValueError, not give " + repr(_got))
+          assert output.splitlines() == ["2 ** 3 ** 2 = 512", "- 2 ** 2 = -4", "2 ** - 1 = 0.5", "( 2 ** 3 ) ** 2 = 64"], "The program should print four lines, giving 512, -4, 0.5 and 64"
+        wrong:
+          - |
+            class Parser:
+                # Grammar, as in Python:
+                #   unary -> "-" unary | power
+                #   power -> atom ("**" unary)?
+                #   atom  -> NUMBER | "(" unary ")"
+                # So ** groups from the right, 2 ** 3 ** 2 meaning 2 ** (3 ** 2), and
+                # binds tighter than a minus on its left but not one on its right:
+                # -2 ** 2 is -(2 ** 2), and 2 ** -1 is allowed.
+                def __init__(self, tokens):
+                    self.tokens = tokens
+                    self.pos = 0
+
+                def peek(self):
+                    return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+                def take(self):
+                    token = self.peek()
+                    self.pos += 1
+                    return token
+
+                def parse(self):
+                    tree = self.unary()
+                    if self.peek() is not None:
+                        raise ValueError("unexpected " + self.peek())
+                    return tree
+
+                def unary(self):
+                    if self.peek() == "-":
+                        self.take()
+                        return ("neg", self.unary())
+                    return self.power()
+
+                def power(self):
+                    left = self.atom()
+                    if self.peek() == "**":
+                        self.take()
+                        return ("**", left, self.power())
+                    return left
+
+                def atom(self):
+                    token = self.take()
+                    if token is not None and token.isdigit():
+                        return int(token)
+                    if token == "(":
+                        tree = self.unary()
+                        if self.take() != ")":
+                            raise ValueError("expected )")
+                        return tree
+                    raise ValueError("unexpected " + str(token))
+
+
+            def calc(tree):
+                if isinstance(tree, int):
+                    return tree
+                if tree[0] == "neg":
+                    return -calc(tree[1])
+                return calc(tree[1]) ** calc(tree[2])
+
+
+            for text in ["2 ** 3 ** 2", "- 2 ** 2", "2 ** - 1", "( 2 ** 3 ) ** 2"]:
+                try:
+                    print(text, "=", calc(Parser(text.split()).parse()))
+                except ValueError:
+                    print(text, "= error")
+          - |
+            class Parser:
+                # Grammar, as in Python:
+                #   unary -> "-" unary | power
+                #   power -> atom ("**" unary)?
+                #   atom  -> NUMBER | "(" unary ")"
+                # So ** groups from the right, 2 ** 3 ** 2 meaning 2 ** (3 ** 2), and
+                # binds tighter than a minus on its left but not one on its right:
+                # -2 ** 2 is -(2 ** 2), and 2 ** -1 is allowed.
+                def __init__(self, tokens):
+                    self.tokens = tokens
+                    self.pos = 0
+
+                def peek(self):
+                    return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+                def take(self):
+                    token = self.peek()
+                    self.pos += 1
+                    return token
+
+                def parse(self):
+                    tree = self.unary()
+                    if self.peek() is not None:
+                        raise ValueError("unexpected " + self.peek())
+                    return tree
+
+                def unary(self):
+                    return self.power()
+
+                def power(self):
+                    left = self.atom()
+                    if self.peek() == "**":
+                        self.take()
+                        return ("**", left, self.unary())
+                    return left
+
+                def atom(self):
+                    token = self.take()
+                    if token == "-":
+                        return ("neg", self.atom())
+                    if token is not None and token.isdigit():
+                        return int(token)
+                    if token == "(":
+                        tree = self.unary()
+                        if self.take() != ")":
+                            raise ValueError("expected )")
+                        return tree
+                    raise ValueError("unexpected " + str(token))
+
+
+            def calc(tree):
+                if isinstance(tree, int):
+                    return tree
+                if tree[0] == "neg":
+                    return -calc(tree[1])
+                return calc(tree[1]) ** calc(tree[2])
+
+
+            for text in ["2 ** 3 ** 2", "- 2 ** 2", "2 ** - 1", "( 2 ** 3 ) ** 2"]:
+                try:
+                    print(text, "=", calc(Parser(text.split()).parse()))
+                except ValueError:
+                    print(text, "= error")
+          - |
+            class Parser:
+                # Grammar, as in Python:
+                #   unary -> "-" unary | power
+                #   power -> atom ("**" unary)?
+                #   atom  -> NUMBER | "(" unary ")"
+                # So ** groups from the right, 2 ** 3 ** 2 meaning 2 ** (3 ** 2), and
+                # binds tighter than a minus on its left but not one on its right:
+                # -2 ** 2 is -(2 ** 2), and 2 ** -1 is allowed.
+                def __init__(self, tokens):
+                    self.tokens = tokens
+                    self.pos = 0
+
+                def peek(self):
+                    return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+                def take(self):
+                    token = self.peek()
+                    self.pos += 1
+                    return token
+
+                def parse(self):
+                    tree = self.unary()
+                    if self.peek() is not None:
+                        raise ValueError("unexpected " + self.peek())
+                    return tree
+
+                def unary(self):
+                    if self.peek() == "-":
+                        self.take()
+                        return ("neg", self.unary())
+                    return self.power()
+
+                def power(self):
+                    left = self.atom()
+                    if self.peek() == "**":
+                        self.take()
+                        right = self.atom()
+                        while self.peek() == "**":
+                            self.take()
+                            right = ("**", right, self.atom())
+                        return ("**", left, right)
+                    return left
+
+                def atom(self):
+                    token = self.take()
+                    if token is not None and token.isdigit():
+                        return int(token)
+                    if token == "(":
+                        tree = self.unary()
+                        if self.take() != ")":
+                            raise ValueError("expected )")
+                        return tree
+                    raise ValueError("unexpected " + str(token))
+
+
+            def calc(tree):
+                if isinstance(tree, int):
+                    return tree
+                if tree[0] == "neg":
+                    return -calc(tree[1])
+                return calc(tree[1]) ** calc(tree[2])
+
+
+            for text in ["2 ** 3 ** 2", "- 2 ** 2", "2 ** - 1", "( 2 ** 3 ) ** 2"]:
+                try:
+                    print(text, "=", calc(Parser(text.split()).parse()))
+                except ValueError:
+                    print(text, "= error")
+        explanation: |
+          `power` loops and folds to the left, and parses only an atom after `**`, but the grammar says `atom ("**" unary)?`: one optional `**` followed by a whole `unary`, which may begin with a minus and may contain another `**`. Recursing into `power` instead of `unary` still rejects `2 ** -1`; putting the minus inside `atom` makes `-2 ** 2` square a negative number; and folding the right-hand side in a loop groups `3 ** 2 ** 1` the wrong way round.
+    - question:
+        id: write-nested
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `parse_list`, which reads nested lists of numbers, such as `[1,[2,3],[]]`, by their grammar. The program should print five lines: the parsed list for the first input, then `-> rejected` for the four broken ones.
+        starter: |
+          def parse_list(text):
+              # Grammar, with no spaces allowed:
+              #   value -> NUMBER | "[" items? "]"
+              #   items -> value ("," value)*
+              # where NUMBER is one or more digits. Return the value as Python ints
+              # and lists, such as [1, [2, 3], []]. Anything that does not fit the
+              # grammar, including text left over at the end, raises ValueError.
+              return []
+
+
+          for text in ["[1,[2,3],[],[[45]]]", "[1,]", "[1,2", "[1]]", "[,1]"]:
+              try:
+                  print(text, "->", parse_list(text))
+              except ValueError:
+                  print(text, "-> rejected")
+        solution: |
+          def parse_list(text):
+              # Grammar, with no spaces allowed:
+              #   value -> NUMBER | "[" items? "]"
+              #   items -> value ("," value)*
+              # where NUMBER is one or more digits. Return the value as Python ints
+              # and lists, such as [1, [2, 3], []]. Anything that does not fit the
+              # grammar, including text left over at the end, raises ValueError.
+              reader = Reader(text)
+              result = reader.value()
+              if reader.pos != len(text):
+                  raise ValueError("unexpected " + text[reader.pos] + " at " + str(reader.pos))
+              return result
+
+
+          class Reader:
+              def __init__(self, text):
+                  self.text = text
+                  self.pos = 0
+
+              def peek(self):
+                  return self.text[self.pos] if self.pos < len(self.text) else ""
+
+              def value(self):
+                  c = self.peek()
+                  if c.isdigit():
+                      start = self.pos
+                      while self.peek().isdigit():
+                          self.pos += 1
+                      return int(self.text[start:self.pos])
+                  if c == "[":
+                      self.pos += 1
+                      items = []
+                      if self.peek() == "]":
+                          self.pos += 1
+                          return items
+                      items.append(self.value())
+                      while self.peek() == ",":
+                          self.pos += 1
+                          items.append(self.value())
+                      if self.peek() != "]":
+                          raise ValueError("expected , or ] at " + str(self.pos))
+                      self.pos += 1
+                      return items
+                  raise ValueError("expected a number or [ at " + str(self.pos))
+
+
+          for text in ["[1,[2,3],[],[[45]]]", "[1,]", "[1,2", "[1]]", "[,1]"]:
+              try:
+                  print(text, "->", parse_list(text))
+              except ValueError:
+                  print(text, "-> rejected")
+        tests: |
+          for _t, _want in [
+              ("7", 7),
+              ("[]", []),
+              ("[[]]", [[]]),
+              ("[1,2,3]", [1, 2, 3]),
+              ("[10,[20,[30]],[]]", [10, [20, [30]], []]),
+              ("[[[[5]]]]", [[[[5]]]]),
+          ]:
+              try:
+                  _got = parse_list(_t)
+              except ValueError as _e:
+                  raise AssertionError("parse_list(" + repr(_t) + ") should give " + repr(_want) + ", but it raised ValueError: " + str(_e))
+              assert _got == _want, "parse_list(" + repr(_t) + ") should give " + repr(_want) + ", not " + repr(_got)
+          for _t in ["", "[", "]", "[1,]", "[1,2", "[1]]", "[,1]", "[1 2]", "[1,,2]", "1,2", "[x]", "[]]", "[[]"]:
+              try:
+                  _got = parse_list(_t)
+              except ValueError:
+                  continue
+              raise AssertionError("parse_list(" + repr(_t) + ") should raise ValueError, not give " + repr(_got))
+          assert output.splitlines()[0] == "[1,[2,3],[],[[45]]] -> [1, [2, 3], [], [[45]]]", "The program's first line should be [1,[2,3],[],[[45]]] -> [1, [2, 3], [], [[45]]]"
+        wrong:
+          - |
+            def parse_list(text):
+                # Grammar, with no spaces allowed:
+                #   value -> NUMBER | "[" items? "]"
+                #   items -> value ("," value)*
+                # where NUMBER is one or more digits. Return the value as Python ints
+                # and lists, such as [1, [2, 3], []]. Anything that does not fit the
+                # grammar, including text left over at the end, raises ValueError.
+                reader = Reader(text)
+                result = reader.value()
+                if reader.pos != len(text):
+                    raise ValueError("unexpected " + text[reader.pos] + " at " + str(reader.pos))
+                return result
+
+
+            class Reader:
+                def __init__(self, text):
+                    self.text = text
+                    self.pos = 0
+
+                def peek(self):
+                    return self.text[self.pos] if self.pos < len(self.text) else ""
+
+                def value(self):
+                    c = self.peek()
+                    if c.isdigit():
+                        start = self.pos
+                        while self.peek().isdigit():
+                            self.pos += 1
+                        return int(self.text[start:self.pos])
+                    if c == "[":
+                        self.pos += 1
+                        items = []
+                        if self.peek() == "]":
+                            self.pos += 1
+                            return items
+                        items.append(self.value())
+                        while self.peek() == ",":
+                            self.pos += 1
+                            if self.peek() != "]":
+                                items.append(self.value())
+                        if self.peek() != "]":
+                            raise ValueError("expected , or ] at " + str(self.pos))
+                        self.pos += 1
+                        return items
+                    raise ValueError("expected a number or [ at " + str(self.pos))
+
+
+            for text in ["[1,[2,3],[],[[45]]]", "[1,]", "[1,2", "[1]]", "[,1]"]:
+                try:
+                    print(text, "->", parse_list(text))
+                except ValueError:
+                    print(text, "-> rejected")
+          - |
+            def parse_list(text):
+                # Grammar, with no spaces allowed:
+                #   value -> NUMBER | "[" items? "]"
+                #   items -> value ("," value)*
+                # where NUMBER is one or more digits. Return the value as Python ints
+                # and lists, such as [1, [2, 3], []]. Anything that does not fit the
+                # grammar, including text left over at the end, raises ValueError.
+                reader = Reader(text)
+                return reader.value()
+
+
+            class Reader:
+                def __init__(self, text):
+                    self.text = text
+                    self.pos = 0
+
+                def peek(self):
+                    return self.text[self.pos] if self.pos < len(self.text) else ""
+
+                def value(self):
+                    c = self.peek()
+                    if c.isdigit():
+                        start = self.pos
+                        while self.peek().isdigit():
+                            self.pos += 1
+                        return int(self.text[start:self.pos])
+                    if c == "[":
+                        self.pos += 1
+                        items = []
+                        if self.peek() == "]":
+                            self.pos += 1
+                            return items
+                        items.append(self.value())
+                        while self.peek() == ",":
+                            self.pos += 1
+                            items.append(self.value())
+                        if self.peek() != "]":
+                            raise ValueError("expected , or ] at " + str(self.pos))
+                        self.pos += 1
+                        return items
+                    raise ValueError("expected a number or [ at " + str(self.pos))
+
+
+            for text in ["[1,[2,3],[],[[45]]]", "[1,]", "[1,2", "[1]]", "[,1]"]:
+                try:
+                    print(text, "->", parse_list(text))
+                except ValueError:
+                    print(text, "-> rejected")
+          - |
+            def parse_list(text):
+                # Grammar, with no spaces allowed:
+                #   value -> NUMBER | "[" items? "]"
+                #   items -> value ("," value)*
+                # where NUMBER is one or more digits. Return the value as Python ints
+                # and lists, such as [1, [2, 3], []]. Anything that does not fit the
+                # grammar, including text left over at the end, raises ValueError.
+                reader = Reader(text)
+                result = reader.value()
+                if reader.pos != len(text):
+                    raise ValueError("unexpected " + text[reader.pos] + " at " + str(reader.pos))
+                return result
+
+
+            class Reader:
+                def __init__(self, text):
+                    self.text = text
+                    self.pos = 0
+
+                def peek(self):
+                    return self.text[self.pos] if self.pos < len(self.text) else ""
+
+                def value(self):
+                    c = self.peek()
+                    if c.isdigit():
+                        start = self.pos
+                        while self.peek().isdigit():
+                            self.pos += 1
+                        return int(self.text[start:self.pos])
+                    if c == "[":
+                        self.pos += 1
+                        items = []
+                        items.append(self.value())
+                        while self.peek() == ",":
+                            self.pos += 1
+                            items.append(self.value())
+                        if self.peek() != "]":
+                            raise ValueError("expected , or ] at " + str(self.pos))
+                        self.pos += 1
+                        return items
+                    raise ValueError("expected a number or [ at " + str(self.pos))
+
+
+            for text in ["[1,[2,3],[],[[45]]]", "[1,]", "[1,2", "[1]]", "[,1]"]:
+                try:
+                    print(text, "->", parse_list(text))
+                except ValueError:
+                    print(text, "-> rejected")
+        explanation: |
+          One function for `value`: digits make a number; a `[` either closes at once into an empty list, or reads a value, then a comma and a value as many times as there are commas, and then requires `]`. The function calls itself for each inner value, which is how it handles any depth. Skipping a value after a final comma accepts `[1,]`; forgetting to check for leftover text accepts `[1]]`; and expecting a value straight after every `[` rejects `[]`.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, how many parse trees does `8 - 4 - 2 - 1` have under the grammar `E -> E "-" E | NUMBER`?
+        answer: "5"
+        explanation: |
+          The last subtraction to happen splits the line. Split after 8: the right part `4 - 2 - 1` has 2 trees. Split after 4: 1 tree on each side. Split after 2: the left part `8 - 4 - 2` has 2 trees. That is $2 + 1 + 2 = 5$.
+    - question:
+        id: work-design
+        type: choice
+        system: s2
+        prompt: |
+          Ananya is designing a small language for fare rules and wants `a - b - c` to mean `(a - b) - c` and `a * b + c` to mean `(a * b) + c`. Which grammar should she use?
+        options:
+          - "`expr -> term (\"-\" term | \"+\" term)*` and `term -> NUMBER (\"*\" NUMBER)*`"
+          - "`expr -> expr \"-\" expr | expr \"*\" expr | expr \"+\" expr | NUMBER`"
+          - "`expr -> NUMBER (\"-\" expr | \"+\" expr | \"*\" expr)?`"
+          - "`expr -> term (\"*\" term)*` and `term -> NUMBER (\"-\" NUMBER | \"+\" NUMBER)*`"
+        answer: 0
+        explanation: |
+          Levels put `*` lower, so it groups first, and loops fold from the left. The second grammar is ambiguous; the third recurses on the right, so `a - b - c` becomes `a - (b - c)`; and the fourth puts `+` and `-` below `*`, so `a * b + c` becomes `a * (b + c)`.
+  connections:
+    - text: |
+        5. Whichever subtraction happens last splits the line in two, and each side is grouped in its own ways: 2 trees, 1 and 2 more, as the recurrence counts. Four numbers already give five meanings, and the count grows quickly with length, which is why a grammar for a real language is written so that each line has exactly one tree.
+
+        A parser's output is a tree, but the parse tree records every rule used, including brackets and levels that no longer matter once the grouping is known. [[s7.syntax-trees-and-evaluation]] keeps only what matters, an abstract syntax tree, and walks it to compute an answer: the heart of an interpreter.

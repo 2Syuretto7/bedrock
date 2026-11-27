@@ -1,0 +1,929 @@
+concept: s7.static-and-dynamic-types
+minutes: 80
+claim: You can say what a type is and what a type error is; tell static checking, before a program runs, from dynamic checking, as each operation runs, and strong typing, which refuses a mismatch, from weak typing, which converts and carries on; place Python, JavaScript, C and Rust on those two axes; write a static checker that gives every node of a syntax tree a type from its children; explain why a sound checker must reject some programs that would never fail; and use isinstance, type hints and a checker such as mypy, knowing what each one checks and when.
+recalls: [s7.scope-closures-and-higher-order-functions]
+uses: [s7.syntax-trees-and-evaluation, s7.how-python-runs-bytecode-and-the-interpreter-loop, s1.type-hints-and-dataclasses, s1.classes-and-objects, s4.designing-with-types-and-invariants, s6.what-a-test-can-prove]
+leads: [s7.memory-management-and-garbage-collection]
+starter: |
+  # Scratch space. Python checks a type only when the line runs.
+  def total(fare, seats):
+      return fare * seats
+
+
+  print(total(450, 3))
+  print(total("450", 3))
+parts:
+  recall:
+    - text: |
+        [[s7.scope-closures-and-higher-order-functions]] passed functions around as values and wrapped them in decorators, and nothing in Python checked in advance that the values passed in were the kind each function expected. This lesson asks what a type is, when a language checks it, and what it does when the check fails. Three quick pulls first.
+  puzzle:
+    - text: |
+        In JavaScript, `+` joins two values as text when either of them is a string, and `-` always converts both of its values to numbers before subtracting. A web form adds `"1" + 2` and then subtracts 1, all in one expression: `"1" + 2 - 1`.
+
+        **What number does the expression give?**
+  intuition:
+    - text: |
+        At a railway reservation counter, the clerk reads your form before printing anything. An age written as "twenty-five" in the box for a number, or a journey date of 31 November, is handed back at the window, before any ticket exists. Other mistakes are found only on the train, when the ticket examiner compares the name on the ticket with your identity card. Both catch errors; they differ in **when**. A third kind of clerk is worse than either: one who, seeing "twenty-five" in the age box, quietly writes 0 and prints the ticket, and the mistake surfaces weeks later as a child's concession nobody asked for.
+
+        Programming languages make the same choices about **types**. The figure takes three small expressions and treats each two ways: checked before running, as the clerk does, and simply run with real values, as Python does. Try each expression both ways.
+    - figure: type-check
+      props: { program: ok, mode: check }
+    - text: |
+        The checker works on the syntax tree, bottom up: a leaf's type is known, and each operation's type follows from its children's, the same walk as an evaluator but with types in place of values. If some node has no type, the program is rejected before it runs. Python instead checks each operation as it happens. The third expression shows the price of checking early: the checker rejects it, although the run with three seats works perfectly, while the run with zero seats does not fail at that line at all.
+  derivation:
+    - text: |
+        **What a type is.** A type is a set of values together with the operations that make sense on them. Integers can be added, multiplied and compared; strings can be joined, sliced and searched. A **type error** is an operation applied to values it was not meant for: adding a string to a number, calling a number as if it were a function, asking for the length of a date. Every language catches some type errors. The questions that separate languages are **when** the check happens and **what** the language does when it finds a mismatch.
+
+        **Static and dynamic.** In a **statically** typed language, such as Java, C, Go, Rust or TypeScript, types belong to variables and expressions, and a checker assigns and verifies them before the program runs, usually as part of compiling it. In a **dynamically** typed language, such as Python, JavaScript or Ruby, types belong to values. A Python variable is a name that can refer to any value, the value carries its type with it, and `a + b` asks at the moment it runs what `a` and `b` actually are. That question is part of the work the interpreter loop of [[s7.how-python-runs-bytecode-and-the-interpreter-loop]] does on every addition, one reason Python is slower than a language that settled the types before it started.
+    - question:
+        id: derivation-static
+        type: choice
+        system: s2
+        prompt: |
+          A strict checker, like Rust's, requires both branches of a conditional to have the same type. Which line does it reject, though Python runs it without any error?
+        options:
+          - "seats = 3; label = seats if seats > 0 else 'sold out'; print(label)"
+          - "print(len(450))"
+          - "print('Rs ' + 450)"
+          - "print(450 * 3 + 40)"
+        answer: 0
+        explanation: |
+          With seats at 3 only the int branch runs, so Python prints 3; the checker sees an int branch and a str branch and rejects the line. Python raises TypeError on the second and third lines when they run, and the last is fine for both.
+    - text: |
+        **Why a checker must say no to some good programs.** A checker is **sound** if every program it accepts is free of the errors it looks for. To be sound and still finish in reasonable time, it has to judge a program without running it, and in general no method can tell which branch a program will take on every possible input. So a sound checker reasons about every path, including paths that never actually run, and rejects some programs that would never fail: the conditional above is one. That is the bargain of static typing. In return for writing annotations and occasionally rephrasing a correct program, you get errors reported at the line that causes them, before the program reaches a user, plus documentation that cannot go out of date. A test, as [[s6.what-a-test-can-prove]] put it, checks particular runs for any kind of mistake; a type checker checks every run, but for one kind of mistake only.
+    - question:
+        id: derivation-runs
+        type: numeric
+        system: s2
+        prompt: |
+          The checker rejects `fare if seats > 0 else 'sold out'`, where fare is an int. If seats can be any whole number from 0 to 9, for how many of those ten values does the expression give an int?
+        answer: "9"
+        explanation: |
+          Every seats value from 1 to 9 takes the first branch and gives fare, an int; only 0 gives the string. The checker rejects all ten runs because one of them has the wrong type.
+    - text: |
+        **Strong and weak.** A separate question is what happens when an operation does meet values of the wrong type. A **strongly** typed language refuses: Python raises `TypeError` for `"Rs " + 450` instead of guessing what you meant. A **weakly** typed language converts, or **coerces**, one value to fit and carries on: in JavaScript `"1" + 2` is the string `"12"` and `"5" - 2` is the number 3, and C will treat a character as a small integer without complaint. Coercion saves keystrokes and costs clarity, because a wrong value produced by a guess travels on through the program and surfaces far from its cause, like the clerk's quiet 0.
+
+        The two questions are independent, which gives four combinations. Python is dynamic and strong. JavaScript is dynamic and weak. C is static and fairly weak. Rust and Haskell are static and strong. "Strong" and "weak" are looser terms than "static" and "dynamic", and languages sit at different points between them, but asking both questions separately clears up most arguments about which language is "more typed".
+    - question:
+        id: derivation-quadrant
+        type: choice
+        system: s2
+        prompt: |
+          Python refuses `'Rs ' + 450` only when the line runs, and then raises TypeError rather than converting either value. Which description fits Python?
+        options:
+          - "Dynamic and strong"
+          - "Static and strong"
+          - "Dynamic and weak"
+          - "Static and weak"
+        answer: 0
+        explanation: |
+          The check happens at run time, which makes it dynamic, and the mismatch is refused rather than coerced, which makes it strong.
+    - text: |
+        **Classes, ducks and hints.** In Python a class is a type, and `isinstance(x, Train)` is true when `x` was made from `Train` or from any subclass of it, as in [[s1.classes-and-objects]]: an Express is a Train. Comparing `type(x) == Train` exactly is almost always a mistake, because it rejects subclasses. Most Python code checks nothing at all, though. It calls `train.rate` and works with any object that has a `rate`, a habit called **duck typing**: if it walks like a duck and quacks like a duck, treat it as a duck.
+
+        The type hints of [[s1.type-hints-and-dataclasses]] add a static layer on top. Python itself ignores them when running, apart from storing them in `__annotations__`; separate checkers such as mypy and pyright read them and check the program before it runs. This is **gradual typing**: annotated code is checked, and code without annotations is treated as `Any`, a type that fits everything, so a project can add types one module at a time. A decorator can also enforce the hints while the program runs, by checking every call with `isinstance`, which catches mismatches as they happen at the cost of a check on every call. The deepest use of types is the one from [[s4.designing-with-types-and-invariants]]: shape the types so that a wrong state cannot even be written down, and the checker then enforces your design for free.
+    - question:
+        id: derivation-pipeline
+        type: order
+        system: s2
+        prompt: |
+          Put in order what happens to a Python file with type hints, from a pull request whose CI runs mypy to the code running in production.
+        steps:
+          - "mypy parses the file into a syntax tree."
+          - "mypy gives each expression a type from the annotations and the types of its parts."
+          - "mypy reports any mismatch, and the CI job fails until it is fixed."
+          - "Python compiles the merged file to bytecode, storing the hints but not checking them."
+          - "Each operation checks the types of the actual values as it runs."
+        explanation: |
+          The static check happens first, on the tree, before any code runs. Python then compiles and runs the program as usual, and its own dynamic checks still guard every operation.
+  formal:
+    - text: |
+        **Type.** A set of values with the operations defined on them. A type error applies an operation to values outside its domain.
+
+        **Static typing.** Types belong to expressions and variables and are checked before running, by giving each node of the syntax tree a type computed from its children's.
+
+        **Dynamic typing.** Types belong to values and are checked by each operation as it runs.
+
+        **Strong and weak typing.** Whether a mismatch is refused with an error or coerced into some value of the expected type.
+
+        **Soundness.** A checker is sound if no program it accepts has a type error at run time; a sound checker must reject some programs that would never fail.
+
+        **Gradual typing.** Annotations are checked where present, and unannotated code has type `Any`; in Python, `isinstance` checks a class including its subclasses.
+  drill:
+    - text: Seconds each. Ask when the check happens, and what it does with a mismatch.
+    - question:
+        id: drill-when
+        type: choice
+        system: s1
+        prompt: |
+          A Java compiler refuses to build a program because a method that should return an int returns a String on one path. What kind of checking is this?
+        options:
+          - "Static checking"
+          - "Dynamic checking"
+          - "Weak typing"
+          - "Duck typing"
+        answer: 0
+        explanation: The error is found before the program runs, by checking types on every path.
+    - question:
+        id: drill-coerce
+        type: choice
+        system: s1
+        prompt: |
+          In JavaScript, `"5" * 2` gives 10. What does this show?
+        options:
+          - "Weak typing: the string is converted to a number"
+          - "Static typing: the types were checked before running"
+          - "Strong typing: the mismatch was refused"
+          - "A type error: the expression has no value"
+        answer: 0
+        explanation: The language converts the string to fit the operation instead of refusing it.
+    - question:
+        id: predict-hint
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def double(n: int) -> int:
+              return n * 2
+
+
+          print(double("ab"))
+        output: "abab"
+        explanation: Python stores the hints but does not check them when running, and a str times 2 repeats it.
+    - question:
+        id: predict-bool
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(isinstance(True, int), type(True) == int)
+        output: "True False"
+        explanation: bool is a subclass of int, so isinstance accepts it, but its exact type is bool, not int.
+  work:
+    - text: Slower now. Each answer checks types, before running, while running, or by guessing.
+    - question:
+        id: write-type-checker
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `type_of`, a static type checker for a tiny language whose programs are trees of tuples. The program should print four lines: `fare * seats + 40 -> int`, then two lines that report a TypeError, then `'Rs ' + name -> str`.
+        starter: |
+          def type_of(node, env):
+              # A type checker for a tiny language. Types are "int", "str" and "bool".
+              #   ("num", 4) is int, ("str", "Rs") is str, ("bool", True) is bool
+              #   ("var", name) has the type env[name]
+              #   ("bin", op, a, b): "+" takes two ints giving int, or two strs giving
+              #       str; "-" and "*" take two ints giving int
+              #   ("cmp", op, a, b): two ints giving bool
+              #   ("if", test, then, other): test must be bool, and both branches must
+              #       have the same type, which is the type of the whole expression
+              # Anything else raises TypeError with a message saying what is wrong.
+              return "int"
+
+
+          env = {"fare": "int", "seats": "int", "name": "str"}
+          programs = {
+              "fare * seats + 40": ("bin", "+", ("bin", "*", ("var", "fare"), ("var", "seats")), ("num", 40)),
+              "name + fare": ("bin", "+", ("var", "name"), ("var", "fare")),
+              "fare if seats > 0 else 'sold out'": ("if", ("cmp", ">", ("var", "seats"), ("num", 0)), ("var", "fare"), ("str", "sold out")),
+              "'Rs ' + name": ("bin", "+", ("str", "Rs "), ("var", "name")),
+          }
+          for text, tree in programs.items():
+              try:
+                  print(text, "->", type_of(tree, env))
+              except TypeError as error:
+                  print(text, "-> TypeError:", error)
+        solution: |
+          def type_of(node, env):
+              # A type checker for a tiny language. Types are "int", "str" and "bool".
+              #   ("num", 4) is int, ("str", "Rs") is str, ("bool", True) is bool
+              #   ("var", name) has the type env[name]
+              #   ("bin", op, a, b): "+" takes two ints giving int, or two strs giving
+              #       str; "-" and "*" take two ints giving int
+              #   ("cmp", op, a, b): two ints giving bool
+              #   ("if", test, then, other): test must be bool, and both branches must
+              #       have the same type, which is the type of the whole expression
+              # Anything else raises TypeError with a message saying what is wrong.
+              kind = node[0]
+              if kind == "num":
+                  return "int"
+              if kind == "str":
+                  return "str"
+              if kind == "bool":
+                  return "bool"
+              if kind == "var":
+                  return env[node[1]]
+              if kind == "if":
+                  if type_of(node[1], env) != "bool":
+                      raise TypeError("the test of an if must be bool")
+                  a = type_of(node[2], env)
+                  b = type_of(node[3], env)
+                  if a != b:
+                      raise TypeError("the branches of an if have types " + a + " and " + b)
+                  return a
+              op = node[1]
+              a = type_of(node[2], env)
+              b = type_of(node[3], env)
+              if kind == "cmp":
+                  if a == "int" and b == "int":
+                      return "bool"
+                  raise TypeError("cannot compare " + a + " with " + b)
+              if a == "int" and b == "int":
+                  return "int"
+              if op == "+" and a == "str" and b == "str":
+                  return "str"
+              raise TypeError("cannot apply " + op + " to " + a + " and " + b)
+
+
+          env = {"fare": "int", "seats": "int", "name": "str"}
+          programs = {
+              "fare * seats + 40": ("bin", "+", ("bin", "*", ("var", "fare"), ("var", "seats")), ("num", 40)),
+              "name + fare": ("bin", "+", ("var", "name"), ("var", "fare")),
+              "fare if seats > 0 else 'sold out'": ("if", ("cmp", ">", ("var", "seats"), ("num", 0)), ("var", "fare"), ("str", "sold out")),
+              "'Rs ' + name": ("bin", "+", ("str", "Rs "), ("var", "name")),
+          }
+          for text, tree in programs.items():
+              try:
+                  print(text, "->", type_of(tree, env))
+              except TypeError as error:
+                  print(text, "-> TypeError:", error)
+        tests: |
+          _env = {"n": "int", "s": "str", "ok": "bool"}
+          for _tree, _want in [
+              (("num", 3), "int"),
+              (("str", "x"), "str"),
+              (("bool", False), "bool"),
+              (("var", "ok"), "bool"),
+              (("bin", "-", ("var", "n"), ("num", 1)), "int"),
+              (("bin", "+", ("var", "s"), ("str", "!")), "str"),
+              (("cmp", "<", ("var", "n"), ("num", 10)), "bool"),
+              (("if", ("var", "ok"), ("var", "s"), ("str", "none")), "str"),
+              (("if", ("cmp", ">", ("var", "n"), ("num", 0)), ("bin", "*", ("var", "n"), ("num", 2)), ("num", 0)), "int"),
+          ]:
+              try:
+                  _got = type_of(_tree, _env)
+              except TypeError as _e:
+                  raise AssertionError("type_of(" + repr(_tree) + ") should be " + _want + ", but it raised TypeError: " + str(_e))
+              assert _got == _want, "type_of(" + repr(_tree) + ") should be " + _want + ", not " + repr(_got)
+          for _tree in [
+              ("bin", "+", ("var", "s"), ("num", 1)),
+              ("bin", "+", ("num", 1), ("var", "s")),
+              ("bin", "-", ("var", "s"), ("str", "a")),
+              ("bin", "*", ("var", "ok"), ("num", 2)),
+              ("cmp", "<", ("var", "s"), ("num", 1)),
+              ("if", ("var", "n"), ("num", 1), ("num", 2)),
+              ("if", ("var", "ok"), ("num", 1), ("str", "1")),
+              ("bin", "+", ("num", 1), ("if", ("var", "ok"), ("num", 1), ("bool", True))),
+          ]:
+              try:
+                  _got = type_of(_tree, _env)
+              except TypeError:
+                  continue
+              raise AssertionError("type_of(" + repr(_tree) + ") should raise TypeError, not give " + repr(_got))
+          assert output.splitlines()[0] == "fare * seats + 40 -> int", "The program's first line should be fare * seats + 40 -> int"
+          assert output.splitlines()[3] == "'Rs ' + name -> str", "The program's last line should be 'Rs ' + name -> str"
+        wrong:
+          - |
+            def type_of(node, env):
+                # A type checker for a tiny language. Types are "int", "str" and "bool".
+                #   ("num", 4) is int, ("str", "Rs") is str, ("bool", True) is bool
+                #   ("var", name) has the type env[name]
+                #   ("bin", op, a, b): "+" takes two ints giving int, or two strs giving
+                #       str; "-" and "*" take two ints giving int
+                #   ("cmp", op, a, b): two ints giving bool
+                #   ("if", test, then, other): test must be bool, and both branches must
+                #       have the same type, which is the type of the whole expression
+                # Anything else raises TypeError with a message saying what is wrong.
+                kind = node[0]
+                if kind == "num":
+                    return "int"
+                if kind == "str":
+                    return "str"
+                if kind == "bool":
+                    return "bool"
+                if kind == "var":
+                    return env[node[1]]
+                if kind == "if":
+                    if type_of(node[1], env) != "bool":
+                        raise TypeError("the test of an if must be bool")
+                    a = type_of(node[2], env)
+                    b = type_of(node[3], env)
+                    return a
+                op = node[1]
+                a = type_of(node[2], env)
+                b = type_of(node[3], env)
+                if kind == "cmp":
+                    if a == "int" and b == "int":
+                        return "bool"
+                    raise TypeError("cannot compare " + a + " with " + b)
+                if a == "int" and b == "int":
+                    return "int"
+                if op == "+" and a == "str" and b == "str":
+                    return "str"
+                raise TypeError("cannot apply " + op + " to " + a + " and " + b)
+
+
+            env = {"fare": "int", "seats": "int", "name": "str"}
+            programs = {
+                "fare * seats + 40": ("bin", "+", ("bin", "*", ("var", "fare"), ("var", "seats")), ("num", 40)),
+                "name + fare": ("bin", "+", ("var", "name"), ("var", "fare")),
+                "fare if seats > 0 else 'sold out'": ("if", ("cmp", ">", ("var", "seats"), ("num", 0)), ("var", "fare"), ("str", "sold out")),
+                "'Rs ' + name": ("bin", "+", ("str", "Rs "), ("var", "name")),
+            }
+            for text, tree in programs.items():
+                try:
+                    print(text, "->", type_of(tree, env))
+                except TypeError as error:
+                    print(text, "-> TypeError:", error)
+          - |
+            def type_of(node, env):
+                # A type checker for a tiny language. Types are "int", "str" and "bool".
+                #   ("num", 4) is int, ("str", "Rs") is str, ("bool", True) is bool
+                #   ("var", name) has the type env[name]
+                #   ("bin", op, a, b): "+" takes two ints giving int, or two strs giving
+                #       str; "-" and "*" take two ints giving int
+                #   ("cmp", op, a, b): two ints giving bool
+                #   ("if", test, then, other): test must be bool, and both branches must
+                #       have the same type, which is the type of the whole expression
+                # Anything else raises TypeError with a message saying what is wrong.
+                kind = node[0]
+                if kind == "num":
+                    return "int"
+                if kind == "str":
+                    return "str"
+                if kind == "bool":
+                    return "bool"
+                if kind == "var":
+                    return env[node[1]]
+                if kind == "if":
+                    if type_of(node[1], env) != "bool":
+                        raise TypeError("the test of an if must be bool")
+                    a = type_of(node[2], env)
+                    b = type_of(node[3], env)
+                    if a != b:
+                        raise TypeError("the branches of an if have types " + a + " and " + b)
+                    return a
+                op = node[1]
+                a = type_of(node[2], env)
+                b = type_of(node[3], env)
+                if kind == "cmp":
+                    if a == "int" and b == "int":
+                        return "bool"
+                    raise TypeError("cannot compare " + a + " with " + b)
+                if a == "int" and b == "int":
+                    return "int"
+                if op == "+" and (a == "str" or b == "str"):
+                    return "str"
+                raise TypeError("cannot apply " + op + " to " + a + " and " + b)
+
+
+            env = {"fare": "int", "seats": "int", "name": "str"}
+            programs = {
+                "fare * seats + 40": ("bin", "+", ("bin", "*", ("var", "fare"), ("var", "seats")), ("num", 40)),
+                "name + fare": ("bin", "+", ("var", "name"), ("var", "fare")),
+                "fare if seats > 0 else 'sold out'": ("if", ("cmp", ">", ("var", "seats"), ("num", 0)), ("var", "fare"), ("str", "sold out")),
+                "'Rs ' + name": ("bin", "+", ("str", "Rs "), ("var", "name")),
+            }
+            for text, tree in programs.items():
+                try:
+                    print(text, "->", type_of(tree, env))
+                except TypeError as error:
+                    print(text, "-> TypeError:", error)
+          - |
+            def type_of(node, env):
+                # A type checker for a tiny language. Types are "int", "str" and "bool".
+                #   ("num", 4) is int, ("str", "Rs") is str, ("bool", True) is bool
+                #   ("var", name) has the type env[name]
+                #   ("bin", op, a, b): "+" takes two ints giving int, or two strs giving
+                #       str; "-" and "*" take two ints giving int
+                #   ("cmp", op, a, b): two ints giving bool
+                #   ("if", test, then, other): test must be bool, and both branches must
+                #       have the same type, which is the type of the whole expression
+                # Anything else raises TypeError with a message saying what is wrong.
+                kind = node[0]
+                if kind == "num":
+                    return "int"
+                if kind == "str":
+                    return "str"
+                if kind == "bool":
+                    return "bool"
+                if kind == "var":
+                    return env[node[1]]
+                if kind == "if":
+                    a = type_of(node[2], env)
+                    b = type_of(node[3], env)
+                    if a != b:
+                        raise TypeError("the branches of an if have types " + a + " and " + b)
+                    return a
+                op = node[1]
+                a = type_of(node[2], env)
+                b = type_of(node[3], env)
+                if kind == "cmp":
+                    if a == "int" and b == "int":
+                        return "bool"
+                    raise TypeError("cannot compare " + a + " with " + b)
+                if a == "int" and b == "int":
+                    return "int"
+                if op == "+" and a == "str" and b == "str":
+                    return "str"
+                raise TypeError("cannot apply " + op + " to " + a + " and " + b)
+
+
+            env = {"fare": "int", "seats": "int", "name": "str"}
+            programs = {
+                "fare * seats + 40": ("bin", "+", ("bin", "*", ("var", "fare"), ("var", "seats")), ("num", 40)),
+                "name + fare": ("bin", "+", ("var", "name"), ("var", "fare")),
+                "fare if seats > 0 else 'sold out'": ("if", ("cmp", ">", ("var", "seats"), ("num", 0)), ("var", "fare"), ("str", "sold out")),
+                "'Rs ' + name": ("bin", "+", ("str", "Rs "), ("var", "name")),
+            }
+            for text, tree in programs.items():
+                try:
+                    print(text, "->", type_of(tree, env))
+                except TypeError as error:
+                    print(text, "-> TypeError:", error)
+        explanation: |
+          Handle the leaves first, then the `if`, whose test must be bool and whose branches must agree, then the binary operations, whose operand types you find by calling `type_of` on each child. Accepting branches of different types lets the third program through; letting `+` join when only one side is a string makes `name + fare` a str, which is the weak typing of JavaScript; and skipping the test's check lets an int stand where a bool belongs.
+    - question:
+        id: fix-checked
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `checked` should reject arguments and results whose class does not match the annotation, while accepting instances of subclasses. The program should print three lines: `Train 450.0`, `Express 750.0` and `Train rejected: km should be int, not str`. Instead, the second line rejects the Express. Find the fault and fix it.
+        starter: |
+          def checked(f):
+              # Wrap f, whose parameters are all annotated with classes, so that each
+              # call checks the positional arguments and the result against the
+              # annotations and raises TypeError on a mismatch. A value matches a
+              # class if it is an instance of that class or of any subclass of it.
+              hints = f.__annotations__
+              params = [name for name in hints if name != "return"]
+
+              def wrapper(*args):
+                  for name, value in zip(params, args):
+                      if type(value) != hints[name]:
+                          raise TypeError(name + " should be " + hints[name].__name__ + ", not " + type(value).__name__)
+                  result = f(*args)
+                  if "return" in hints and type(result) != hints["return"]:
+                      raise TypeError("result should be " + hints["return"].__name__ + ", not " + type(result).__name__)
+                  return result
+
+              return wrapper
+
+
+          class Train:
+              rate = 1.5
+
+
+          class Express(Train):
+              rate = 2.5
+
+
+          @checked
+          def fare(train: Train, km: int) -> float:
+              return train.rate * km
+
+
+          for train, km in [(Train(), 300), (Express(), 300), (Train(), "300")]:
+              try:
+                  print(type(train).__name__, fare(train, km))
+              except TypeError as error:
+                  print(type(train).__name__, "rejected:", error)
+        solution: |
+          def checked(f):
+              # Wrap f, whose parameters are all annotated with classes, so that each
+              # call checks the positional arguments and the result against the
+              # annotations and raises TypeError on a mismatch. A value matches a
+              # class if it is an instance of that class or of any subclass of it.
+              hints = f.__annotations__
+              params = [name for name in hints if name != "return"]
+
+              def wrapper(*args):
+                  for name, value in zip(params, args):
+                      if not isinstance(value, hints[name]):
+                          raise TypeError(name + " should be " + hints[name].__name__ + ", not " + type(value).__name__)
+                  result = f(*args)
+                  if "return" in hints and not isinstance(result, hints["return"]):
+                      raise TypeError("result should be " + hints["return"].__name__ + ", not " + type(result).__name__)
+                  return result
+
+              return wrapper
+
+
+          class Train:
+              rate = 1.5
+
+
+          class Express(Train):
+              rate = 2.5
+
+
+          @checked
+          def fare(train: Train, km: int) -> float:
+              return train.rate * km
+
+
+          for train, km in [(Train(), 300), (Express(), 300), (Train(), "300")]:
+              try:
+                  print(type(train).__name__, fare(train, km))
+              except TypeError as error:
+                  print(type(train).__name__, "rejected:", error)
+        tests: |
+          class _A:
+              pass
+
+
+          class _B(_A):
+              pass
+
+
+          def _ok(_f, *_args):
+              try:
+                  return _f(*_args)
+              except TypeError as _e:
+                  raise AssertionError("This call should be accepted, but it raised TypeError: " + str(_e))
+
+
+          def _rejects(_f, *_args):
+              try:
+                  _f(*_args)
+              except TypeError:
+                  return True
+              return False
+
+
+          @checked
+          def _take_a(_x: _A) -> int:
+              return 1
+
+
+          @checked
+          def _take_b(_x: _B) -> int:
+              return 2
+
+
+          @checked
+          def _make(_n: int) -> _A:
+              return _B() if _n else _A()
+
+
+          @checked
+          def _liar(_n: int) -> int:
+              return "not a number"
+
+
+          assert _ok(_take_a, _A()) == 1, "An _A should be accepted where an _A is expected"
+          assert _ok(_take_a, _B()) == 1, "A subclass instance should be accepted where its parent class is expected"
+          assert _rejects(_take_b, _A()), "A parent-class instance should be rejected where the subclass is expected"
+          assert _rejects(_take_a, 5), "An int should be rejected where an _A is expected"
+          assert isinstance(_ok(_make, 1), _B), "A result that is an instance of a subclass of the return annotation should be accepted"
+          assert _rejects(_liar, 3), "A result of the wrong type should be rejected with TypeError"
+          assert output.splitlines() == ["Train 450.0", "Express 750.0", "Train rejected: km should be int, not str"], "The program should print three lines: Train 450.0, Express 750.0, and the rejection of km as a str"
+        wrong:
+          - |
+            def checked(f):
+                # Wrap f, whose parameters are all annotated with classes, so that each
+                # call checks the positional arguments and the result against the
+                # annotations and raises TypeError on a mismatch. A value matches a
+                # class if it is an instance of that class or of any subclass of it.
+                hints = f.__annotations__
+                params = [name for name in hints if name != "return"]
+
+                def wrapper(*args):
+                    for name, value in zip(params, args):
+                        if not isinstance(value, hints[name]):
+                            raise TypeError(name + " should be " + hints[name].__name__ + ", not " + type(value).__name__)
+                    result = f(*args)
+                    return result
+
+                return wrapper
+
+
+            class Train:
+                rate = 1.5
+
+
+            class Express(Train):
+                rate = 2.5
+
+
+            @checked
+            def fare(train: Train, km: int) -> float:
+                return train.rate * km
+
+
+            for train, km in [(Train(), 300), (Express(), 300), (Train(), "300")]:
+                try:
+                    print(type(train).__name__, fare(train, km))
+                except TypeError as error:
+                    print(type(train).__name__, "rejected:", error)
+          - |
+            def checked(f):
+                # Wrap f, whose parameters are all annotated with classes, so that each
+                # call checks the positional arguments and the result against the
+                # annotations and raises TypeError on a mismatch. A value matches a
+                # class if it is an instance of that class or of any subclass of it.
+                hints = f.__annotations__
+                params = [name for name in hints if name != "return"]
+
+                def wrapper(*args):
+                    for name, value in zip(params, args):
+                        if not isinstance(value, hints[name]):
+                            raise TypeError(name + " should be " + hints[name].__name__ + ", not " + type(value).__name__)
+                    result = f(*args)
+                    if "return" in hints and type(result) != hints["return"]:
+                        raise TypeError("result should be " + hints["return"].__name__ + ", not " + type(result).__name__)
+                    return result
+
+                return wrapper
+
+
+            class Train:
+                rate = 1.5
+
+
+            class Express(Train):
+                rate = 2.5
+
+
+            @checked
+            def fare(train: Train, km: int) -> float:
+                return train.rate * km
+
+
+            for train, km in [(Train(), 300), (Express(), 300), (Train(), "300")]:
+                try:
+                    print(type(train).__name__, fare(train, km))
+                except TypeError as error:
+                    print(type(train).__name__, "rejected:", error)
+          - |
+            def checked(f):
+                # Wrap f, whose parameters are all annotated with classes, so that each
+                # call checks the positional arguments and the result against the
+                # annotations and raises TypeError on a mismatch. A value matches a
+                # class if it is an instance of that class or of any subclass of it.
+                hints = f.__annotations__
+                params = [name for name in hints if name != "return"]
+
+                def wrapper(*args):
+                    for name, value in zip(params, args):
+                        if not issubclass(hints[name], type(value)):
+                            raise TypeError(name + " should be " + hints[name].__name__ + ", not " + type(value).__name__)
+                    result = f(*args)
+                    if "return" in hints and not isinstance(result, hints["return"]):
+                        raise TypeError("result should be " + hints["return"].__name__ + ", not " + type(result).__name__)
+                    return result
+
+                return wrapper
+
+
+            class Train:
+                rate = 1.5
+
+
+            class Express(Train):
+                rate = 2.5
+
+
+            @checked
+            def fare(train: Train, km: int) -> float:
+                return train.rate * km
+
+
+            for train, km in [(Train(), 300), (Express(), 300), (Train(), "300")]:
+                try:
+                    print(type(train).__name__, fare(train, km))
+                except TypeError as error:
+                    print(type(train).__name__, "rejected:", error)
+        explanation: |
+          `type(value) != cls` demands the exact class, so an Express is turned away where a Train is expected. Use `isinstance(value, cls)` for the arguments and for the result. Dropping the result check stops a function that returns the wrong type from being caught; fixing the arguments but leaving `type(...)` on the result still rejects a subclass returned where its parent is promised; and `issubclass` the wrong way round accepts a parent where a subclass is required.
+    - question:
+        id: write-weak
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `to_number`, `weak_add` and `weak_sub`, which imitate the `+` and `-` of a weakly typed language. The program should print three lines: `11`, `30` and `None -1`.
+        starter: |
+          def to_number(v):
+              # How a weakly typed language turns a value into a number for "-":
+              # an int stays as it is; a string of digits, perhaps with a leading
+              # "-", becomes that int; the empty string becomes 0; any other string
+              # becomes None, standing for "not a number".
+              return None
+
+
+          def weak_add(a, b):
+              # "+": if either value is a string, join both as strings; otherwise add
+              # the numbers.
+              return None
+
+
+          def weak_sub(a, b):
+              # "-": convert both values with to_number and subtract; if either is
+              # None, the result is None.
+              return None
+
+
+          print(weak_sub(weak_add("1", 2), 1))
+          print(weak_add(weak_sub("5", 2), "0"))
+          print(weak_sub("ten", 1), weak_sub("", 1))
+        solution: |
+          def to_number(v):
+              # How a weakly typed language turns a value into a number for "-":
+              # an int stays as it is; a string of digits, perhaps with a leading
+              # "-", becomes that int; the empty string becomes 0; any other string
+              # becomes None, standing for "not a number".
+              if isinstance(v, int):
+                  return v
+              if v == "":
+                  return 0
+              digits = v[1:] if v.startswith("-") else v
+              if digits.isdigit():
+                  return int(v)
+              return None
+
+
+          def weak_add(a, b):
+              # "+": if either value is a string, join both as strings; otherwise add
+              # the numbers.
+              if isinstance(a, str) or isinstance(b, str):
+                  return str(a) + str(b)
+              return a + b
+
+
+          def weak_sub(a, b):
+              # "-": convert both values with to_number and subtract; if either is
+              # None, the result is None.
+              x = to_number(a)
+              y = to_number(b)
+              if x is None or y is None:
+                  return None
+              return x - y
+
+
+          print(weak_sub(weak_add("1", 2), 1))
+          print(weak_add(weak_sub("5", 2), "0"))
+          print(weak_sub("ten", 1), weak_sub("", 1))
+        tests: |
+          def _safe(_f, *_a):
+              try:
+                  return _f(*_a)
+              except (TypeError, ValueError) as _e:
+                  raise AssertionError(_f.__name__ + repr(_a) + " raised " + type(_e).__name__ + ": " + str(_e))
+
+
+          for _v, _want in [(7, 7), (-3, -3), ("42", 42), ("-8", -8), ("", 0), ("4a", None), ("ten", None), ("-", None), ("1.5", None)]:
+              _got = _safe(to_number, _v)
+              assert _got == _want, "to_number(" + repr(_v) + ") should be " + repr(_want) + ", not " + repr(_got)
+          for _a, _b, _want in [(1, 2, 3), ("1", 2, "12"), (1, "2", "12"), ("a", "b", "ab"), ("", 5, "5"), (-1, "", "-1")]:
+              _got = _safe(weak_add, _a, _b)
+              assert _got == _want, "weak_add(" + repr(_a) + ", " + repr(_b) + ") should be " + repr(_want) + ", not " + repr(_got)
+          for _a, _b, _want in [(5, 2, 3), ("5", 2, 3), ("5", "2", 3), ("12", 1, 11), ("", "3", -3), ("x", 1, None), (1, "y", None), ("-4", "-4", 0)]:
+              _got = _safe(weak_sub, _a, _b)
+              assert _got == _want, "weak_sub(" + repr(_a) + ", " + repr(_b) + ") should be " + repr(_want) + ", not " + repr(_got)
+          assert output.splitlines() == ["11", "30", "None -1"], "The program should print three lines: 11, 30 and None -1"
+        wrong:
+          - |
+            def to_number(v):
+                # How a weakly typed language turns a value into a number for "-":
+                # an int stays as it is; a string of digits, perhaps with a leading
+                # "-", becomes that int; the empty string becomes 0; any other string
+                # becomes None, standing for "not a number".
+                if isinstance(v, int):
+                    return v
+                if v == "":
+                    return 0
+                digits = v[1:] if v.startswith("-") else v
+                if digits.isdigit():
+                    return int(v)
+                return None
+
+
+            def weak_add(a, b):
+                # "+": if either value is a string, join both as strings; otherwise add
+                # the numbers.
+                x = to_number(a)
+                y = to_number(b)
+                if x is None or y is None:
+                    return str(a) + str(b)
+                return x + y
+
+
+            def weak_sub(a, b):
+                # "-": convert both values with to_number and subtract; if either is
+                # None, the result is None.
+                x = to_number(a)
+                y = to_number(b)
+                if x is None or y is None:
+                    return None
+                return x - y
+
+
+            print(weak_sub(weak_add("1", 2), 1))
+            print(weak_add(weak_sub("5", 2), "0"))
+            print(weak_sub("ten", 1), weak_sub("", 1))
+          - |
+            def to_number(v):
+                # How a weakly typed language turns a value into a number for "-":
+                # an int stays as it is; a string of digits, perhaps with a leading
+                # "-", becomes that int; the empty string becomes 0; any other string
+                # becomes None, standing for "not a number".
+                if isinstance(v, int):
+                    return v
+                if v == "":
+                    return None
+                digits = v[1:] if v.startswith("-") else v
+                if digits.isdigit():
+                    return int(v)
+                return None
+
+
+            def weak_add(a, b):
+                # "+": if either value is a string, join both as strings; otherwise add
+                # the numbers.
+                if isinstance(a, str) or isinstance(b, str):
+                    return str(a) + str(b)
+                return a + b
+
+
+            def weak_sub(a, b):
+                # "-": convert both values with to_number and subtract; if either is
+                # None, the result is None.
+                x = to_number(a)
+                y = to_number(b)
+                if x is None or y is None:
+                    return None
+                return x - y
+
+
+            print(weak_sub(weak_add("1", 2), 1))
+            print(weak_add(weak_sub("5", 2), "0"))
+            print(weak_sub("ten", 1), weak_sub("", 1))
+          - |
+            def to_number(v):
+                # How a weakly typed language turns a value into a number for "-":
+                # an int stays as it is; a string of digits, perhaps with a leading
+                # "-", becomes that int; the empty string becomes 0; any other string
+                # becomes None, standing for "not a number".
+                if isinstance(v, int):
+                    return v
+                if v == "":
+                    return 0
+                if v.isdigit():
+                    return int(v)
+                return None
+
+
+            def weak_add(a, b):
+                # "+": if either value is a string, join both as strings; otherwise add
+                # the numbers.
+                if isinstance(a, str) or isinstance(b, str):
+                    return str(a) + str(b)
+                return a + b
+
+
+            def weak_sub(a, b):
+                # "-": convert both values with to_number and subtract; if either is
+                # None, the result is None.
+                x = to_number(a)
+                y = to_number(b)
+                if x is None or y is None:
+                    return None
+                return x - y
+
+
+            print(weak_sub(weak_add("1", 2), 1))
+            print(weak_add(weak_sub("5", 2), "0"))
+            print(weak_sub("ten", 1), weak_sub("", 1))
+        explanation: |
+          `to_number` keeps ints, turns the empty string into 0 and a string of digits, with an optional leading minus, into an int, and gives None for anything else. `weak_add` joins as strings if either side is a string, and `weak_sub` converts both sides. Converting both sides for `+` turns `"1" + 2` into 3 instead of `"12"`; treating the empty string as not a number breaks `"" - 1`; and checking `isdigit` on the whole string misses negative numbers.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In JavaScript, `+` joins when either value is a string and `-` converts both values to numbers. What number does `"1" + 2 - 1` give?
+        answer: "11"
+        explanation: |
+          The expression runs left to right. `"1" + 2` joins to the string `"12"`, and `"12" - 1` converts it back to the number 12 and subtracts, giving 11, not the 2 that the digits suggest.
+    - question:
+        id: work-boundary
+        type: choice
+        system: s2
+        prompt: |
+          Priya's team runs a large Python payments service. Now and then an amount arrives from a web form as the string "500", is multiplied by a quantity of 2, and a customer is charged for "500500". What change catches this kind of mistake earliest and with least disruption?
+        options:
+          - "Convert form input to int where it enters the service, annotate the payment functions, and run mypy in CI"
+          - "Rewrite the service in a statically typed language"
+          - "Add more unit tests that call the payment functions with int amounts"
+          - "Catch every TypeError in the payment code and charge 0 instead"
+        answer: 0
+        explanation: |
+          Converting at the boundary means the rest of the code only ever sees ints, and the annotations let mypy flag any path that passes a str, before the code ships. A rewrite costs months; tests that only use ints never meet the string; and turning errors into a charge of 0 is weak typing at its worst.
+  connections:
+    - text: |
+        11. The `+` comes first and meets a string, so it joins: `"12"`. The `-` then converts that string back into the number 12 and subtracts 1. Two guesses in one line, each reasonable on its own, give an answer nobody would have written down.
+
+        Because Python's values carry their types, every value is an object somewhere in memory with a header saying what it is, and a program makes and abandons such objects by the million. Nobody writes code to free them, so something must decide when an object can no longer be reached and give its memory back. [[s7.memory-management-and-garbage-collection]] finishes the cluster by looking at how that is done.

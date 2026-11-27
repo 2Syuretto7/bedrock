@@ -9493,6 +9493,1009 @@ function FuzzHeader(props: Props) {
     </Frame>
   );
 }
+const TS_SOURCES = ["fare = base*1.18 + gst2", "age>=18", "x = 3 $ 4"];
+
+type TsToken = { kind: string; text: string; start: number; end: number };
+
+function tsScan(src: string) {
+  const tokens: TsToken[] = [];
+  let error = -1;
+  let i = 0;
+  const isDigit = (c: string) => c >= "0" && c <= "9";
+  const isLetter = (c: string) => (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c === "_";
+  while (i < src.length) {
+    const c = src[i];
+    if (c === " ") {
+      i += 1;
+    } else if (isDigit(c)) {
+      let j = i;
+      while (j < src.length && isDigit(src[j])) j += 1;
+      if (src[j] === "." && j + 1 < src.length && isDigit(src[j + 1])) {
+        j += 1;
+        while (j < src.length && isDigit(src[j])) j += 1;
+      }
+      tokens.push({ kind: "number", text: src.slice(i, j), start: i, end: j });
+      i = j;
+    } else if (isLetter(c)) {
+      let j = i;
+      while (j < src.length && (isLetter(src[j]) || isDigit(src[j]))) j += 1;
+      tokens.push({ kind: "name", text: src.slice(i, j), start: i, end: j });
+      i = j;
+    } else {
+      const two = src.slice(i, i + 2);
+      const op = ["<=", ">=", "==", "!="].includes(two) ? two : "+-*/()=<>".includes(c) ? c : "";
+      if (op === "") {
+        error = i;
+        break;
+      }
+      tokens.push({ kind: "op", text: op, start: i, end: i + op.length });
+      i += op.length;
+    }
+  }
+  return { tokens, error };
+}
+
+/** A tokeniser reading a line of code: each step skips spaces and takes the longest token at the cursor. */
+function TokenScan(props: Props) {
+  const startSrc = typeof props.source === "string" && TS_SOURCES.includes(props.source) ? props.source : TS_SOURCES[0];
+  const [src, setSrc] = useState(startSrc);
+  const { tokens, error } = tsScan(src);
+  const steps = tokens.length + (error >= 0 ? 1 : 0);
+  const [stepRaw, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, 20));
+  const step = Math.min(stepRaw, steps);
+  const shown = tokens.slice(0, Math.min(step, tokens.length));
+  const atError = error >= 0 && step === steps;
+  const last = shown.length > 0 ? shown[shown.length - 1] : null;
+  const cursor = atError ? error : last ? last.end : 0;
+  const why = (t: TsToken) =>
+    t.kind === "number"
+      ? t.text.includes(".")
+        ? "Digits, then a dot and more digits, make one number."
+        : "The scanner reads digits for as long as they last."
+      : t.kind === "name"
+        ? t.text.length > 1 && /[0-9]/.test(t.text)
+          ? `A letter starts a name, which runs on through letters and digits, so ${t.text} is one name.`
+          : "A letter starts a name, which runs on through letters, digits and underscores."
+        : t.text.length === 2
+          ? `${t.text} is one token, not two: the scanner takes the longest operator that matches.`
+          : "A single operator character.";
+  const summary =
+    step === 0
+      ? "The scanner starts at position 0. Each step skips spaces, then reads the longest token that starts at the cursor."
+      : atError
+        ? `Position ${error} holds ${src[error]}, which starts no token, so the scanner stops with an error that names the position, after ${plural(tokens.length, "token")}.`
+        : last
+          ? `Token ${step}: ${last.kind} ${last.text}, positions ${last.start} to ${last.end - 1}. ${why(last)}${step === tokens.length && error < 0 ? ` All ${tokens.length} tokens are read; the parser sees only these, not the characters or the spaces.` : ""}`
+          : "";
+  const cw = 18;
+  const x0 = Math.max(10, Math.round((460 - src.length * cw) / 2));
+  return (
+    <Frame
+      title="Reading tokens"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">the line</span>
+          {TS_SOURCES.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className="btn btn-secondary btn-small"
+              aria-pressed={s === src}
+              onClick={() => {
+                setSrc(s);
+                setStep(0);
+              }}
+            >
+              {s}
+            </button>
+          ))}
+          <Stepper label="steps" value={step} min={0} max={steps} onChange={setStep} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 130" role="img" aria-label={`${shown.length} tokens read from ${src}`}>
+        {src.split("").map((c, i) => {
+          const read = i < cursor;
+          return (
+            <g key={i}>
+              <rect x={x0 + i * cw} y={20} width={cw - 2} height={24} className={atError && i === error ? "fig-accent" : read ? "fig-fill" : "fig-ghost"} />
+              <text x={x0 + i * cw + (cw - 2) / 2} y={37} textAnchor="middle" style={{ fill: atError && i === error ? "var(--bg)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: 13 }}>
+                {c === " " ? "·" : c}
+              </text>
+              <text x={x0 + i * cw + (cw - 2) / 2} y={14} textAnchor="middle" className="fig-small">
+                {i % 5 === 0 ? i : ""}
+              </text>
+            </g>
+          );
+        })}
+        <line x1={x0 + cursor * cw - 1} y1={16} x2={x0 + cursor * cw - 1} y2={48} className="fig-accent-line" />
+        {shown.map((t, k) => (
+          <g key={k}>
+            <line x1={x0 + t.start * cw} y1={52} x2={x0 + t.end * cw - 2} y2={52} className={k === shown.length - 1 && !atError ? "fig-accent-line" : "fig-line"} />
+            <text x={x0 + ((t.start + t.end) * cw) / 2 - 1} y={66 + (k % 2) * 12} textAnchor="middle" className="fig-small">
+              {t.kind === "number" ? "num" : t.kind}
+            </text>
+          </g>
+        ))}
+        <text x={10} y={110} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`tokens: ${shown.length === 0 ? "none yet" : shown.map((t) => t.text).join("  ")}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+const DR_INPUTS = ["3.14", "40", "7.", "1.2.3", ".5"];
+const DR_STATES: { id: string; x: number; y: number; accept: boolean }[] = [
+  { id: "start", x: 50, y: 62, accept: false },
+  { id: "int", x: 160, y: 62, accept: true },
+  { id: "dot", x: 270, y: 62, accept: false },
+  { id: "frac", x: 380, y: 62, accept: true },
+  { id: "stuck", x: 215, y: 150, accept: false },
+];
+
+function drStep(state: string, c: string) {
+  const digit = c >= "0" && c <= "9";
+  if (state === "start") return digit ? "int" : "stuck";
+  if (state === "int") return digit ? "int" : c === "." ? "dot" : "stuck";
+  if (state === "dot") return digit ? "frac" : "stuck";
+  if (state === "frac") return digit ? "frac" : "stuck";
+  return "stuck";
+}
+
+/** A finite automaton for numbers such as 3.14 reading its input one character at a time. */
+function DfaRun(props: Props) {
+  const startInput = typeof props.input === "string" && DR_INPUTS.includes(props.input) ? props.input : DR_INPUTS[0];
+  const [input, setInput] = useState(startInput);
+  const [readRaw, setRead] = useState(clamp(Math.round(num(props.read, 0)), 0, 10));
+  const read = Math.min(readRaw, input.length);
+  const path: string[] = ["start"];
+  for (let i = 0; i < input.length; i++) path.push(drStep(path[i], input[i]));
+  const state = path[read];
+  const accepting = state === "int" || state === "frac";
+  const done = read === input.length;
+  let lastAccept = -1;
+  for (let i = 1; i <= input.length; i++) if (path[i] === "int" || path[i] === "frac") lastAccept = i;
+  const summary =
+    read === 0
+      ? `The automaton starts in state start, before reading ${input}. It will read each character once and never look back.`
+      : !done
+        ? `After reading ${input.slice(0, read)}, the automaton is in state ${state}, which ${accepting ? "accepts" : "does not accept"}.${state === "stuck" ? " Nothing can lead out of stuck, so the answer is already known." : ""}`
+        : accepting
+          ? `${input} is accepted: the automaton ends in ${state}, an accepting state, after reading each character exactly once.`
+          : `${input} is rejected: the automaton ends in ${state}, which does not accept.${lastAccept > 0 ? ` A scanner using the longest match would still take ${input.slice(0, lastAccept)}, the longest prefix that ended in an accepting state.` : ""}`;
+  const at = (id: string) => DR_STATES.find((s) => s.id === id) ?? DR_STATES[0];
+  const edge = (a: string, b: string, label: string, dy = 0) => {
+    const p = at(a);
+    const q = at(b);
+    const dx = q.x - p.x;
+    const dyy = q.y - p.y;
+    const len = Math.hypot(dx, dyy);
+    const ux = dx / len;
+    const uy = dyy / len;
+    return (
+      <g key={`${a}-${b}`}>
+        <line x1={p.x + ux * 22} y1={p.y + uy * 22} x2={q.x - ux * 24} y2={q.y - uy * 24} className="fig-line" />
+        <circle cx={q.x - ux * 24} cy={q.y - uy * 24} r={3} style={{ fill: "var(--text-secondary)" }} />
+        <text x={(p.x + q.x) / 2} y={(p.y + q.y) / 2 - 6 + dy} textAnchor="middle" className="fig-small">
+          {label}
+        </text>
+      </g>
+    );
+  };
+  const loop = (id: string) => {
+    const p = at(id);
+    return (
+      <g key={`${id}-loop`}>
+        <path d={`M ${p.x - 10} ${p.y - 19} C ${p.x - 22} ${p.y - 50}, ${p.x + 22} ${p.y - 50}, ${p.x + 10} ${p.y - 19}`} className="fig-line" />
+        <text x={p.x} y={p.y - 44} textAnchor="middle" className="fig-small">
+          digit
+        </text>
+      </g>
+    );
+  };
+  return (
+    <Frame
+      title="An automaton reading a number"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">the input</span>
+          {DR_INPUTS.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className="btn btn-secondary btn-small"
+              aria-pressed={s === input}
+              onClick={() => {
+                setInput(s);
+                setRead(0);
+              }}
+            >
+              {s}
+            </button>
+          ))}
+          <Stepper label="characters read" value={read} min={0} max={input.length} onChange={setRead} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 230" role="img" aria-label={`After ${read} characters of ${input}, in state ${state}`}>
+        {edge("start", "int", "digit")}
+        {edge("int", "dot", ".")}
+        {edge("dot", "frac", "digit")}
+        {loop("int")}
+        {loop("frac")}
+        <text x={245} y={154} className="fig-small">
+          anything else
+        </text>
+        {DR_STATES.filter((s) => s.id !== "stuck").map((s) => (
+          <line key={`${s.id}-stuck`} x1={s.x + (215 - s.x) * 0.2} y1={s.y + 20} x2={215 + (s.x - 215) * 0.14} y2={150 - 20} className="fig-guide" />
+        ))}
+        {DR_STATES.map((s) => (
+          <g key={s.id}>
+            <circle cx={s.x} cy={s.y} r={20} className={s.id === state ? "fig-accent" : "fig-fill"} />
+            {s.accept ? <circle cx={s.x} cy={s.y} r={16} fill="none" style={{ stroke: s.id === state ? "var(--bg)" : "var(--text-secondary)" }} /> : null}
+            <text x={s.x} y={s.y + 4} textAnchor="middle" className="fig-small" style={{ fill: s.id === state ? "var(--bg)" : "var(--text)" }}>
+              {s.id}
+            </text>
+          </g>
+        ))}
+        {input.split("").map((c, i) => (
+          <g key={i}>
+            <rect x={150 + i * 24} y={186} width={22} height={24} className={i < read ? "fig-fill" : "fig-ghost"} />
+            <text x={161 + i * 24} y={203} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 13 }}>
+              {c}
+            </text>
+          </g>
+        ))}
+        <line x1={150 + read * 24 - 1} y1={182} x2={150 + read * 24 - 1} y2={214} className="fig-accent-line" />
+        <text x={10} y={203} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {done ? (accepting ? "accepted" : "rejected") : "reading"}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+const PT_CASES: { key: string; label: string; a: number; b: number; c: number; op1: string; op2: string; left: boolean; summary: string }[] = [
+  {
+    key: "sub-left",
+    label: "8 − 4 − 2, from the left",
+    a: 8,
+    b: 4,
+    c: 2,
+    op1: "−",
+    op2: "−",
+    left: true,
+    summary: "The tree groups (8 − 4) − 2. The lower subtraction runs first, giving 4, and the root subtracts 2, giving 2, which is what arithmetic means. A rule that repeats in a loop, expr → term (− term)*, builds this left-leaning tree.",
+  },
+  {
+    key: "sub-right",
+    label: "8 − 4 − 2, from the right",
+    a: 8,
+    b: 4,
+    c: 2,
+    op1: "−",
+    op2: "−",
+    left: false,
+    summary: "The tree groups 8 − (4 − 2). The lower subtraction gives 2 and the root gives 8 − 2 = 6. The same tokens in a different tree give a different answer. A rule that calls itself on its right, expr → term − expr, leans this way.",
+  },
+  {
+    key: "mul-first",
+    label: "2 + 3 × 4, × first",
+    a: 2,
+    b: 3,
+    c: 4,
+    op1: "+",
+    op2: "×",
+    left: false,
+    summary: "The tree groups 2 + (3 × 4). Multiplication is handled by a lower rule, term, so it sits deeper in the tree and runs first: 3 × 4 = 12, then 2 + 12 = 14.",
+  },
+  {
+    key: "flat",
+    label: "2 + 3 × 4, left to right",
+    a: 2,
+    b: 3,
+    c: 4,
+    op1: "+",
+    op2: "×",
+    left: true,
+    summary: "Treating + and × alike and grouping from the left gives (2 + 3) × 4 = 20, the answer a cheap calculator gives. Precedence lives in the grammar's levels, not in the tokens.",
+  },
+];
+
+function ptApply(op: string, x: number, y: number) {
+  return op === "−" ? x - y : op === "+" ? x + y : x * y;
+}
+
+/** Two parse trees for the same tokens: grouping and precedence decide the answer. */
+function ParseTree(props: Props) {
+  const startKey = typeof props.case === "string" && PT_CASES.some((c) => c.key === props.case) ? props.case : PT_CASES[0].key;
+  const [key, setKey] = useState(startKey);
+  const c = PT_CASES.find((x) => x.key === key) ?? PT_CASES[0];
+  const inner = c.left ? ptApply(c.op1, c.a, c.b) : ptApply(c.op2, c.b, c.c);
+  const total = c.left ? ptApply(c.op2, inner, c.c) : ptApply(c.op1, c.a, inner);
+  const root = { x: 230, y: 34, label: c.left ? c.op2 : c.op1, value: total };
+  const mid = c.left ? { x: 140, y: 94, label: c.op1, value: inner } : { x: 320, y: 94, label: c.op2, value: inner };
+  const leafTop = c.left ? { x: 320, y: 94, label: String(c.c) } : { x: 140, y: 94, label: String(c.a) };
+  const leaves = c.left
+    ? [
+        { x: 90, y: 154, label: String(c.a) },
+        { x: 190, y: 154, label: String(c.b) },
+      ]
+    : [
+        { x: 270, y: 154, label: String(c.b) },
+        { x: 370, y: 154, label: String(c.c) },
+      ];
+  const link = (p: { x: number; y: number }, q: { x: number; y: number }, k: string) => <line key={k} x1={p.x} y1={p.y + 18} x2={q.x} y2={q.y - 18} className="fig-line" />;
+  const node = (n: { x: number; y: number; label: string; value?: number }, k: string, op: boolean) => (
+    <g key={k}>
+      <circle cx={n.x} cy={n.y} r={18} className={op ? "fig-fill" : "fig-ghost"} />
+      <text x={n.x} y={n.y + 5} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 14 }}>
+        {n.label}
+      </text>
+      {n.value === undefined ? null : (
+        <text x={n.x + 26} y={n.y + 5} className="fig-small" style={{ fill: "var(--focus)", fontWeight: 600 }}>
+          {`= ${n.value}`}
+        </text>
+      )}
+    </g>
+  );
+  return (
+    <Frame
+      title="One line, two trees"
+      summary={c.summary}
+      controls={
+        <>
+          <span className="label">the tree</span>
+          {PT_CASES.map((x) => (
+            <button key={x.key} type="button" className="btn btn-secondary btn-small" aria-pressed={x.key === key} onClick={() => setKey(x.key)}>
+              {x.label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 200" role="img" aria-label={`${c.label}: the root gives ${total}`}>
+        {link(root, mid, "rm")}
+        {link(root, leafTop, "rl")}
+        {leaves.map((l, i) => link(mid, l, `ml${i}`))}
+        {node(root, "root", true)}
+        {node(mid, "mid", true)}
+        {node(leafTop, "leaf", false)}
+        {leaves.map((l, i) => node(l, `leaf${i}`, false))}
+        <text x={10} y={192} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`the lower operator runs first; the root gives ${total}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+type AeNode = { id: number; label: string; x: number; y: number; kids: number[]; leaf?: number | boolean };
+
+const AE_TREES: Record<string, { label: string; nodes: AeNode[]; root: number }> = {
+  arith: {
+    label: "(2 + 3) × (10 − 4)",
+    root: 0,
+    nodes: [
+      { id: 0, label: "×", x: 230, y: 30, kids: [1, 2] },
+      { id: 1, label: "+", x: 130, y: 90, kids: [3, 4] },
+      { id: 2, label: "−", x: 330, y: 90, kids: [5, 6] },
+      { id: 3, label: "2", x: 80, y: 150, kids: [], leaf: 2 },
+      { id: 4, label: "3", x: 180, y: 150, kids: [], leaf: 3 },
+      { id: 5, label: "10", x: 280, y: 150, kids: [], leaf: 10 },
+      { id: 6, label: "4", x: 380, y: 150, kids: [], leaf: 4 },
+    ],
+  },
+  and: {
+    label: "x ≠ 0 and 10 ÷ x > 2, with x = 0",
+    root: 0,
+    nodes: [
+      { id: 0, label: "and", x: 230, y: 30, kids: [1, 2] },
+      { id: 1, label: "≠", x: 120, y: 90, kids: [3, 4] },
+      { id: 2, label: ">", x: 340, y: 90, kids: [5, 6] },
+      { id: 3, label: "x", x: 80, y: 150, kids: [], leaf: 0 },
+      { id: 4, label: "0", x: 160, y: 150, kids: [], leaf: 0 },
+      { id: 5, label: "÷", x: 300, y: 150, kids: [7, 8] },
+      { id: 6, label: "2", x: 390, y: 150, kids: [], leaf: 2 },
+      { id: 7, label: "10", x: 260, y: 200, kids: [], leaf: 10 },
+      { id: 8, label: "x", x: 340, y: 200, kids: [], leaf: 0 },
+    ],
+  },
+};
+
+function aeRun(tree: { nodes: AeNode[]; root: number }) {
+  // Post-order evaluation, with `and` evaluating its right side only when the left is true.
+  const order: { id: number; value: number | boolean; note: string }[] = [];
+  const skipped: number[] = [];
+  const skip = (id: number) => {
+    skipped.push(id);
+    for (const k of tree.nodes[id].kids) skip(k);
+  };
+  const visit = (id: number): number | boolean => {
+    const n = tree.nodes[id];
+    if (n.kids.length === 0) {
+      const v = n.leaf ?? 0;
+      order.push({ id, value: v, note: n.label === "x" ? "x is looked up in the environment: 0" : `the number ${n.label} is its own value` });
+      return v;
+    }
+    const a = visit(n.kids[0]);
+    if (n.label === "and" && !a) {
+      skip(n.kids[1]);
+      order.push({ id, value: false, note: "and sees a false left side, so it is false without evaluating its right side at all, and the division by zero never happens" });
+      return false;
+    }
+    const b = visit(n.kids[1]);
+    const num = (v: number | boolean) => (typeof v === "boolean" ? (v ? 1 : 0) : v);
+    let v: number | boolean = 0;
+    if (n.label === "+") v = num(a) + num(b);
+    else if (n.label === "−") v = num(a) - num(b);
+    else if (n.label === "×") v = num(a) * num(b);
+    else if (n.label === "÷") v = num(a) / num(b);
+    else if (n.label === ">") v = num(a) > num(b);
+    else if (n.label === "≠") v = num(a) !== num(b);
+    else v = b;
+    order.push({ id, value: v, note: `${n.label} combines its children's values, ${String(a)} and ${String(b)}, giving ${String(v)}` });
+    return v;
+  };
+  visit(tree.root);
+  return { order, skipped };
+}
+
+/** A tree-walking evaluator visiting each node after its children, and skipping what `and` does not need. */
+function AstEval(props: Props) {
+  const startKey = props.tree === "and" ? "and" : "arith";
+  const [key, setKey] = useState(startKey);
+  const tree = AE_TREES[key];
+  const { order, skipped } = aeRun(tree);
+  const [stepRaw, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, 20));
+  const step = Math.min(stepRaw, order.length);
+  const done = order.slice(0, step);
+  const value = (id: number) => done.find((d) => d.id === id)?.value;
+  const last = done.length > 0 ? done[done.length - 1] : null;
+  const finished = step === order.length;
+  const show = (v: number | boolean) => (typeof v === "boolean" ? (v ? "True" : "False") : String(v));
+  const summary =
+    step === 0
+      ? `The evaluator starts at the root of ${tree.label} and must evaluate a node's children before the node itself.`
+      : last
+        ? `Step ${step}: ${last.note.replace(/true/g, "True").replace(/false/g, "False")}.${finished ? ` The root's value, ${show(order[order.length - 1].value)}, is the value of the whole expression${skipped.length > 0 ? `, and ${plural(skipped.length, "node")} were never visited` : ""}.` : ""}`
+        : "";
+  return (
+    <Frame
+      title="Walking a syntax tree"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">the expression</span>
+          {Object.entries(AE_TREES).map(([k, t]) => (
+            <button
+              key={k}
+              type="button"
+              className="btn btn-secondary btn-small"
+              aria-pressed={k === key}
+              onClick={() => {
+                setKey(k);
+                setStep(0);
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+          <Stepper label="steps" value={step} min={0} max={order.length} onChange={setStep} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 240" role="img" aria-label={`${tree.label}: ${step} of ${order.length} steps`}>
+        {tree.nodes.flatMap((n) =>
+          n.kids.map((k) => <line key={`${n.id}-${k}`} x1={n.x} y1={n.y + 16} x2={tree.nodes[k].x} y2={tree.nodes[k].y - 16} className={skipped.includes(k) && finished ? "fig-guide" : "fig-line"} />),
+        )}
+        {tree.nodes.map((n) => {
+          const v = value(n.id);
+          const isLast = last !== null && last.id === n.id;
+          const gone = finished && skipped.includes(n.id);
+          return (
+            <g key={n.id}>
+              <circle cx={n.x} cy={n.y} r={16} className={isLast ? "fig-accent" : v !== undefined ? "fig-fill" : "fig-ghost"} />
+              <text x={n.x} y={n.y + 5} textAnchor="middle" style={{ fill: isLast ? "var(--bg)" : gone ? "var(--text-faint)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: 13 }}>
+                {n.label}
+              </text>
+              {v === undefined ? null : (
+                <text x={n.x + 20} y={n.y - 10} className="fig-small" style={{ fill: "var(--focus)", fontWeight: 600 }}>
+                  {show(v)}
+                </text>
+              )}
+              {gone ? (
+                <text x={n.x + 20} y={n.y - 10} className="fig-small">
+                  skipped
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+        <text x={10} y={232} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`step ${step} of ${order.length}${finished ? `: the value is ${show(order[order.length - 1].value)}` : ""}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+type SmIns = [string, (string | number)?];
+
+const SM_PROGRAMS: Record<string, { label: string; code: SmIns[]; env: Record<string, number> }> = {
+  fare: {
+    label: "(price + tip) × qty",
+    code: [["LOAD", "price"], ["LOAD", "tip"], ["ADD"], ["LOAD", "qty"], ["MUL"], ["STORE", "bill"]],
+    env: { price: 450, tip: 50, qty: 2 },
+  },
+  loop: {
+    label: "a loop: total += n while n > 0",
+    code: [
+      ["PUSH", 0],
+      ["STORE", "total"],
+      ["PUSH", 0],
+      ["LOAD", "n"],
+      ["LT"],
+      ["JUMP_IF_FALSE", 15],
+      ["LOAD", "total"],
+      ["LOAD", "n"],
+      ["ADD"],
+      ["STORE", "total"],
+      ["LOAD", "n"],
+      ["PUSH", 1],
+      ["SUB"],
+      ["STORE", "n"],
+      ["JUMP", 2],
+    ],
+    env: { n: 3 },
+  },
+};
+
+type SmState = { pc: number; stack: (number | boolean)[]; env: Record<string, number>; note: string };
+
+function smTrace(code: SmIns[], env0: Record<string, number>) {
+  const states: SmState[] = [{ pc: 0, stack: [], env: { ...env0 }, note: "" }];
+  for (let guard = 0; guard < 200; guard++) {
+    const cur = states[states.length - 1];
+    if (cur.pc >= code.length) break;
+    const [op, arg] = code[cur.pc];
+    const stack = [...cur.stack];
+    const env = { ...cur.env };
+    let pc = cur.pc + 1;
+    let note = "";
+    const show = (v: number | boolean) => (typeof v === "boolean" ? (v ? "True" : "False") : String(v));
+    if (op === "PUSH") {
+      stack.push(Number(arg));
+      note = `PUSH ${arg} puts ${arg} on the stack.`;
+    } else if (op === "LOAD") {
+      const v = env[String(arg)];
+      stack.push(v);
+      note = `LOAD ${arg} looks up ${arg} and pushes ${v}.`;
+    } else if (op === "STORE") {
+      const v = stack.pop() ?? 0;
+      env[String(arg)] = Number(v);
+      note = `STORE ${arg} pops ${show(v)} and saves it as ${arg}.`;
+    } else if (op === "JUMP_IF_FALSE") {
+      const v = stack.pop();
+      if (!v) pc = Number(arg);
+      note = v ? `JUMP_IF_FALSE pops True, so execution carries on into the loop body.` : `JUMP_IF_FALSE pops False and jumps to ${arg}, past the end: the loop is over.`;
+    } else if (op === "JUMP") {
+      pc = Number(arg);
+      note = `JUMP ${arg} sends execution back to the test at ${arg}: the loop goes round again.`;
+    } else {
+      const right = stack.pop() ?? 0;
+      const left = stack.pop() ?? 0;
+      const l = Number(left);
+      const r = Number(right);
+      const v = op === "ADD" ? l + r : op === "SUB" ? l - r : op === "MUL" ? l * r : l < r;
+      stack.push(v);
+      note = `${op} pops ${show(right)} and then ${show(left)}, and pushes ${show(v)}.`;
+    }
+    states.push({ pc, stack, env, note });
+  }
+  return states;
+}
+
+/** A stack machine running bytecode: a program counter, a stack and a table of variables. */
+function StackMachine(props: Props) {
+  const startKey = props.program === "loop" ? "loop" : "fare";
+  const [key, setKey] = useState(startKey);
+  const prog = SM_PROGRAMS[key];
+  const states = smTrace(prog.code, prog.env);
+  const total = states.length - 1;
+  const [stepRaw, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, 200));
+  const step = Math.min(stepRaw, total);
+  const st = states[step];
+  const finished = step === total;
+  const vars = Object.entries(st.env)
+    .map(([k, v]) => `${k} = ${v}`)
+    .join(", ");
+  const summary =
+    step === 0
+      ? `The machine starts at instruction 0 with an empty stack and ${vars}. Each step runs the instruction at the program counter.`
+      : `Step ${step}: ${st.note}${finished ? ` The program counter has passed the last instruction, so the run is over after ${total} instructions, with ${vars}.` : ""}`;
+  const show = (v: number | boolean) => (typeof v === "boolean" ? (v ? "True" : "False") : String(v));
+  const lineH = 13;
+  return (
+    <Frame
+      title="A stack machine"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">the program</span>
+          {Object.entries(SM_PROGRAMS).map(([k, p]) => (
+            <button
+              key={k}
+              type="button"
+              className="btn btn-secondary btn-small"
+              aria-pressed={k === key}
+              onClick={() => {
+                setKey(k);
+                setStep(0);
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+          <Slider label="instructions run" value={step} min={0} max={total} onChange={setStep} text={String(step)} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 236" role="img" aria-label={`After ${step} instructions: stack ${st.stack.map(show).join(", ") || "empty"}`}>
+        <text x={10} y={12} className="fig-small">
+          code
+        </text>
+        {prog.code.map(([op, arg], i) => (
+          <g key={i}>
+            {i === st.pc ? <rect x={8} y={18 + i * lineH} width={196} height={lineH} className="fig-fill" /> : null}
+            <text x={12} y={28 + i * lineH} className="fig-small" style={{ fill: i === st.pc ? "var(--text)" : undefined }}>
+              {`${String(i).padStart(2, " ")}  ${op}${arg === undefined ? "" : ` ${arg}`}`}
+            </text>
+          </g>
+        ))}
+        <text x={230} y={12} className="fig-small">
+          stack
+        </text>
+        <text x={340} y={12} className="fig-small">
+          variables
+        </text>
+        {Object.entries(st.env).map(([k, v], i) => (
+          <text key={k} x={340} y={30 + i * 16} className="fig-small" style={{ fill: "var(--text)" }}>
+            {`${k} = ${v}`}
+          </text>
+        ))}
+        {st.stack.map((v, i) => (
+          <g key={i}>
+            <rect x={230} y={190 - (i + 1) * 26} width={80} height={24} className={i === st.stack.length - 1 ? "fig-accent" : "fig-fill"} />
+            <text x={270} y={190 - (i + 1) * 26 + 16} textAnchor="middle" style={{ fill: i === st.stack.length - 1 ? "var(--bg)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: 13 }}>
+              {show(v)}
+            </text>
+          </g>
+        ))}
+        <line x1={225} y1={192} x2={315} y2={192} className="fig-axis" />
+        <text x={230} y={230} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {finished ? `done after ${total} instructions` : `next: instruction ${st.pc}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+const SC_FRAMES: { key: string; title: string; names: [string, string][] }[] = [
+  { key: "local", title: "increment (local)", names: [["step", "1"]] },
+  { key: "enclosing", title: "make_counter (enclosing)", names: [["count", "2"]] },
+  { key: "global", title: "module (global)", names: [["GST_RATE", "0.18"], ["make_counter", "function"]] },
+  { key: "builtin", title: "built-ins", names: [["len", "function"], ["print", "function"]] },
+];
+const SC_LOOKUPS = ["step", "count", "GST_RATE", "len", "discount"];
+
+/** Where Python finds a name: local, enclosing, global, then built-in scope. */
+function ScopeChain(props: Props) {
+  const startName = typeof props.name === "string" && SC_LOOKUPS.includes(props.name) ? props.name : "count";
+  const [name, setName] = useState(startName);
+  const [returned, setReturned] = useState(props.returned === true);
+  const foundAt = SC_FRAMES.findIndex((f) => f.names.some(([n]) => n === name));
+  const searched = foundAt < 0 ? SC_FRAMES.length : foundAt + 1;
+  const value = foundAt < 0 ? "" : (SC_FRAMES[foundAt].names.find(([n]) => n === name)?.[1] ?? "");
+  const order = ["local", "enclosing", "global", "built-in"];
+  const summary =
+    foundAt < 0
+      ? `Looking up ${name} from inside increment: Python searches all four scopes, local, enclosing, global and built-in, finds it in none, and raises NameError.`
+      : foundAt === 0
+        ? `Looking up ${name} from inside increment: it is a local variable, found at the first place Python looks, with the value ${value}.`
+        : `Looking up ${name} from inside increment: not found in ${order.slice(0, foundAt).join(" or ")}, so Python looks further out and finds it in the ${order[foundAt]} scope${value === "function" ? ", a function" : `, with the value ${value}`}.` +
+          (foundAt === 1
+            ? returned
+              ? " make_counter's call has finished, but count lives on in a cell that increment holds: that is a closure."
+              : " increment uses count, so Python keeps it in a cell that increment will hold even after make_counter returns."
+            : "");
+  const boxY = (i: number) => 20 + i * 50;
+  return (
+    <Frame
+      title="Where a name is found"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">look up</span>
+          {SC_LOOKUPS.map((n) => (
+            <button key={n} type="button" className="btn btn-secondary btn-small" aria-pressed={n === name} onClick={() => setName(n)}>
+              {n}
+            </button>
+          ))}
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={returned} onClick={() => setReturned(!returned)}>
+            make_counter has returned
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 238" role="img" aria-label={foundAt < 0 ? `${name} is not found: NameError` : `${name} is found in the ${order[foundAt]} scope`}>
+        {SC_FRAMES.map((f, i) => {
+          const isFound = i === foundAt;
+          const looked = i < searched;
+          const ghost = returned && f.key === "enclosing";
+          return (
+            <g key={f.key}>
+              <rect x={20} y={boxY(i)} width={300} height={40} className={isFound ? "fig-accent" : looked ? "fig-fill" : "fig-ghost"} style={ghost ? { strokeDasharray: "4 4", stroke: "var(--text-faint)" } : undefined} />
+              <text x={30} y={boxY(i) + 16} className="fig-small" style={{ fill: isFound ? "var(--bg)" : "var(--text)" }}>
+                {ghost ? "make_counter: call finished; cell kept" : f.title}
+              </text>
+              <text x={30} y={boxY(i) + 32} className="fig-small" style={{ fill: isFound ? "var(--bg)" : undefined }}>
+                {f.names.map(([n, v]) => `${n} = ${v}`).join(",  ")}
+              </text>
+              {i < SC_FRAMES.length - 1 ? <line x1={340} y1={boxY(i) + 20} x2={340} y2={boxY(i + 1) + 20} className={i + 1 < searched ? "fig-accent-line" : "fig-guide"} /> : null}
+            </g>
+          );
+        })}
+        <text x={350} y={boxY(0) + 24} className="fig-small">
+          looks here first
+        </text>
+        <text x={350} y={boxY(3) + 24} className="fig-small">
+          and here last
+        </text>
+        <text x={20} y={230} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {foundAt < 0 ? `${name}: NameError after 4 scopes` : `${name}: found after ${plural(searched, "scope")}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+type TcNode = { label: string; type: string; x: number; y: number; kids: number[]; error?: boolean };
+
+const TC_PROGRAMS: Record<string, { label: string; nodes: TcNode[]; check: string; run: Record<string, string> }> = {
+  ok: {
+    label: "fare * seats + 40",
+    nodes: [
+      { label: "+", type: "int", x: 230, y: 30, kids: [1, 2] },
+      { label: "*", type: "int", x: 140, y: 90, kids: [3, 4] },
+      { label: "40", type: "int", x: 320, y: 90, kids: [] },
+      { label: "fare", type: "int", x: 90, y: 150, kids: [] },
+      { label: "seats", type: "int", x: 190, y: 150, kids: [] },
+    ],
+    check: "Every node gets its type from its children: int * int is int, and int + int is int. The checker accepts the program without running it.",
+    run: {
+      three: "Python computes 450 * 3 + 40 = 1390. The types worked out exactly as the checker predicted.",
+      zero: "Python computes 450 * 0 + 40 = 40. The types worked out exactly as the checker predicted.",
+    },
+  },
+  mixed: {
+    label: "name + fare",
+    nodes: [
+      { label: "+", type: "?", x: 230, y: 40, kids: [1, 2], error: true },
+      { label: "name", type: "str", x: 150, y: 110, kids: [] },
+      { label: "fare", type: "int", x: 310, y: 110, kids: [] },
+    ],
+    check: "+ has a str on its left and an int on its right, and no rule for + fits that pair, so the checker rejects the program before it runs, pointing at this node.",
+    run: {
+      three: "Python raises TypeError when it reaches this line, because it will not add a str to an int. A weakly typed language would quietly produce Asha450 instead.",
+      zero: "Python raises TypeError when it reaches this line, whatever seats is, because it will not add a str to an int.",
+    },
+  },
+  branches: {
+    label: "fare if seats > 0 else 'sold out'",
+    nodes: [
+      { label: "if", type: "?", x: 230, y: 30, kids: [1, 2, 3], error: true },
+      { label: ">", type: "bool", x: 110, y: 90, kids: [4, 5] },
+      { label: "fare", type: "int", x: 250, y: 90, kids: [] },
+      { label: "'sold out'", type: "str", x: 370, y: 90, kids: [] },
+      { label: "seats", type: "int", x: 70, y: 150, kids: [] },
+      { label: "0", type: "int", x: 150, y: 150, kids: [] },
+    ],
+    check: "The test is a bool, but the branches are an int and a str, so the whole expression has no single type. The checker rejects it, although some runs would be fine.",
+    run: {
+      three: "With seats = 3 the test is true, only fare is evaluated, and the result is 450: no error at all. The checker rejected a run that would have worked.",
+      zero: "With seats = 0 the result is the string 'sold out'. Nothing fails here; the error comes later, wherever the code does arithmetic with it, far from its cause.",
+    },
+  },
+};
+
+/** The same expressions checked before running, and run with real values. */
+function TypeCheck(props: Props) {
+  const startKey = typeof props.program === "string" && props.program in TC_PROGRAMS ? props.program : "ok";
+  const [key, setKey] = useState(startKey);
+  const [mode, setMode] = useState(props.mode === "three" || props.mode === "zero" ? props.mode : "check");
+  const prog = TC_PROGRAMS[key];
+  const summary = mode === "check" ? prog.check : prog.run[mode];
+  const checking = mode === "check";
+  return (
+    <Frame
+      title="Checked before running, or found while running"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">the expression</span>
+          {Object.entries(TC_PROGRAMS).map(([k, p]) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={k === key} onClick={() => setKey(k)}>
+              {p.label}
+            </button>
+          ))}
+          <span className="label">how</span>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={mode === "check"} onClick={() => setMode("check")}>
+            check the types first
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={mode === "three"} onClick={() => setMode("three")}>
+            run with seats = 3
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={mode === "zero"} onClick={() => setMode("zero")}>
+            run with seats = 0
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 215" role="img" aria-label={`${prog.label}: ${checking ? (prog.nodes.some((n) => n.error) ? "rejected by the checker" : "accepted by the checker") : "run"}`}>
+        {prog.nodes.flatMap((n, i) => n.kids.map((k) => <line key={`${i}-${k}`} x1={n.x} y1={n.y + 16} x2={prog.nodes[k].x} y2={prog.nodes[k].y - 16} className="fig-line" />))}
+        {prog.nodes.map((n, i) => {
+          const bad = checking && n.error === true;
+          const w = Math.max(32, n.label.length * 8 + 12);
+          return (
+            <g key={i}>
+              <rect x={n.x - w / 2} y={n.y - 16} width={w} height={32} rx={6} className={bad ? "fig-accent" : "fig-fill"} />
+              <text x={n.x} y={n.y + 5} textAnchor="middle" style={{ fill: bad ? "var(--bg)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                {n.label}
+              </text>
+              {checking ? (
+                <text x={n.x} y={n.y + 30} textAnchor="middle" className="fig-small" style={{ fill: bad ? "var(--focus)" : undefined, fontWeight: bad ? 600 : undefined }}>
+                  {bad ? "type error" : n.type}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+        <text x={10} y={208} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {checking ? (prog.nodes.some((n) => n.error) ? "rejected before running" : "accepted before running") : `running with seats = ${mode === "three" ? 3 : 0}, fare = 450, name = Asha`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+const MS_NODES: { id: string; x: number; y: number; refs: string[]; root?: boolean }[] = [
+  { id: "variables", x: 48, y: 40, refs: ["session"], root: true },
+  { id: "session", x: 160, y: 40, refs: ["cart", "user"] },
+  { id: "user", x: 160, y: 115, refs: [] },
+  { id: "cart", x: 280, y: 40, refs: ["item1", "item2"] },
+  { id: "item1", x: 400, y: 40, refs: ["cart"] },
+  { id: "item2", x: 400, y: 115, refs: [] },
+  { id: "log", x: 70, y: 185, refs: ["log"] },
+  { id: "old_cart", x: 235, y: 185, refs: ["old_item"] },
+  { id: "old_item", x: 375, y: 185, refs: ["old_cart"] },
+];
+const MS_ORDER: [string, string][] = [
+  ["session", "the variables"],
+  ["cart", "session"],
+  ["user", "session"],
+  ["item1", "cart"],
+  ["item2", "cart"],
+];
+const MS_OBJECTS = MS_NODES.filter((n) => !n.root);
+
+function msClip(cx: number, cy: number, hw: number, hh: number, dx: number, dy: number): [number, number] {
+  const t = Math.min(dx !== 0 ? hw / Math.abs(dx) : Infinity, dy !== 0 ? hh / Math.abs(dy) : Infinity);
+  return [cx + dx * t, cy + dy * t];
+}
+
+/** Mark and sweep from the roots, compared with counting references, on a heap with cycles. */
+function MarkSweep(props: Props) {
+  const last = MS_ORDER.length + 1;
+  const [step, setStep] = useState(clamp(Math.round(num(props.step, 0)), 0, last));
+  const [mode, setMode] = useState(props.mode === "count" ? "count" : "mark");
+  const counting = mode === "count";
+  const marked = new Set(MS_ORDER.slice(0, Math.min(step, MS_ORDER.length)).map(([id]) => id));
+  const swept = !counting && step === last;
+  const counts: Record<string, number> = {};
+  for (const n of MS_NODES) for (const r of n.refs) counts[r] = (counts[r] ?? 0) + 1;
+  const label = (id: string) => (counting && id !== "variables" ? `${id} · ${counts[id] ?? 0}` : id);
+  const width = (id: string) => label(id).length * 7 + 16;
+  const byId = (id: string) => MS_NODES.find((n) => n.id === id) ?? MS_NODES[0];
+  const garbage = MS_OBJECTS.filter((n) => !MS_ORDER.some(([id]) => id === n.id)).map((n) => n.id);
+  const garbageList = garbage.length > 1 ? `${garbage.slice(0, -1).join(", ")} and ${garbage[garbage.length - 1]}` : garbage.join("");
+  const summary = counting
+    ? `Reference counting frees an object when the number of references to it falls to 0. Every object here has at least one. The ${plural(garbage.length, "unreachable object")}, ${garbageList}, are still referred to by each other or by themselves, so counting alone frees none of them.`
+    : step === 0
+      ? `The heap holds ${plural(MS_OBJECTS.length, "object")}. Only the variables, the roots, are known to be in use. Step through the mark phase, which follows references out from the roots.`
+      : step <= MS_ORDER.length
+        ? `Mark: ${MS_ORDER[step - 1][0]} is reached from ${MS_ORDER[step - 1][1]}, so it is marked as live. ${marked.size} of ${MS_OBJECTS.length} objects marked so far.`
+        : `Sweep: the ${plural(garbage.length, "object")} never reached, ${garbageList}, ${garbage.length === 1 ? "is" : "are"} freed, although each still has a reference pointing at it. ${MS_ORDER.length} objects survive.`;
+  const edges: ReactNode[] = [];
+  for (const n of MS_NODES) {
+    for (const r of n.refs) {
+      if (r === n.id) {
+        const top = n.y - 13;
+        edges.push(
+          <g key={`${n.id}-self`}>
+            <path d={`M ${n.x - 10} ${top} C ${n.x - 30} ${top - 34}, ${n.x + 30} ${top - 34}, ${n.x + 10} ${top}`} className="fig-line" fill="none" />
+            <polygon points={`${n.x + 10},${top} ${n.x + 13},${top - 9} ${n.x + 4},${top - 6}`} className="fig-accent" />
+          </g>,
+        );
+        continue;
+      }
+      const t = byId(r);
+      const dx = t.x - n.x;
+      const dy = t.y - n.y;
+      const len = Math.hypot(dx, dy);
+      const ux = dx / len;
+      const uy = dy / len;
+      const twoWay = t.refs.includes(n.id);
+      const ox = twoWay ? -uy * 5 : 0;
+      const oy = twoWay ? ux * 5 : 0;
+      const [sx, sy] = msClip(n.x, n.y, width(n.id) / 2, 13, dx, dy);
+      const [ex, ey] = msClip(t.x, t.y, width(r) / 2, 13, -dx, -dy);
+      const tipX = ex + ox;
+      const tipY = ey + oy;
+      edges.push(
+        <g key={`${n.id}-${r}`}>
+          <line x1={sx + ox} y1={sy + oy} x2={tipX} y2={tipY} className="fig-line" />
+          <polygon
+            points={`${tipX},${tipY} ${tipX - 8 * ux - 4 * uy},${tipY - 8 * uy + 4 * ux} ${tipX - 8 * ux + 4 * uy},${tipY - 8 * uy - 4 * ux}`}
+            className="fig-accent"
+          />
+        </g>,
+      );
+    }
+  }
+  return (
+    <Frame
+      title={counting ? "Counting references" : "Mark and sweep"}
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!counting} onClick={() => setMode("mark")}>
+            mark and sweep
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={counting} onClick={() => setMode("count")}>
+            count references
+          </button>
+          {counting ? null : <Stepper label="step" value={step} min={0} max={last} onChange={setStep} />}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 230" role="img" aria-label={counting ? "reference counts: no object has a count of 0" : swept ? `${plural(garbage.length, "object")} freed` : `${marked.size} of ${MS_OBJECTS.length} objects marked`}>
+        {edges}
+        {MS_NODES.map((n) => {
+          const w = width(n.id);
+          const isMarked = marked.has(n.id) && !counting;
+          const isFreed = swept && garbage.includes(n.id);
+          return (
+            <g key={n.id} opacity={isFreed ? 0.45 : 1}>
+              <rect
+                x={n.x - w / 2}
+                y={n.y - 13}
+                width={w}
+                height={26}
+                rx={n.root ? 2 : 8}
+                className={isMarked ? "fig-accent" : isFreed ? "fig-ghost" : "fig-fill"}
+                style={isFreed ? { strokeDasharray: "4 4", stroke: "var(--text-faint)" } : undefined}
+              />
+              <text x={n.x} y={n.y + 4} textAnchor="middle" style={{ fill: isMarked ? "var(--bg)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                {label(n.id)}
+              </text>
+            </g>
+          );
+        })}
+        <text x={455} y={222} textAnchor="end" className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {counting ? `freed by counting: 0 of ${MS_OBJECTS.length}` : swept ? `freed: ${garbage.length}, kept: ${MS_ORDER.length}` : `marked: ${marked.size} of ${MS_OBJECTS.length}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -10851,6 +11854,14 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "sleep-poll": SleepPoll,
   "month-end": MonthEnd,
   "fuzz-header": FuzzHeader,
+  "token-scan": TokenScan,
+  "dfa-run": DfaRun,
+  "parse-tree": ParseTree,
+  "ast-eval": AstEval,
+  "stack-machine": StackMachine,
+  "scope-chain": ScopeChain,
+  "type-check": TypeCheck,
+  "mark-sweep": MarkSweep,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
