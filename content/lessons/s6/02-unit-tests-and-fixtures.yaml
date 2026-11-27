@@ -1,0 +1,741 @@
+concept: s6.unit-tests-and-fixtures
+minutes: 80
+claim: You can write unit tests that each check one behaviour in the arrange, act and assert pattern, name them so a failure explains itself, keep them independent of each other and of the order they run in, build their starting state with fixtures that make something fresh for every test, drive many cases through one test with a table, tell a failing test from an erroring one, and compare floating-point results sensibly.
+recalls: [s6.what-a-test-can-prove]
+uses: [s1.testing-with-pytest, s4.dependency-injection-and-testable-code, s1.generators-and-context-managers, s1.exceptions, s1.classes-and-objects]
+leads: [s6.fakes-stubs-and-mocks, s6.integration-and-end-to-end-tests, s6.flaky-tests-and-their-causes, s6.deterministic-tests-seeds-clocks-and-fakes]
+starter: |
+  # Scratch space. Two tests that share one list.
+  cart = []
+
+
+  def test_add_chai():
+      cart.append("chai")
+      return len(cart) == 1
+
+
+  print(test_add_chai(), test_add_chai())
+parts:
+  recall:
+    - text: |
+        [[s6.what-a-test-can-prove]] treated each test as an experiment: chosen inputs, a known expectation, and a result that speaks only for what was tried. An experiment is only trustworthy if its conditions are controlled, so that the same test gives the same verdict whenever and wherever it runs. This lesson is about building tests that way, in large numbers, without them tripping over each other. Three quick pulls first.
+  puzzle:
+    - text: |
+        Four tests share one shopping cart, a list that starts empty:
+
+        - `E` checks that the cart is empty.
+        - `C` adds chai, then checks that the cart holds exactly 1 item.
+        - `S` adds a samosa, then checks that a samosa is in the cart.
+        - `R` empties the cart, then checks that it is empty.
+
+        The test runner may run them in any order, and nobody resets the cart in between.
+
+        **In how many of the 24 possible orders do all four tests pass?**
+  intuition:
+    - text: |
+        Think of a cooking competition on television. Each contestant is judged on their own dish, so each starts at a clean station with the same fresh ingredients. If the stations were shared, and the third contestant found the second one's half-used onions and a pan still hot, the judges would be scoring the order of the contestants as much as their cooking. Tests are the same. A test that inherits whatever the previous test left behind is judging the order of the tests, not the code.
+
+        The figure runs three of the puzzle's tests on one shared cart. Choose the order they run in, and then give each test a fresh cart of its own.
+    - figure: test-order
+      props: { order: "213", fresh: false }
+    - text: |
+        With a shared cart, the order decides the verdict: `empty_at_start` passes only if it runs first, and `add_chai` passes only if nothing was added before it. The code being tested never changed. Switch on a fresh cart per test and every test passes in every order, because each one now starts from the state it was written for. Making that fresh state for each test, cheaply and in one place, is the job of a **fixture**.
+  derivation:
+    - text: |
+        **What a unit test is.** A unit test checks one small piece of behaviour, usually of a single function or class, in isolation from the rest of the system. It is fast, a few milliseconds, so thousands can run on every change, and when it fails it points at one place. Most well-written unit tests have three parts, in this order. **Arrange**: build the starting state and the inputs. **Act**: call the code under test, once. **Assert**: check the outcome. A test that acts several times and asserts in between is really several tests, and when it fails nobody can tell which behaviour broke.
+
+        **Names that explain the failure.** Test runners such as the one in [[s1.testing-with-pytest]] find tests by name and report the names of those that fail. A name like `test_fare_2` tells the reader nothing; `test_fare_is_flat_up_to_five_km` reads as a sentence about the specification, so the report of a failure already says what went wrong. Each test should check one such sentence.
+    - question:
+        id: derivation-aaa
+        type: choice
+        system: s2
+        prompt: |
+          Which test is written best?
+        options:
+          - "test_refund_restores_balance: make a wallet with 100, spend 30, refund 30, assert the balance is 100"
+          - "test_wallet: make a wallet, spend, assert, refund, assert, overdraw, assert, close, assert"
+          - "test_1: refund 30 on whatever wallet the previous test left behind, assert the balance went up"
+          - "test_refund_works: refund 30 and print the balance so someone can check it"
+        answer: 0
+        explanation: |
+          It arranges its own state, acts once on the behaviour it is named after, and asserts one outcome. The long test checks four behaviours and hides which one failed; the third depends on another test's leftovers; and a test that prints instead of asserting can never fail.
+    - text: |
+        **Independence.** Every test must pass or fail on its own merits, whatever runs before it, after it, or at the same time. Shared mutable state breaks this: a global list, a module-level dictionary, a file both tests write, a database row left behind. Two symptoms give it away: a test that passes alone but fails in the full suite, and a suite whose result changes when tests are run in a different order. Some test runners shuffle the order on purpose to flush such dependencies out.
+
+        **Fixtures.** A fixture builds the starting state a test needs: a wallet with ₹100 in it, a cart with two items, a temporary folder, a database with a few sample rows. Defining it once, as a function that every test calls or that the runner calls for it, keeps tests short and the setup consistent. The essential property is that each call makes a **fresh** object, so that what one test does to it cannot leak into the next. Fixtures that need cleaning up afterwards, closing a file or deleting a folder, pair setup with teardown, which is exactly what a context manager or generator from [[s1.generators-and-context-managers]] provides: code before the `yield` sets up, code after it cleans up, and it runs even when the test fails.
+
+        Python has a famous trap here. A default argument is evaluated once, when the function is defined, so `def make_cart(items=[])` hands every caller the same list. The fix is a default of `None` and a new list made inside the function.
+    - question:
+        id: derivation-teardown
+        type: order
+        system: s2
+        prompt: |
+          A fixture makes a temporary folder for each test. Put the events of running two tests that use it in order.
+        steps:
+          - "The fixture creates a fresh, empty folder for the first test."
+          - "The first test writes files into its folder and asserts on them."
+          - "The fixture deletes the first test's folder, even though the test failed."
+          - "The fixture creates a fresh, empty folder for the second test."
+          - "The second test runs and asserts on its own folder."
+        explanation: |
+          Setup precedes each test and teardown follows it, whatever the verdict, so the second test starts from the same clean state as the first and cannot see its files.
+    - text: |
+        **Testing code that has dependencies.** A unit test should not need a real payment gateway, network or clock. If the code under test reaches for them directly, the test cannot control them; if they are passed in, as [[s4.dependency-injection-and-testable-code]] recommended, the test can pass in something simple instead. What that something can be is the subject of [[s6.fakes-stubs-and-mocks]].
+
+        **Many cases, one test.** When the same behaviour must hold for many inputs, writing a separate test for each copies the same lines over and over. A **table-driven** or parametrised test lists the cases as data, pairs of input and expected output, and runs the same check on each, reporting every failing case rather than stopping at the first. Adding a boundary case is then one line in a table.
+    - question:
+        id: derivation-cases
+        type: numeric
+        system: s2
+        prompt: |
+          A parametrised test checks a currency converter for 4 currencies, each at 3 amounts: zero, a typical amount and the largest allowed. How many test cases does the runner report?
+        answer: "12"
+        explanation: |
+          Each pair of currency and amount is a separate case, $4 \times 3 = 12$, each reported on its own so that one failure does not hide the others.
+    - text: |
+        **Failures and errors.** Runners distinguish a test that **fails**, because an assertion was false, from one that **errors**, because something else went wrong: an unexpected exception, a missing file, a typo in the test. A failure says the code did the wrong thing; an error says the test could not even check. Where an exception is the correct behaviour, assert that it is raised, for instance with `pytest.raises`, so that the absence of the exception is the failure, as [[s1.exceptions]] taught for code that must reject bad input.
+
+        **Floating-point comparisons.** `0.1 + 0.2 == 0.3` is false, because neither side is exactly representable in binary. Tests of calculations with floats compare within a tolerance, `abs(got - expected) < 1e-9`, or `pytest.approx`, choosing the tolerance from what the specification actually requires. Money is better kept in whole paise, where equality is exact.
+  formal:
+    - text: |
+        **Unit test.** A fast, isolated check of one behaviour of one small piece of code, structured as arrange, act, assert, and named after the behaviour it checks.
+
+        **Independence.** A test's verdict depends only on the code under test, never on other tests or the order they run in; shared mutable state is the usual cause of dependence.
+
+        **Fixture.** A function that builds a fresh starting state for each test, with teardown afterwards where needed, even when the test fails.
+
+        **Table-driven test.** One check applied to a list of (input, expected) cases, each reported separately.
+
+        **Failure and error.** A failure is a false assertion; an error is any other exception raised while the test runs.
+  drill:
+    - text: Seconds each. Look for state that outlives a test.
+    - question:
+        id: drill-alone
+        type: choice
+        system: s1
+        prompt: |
+          A test passes when run on its own but fails when the whole suite runs. What is the most likely cause?
+        options:
+          - "Another test leaves shared state behind that this test inherits"
+          - "The code under test is too slow"
+          - "The test has too few assertions"
+          - "The machine has too little memory"
+        answer: 0
+        explanation: The only thing that differs between the two runs is what ran before it.
+    - question:
+        id: drill-speed
+        type: numeric
+        system: s1
+        prompt: |
+          A project has 5,000 unit tests that take 2 milliseconds each. How many seconds does the suite take?
+        answer: "10"
+        explanation: $5000 \times 0.002 = 10$ seconds, fast enough to run on every change.
+    - question:
+        id: drill-error
+        type: choice
+        system: s1
+        prompt: |
+          A test raises `KeyError` before it reaches its assertion. How should the runner report it?
+        options:
+          - "As an error: the test could not complete its check"
+          - "As a failure: the assertion was false"
+          - "As a pass, since no assertion failed"
+          - "As skipped"
+        answer: 0
+        explanation: Only a false assertion is a failure; any other exception is an error.
+    - question:
+        id: predict-default
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def add(item, cart=[]):
+              cart.append(item)
+              return cart
+
+
+          add("chai")
+          print(add("samosa"))
+        output: "['chai', 'samosa']"
+        explanation: The default list is made once, when `add` is defined, so both calls append to the same list.
+    - question:
+        id: predict-float
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(0.1 + 0.2 == 0.3, abs(0.1 + 0.2 - 0.3) < 1e-9)
+        output: "False True"
+        explanation: The sum is a tiny bit more than 0.3, so exact equality fails while a comparison within a tolerance succeeds.
+  work:
+    - text: Slower now. Each problem is part of a test suite.
+    - question:
+        id: fix-fixture
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `make_cart` is a fixture that should give each test a new cart. The program should print `1 2 1`. It prints `1 3 4`. Find the fault and fix it.
+        starter: |
+          def make_cart(items=[]):
+              # A fixture: returns a new cart, a list holding the given items or none.
+              return items
+
+
+          def test_one_item():
+              cart = make_cart()
+              cart.append("chai")
+              return len(cart)
+
+
+          def test_two_items():
+              cart = make_cart()
+              cart.append("samosa")
+              cart.append("jalebi")
+              return len(cart)
+
+
+          print(test_one_item(), test_two_items(), test_one_item())
+        solution: |
+          def make_cart(items=None):
+              # A fixture: returns a new cart, a list holding the given items or none.
+              if items is None:
+                  return []
+              return list(items)
+
+
+          def test_one_item():
+              cart = make_cart()
+              cart.append("chai")
+              return len(cart)
+
+
+          def test_two_items():
+              cart = make_cart()
+              cart.append("samosa")
+              cart.append("jalebi")
+              return len(cart)
+
+
+          print(test_one_item(), test_two_items(), test_one_item())
+        tests: |
+          _a = make_cart()
+          _b = make_cart()
+          _a.append("x")
+          assert _b == [], "Two carts made without items should be separate lists, but adding to one changed the other: " + repr(_b)
+          _given = ["poha", "chai"]
+          _c = make_cart(_given)
+          _c.append("vada")
+          assert _given == ["poha", "chai"], "Adding to a cart must not change the list it was made from, but it became " + repr(_given)
+          assert _c == ["poha", "chai", "vada"], "A cart made from ['poha', 'chai'] should hold them, then the added item, not " + repr(_c)
+          _d = make_cart()
+          _e = make_cart()
+          _d.append(1)
+          _e.append(2)
+          assert _d == [1] and _e == [2], "Each fixture call should give a fresh cart; got " + repr(_d) + " and " + repr(_e)
+          assert output.strip() == "1 2 1", "The program should print 1 2 1"
+        wrong:
+          - |
+            def make_cart(items=None):
+                # A fixture: returns a new cart, a list holding the given items or none.
+                if items is None:
+                    items = []
+                return items
+
+
+            def test_one_item():
+                cart = make_cart()
+                cart.append("chai")
+                return len(cart)
+
+
+            def test_two_items():
+                cart = make_cart()
+                cart.append("samosa")
+                cart.append("jalebi")
+                return len(cart)
+
+
+            print(test_one_item(), test_two_items(), test_one_item())
+          - |
+            def make_cart(items=[]):
+                # A fixture: returns a new cart, a list holding the given items or none.
+                items.clear()
+                return items
+
+
+            def test_one_item():
+                cart = make_cart()
+                cart.append("chai")
+                return len(cart)
+
+
+            def test_two_items():
+                cart = make_cart()
+                cart.append("samosa")
+                cart.append("jalebi")
+                return len(cart)
+
+
+            print(test_one_item(), test_two_items(), test_one_item())
+          - |
+            SHARED = []
+
+
+            def make_cart(items=None):
+                # A fixture: returns a new cart, a list holding the given items or none.
+                SHARED.clear()
+                if items is not None:
+                    SHARED.extend(items)
+                return SHARED
+
+
+            def test_one_item():
+                cart = make_cart()
+                cart.append("chai")
+                return len(cart)
+
+
+            def test_two_items():
+                cart = make_cart()
+                cart.append("samosa")
+                cart.append("jalebi")
+                return len(cart)
+
+
+            print(test_one_item(), test_two_items(), test_one_item())
+        explanation: |
+          The default list is created once, so every call returns the same list and each test sees the items of the tests before it. Default to `None` and build a new list on every call, copying any items given. Returning the caller's own list lets a test change data it does not own; clearing a shared list makes one test's cart vanish under another that still holds it; and a module-level list that is reset each time has the same problem.
+    - question:
+        id: write-runner
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `run_tests(tests, setup)`, a tiny test runner that gives each test a fresh fixture and tells passes, failures and errors apart. The program should print `[('test_overdraw', 'FAIL'), ('test_refund', 'ERROR'), ('test_spend', 'PASS'), ('test_starts_at_100', 'PASS')]`.
+        starter: |
+          def run_tests(tests, setup):
+              # tests maps each test's name to a function that takes a fixture. Call
+              # setup() afresh for every test and pass its result in. A test passes if
+              # it returns normally, fails if it raises AssertionError, and is an error
+              # if it raises anything else. Return (name, "PASS" / "FAIL" / "ERROR")
+              # pairs in order of name.
+              return []
+
+
+          def new_wallet():
+              return {"balance": 100}
+
+
+          def test_spend(w):
+              w["balance"] -= 30
+              assert w["balance"] == 70
+
+
+          def test_starts_at_100(w):
+              assert w["balance"] == 100
+
+
+          def test_refund(w):
+              w["balance"] += w["refund"]
+
+
+          def test_overdraw(w):
+              w["balance"] -= 150
+              assert w["balance"] >= 0, "balance went negative"
+
+
+          tests = {"test_spend": test_spend, "test_starts_at_100": test_starts_at_100,
+                   "test_refund": test_refund, "test_overdraw": test_overdraw}
+          print(run_tests(tests, new_wallet))
+        solution: |
+          def run_tests(tests, setup):
+              # tests maps each test's name to a function that takes a fixture. Call
+              # setup() afresh for every test and pass its result in. A test passes if
+              # it returns normally, fails if it raises AssertionError, and is an error
+              # if it raises anything else. Return (name, "PASS" / "FAIL" / "ERROR")
+              # pairs in order of name.
+              results = []
+              for name in sorted(tests):
+                  try:
+                      tests[name](setup())
+                      results.append((name, "PASS"))
+                  except AssertionError:
+                      results.append((name, "FAIL"))
+                  except Exception:
+                      results.append((name, "ERROR"))
+              return results
+
+
+          def new_wallet():
+              return {"balance": 100}
+
+
+          def test_spend(w):
+              w["balance"] -= 30
+              assert w["balance"] == 70
+
+
+          def test_starts_at_100(w):
+              assert w["balance"] == 100
+
+
+          def test_refund(w):
+              w["balance"] += w["refund"]
+
+
+          def test_overdraw(w):
+              w["balance"] -= 150
+              assert w["balance"] >= 0, "balance went negative"
+
+
+          tests = {"test_spend": test_spend, "test_starts_at_100": test_starts_at_100,
+                   "test_refund": test_refund, "test_overdraw": test_overdraw}
+          print(run_tests(tests, new_wallet))
+        tests: |
+          _made = []
+
+
+          def _setup():
+              _made.append(1)
+              return {"n": 0}
+
+
+          def _inc(f):
+              f["n"] += 1
+              assert f["n"] == 1
+
+
+          def _bad(f):
+              assert False
+
+
+          def _boom(f):
+              return 1 // 0
+
+
+          def _key(f):
+              return f["missing"]
+
+
+          _got = run_tests({"b_inc": _inc, "a_inc": _inc, "c_bad": _bad, "d_boom": _boom, "e_key": _key}, _setup)
+          _want = [("a_inc", "PASS"), ("b_inc", "PASS"), ("c_bad", "FAIL"), ("d_boom", "ERROR"), ("e_key", "ERROR")]
+          assert [tuple(r) for r in _got] == _want, "run_tests should return " + repr(_want) + ", not " + repr(_got)
+          assert len(_made) == 5, "setup should be called once for each of the 5 tests, not " + str(len(_made)) + " times"
+          assert list(run_tests({}, _setup)) == [], "With no tests, run_tests should return an empty list"
+          assert output.strip() == "[('test_overdraw', 'FAIL'), ('test_refund', 'ERROR'), ('test_spend', 'PASS'), ('test_starts_at_100', 'PASS')]", "The program should print [('test_overdraw', 'FAIL'), ('test_refund', 'ERROR'), ('test_spend', 'PASS'), ('test_starts_at_100', 'PASS')]"
+        wrong:
+          - |
+            def run_tests(tests, setup):
+                # tests maps each test's name to a function that takes a fixture. Call
+                # setup() afresh for every test and pass its result in. A test passes if
+                # it returns normally, fails if it raises AssertionError, and is an error
+                # if it raises anything else. Return (name, "PASS" / "FAIL" / "ERROR")
+                # pairs in order of name.
+                results = []
+                fixture = setup()
+                for name in sorted(tests):
+                    try:
+                        tests[name](fixture)
+                        results.append((name, "PASS"))
+                    except AssertionError:
+                        results.append((name, "FAIL"))
+                    except Exception:
+                        results.append((name, "ERROR"))
+                return results
+
+
+            def new_wallet():
+                return {"balance": 100}
+
+
+            def test_spend(w):
+                w["balance"] -= 30
+                assert w["balance"] == 70
+
+
+            def test_starts_at_100(w):
+                assert w["balance"] == 100
+
+
+            def test_refund(w):
+                w["balance"] += w["refund"]
+
+
+            def test_overdraw(w):
+                w["balance"] -= 150
+                assert w["balance"] >= 0, "balance went negative"
+
+
+            tests = {"test_spend": test_spend, "test_starts_at_100": test_starts_at_100,
+                     "test_refund": test_refund, "test_overdraw": test_overdraw}
+            print(run_tests(tests, new_wallet))
+          - |
+            def run_tests(tests, setup):
+                # tests maps each test's name to a function that takes a fixture. Call
+                # setup() afresh for every test and pass its result in. A test passes if
+                # it returns normally, fails if it raises AssertionError, and is an error
+                # if it raises anything else. Return (name, "PASS" / "FAIL" / "ERROR")
+                # pairs in order of name.
+                results = []
+                for name in sorted(tests):
+                    try:
+                        tests[name](setup())
+                        results.append((name, "PASS"))
+                    except Exception:
+                        results.append((name, "FAIL"))
+                return results
+
+
+            def new_wallet():
+                return {"balance": 100}
+
+
+            def test_spend(w):
+                w["balance"] -= 30
+                assert w["balance"] == 70
+
+
+            def test_starts_at_100(w):
+                assert w["balance"] == 100
+
+
+            def test_refund(w):
+                w["balance"] += w["refund"]
+
+
+            def test_overdraw(w):
+                w["balance"] -= 150
+                assert w["balance"] >= 0, "balance went negative"
+
+
+            tests = {"test_spend": test_spend, "test_starts_at_100": test_starts_at_100,
+                     "test_refund": test_refund, "test_overdraw": test_overdraw}
+            print(run_tests(tests, new_wallet))
+          - |
+            def run_tests(tests, setup):
+                # tests maps each test's name to a function that takes a fixture. Call
+                # setup() afresh for every test and pass its result in. A test passes if
+                # it returns normally, fails if it raises AssertionError, and is an error
+                # if it raises anything else. Return (name, "PASS" / "FAIL" / "ERROR")
+                # pairs in order of name.
+                results = []
+                for name in sorted(tests):
+                    try:
+                        tests[name](setup())
+                        results.append((name, "PASS"))
+                    except Exception:
+                        results.append((name, "ERROR"))
+                    except AssertionError:
+                        results.append((name, "FAIL"))
+                return results
+
+
+            def new_wallet():
+                return {"balance": 100}
+
+
+            def test_spend(w):
+                w["balance"] -= 30
+                assert w["balance"] == 70
+
+
+            def test_starts_at_100(w):
+                assert w["balance"] == 100
+
+
+            def test_refund(w):
+                w["balance"] += w["refund"]
+
+
+            def test_overdraw(w):
+                w["balance"] -= 150
+                assert w["balance"] >= 0, "balance went negative"
+
+
+            tests = {"test_spend": test_spend, "test_starts_at_100": test_starts_at_100,
+                     "test_refund": test_refund, "test_overdraw": test_overdraw}
+            print(run_tests(tests, new_wallet))
+        explanation: |
+          Call `setup()` inside the loop so every test gets its own wallet, and catch `AssertionError` before the general `Exception`, since it is a kind of exception too. Building one fixture for all tests makes every test after `test_overdraw` start from a wallet that is already ₹50 in debt; catching every exception as a failure hides the missing key in `test_refund`; and catching `Exception` first means the `AssertionError` clause is never reached.
+    - question:
+        id: write-table
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `check_table(f, cases)`, which runs a table of cases and reports every case that does not match, including cases where an exception is expected. The program should print `[(5, 50, 62), (6, 62, 74), (10, 110, 122)]`.
+        starter: |
+          def check_table(f, cases):
+              # cases is a list of (x, expected) pairs. Call f(x) for every case, even
+              # after a failure, and return a list of (x, expected, got) for the cases
+              # where got != expected. If f(x) raises an exception, got is the name of
+              # its class, such as "ValueError".
+              return []
+
+
+          def fare(km):
+              # Rs 50 covers the first 5 km; each km after that costs Rs 12.
+              if km <= 0:
+                  raise ValueError("distance must be positive")
+              if km < 5:
+                  return 50
+              return 50 + 12 * (km - 4)
+
+
+          cases = [(1, 50), (5, 50), (6, 62), (10, 110), (0, "ValueError")]
+          print(check_table(fare, cases))
+        solution: |
+          def check_table(f, cases):
+              # cases is a list of (x, expected) pairs. Call f(x) for every case, even
+              # after a failure, and return a list of (x, expected, got) for the cases
+              # where got != expected. If f(x) raises an exception, got is the name of
+              # its class, such as "ValueError".
+              failures = []
+              for x, expected in cases:
+                  try:
+                      got = f(x)
+                  except Exception as error:
+                      got = type(error).__name__
+                  if got != expected:
+                      failures.append((x, expected, got))
+              return failures
+
+
+          def fare(km):
+              # Rs 50 covers the first 5 km; each km after that costs Rs 12.
+              if km <= 0:
+                  raise ValueError("distance must be positive")
+              if km < 5:
+                  return 50
+              return 50 + 12 * (km - 4)
+
+
+          cases = [(1, 50), (5, 50), (6, 62), (10, 110), (0, "ValueError")]
+          print(check_table(fare, cases))
+        tests: |
+          def _sq(x):
+              if x < 0:
+                  raise ArithmeticError("negative")
+              return x * x
+
+
+          _got = check_table(_sq, [(2, 4), (3, 10), (0, 0), (-1, "ArithmeticError"), (4, 15), (-2, 4)])
+          _want = [(3, 10, 9), (4, 15, 16), (-2, 4, "ArithmeticError")]
+          assert [tuple(r) for r in _got] == _want, "check_table should report " + repr(_want) + ", not " + repr(_got)
+          assert list(check_table(_sq, [(1, 1), (5, 25)])) == [], "When every case passes, check_table should return an empty list"
+          _lookup = {"a": 1}
+          _got = check_table(lambda k: _lookup[k], [("a", 1), ("b", 2)])
+          assert [tuple(r) for r in _got] == [("b", 2, "KeyError")], "A missing key should be reported as ('b', 2, 'KeyError'), not " + repr(_got)
+          assert output.strip() == "[(5, 50, 62), (6, 62, 74), (10, 110, 122)]", "The program should print [(5, 50, 62), (6, 62, 74), (10, 110, 122)]"
+        wrong:
+          - |
+            def check_table(f, cases):
+                # cases is a list of (x, expected) pairs. Call f(x) for every case, even
+                # after a failure, and return a list of (x, expected, got) for the cases
+                # where got != expected. If f(x) raises an exception, got is the name of
+                # its class, such as "ValueError".
+                for x, expected in cases:
+                    try:
+                        got = f(x)
+                    except Exception as error:
+                        got = type(error).__name__
+                    if got != expected:
+                        return [(x, expected, got)]
+                return []
+
+
+            def fare(km):
+                # Rs 50 covers the first 5 km; each km after that costs Rs 12.
+                if km <= 0:
+                    raise ValueError("distance must be positive")
+                if km < 5:
+                    return 50
+                return 50 + 12 * (km - 4)
+
+
+            cases = [(1, 50), (5, 50), (6, 62), (10, 110), (0, "ValueError")]
+            print(check_table(fare, cases))
+          - |
+            def check_table(f, cases):
+                # cases is a list of (x, expected) pairs. Call f(x) for every case, even
+                # after a failure, and return a list of (x, expected, got) for the cases
+                # where got != expected. If f(x) raises an exception, got is the name of
+                # its class, such as "ValueError".
+                failures = []
+                for x, expected in cases:
+                    got = f(x)
+                    if got != expected:
+                        failures.append((x, expected, got))
+                return failures
+
+
+            def fare(km):
+                # Rs 50 covers the first 5 km; each km after that costs Rs 12.
+                if km <= 0:
+                    raise ValueError("distance must be positive")
+                if km < 5:
+                    return 50
+                return 50 + 12 * (km - 4)
+
+
+            cases = [(1, 50), (5, 50), (6, 62), (10, 110), (0, "ValueError")]
+            print(check_table(fare, cases))
+          - |
+            def check_table(f, cases):
+                # cases is a list of (x, expected) pairs. Call f(x) for every case, even
+                # after a failure, and return a list of (x, expected, got) for the cases
+                # where got != expected. If f(x) raises an exception, got is the name of
+                # its class, such as "ValueError".
+                failures = []
+                for x, expected in cases:
+                    try:
+                        got = f(x)
+                    except Exception as error:
+                        got = str(error)
+                    if got != expected:
+                        failures.append((x, expected, got))
+                return failures
+
+
+            def fare(km):
+                # Rs 50 covers the first 5 km; each km after that costs Rs 12.
+                if km <= 0:
+                    raise ValueError("distance must be positive")
+                if km < 5:
+                    return 50
+                return 50 + 12 * (km - 4)
+
+
+            cases = [(1, 50), (5, 50), (6, 62), (10, 110), (0, "ValueError")]
+            print(check_table(fare, cases))
+        explanation: |
+          Try each case, turn an exception into its class name, and collect every mismatch. Returning at the first failure hides the other two; letting exceptions escape stops the whole table at the case where `ValueError` was the expected answer; and recording the exception's message instead of its class compares the wrong thing.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, four tests `E`, `C`, `S` and `R` share one cart that is never reset between them. In how many of the 24 orders do all four pass?
+        answer: "8"
+        explanation: |
+          `S` always passes and `R` leaves the cart empty. `E` and `C` each need an empty cart, which happens only at the start, after `R`, or after `E`. So within each stretch of the order separated by `R`, `E` must come before any adding test, and `C` must be the first adding test. Checking the 24 orders, 8 pass: ECSR, ECRS, ESRC, ERCS, CSRE, CRES, SREC and RECS.
+    - question:
+        id: work-suite-only
+        type: choice
+        system: s2
+        prompt: |
+          Ananya's new test, `test_receipt_lists_items`, passes when she runs it alone and fails in the full suite, where it finds two items it never added. What should she change?
+        options:
+          - "Have the test build its own cart from a fixture that returns a new one on every call, instead of using a cart shared at module level."
+          - "Rename the test so it runs first in alphabetical order."
+          - "Mark the test as flaky and let the pipeline retry it."
+          - "Make the test accept any number of items."
+        answer: 0
+        explanation: |
+          The extra items come from another test through shared state, and a fresh fixture removes the dependence. Renaming makes the suite depend on order more deliberately; retrying hides the cause; and loosening the assertion stops the test from checking what it was written to check.
+  connections:
+    - text: |
+        Eight of the 24 orders. The tests that need an empty cart, `E` and `C`, pass only where nothing has been added since the start or since `R`, and that rules out two orders in three. The code under test is the same in all 24, so the suite's verdict here measures the shuffle, not the code. With a fixture that makes a fresh cart for each test, all 24 orders pass.
+
+        A fresh cart is easy to make. A fresh payment gateway, email service or clock is not, and a unit test should not touch the real ones at all. Replacing them with stand-ins that the test controls, and knowing which kind of stand-in to use, is [[s6.fakes-stubs-and-mocks]].
