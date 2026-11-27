@@ -1,0 +1,660 @@
+concept: s6.flaky-tests-and-their-causes
+minutes: 80
+claim: You can recognise a flaky test, one that passes and fails on the same code, name its usual causes, fixed waits, shared state and test order, unseeded randomness, clocks and dates, and real networks, and estimate how often it fails; confirm flakiness by rerunning on one commit; find a polluting test by bisecting the tests that ran before it; replace sleeping with polling; and handle a flaky test without hiding it behind retries.
+recalls: [s6.coverage-and-mutation-testing]
+uses: [s6.what-a-test-can-prove, s6.fakes-stubs-and-mocks, s6.unit-tests-and-fixtures, s6.integration-and-end-to-end-tests, s5.debugging-methodically, f4.continuous-distributions-and-densities, s3.binary-search, s5.continuous-integration]
+leads: [s6.deterministic-tests-seeds-clocks-and-fakes, s6.fuzzing, d0.interleavings-and-race-conditions]
+starter: |
+  # Scratch space. A test that fails sometimes, on the same code.
+  import random
+
+  results = []
+  for run in range(20):
+      finished_at = random.random() * 4   # the job takes 0 to 4 seconds
+      results.append(finished_at <= 3)    # the test checks after 3 seconds
+  print(results.count(False), "of 20 runs failed")
+parts:
+  recall:
+    - text: |
+        [[s6.coverage-and-mutation-testing]] asked whether a suite would notice a fault. This lesson asks the opposite question: does the suite cry wolf? A test that fails when nothing is wrong is called **flaky**, and a few of them are enough to make a team stop believing red runs, at which point the suite protects nobody. Three quick pulls first.
+  puzzle:
+    - text: |
+        A test starts a background job that sends a booking confirmation, sleeps for 3 seconds, and then checks that the confirmation was sent. The job takes a random time between 0 and 4 seconds, every moment in that range equally likely. The code is correct every time.
+
+        **In what percentage of runs does the test fail?**
+  intuition:
+    - text: |
+        A family agrees to leave for the station at 7:00 sharp, whether or not everyone is ready. Most days everyone is. Some days, someone is still looking for a charger, and the family leaves without them. Nobody did anything wrong; the plan simply bet that getting ready always takes less than a fixed time, and lost the bet now and then. Waiting a full hour every day would always work and waste most of the hour. The sensible plan is to check every few minutes and leave the moment everyone is ready, with a firm limit for real emergencies.
+
+        Tests that wait for something asynchronous face the same choice. The figure shows when a background job finished on twenty runs. Choose how the test waits.
+    - figure: sleep-poll
+      props: { wait: "3" }
+    - text: |
+        A fixed sleep is a bet. Sleep too little and some runs fail although nothing is wrong; sleep generously and every run pays the full wait, so the suite gets slow, and a busy build machine can still lose the bet. Polling, checking repeatedly until the job is done or a generous limit passes, is never slower than necessary and fails only if the job truly never finishes. The code under test was identical in every run. Only the test decided whether a correct program looked broken.
+  derivation:
+    - text: |
+        **What flakiness is.** A test is flaky when it can pass and fail on the same code in the same environment. The failures are not bugs in the product, or at least not the bug the test was written to catch, and they come and go. Each one costs someone's time to investigate, and together they teach people to rerun until green and to ignore red. A team that ignores red will eventually ignore a real failure too.
+
+        **The usual causes.** Nearly all flaky tests come from a short list.
+
+        - **Fixed waits** for something asynchronous: a sleep that is usually long enough.
+        - **Shared state and order**: a test that depends on what an earlier test left behind, or on the order the runner chose, the problem fixtures solved in [[s6.unit-tests-and-fixtures]].
+        - **Unseeded randomness**: random data that occasionally hits an edge case, with no seed to reproduce it.
+        - **Clocks and dates**: a test that fails near midnight, at the end of a month, on 29 February, or when the machine's time zone differs from the code's assumption.
+        - **Real networks and services**: a call that times out, as the sandbox did in [[s6.fakes-stubs-and-mocks]].
+        - **Concurrency**: two threads or tests whose steps interleave differently on different runs.
+        - **Unordered collections**: iterating over a set of strings, whose order can change from run to run in Python.
+    - question:
+        id: derivation-midnight
+        type: choice
+        system: s2
+        prompt: |
+          A test passes all day and fails every night between midnight and 5:30 a.m. India time. What is the most likely cause?
+        options:
+          - "It compares a date in India time with a date in UTC, which differ by a day in exactly those hours"
+          - "The build machine is slower at night"
+          - "The test is too long"
+          - "Night-time builds use a different version of Python"
+        answer: 0
+        explanation: |
+          India is five and a half hours ahead of UTC, so from midnight to 5:30 a.m. in India it is still the previous day in UTC. A fixed daily window points straight at dates and time zones.
+    - text: |
+        **Confirming it is flaky.** A single failure on a commit that passed before might be a real bug or a flake. Rerun the failing test many times on the same commit, ideally alone and within the full suite. If it sometimes passes and sometimes fails, it is flaky; if it always fails, the commit broke something. A rarely failing test needs many reruns before you can be confident it is clean, by the same arithmetic as rare bugs in [[s6.what-a-test-can-prove]].
+    - question:
+        id: derivation-reruns
+        type: numeric
+        system: s2
+        prompt: |
+          A test fails on 10% of runs, independently. How many reruns on the same commit give at least a 95% chance of seeing it fail at least once?
+        answer: "29"
+        explanation: |
+          All $n$ reruns pass with probability $0.9^n$, which falls below 0.05 when $n \ge \ln 0.05 / \ln 0.9 \approx 28.4$, so 29 reruns.
+    - text: |
+        **Finding the cause.** Treat a flaky test like any other bug, with the method of [[s5.debugging-methodically]]: first make it fail on demand. Record the random seed, the test order and the time with every run, so that a failing combination can be replayed. Run the test in a loop, or under load, or with the order shuffled, until it fails reliably. If it fails only after certain other tests, one of them is polluting shared state, and the culprit can be found by bisecting the tests that ran before it, the binary search of [[s3.binary-search]]: run the first half of them and then the target, see whether it still fails, and keep the half that must contain the polluter.
+
+        **Fixing it.** Each cause has a standard fix. Replace sleeps with polling and a generous timeout, or better, with a signal the code gives when it is done. Give every test fresh state. Seed every generator and log the seed. Pass a clock in instead of reading the real one, so the test chooses the time, including midnight and 29 February. Replace real networks with doubles, or isolate the few tests that need them. Sort before comparing anything that comes from a set. The next lesson, [[s6.deterministic-tests-seeds-clocks-and-fakes]], is about making tests deterministic by design.
+
+        **Living with a flake while you fix it.** A team that cannot fix a flaky test today still has to decide what the pipeline does with it tomorrow. Some teams move it to a quarantine list, where it still runs and its result is still recorded, but a failure no longer blocks a merge. That is reasonable only if the list is short, every entry has an owner and a date, and the test leaves quarantine the moment its cause is fixed. A quarantine list nobody reads is a slower way of deleting tests.
+    - question:
+        id: derivation-retries
+        type: choice
+        system: s2
+        prompt: |
+          The pipeline is set to retry every failed test up to three times and report a pass if any try passes. What is the main danger?
+        options:
+          - "Real intermittent bugs, such as race conditions customers will hit, are hidden along with harmless flakes"
+          - "The pipeline becomes too fast"
+          - "Tests that pass the first time are run three times"
+          - "Retries make the code under test slower"
+        answer: 0
+        explanation: |
+          A test that fails one run in ten passes one of three tries 99.9% of the time, so automatic retries make it look healthy, whether its failures come from the test or from a real bug that will also strike in production. Retries can be a stopgap, but every retried pass should be recorded and investigated.
+    - text: |
+        **Handling a flaky test.** When a flaky test cannot be fixed at once, **quarantine** it: move it out of the blocking suite, so that it no longer turns pipelines red, but keep running it and recording its results. Give it an owner and a date by which it will be fixed or deleted, because a quarantine without an owner becomes a graveyard of tests that check nothing. Track the flakiness rate of the whole suite in [[s5.continuous-integration]] so that it is visible when it creeps up.
+    - question:
+        id: order-flaky
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of dealing with a newly flaky test in order.
+        steps:
+          - "Rerun it many times on the same commit to confirm that it sometimes passes and sometimes fails."
+          - "Quarantine it from the blocking suite, with an owner and a deadline."
+          - "Replay its failing seed, order or time until it fails on demand."
+          - "Fix the cause, such as replacing a sleep with polling."
+          - "Return it to the blocking suite after a long run of clean reruns."
+        explanation: |
+          Confirming comes first, since a consistent failure is a real bug, not a flake; quarantine stops it blocking others while it is investigated; reproducing precedes fixing; and only clean reruns justify trusting it again.
+  formal:
+    - text: |
+        **Flaky test.** A test that can both pass and fail on the same code and environment.
+
+        **Common causes.** Fixed waits, shared state and order, unseeded randomness, clocks and dates, real networks, concurrency, and unordered collections.
+
+        **Confirmation.** Rerun on one commit: mixed results mean flaky; all failures mean broken. A test failing with probability $f$ shows a failure in $n$ reruns with probability $1 - (1 - f)^n$.
+
+        **Polluter search.** Bisect the tests that ran before the failing test, keeping the half after which it still fails.
+
+        **Quarantine.** Removing a flaky test from the blocking suite while it keeps running, with an owner and a deadline.
+  drill:
+    - text: Seconds each. Ask what changes between two runs of the same code.
+    - question:
+        id: drill-define
+        type: choice
+        system: s1
+        prompt: |
+          Which test is flaky?
+        options:
+          - "One that sometimes passes and sometimes fails on the same commit"
+          - "One that always fails since yesterday's change"
+          - "One that takes more than a second"
+          - "One that has never failed"
+        answer: 0
+        explanation: Consistent failure after a change is a broken test or a real bug; flakiness means mixed results on unchanged code.
+    - question:
+        id: drill-sleep
+        type: choice
+        system: s1
+        prompt: |
+          A test calls `time.sleep(2)` and then checks that an email was queued. What is the risk?
+        options:
+          - "On a slow day the email is queued after 2 seconds and the test fails though the code is fine"
+          - "The email is sent twice"
+          - "The test can never fail"
+          - "Sleep changes the order of other tests"
+        answer: 0
+        explanation: A fixed wait bets on the timing; polling until the email appears removes the bet.
+    - question:
+        id: drill-two-passes
+        type: numeric
+        system: s1
+        prompt: |
+          A test fails 1 run in 4. What is the chance, in per cent, that two reruns both pass?
+        answer: "56"
+        tolerance: "1"
+        explanation: $0.75^2 = 0.5625$, so more than half the time two clean reruns would wrongly suggest the test is fine.
+    - question:
+        id: predict-set-order
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(sorted({"b", "a", "c"}))
+        output: "['a', 'b', 'c']"
+        explanation: A set's order can vary between runs, but sorting it gives the same list every time, so tests compare sorted results.
+    - question:
+        id: predict-retries
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          p = 0.1
+          print(round(1 - p ** 3, 3))
+        output: "0.999"
+        explanation: A test that fails 10% of the time passes at least one of three tries 99.9% of the time, so retries hide it almost completely.
+  work:
+    - text: Slower now. Each problem helps find or remove a flake.
+    - question:
+        id: fix-poll
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `wait_until` polls a condition until a timeout. The program should print `True 3.0`, since the job is done by the final check at 3 seconds. It prints `False 3.0`. Find the fault and fix it.
+        starter: |
+          def wait_until(done, timeout, step, clock, sleep):
+              # Poll: check done() now and then every step seconds, and return True as
+              # soon as it is true. Give up and return False only if it is still
+              # false when checked at or after timeout seconds from the start.
+              start = clock()
+              while clock() - start < timeout:
+                  if done():
+                      return True
+                  sleep(step)
+              return False
+
+
+          class FakeTime:
+              def __init__(self):
+                  self.now = 0.0
+
+              def clock(self):
+                  return self.now
+
+              def sleep(self, seconds):
+                  self.now += seconds
+
+
+          t = FakeTime()
+          ready_at = 2.95  # the background job finishes just before the deadline
+          print(wait_until(lambda: t.now >= ready_at, 3.0, 0.5, t.clock, t.sleep), t.now)
+        solution: |
+          def wait_until(done, timeout, step, clock, sleep):
+              # Poll: check done() now and then every step seconds, and return True as
+              # soon as it is true. Give up and return False only if it is still
+              # false when checked at or after timeout seconds from the start.
+              start = clock()
+              while True:
+                  if done():
+                      return True
+                  if clock() - start >= timeout:
+                      return False
+                  sleep(step)
+
+
+          class FakeTime:
+              def __init__(self):
+                  self.now = 0.0
+
+              def clock(self):
+                  return self.now
+
+              def sleep(self, seconds):
+                  self.now += seconds
+
+
+          t = FakeTime()
+          ready_at = 2.95  # the background job finishes just before the deadline
+          print(wait_until(lambda: t.now >= ready_at, 3.0, 0.5, t.clock, t.sleep), t.now)
+        tests: |
+          def _run(_ready, _timeout, _step):
+              _t = FakeTime()
+              _got = wait_until(lambda: _t.now >= _ready, _timeout, _step, _t.clock, _t.sleep)
+              return _got, _t.now
+
+
+          for _ready, _timeout, _step, _want in [
+              (0.0, 5.0, 1.0, (True, 0.0)),
+              (2.0, 5.0, 1.0, (True, 2.0)),
+              (2.5, 5.0, 1.0, (True, 3.0)),
+              (5.0, 5.0, 1.0, (True, 5.0)),
+              (5.5, 5.0, 1.0, (False, 5.0)),
+              (99.0, 2.0, 0.5, (False, 2.0)),
+              (0.25, 1.0, 0.25, (True, 0.25)),
+          ]:
+              _got = _run(_ready, _timeout, _step)
+              assert tuple(_got) == _want, "With the job ready at " + str(_ready) + " s, a " + str(_timeout) + " s timeout and checks every " + str(_step) + " s, wait_until should give (result, time) " + repr(_want) + ", not " + repr(_got)
+          assert output.strip() == "True 3.0", "The program should print True 3.0"
+        wrong:
+          - |
+            def wait_until(done, timeout, step, clock, sleep):
+                # Poll: check done() now and then every step seconds, and return True as
+                # soon as it is true. Give up and return False only if it is still
+                # false when checked at or after timeout seconds from the start.
+                start = clock()
+                sleep(timeout)
+                return done()
+
+
+            class FakeTime:
+                def __init__(self):
+                    self.now = 0.0
+
+                def clock(self):
+                    return self.now
+
+                def sleep(self, seconds):
+                    self.now += seconds
+
+
+            t = FakeTime()
+            ready_at = 2.95  # the background job finishes just before the deadline
+            print(wait_until(lambda: t.now >= ready_at, 3.0, 0.5, t.clock, t.sleep), t.now)
+          - |
+            def wait_until(done, timeout, step, clock, sleep):
+                # Poll: check done() now and then every step seconds, and return True as
+                # soon as it is true. Give up and return False only if it is still
+                # false when checked at or after timeout seconds from the start.
+                start = clock()
+                while clock() - start < timeout:
+                    sleep(step)
+                    if done():
+                        return True
+                return False
+
+
+            class FakeTime:
+                def __init__(self):
+                    self.now = 0.0
+
+                def clock(self):
+                    return self.now
+
+                def sleep(self, seconds):
+                    self.now += seconds
+
+
+            t = FakeTime()
+            ready_at = 2.95  # the background job finishes just before the deadline
+            print(wait_until(lambda: t.now >= ready_at, 3.0, 0.5, t.clock, t.sleep), t.now)
+          - |
+            def wait_until(done, timeout, step, clock, sleep):
+                # Poll: check done() now and then every step seconds, and return True as
+                # soon as it is true. Give up and return False only if it is still
+                # false when checked at or after timeout seconds from the start.
+                start = clock()
+                while clock() - start <= timeout + step:
+                    if done():
+                        return True
+                    sleep(step)
+                return False
+
+
+            class FakeTime:
+                def __init__(self):
+                    self.now = 0.0
+
+                def clock(self):
+                    return self.now
+
+                def sleep(self, seconds):
+                    self.now += seconds
+
+
+            t = FakeTime()
+            ready_at = 2.95  # the background job finishes just before the deadline
+            print(wait_until(lambda: t.now >= ready_at, 3.0, 0.5, t.clock, t.sleep), t.now)
+        explanation: |
+          The loop stops as soon as the timeout is reached, without checking the condition one last time, so a job that finishes just before the deadline is reported as failed: a flaky test in the making. Check first, then give up only if the time is up. Sleeping the whole timeout and checking once always waits the maximum; sleeping before the first check makes even an instant job wait one step; and stretching the deadline by a step reports success for a job that finished after the timeout.
+    - question:
+        id: write-classify
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `classify(runs)`, which sorts reruns on one commit into stable, broken and flaky tests. The program should print three lines, for the fare table, the refund rounding and the seat map tests.
+        starter: |
+          def classify(runs):
+              # runs maps each test's name to its results, True for a pass, from
+              # rerunning it many times on the same commit. Return a dict from name to
+              # "stable" if every run passed, "broken" if every run failed, and
+              # otherwise "flaky: K of N failed". Tests with no runs are left out.
+              return {}
+
+
+          runs = {
+              "test_fare_table": [True] * 20,
+              "test_seat_map_loads": [True] * 17 + [False, True, False],
+              "test_refund_rounding": [False] * 20,
+          }
+          for name, verdict in sorted(classify(runs).items()):
+              print(name, "->", verdict)
+        solution: |
+          def classify(runs):
+              # runs maps each test's name to its results, True for a pass, from
+              # rerunning it many times on the same commit. Return a dict from name to
+              # "stable" if every run passed, "broken" if every run failed, and
+              # otherwise "flaky: K of N failed". Tests with no runs are left out.
+              verdicts = {}
+              for name, results in runs.items():
+                  if results:
+                      failed = len(results) - sum(results)
+                      if failed == 0:
+                          verdicts[name] = "stable"
+                      elif failed == len(results):
+                          verdicts[name] = "broken"
+                      else:
+                          verdicts[name] = "flaky: " + str(failed) + " of " + str(len(results)) + " failed"
+              return verdicts
+
+
+          runs = {
+              "test_fare_table": [True] * 20,
+              "test_seat_map_loads": [True] * 17 + [False, True, False],
+              "test_refund_rounding": [False] * 20,
+          }
+          for name, verdict in sorted(classify(runs).items()):
+              print(name, "->", verdict)
+        tests: |
+          _got = classify({"a": [True, True], "b": [False], "c": [True, False, True, True], "d": [], "e": [False, False, True]})
+          _want = {"a": "stable", "b": "broken", "c": "flaky: 1 of 4 failed", "e": "flaky: 2 of 3 failed"}
+          assert dict(_got) == _want, "classify should return " + repr(_want) + ", not " + repr(_got)
+          assert dict(classify({})) == {}, "With no tests, classify should return an empty dict"
+          assert output.strip() == "test_fare_table -> stable\ntest_refund_rounding -> broken\ntest_seat_map_loads -> flaky: 2 of 20 failed", "The program should print the three verdicts: stable, broken, and flaky with 2 of 20 failed"
+        wrong:
+          - |
+            def classify(runs):
+                # runs maps each test's name to its results, True for a pass, from
+                # rerunning it many times on the same commit. Return a dict from name to
+                # "stable" if every run passed, "broken" if every run failed, and
+                # otherwise "flaky: K of N failed". Tests with no runs are left out.
+                verdicts = {}
+                for name, results in runs.items():
+                    if results:
+                        verdicts[name] = "stable" if all(results) else "broken"
+                return verdicts
+
+
+            runs = {
+                "test_fare_table": [True] * 20,
+                "test_seat_map_loads": [True] * 17 + [False, True, False],
+                "test_refund_rounding": [False] * 20,
+            }
+            for name, verdict in sorted(classify(runs).items()):
+                print(name, "->", verdict)
+          - |
+            def classify(runs):
+                # runs maps each test's name to its results, True for a pass, from
+                # rerunning it many times on the same commit. Return a dict from name to
+                # "stable" if every run passed, "broken" if every run failed, and
+                # otherwise "flaky: K of N failed". Tests with no runs are left out.
+                verdicts = {}
+                for name, results in runs.items():
+                    if results:
+                        passed = sum(results)
+                        if passed == len(results):
+                            verdicts[name] = "stable"
+                        elif passed == 0:
+                            verdicts[name] = "broken"
+                        else:
+                            verdicts[name] = "flaky: " + str(passed) + " of " + str(len(results)) + " failed"
+                return verdicts
+
+
+            runs = {
+                "test_fare_table": [True] * 20,
+                "test_seat_map_loads": [True] * 17 + [False, True, False],
+                "test_refund_rounding": [False] * 20,
+            }
+            for name, verdict in sorted(classify(runs).items()):
+                print(name, "->", verdict)
+          - |
+            def classify(runs):
+                # runs maps each test's name to its results, True for a pass, from
+                # rerunning it many times on the same commit. Return a dict from name to
+                # "stable" if every run passed, "broken" if every run failed, and
+                # otherwise "flaky: K of N failed". Tests with no runs are left out.
+                verdicts = {}
+                for name, results in runs.items():
+                    failed = len(results) - sum(results)
+                    if failed == 0:
+                        verdicts[name] = "stable"
+                    elif failed == len(results):
+                        verdicts[name] = "broken"
+                    else:
+                        verdicts[name] = "flaky: " + str(failed) + " of " + str(len(results)) + " failed"
+                return verdicts
+
+
+            runs = {
+                "test_fare_table": [True] * 20,
+                "test_seat_map_loads": [True] * 17 + [False, True, False],
+                "test_refund_rounding": [False] * 20,
+            }
+            for name, verdict in sorted(classify(runs).items()):
+                print(name, "->", verdict)
+        explanation: |
+          Count the failures in each list: none means stable, all means broken, and anything in between is flaky, reported with its count. Calling every failure "broken" misses the flaky seat map test, which needs a different response from a broken one; counting passes as failures reports 18 failures out of 20 instead of 2; and a test with no runs at all has shown nothing, so it should not be called stable.
+    - question:
+        id: write-polluter
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `find_polluter(before, run)`, which bisects the tests that ran before a failing test to find the one that leaves bad state behind. The program should print `('test_cache_warm', 4)`.
+        starter: |
+          def find_polluter(before, run):
+              # A target test passes alone but fails after the tests in before, and
+              # exactly one of them is to blame. run(tests) runs the given tests in
+              # order, then the target, and returns True if the target passed. Bisect:
+              # keep a list of suspects, run the first half of it, and keep whichever
+              # half must contain the polluter. Return (polluter, number of runs).
+              return before[0], 0
+
+
+          suite = ["test_" + name for name in ["login", "search", "seat_map", "cache_warm", "fares",
+                                               "refund", "sms", "profile", "logout", "report"]]
+
+
+          def run(tests):
+              # In real life this would run the tests; here, test_cache_warm leaves a
+              # stale fare in a module-level cache that the target then reads.
+              return "test_cache_warm" not in tests
+
+
+          print(find_polluter(suite, run))
+        solution: |
+          def find_polluter(before, run):
+              # A target test passes alone but fails after the tests in before, and
+              # exactly one of them is to blame. run(tests) runs the given tests in
+              # order, then the target, and returns True if the target passed. Bisect:
+              # keep a list of suspects, run the first half of it, and keep whichever
+              # half must contain the polluter. Return (polluter, number of runs).
+              suspects = list(before)
+              runs = 0
+              while len(suspects) > 1:
+                  half = suspects[:len(suspects) // 2]
+                  runs += 1
+                  if run(half):
+                      suspects = suspects[len(suspects) // 2:]
+                  else:
+                      suspects = half
+              return suspects[0], runs
+
+
+          suite = ["test_" + name for name in ["login", "search", "seat_map", "cache_warm", "fares",
+                                               "refund", "sms", "profile", "logout", "report"]]
+
+
+          def run(tests):
+              # In real life this would run the tests; here, test_cache_warm leaves a
+              # stale fare in a module-level cache that the target then reads.
+              return "test_cache_warm" not in tests
+
+
+          print(find_polluter(suite, run))
+        tests: |
+          import math as _m
+
+          for _n in [1, 2, 3, 5, 8, 10, 33]:
+              _names = ["t" + str(_i) for _i in range(_n)]
+              for _p in sorted(set([0, _n // 2, _n - 1])):
+                  _bad = _names[_p]
+                  _calls = []
+
+                  def _run(tests, _bad=_bad, _calls=_calls):
+                      _calls.append(list(tests))
+                      return _bad not in tests
+
+                  _got = find_polluter(list(_names), _run)
+                  assert _got[0] == _bad, "With " + str(_n) + " earlier tests and " + _bad + " the polluter, find_polluter named " + repr(_got[0])
+                  assert _got[1] == len(_calls), "The number of runs reported, " + str(_got[1]) + ", should match the runs made, " + str(len(_calls))
+                  assert len(_calls) <= _m.ceil(_m.log2(_n)) if _n > 1 else len(_calls) == 0, "Bisecting " + str(_n) + (" test" if _n == 1 else " tests") + " should take at most " + str(_m.ceil(_m.log2(max(_n, 1)))) + " runs, not " + str(len(_calls))
+          assert output.strip() == "('test_cache_warm', 4)", "The program should print ('test_cache_warm', 4)"
+        wrong:
+          - |
+            def find_polluter(before, run):
+                # A target test passes alone but fails after the tests in before, and
+                # exactly one of them is to blame. run(tests) runs the given tests in
+                # order, then the target, and returns True if the target passed. Bisect:
+                # keep a list of suspects, run the first half of it, and keep whichever
+                # half must contain the polluter. Return (polluter, number of runs).
+                runs = 0
+                for test in before:
+                    runs += 1
+                    if not run([test]):
+                        return test, runs
+                return None, runs
+
+
+            suite = ["test_" + name for name in ["login", "search", "seat_map", "cache_warm", "fares",
+                                                 "refund", "sms", "profile", "logout", "report"]]
+
+
+            def run(tests):
+                # In real life this would run the tests; here, test_cache_warm leaves a
+                # stale fare in a module-level cache that the target then reads.
+                return "test_cache_warm" not in tests
+
+
+            print(find_polluter(suite, run))
+          - |
+            def find_polluter(before, run):
+                # A target test passes alone but fails after the tests in before, and
+                # exactly one of them is to blame. run(tests) runs the given tests in
+                # order, then the target, and returns True if the target passed. Bisect:
+                # keep a list of suspects, run the first half of it, and keep whichever
+                # half must contain the polluter. Return (polluter, number of runs).
+                suspects = list(before)
+                runs = 0
+                while len(suspects) > 1:
+                    half = suspects[:len(suspects) // 2]
+                    runs += 1
+                    if run(half):
+                        suspects = half
+                    else:
+                        suspects = suspects[len(suspects) // 2:]
+                return suspects[0], runs
+
+
+            suite = ["test_" + name for name in ["login", "search", "seat_map", "cache_warm", "fares",
+                                                 "refund", "sms", "profile", "logout", "report"]]
+
+
+            def run(tests):
+                # In real life this would run the tests; here, test_cache_warm leaves a
+                # stale fare in a module-level cache that the target then reads.
+                return "test_cache_warm" not in tests
+
+
+            print(find_polluter(suite, run))
+          - |
+            def find_polluter(before, run):
+                # A target test passes alone but fails after the tests in before, and
+                # exactly one of them is to blame. run(tests) runs the given tests in
+                # order, then the target, and returns True if the target passed. Bisect:
+                # keep a list of suspects, run the first half of it, and keep whichever
+                # half must contain the polluter. Return (polluter, number of runs).
+                suspects = list(before)
+                runs = 0
+                while len(suspects) > 1:
+                    half = suspects[:len(suspects) // 2]
+                    runs += 1
+                    if run(half):
+                        suspects = suspects[len(suspects) // 2 + 1:]
+                    else:
+                        suspects = half
+                return suspects[0], runs
+
+
+            suite = ["test_" + name for name in ["login", "search", "seat_map", "cache_warm", "fares",
+                                                 "refund", "sms", "profile", "logout", "report"]]
+
+
+            def run(tests):
+                # In real life this would run the tests; here, test_cache_warm leaves a
+                # stale fare in a module-level cache that the target then reads.
+                return "test_cache_warm" not in tests
+
+
+            print(find_polluter(suite, run))
+        explanation: |
+          Run the first half of the suspects before the target. If the target still passes, the polluter is in the second half; if it fails, it is in the first. Repeat until one suspect remains, about $\log_2 n$ runs. Trying each test alone works but takes up to $n$ runs; keeping the wrong half after a passing run throws the polluter away; and skipping one test when moving to the second half can skip the polluter itself.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, the job takes a uniformly random time between 0 and 4 seconds and the test checks after sleeping 3 seconds. In what percentage of runs does it fail?
+        answer: "25"
+        explanation: |
+          The test fails when the job takes longer than 3 seconds. Under a uniform distribution on 0 to 4 seconds, that is the last second of four, a probability of $1/4$, or 25%.
+    - question:
+        id: work-quarantine
+        type: choice
+        system: s2
+        prompt: |
+          Sanjay finds a flaky end-to-end test that fails about once a day and blocks other people's merges. He cannot fix it today. What should he do?
+        options:
+          - "Quarantine it out of the blocking suite, keep it running and recording results, and give it an owner and a date for a fix."
+          - "Delete it, since it is unreliable."
+          - "Add three automatic retries and forget about it."
+          - "Leave it blocking merges until someone has time."
+        answer: 0
+        explanation: |
+          Quarantine stops the harm to everyone else while keeping the evidence and the responsibility. Deleting throws away whatever the test protected; silent retries hide a cause that might be a real bug; and leaving it blocking teaches the team to ignore red.
+  connections:
+    - text: |
+        25%. With the finish time spread evenly over four seconds, the job is still running at the 3-second check one time in four. The code is correct in every run, so every one of those failures is the test's fault. Sleeping 5 seconds would end the failures and make every run 5 seconds slow; polling ends the failures and waits only as long as needed.
+
+        Most flaky tests share one root: something in the test that the test does not control, such as time, randomness, order or the speed of a machine. The cure is to take control of each of those deliberately, choosing the seed, the clock and the timing inside the test itself, which is [[s6.deterministic-tests-seeds-clocks-and-fakes]].

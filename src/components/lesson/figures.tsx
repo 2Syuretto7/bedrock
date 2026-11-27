@@ -9223,6 +9223,82 @@ function MutationScore(props: Props) {
     </Frame>
   );
 }
+const SP_WAITS = ["1", "2", "3", "5", "poll"];
+
+function spTimes() {
+  // Twenty runs of a background job that finishes at a random moment between 0 and 4 seconds.
+  const out: number[] = [];
+  let s = 42;
+  for (let i = 0; i < 20; i++) {
+    s = (s * 48271) % 2147483647;
+    out.push((s / 2147483647) * 4);
+  }
+  return out;
+}
+
+/** A test that sleeps a fixed time before checking a background job, against one that polls until the job is done. */
+function SleepPoll(props: Props) {
+  const startKey = typeof props.wait === "string" ? props.wait : typeof props.wait === "number" ? String(props.wait) : "3";
+  const [key, setKey] = useState(SP_WAITS.includes(startKey) ? startKey : "3");
+  const times = spTimes();
+  const poll = key === "poll";
+  const wait = poll ? null : Number(key);
+  const fails = wait === null ? 0 : times.filter((t) => t > wait).length;
+  const waited = times.map((t) => (wait === null ? Math.ceil(t / 0.1 - 1e-9) * 0.1 : wait));
+  const avg = waited.reduce((a, b) => a + b, 0) / times.length;
+  const fmt = (x: number) => x.toLocaleString("en-IN", { maximumFractionDigits: 1 });
+  const w = wait ?? 0;
+  const longRun = Math.round((Math.max(0, 4 - w) / 4) * 100);
+  const summary = poll
+    ? `Checking every 0.1 seconds, for up to 10 seconds: none of the 20 runs fails, and each waits only until its job is done, ${fmt(avg)} seconds on average.`
+    : fails === 0
+      ? `Sleeping ${plural(w, "second")} before checking: none of the 20 runs fails, but every run waits the full ${plural(w, "second")}, whenever its job actually finished.`
+      : `Sleeping ${plural(w, "second")} before checking: ${fails} of the 20 runs fail, because their job had not finished yet, and every run waits the full ${plural(w, "second")}. In the long run, ${longRun}% of runs would fail.`;
+  const x = (t: number) => 10 + (t / 5) * 440;
+  return (
+    <Frame
+      title="Sleeping against polling"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">the test</span>
+          {SP_WAITS.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={k === key} onClick={() => setKey(k)}>
+              {k === "poll" ? "polls until done" : `sleeps ${k} s`}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 150" role="img" aria-label={poll ? "No run fails" : `${fails} of 20 runs fail`}>
+        <text x={10} y={14} className="fig-small">
+          {"when each of 20 runs' background job finished, in seconds"}
+        </text>
+        {times.map((t, i) => {
+          const failed = wait !== null && t > wait;
+          return <rect key={i} x={x(t) - 3} y={28 + (i % 4) * 16} width={6} height={12} className={failed ? "fig-accent" : "fig-fill"} />;
+        })}
+        {wait !== null ? (
+          <>
+            <line x1={x(wait)} y1={22} x2={x(wait)} y2={100} className="fig-accent-line" />
+            <text x={x(wait) + (wait >= 4.5 ? -4 : 4)} y={98} textAnchor={wait >= 4.5 ? "end" : "start"} className="fig-small" style={{ fill: "var(--text)" }}>
+              check
+            </text>
+          </>
+        ) : null}
+        <line x1={10} y1={104} x2={450} y2={104} className="fig-axis" />
+        {[0, 1, 2, 3, 4, 5].map((t) => (
+          <text key={t} x={x(t)} y={120} textAnchor="middle" className="fig-small">
+            {t}
+          </text>
+        ))}
+        <text x={10} y={142} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`failed runs: ${fails} of 20; average wait: ${fmt(avg)} s`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -10578,6 +10654,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "triangle-check": TriangleCheck,
   "test-pyramid": TestPyramid,
   "mutation-score": MutationScore,
+  "sleep-poll": SleepPoll,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
