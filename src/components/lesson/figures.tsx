@@ -8001,6 +8001,113 @@ function DecisionMatrix(props: Props) {
   );
 }
 
+const CS_FILES: [string, string][] = [
+  ["README.md", "Tiffin app: how to run it"],
+  ["app.py", "print(menu_for(today))"],
+  ["menu.csv", "monday,rajma chawal"],
+];
+
+/** A short, stable fingerprint of a text (FNV-1a, 32 bits), standing in for a real content hash. */
+function csHash(text: string) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0").slice(0, 7);
+}
+
+/** Two commits of a three-file project in a content-addressed store: what a new commit adds and what it shares. */
+function ContentStore(props: Props) {
+  const start = Array.isArray(props.changed) ? props.changed.filter((n): n is string => typeof n === "string") : ["app.py"];
+  const [changed, setChanged] = useState<string[]>(CS_FILES.map(([n]) => n).filter((n) => start.includes(n)));
+  const v1 = CS_FILES.map(([name, text]) => ({ name, id: csHash(text) }));
+  const v2 = CS_FILES.map(([name, text]) => ({ name, id: changed.includes(name) ? csHash(`${text} (edited)`) : csHash(text) }));
+  const treeText = (entries: { name: string; id: string }[]) => entries.map((e) => `${e.name} ${e.id}`).join("\n");
+  const t1 = csHash(treeText(v1));
+  const t2 = csHash(treeText(v2));
+  const c1 = csHash(`tree ${t1}\nfirst menu`);
+  const c2 = csHash(`tree ${t2}\nparent ${c1}\nnext week`);
+  const newBlobs = v2.filter((e) => changed.includes(e.name));
+  const sameTree = t2 === t1;
+  const objects: { kind: string; id: string; added: boolean }[] = [
+    ...v1.map((e) => ({ kind: "blob", id: e.id, added: false })),
+    { kind: "tree", id: t1, added: false },
+    { kind: "commit", id: c1, added: false },
+    ...newBlobs.map((e) => ({ kind: "blob", id: e.id, added: true })),
+    ...(sameTree ? [] : [{ kind: "tree", id: t2, added: true }]),
+    { kind: "commit", id: c2, added: true },
+  ];
+  const added = objects.filter((o) => o.added).length;
+  const toggle = (name: string) => setChanged(changed.includes(name) ? changed.filter((n) => n !== name) : [...changed, name]);
+  const names = CS_FILES.map(([n]) => n).filter((n) => changed.includes(n));
+  const listed = names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const kept = CS_FILES.length - changed.length;
+  const summary =
+    changed.length === 0
+      ? `Commit 2 changes no file, so its tree has the same entries and the same id as commit 1's, and the store gains only the new commit record: 1 object.`
+      : `Commit 2 changes ${listed}: ${newBlobs.length} new ${newBlobs.length === 1 ? "blob" : "blobs"}, 1 new tree and 1 new commit, ${added} objects added.${kept === 0 ? " Every file changed, so nothing is shared." : ` The other ${kept === 1 ? "file points" : `${kept} files point`} at ${kept === 1 ? "a blob" : "blobs"} already stored, by the same id.`}`;
+  const entryRows = (entries: { name: string; id: string }[], x: number, mark: boolean) =>
+    entries.map((e, i) => {
+      const hot = mark && changed.includes(e.name);
+      return (
+        <g key={`${x}-${e.name}`}>
+          <rect x={x} y={52 + i * 22} width={200} height={18} rx={2} className={hot ? "fig-accent" : "fig-ghost"} />
+          <text x={x + 6} y={65 + i * 22} className="fig-small" style={{ fill: hot ? "var(--bg)" : "var(--text)" }}>
+            {`${e.name} → ${e.id}`}
+          </text>
+        </g>
+      );
+    });
+  return (
+    <Frame
+      title="Two commits in a content-addressed store"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">changed in commit 2</span>
+          {CS_FILES.map(([name]) => (
+            <button key={name} type="button" className="btn btn-secondary btn-small" aria-pressed={changed.includes(name)} onClick={() => toggle(name)}>
+              {name}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 236" role="img" aria-label={`Commit 2 adds ${added} ${added === 1 ? "object" : "objects"} to the store, ${objects.length} in all`}>
+        <text x={10} y={16} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`commit 1: ${c1}`}
+        </text>
+        <text x={10} y={32} className="fig-small">
+          {`tree ${t1}, no parent`}
+        </text>
+        <text x={250} y={16} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`commit 2: ${c2}`}
+        </text>
+        <text x={250} y={32} className="fig-small">
+          {`tree ${t2}, parent ${c1}`}
+        </text>
+        {entryRows(v1, 10, false)}
+        {entryRows(v2, 250, true)}
+        <text x={10} y={142} className="fig-small">
+          {`the store: ${objects.length} objects, filled = added by commit 2`}
+        </text>
+        {objects.map((o, i) => (
+          <g key={`o${i}`}>
+            <rect x={10 + (i % 5) * 89} y={152 + Math.floor(i / 5) * 34} width={84} height={28} rx={3} className={o.added ? "fig-accent" : "fig-ghost"} />
+            <text x={52 + (i % 5) * 89} y={163 + Math.floor(i / 5) * 34} textAnchor="middle" className="fig-small" style={{ fill: o.added ? "var(--bg)" : "var(--text)" }}>
+              {o.kind}
+            </text>
+            <text x={52 + (i % 5) * 89} y={175 + Math.floor(i / 5) * 34} textAnchor="middle" className="fig-small" style={{ fill: o.added ? "var(--bg)" : "var(--text)" }}>
+              {o.id}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -9341,6 +9448,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "refactor-steps": RefactorSteps,
   "page-cursor": PageCursor,
   "decision-matrix": DecisionMatrix,
+  "content-store": ContentStore,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
