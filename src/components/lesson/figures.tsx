@@ -8666,6 +8666,268 @@ function CiPipeline(props: Props) {
     </Frame>
   );
 }
+const BT_COUNTS = [10, 100, 1000];
+
+function btDraws(n: number) {
+  // A fixed linear congruential generator, so the same tests appear on every visit.
+  const out: number[] = [];
+  let s = 1127;
+  for (let i = 0; i < n; i++) {
+    s = (s * 48271) % 2147483647;
+    out.push(Math.floor((s / 2147483647) * 2001));
+  }
+  return out;
+}
+
+/** Random tests against boundary tests for a discount whose code says > where the rule says at least. */
+function BoundaryTests(props: Props) {
+  const startN = clamp(Math.round(num(props.random, 100)), 0, 1000);
+  const [n, setN] = useState(BT_COUNTS.includes(startN) ? startN : 100);
+  const [edges, setEdges] = useState(props.boundary === true);
+  const draws = btDraws(n);
+  const hits = draws.filter((x) => x === 1000).length;
+  const boundary = [0, 999, 1000, 1001, 2000];
+  const chance = 1 - Math.pow(2000 / 2001, n);
+  const pct = (100 * chance).toLocaleString("en-IN", { maximumFractionDigits: 1 });
+  const found = hits > 0 || edges;
+  const randomPart = `${group(n)} random amounts from ₹0 to ₹2,000: ${hits === 0 ? "none is exactly ₹1,000, so every one passes" : `${plural(hits, "test")} landed on ₹1,000 and failed`}. Any one random test has a 1 in 2,001 chance of hitting the bug, so ${group(n)} of them find it ${pct}% of the time.`;
+  const edgePart = edges ? " The boundary tests try ₹0, ₹999, ₹1,000, ₹1,001 and ₹2,000, and the one at ₹1,000 fails: the bug is found with five tests." : "";
+  const summary = `The rule: 10% off orders of ₹1,000 or more. The code says amount > 1000. ${randomPart}${edgePart}`;
+  const x = (v: number) => 10 + (v / 2000) * 440;
+  return (
+    <Frame
+      title="Where the tests land"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">random tests</span>
+          {BT_COUNTS.map((c) => (
+            <button key={c} type="button" className="btn btn-secondary btn-small" aria-pressed={c === n} onClick={() => setN(c)}>
+              {group(c)}
+            </button>
+          ))}
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={edges} onClick={() => setEdges(!edges)}>
+            boundary tests
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 150" role="img" aria-label={found ? "The bug at ₹1,000 is found" : "No test lands on ₹1,000; the bug is missed"}>
+        <text x={10} y={14} className="fig-small">
+          order amount in rupees; each mark is one test
+        </text>
+        <line x1={10} y1={70} x2={450} y2={70} className="fig-axis" />
+        {draws.map((v, i) => (
+          <line key={i} x1={x(v)} y1={44} x2={x(v)} y2={68} className="fig-line" style={{ opacity: n >= 1000 ? 0.35 : 0.8 }} />
+        ))}
+        {edges
+          ? boundary.map((v) => (
+              <rect key={v} x={x(v) - 3} y={74} width={6} height={16} className={v === 1000 ? "fig-accent" : "fig-fill"} />
+            ))
+          : null}
+        <line x1={x(1000)} y1={28} x2={x(1000)} y2={96} className="fig-accent-line" />
+        <text x={x(1000)} y={24} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          bug: exactly ₹1,000
+        </text>
+        {[0, 500, 1000, 1500, 2000].map((v) => (
+          <text key={v} x={x(v)} y={110} textAnchor={v === 0 ? "start" : v === 2000 ? "end" : "middle"} className="fig-small">
+            {group(v)}
+          </text>
+        ))}
+        <text x={10} y={138} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {found ? "bug found" : "every test passes, and the bug is still there"}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+const TO_TESTS: Record<string, { name: string; adds: string | null; check: (cart: string[]) => boolean; expect: string }> = {
+  "1": { name: "empty_at_start", adds: null, check: (c) => c.length === 0, expect: "cart is empty" },
+  "2": { name: "add_chai", adds: "chai", check: (c) => c.length === 1, expect: "cart has 1 item" },
+  "3": { name: "add_samosa", adds: "samosa", check: (c) => c.includes("samosa"), expect: "cart has a samosa" },
+};
+const TO_ORDERS = ["123", "132", "213", "231", "312", "321"];
+
+/** Three tests sharing one cart: the order they run in decides which pass, unless each gets a fresh cart. */
+function TestOrder(props: Props) {
+  const [order, setOrder] = useState(typeof props.order === "string" && TO_ORDERS.includes(props.order) ? props.order : "213");
+  const [fresh, setFresh] = useState(props.fresh === true);
+  const shared: string[] = [];
+  const rows: { k: string; name: string; after: string[]; ok: boolean; expect: string }[] = [];
+  for (const k of order.split("")) {
+    const t = TO_TESTS[k];
+    const cart = fresh ? [] : shared;
+    if (t.adds) cart.push(t.adds);
+    rows.push({ k, name: t.name, after: [...cart], ok: t.check(cart), expect: t.expect });
+  }
+  const passing = rows.filter((r) => r.ok).length;
+  const allOrders = TO_ORDERS.filter((o) => {
+    const c: string[] = [];
+    return o.split("").every((k) => {
+      const cart = fresh ? [] : c;
+      if (TO_TESTS[k].adds) cart.push(TO_TESTS[k].adds as string);
+      return TO_TESTS[k].check(cart);
+    });
+  }).length;
+  const show = (c: string[]) => (c.length === 0 ? "[]" : `[${c.join(", ")}]`);
+  const fails = rows.filter((r) => !r.ok);
+  const said = passing === 3 ? "all three pass" : `${passing} of 3 pass`;
+  const why = fails.map((r) => `${r.name} expects that the ${r.expect} but finds ${show(r.after)}`).join("; ");
+  const summary = fresh
+    ? `Each test gets a fresh, empty cart from a fixture, so all three pass in this order, and in all ${allOrders} possible orders.`
+    : `All three tests share one cart. In the order ${order.split("").join(", ")}, ${said}${why ? `: ${why}` : ""}. Only ${allOrders} of the 6 possible orders lets every test pass.`;
+  return (
+    <Frame
+      title="Tests that share a cart"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">run order</span>
+          {TO_ORDERS.map((o) => (
+            <button key={o} type="button" className="btn btn-secondary btn-small" aria-pressed={o === order} onClick={() => setOrder(o)}>
+              {o.split("").join(" ")}
+            </button>
+          ))}
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={fresh} onClick={() => setFresh(!fresh)}>
+            fresh cart per test
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 150" role="img" aria-label={`${passing} of 3 tests pass in the order ${order.split("").join(", ")}`}>
+        <text x={10} y={16} className="fig-small">
+          run
+        </text>
+        <text x={44} y={16} className="fig-small">
+          test
+        </text>
+        <text x={190} y={16} className="fig-small">
+          cart when it checks
+        </text>
+        <text x={390} y={16} className="fig-small">
+          result
+        </text>
+        {rows.map((r, i) => (
+          <g key={r.k}>
+            <rect x={6} y={26 + i * 38} width={448} height={32} className={r.ok ? "fig-ghost" : "fig-fill"} />
+            <text x={14} y={46 + i * 38} className="fig-small" style={{ fill: "var(--text)" }}>
+              {`${i + 1}.`}
+            </text>
+            <text x={44} y={46 + i * 38} className="fig-small" style={{ fill: "var(--text)" }}>
+              {`${r.k}: ${r.name}`}
+            </text>
+            <text x={190} y={46 + i * 38} className="fig-small" style={{ fill: "var(--text)" }}>
+              {show(r.after)}
+            </text>
+            <text x={390} y={46 + i * 38} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+              {r.ok ? "pass" : "FAIL"}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+const TD_ROWS: { key: string; label: string; secs: string; repeat: boolean; catches: boolean; refactor: boolean; note: string }[] = [
+  {
+    key: "real",
+    label: "real gateway",
+    secs: "24",
+    repeat: false,
+    catches: true,
+    refactor: true,
+    note: "The test sends 30 real text messages at 0.8 seconds each, costs money every run, and fails whenever the network does. It checks the truth, slowly and unreliably.",
+  },
+  {
+    key: "stub",
+    label: "stub",
+    secs: "0.001",
+    repeat: true,
+    catches: false,
+    refactor: true,
+    note: 'The stub answers "sent" to anything and remembers nothing, so the test can only check what notify_delays returns. It would still pass if the code messaged nobody at all.',
+  },
+  {
+    key: "fake",
+    label: "fake outbox",
+    secs: "0.001",
+    repeat: true,
+    catches: true,
+    refactor: true,
+    note: "The fake keeps an in-memory outbox and implements both send and send_bulk, so the test asserts that every passenger's number received the message. It checks the outcome, not how it was produced, so the bulk refactor leaves it green.",
+  },
+  {
+    key: "mock",
+    label: "strict mock",
+    secs: "0.001",
+    repeat: true,
+    catches: true,
+    refactor: false,
+    note: "The mock expects exactly 30 calls to send, in order, and fails on anything else. It catches a missing message, but when the code is changed to one send_bulk call that delivers the same messages, it fails although nothing is wrong.",
+  },
+];
+
+/** Four stand-ins for an SMS gateway in a test of notify_delays, and what each one can and cannot tell you. */
+function TestDoubles(props: Props) {
+  const [key, setKey] = useState(typeof props.double === "string" && TD_ROWS.some((r) => r.key === props.double) ? props.double : "fake");
+  const row = TD_ROWS.find((r) => r.key === key) ?? TD_ROWS[2];
+  const summary = `With a ${row.label}: ${row.note}`;
+  const cols = [
+    { x: 150, head: "seconds" },
+    { x: 222, head: "repeatable" },
+    { x: 310, head: "catches a" },
+    { x: 400, head: "survives" },
+  ];
+  const yes = (b: boolean) => (b ? "yes" : "no");
+  return (
+    <Frame
+      title="Four stand-ins for an SMS gateway"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">the test uses</span>
+          {TD_ROWS.map((r) => (
+            <button key={r.key} type="button" className="btn btn-secondary btn-small" aria-pressed={r.key === key} onClick={() => setKey(r.key)}>
+              {r.label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 196" role="img" aria-label={`The test uses a ${row.label}`}>
+        {cols.map((c) => (
+          <text key={c.head} x={c.x} y={14} textAnchor="middle" className="fig-small">
+            {c.head}
+          </text>
+        ))}
+        <text x={310} y={28} textAnchor="middle" className="fig-small">
+          missing message
+        </text>
+        <text x={400} y={28} textAnchor="middle" className="fig-small">
+          bulk refactor
+        </text>
+        {TD_ROWS.map((r, i) => {
+          const y = 38 + i * 38;
+          const on = r.key === key;
+          const cells = [r.secs, yes(r.repeat), yes(r.catches), yes(r.refactor)];
+          return (
+            <g key={r.key}>
+              <rect x={4} y={y} width={452} height={32} className={on ? "fig-accent" : "fig-ghost"} />
+              <text x={12} y={y + 20} className="fig-small" style={{ fill: on ? "var(--bg)" : "var(--text)", fontWeight: on ? 600 : 400 }}>
+                {r.label}
+              </text>
+              {cells.map((v, j) => (
+                <text key={j} x={cols[j].x} y={y + 20} textAnchor="middle" className="fig-small" style={{ fill: on ? "var(--bg)" : "var(--text)" }}>
+                  {v}
+                </text>
+              ))}
+            </g>
+          );
+        })}
+      </svg>
+    </Frame>
+  );
+}
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -10014,6 +10276,9 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "bisect-commits": BisectCommits,
   "amdahl-speedup": AmdahlSpeedup,
   "ci-pipeline": CiPipeline,
+  "boundary-tests": BoundaryTests,
+  "test-order": TestOrder,
+  "test-doubles": TestDoubles,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
