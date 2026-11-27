@@ -787,3 +787,84 @@ test("the weights of a decision matrix decide its winner", async ({ page }) => {
   for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Decrease weight of scaling" }).click();
   await expect(figure).toContainText("With these weights, one database server wins with 23, ahead of object storage at 22 and own file servers at 18.");
 });
+
+test("a commit stores only the objects whose contents changed", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="content-store"]').first().getByRole("figure");
+  await expect(figure).toContainText("Commit 2 changes app.py: 1 new blob, 1 new tree and 1 new commit, 3 objects added.");
+  await figure.getByRole("button", { name: "menu.csv", exact: true }).click();
+  await expect(figure).toContainText("2 new blobs, 1 new tree and 1 new commit, 4 objects added.");
+  await figure.getByRole("button", { name: "app.py", exact: true }).click();
+  await figure.getByRole("button", { name: "menu.csv", exact: true }).click();
+  await expect(figure).toContainText("Commit 2 changes no file, so its tree has the same entries and the same id as commit 1's");
+});
+
+test("a three-way merge conflicts only where both sides changed a line differently", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="three-way-merge"]').first().getByRole("figure");
+  await expect(figure).toContainText("1 line changed only on ours, so ours is taken; 1 line changed only on theirs, so theirs is taken.");
+  await figure.getByRole("button", { name: "same line, different edits", exact: true }).click();
+  await expect(figure).toContainText("1 line changed differently on both, a conflict that a person must resolve.");
+  await figure.getByRole("button", { name: "same edit on both", exact: true }).click();
+  await expect(figure).toContainText("1 line changed the same way on both, so that change is taken once.");
+});
+
+test("splitting a large change into smaller pull requests catches more defects", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="review-size"]').first().getByRole("figure");
+  await expect(figure).toContainText("One pull request of 1,200 lines.");
+  await expect(figure).toContainText("a review catches about 1.4 of them on average");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase pull requests" }).click();
+  await expect(figure).toContainText("4 pull requests of 300 lines each.");
+  await expect(figure).toContainText("the reviews catch about 5.6 of the 12 on average.");
+});
+
+test("a change rebuilds only the targets that depend on it", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="build-graph"]').first().getByRole("figure");
+  await expect(figure).toContainText("Changing utils.h rebuilds menu.o, orders.o, app and tests: 4 of 7 targets.");
+  await figure.getByRole("button", { name: "pay.c", exact: true }).click();
+  await expect(figure).toContainText("Changing pay.c rebuilds pay.o, app and tests: 3 of 7 targets.");
+});
+
+test("a resolver picks the newest version both ranges allow, or fails", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="version-ranges"]').first().getByRole("figure");
+  await expect(figure).toContainText("The resolver picks the newest, 1.10.0, and the lock file records it");
+  await figure.getByRole("button", { name: "^2.0.0", exact: true }).click();
+  await expect(figure).toContainText("No published version satisfies both, so installation fails");
+  await figure.getByRole("button", { name: "~1.5.0", exact: true }).click();
+  await expect(figure).toContainText("Only 1.5.2 satisfies both.");
+});
+
+test("bisection finds the first bad commit of 64 in six tests", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="bisect-commits"]').first().getByRole("figure");
+  await expect(figure).toContainText("The first bad commit could be any of commits 1 to 63. The first test is commit 31, halfway.");
+  await figure.getByRole("button", { name: "Increase tests done" }).click();
+  await expect(figure).toContainText("Test 1: commit 31 is good, so the first bad commit comes after it. 32 commits remain as candidates, 32 to 63; next, test commit 47.");
+  for (let i = 0; i < 5; i++) await figure.getByRole("button", { name: "Increase tests done" }).click();
+  await expect(figure).toContainText("After 6 tests, commit 40 is good and commit 41 is bad, so commit 41 introduced the bug.");
+});
+
+test("speeding up a small part of a program barely helps the whole", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="amdahl-speedup"]').first().getByRole("figure");
+  await expect(figure).toContainText("Making it 10 times faster brings the whole program from 60 to 49.2 seconds, 1.22 times faster.");
+  await expect(figure).toContainText("the whole could never be more than 1.25 times faster.");
+  await figure.getByRole("button", { name: "parse", exact: true }).click();
+  for (let i = 0; i < 8; i++) await figure.getByRole("button", { name: "Decrease times faster" }).click();
+  await expect(figure).toContainText("Making it 2 times faster brings the whole program from 60 to 43.5 seconds, 1.38 times faster.");
+});
+
+test("more runners shorten a pipeline only until the longest job decides", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="ci-pipeline"]').first().getByRole("figure");
+  await expect(figure).toContainText("With 1 runner, installing takes 6 minutes, the four checks are done 19 minutes after that");
+  await expect(figure).toContainText("32 minutes from push to result.");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase runners" }).click();
+  await expect(figure).toContainText("22 minutes from push to result. The 9-minute unit tests now set the length of the middle stage");
+  await figure.getByRole("button", { name: "cache dependencies", exact: true }).click();
+  await expect(figure).toContainText("installing takes 1 minute");
+  await expect(figure).toContainText("17 minutes from push to result.");
+});

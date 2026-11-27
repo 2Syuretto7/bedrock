@@ -8612,7 +8612,7 @@ function CiPipeline(props: Props) {
   const total = middleEnd + e2e;
   const middleLen = middleEnd - install;
   const bound = runners >= 3 ? " The 9-minute unit tests now set the length of the middle stage, so another runner would not help; splitting the unit tests into smaller jobs would." : "";
-  const summary = `With ${plural(runners, "runner")}${cache ? " and a dependency cache" : ""}, installing takes ${plural(install, "minute")}, the four checks take ${plural(middleLen, "minute")} between them, and the end-to-end tests ${e2e} more: ${plural(total, "minute")} from push to result.${bound}`;
+  const summary = `With ${plural(runners, "runner")}${cache ? " and a dependency cache" : ""}, installing takes ${plural(install, "minute")}, the four checks are done ${plural(middleLen, "minute")} after that, and the end-to-end tests take ${e2e} more: ${plural(total, "minute")} from push to result.${bound}`;
   const scale = 440 / 32;
   const rowH = 26;
   return (
