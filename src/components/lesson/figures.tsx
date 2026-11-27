@@ -9016,6 +9016,69 @@ function PropertyRuns(props: Props) {
     </Frame>
   );
 }
+const TC_OPTIONS = [280, 315, 340, 480];
+
+/** Checking a route planner without knowing the true distances: the triangle rule as an oracle. */
+function TriangleCheck(props: Props) {
+  const start = Math.round(num(props.pn, 340));
+  const [pn, setPn] = useState(TC_OPTIONS.includes(start) ? start : 340);
+  const pm = 150;
+  const mn = 165;
+  const via = pm + mn;
+  const broken = pn > via;
+  const summary = broken
+    ? `The planner says Pune to Nashik is ${group(pn)} km, but going through Mumbai takes ${pm} + ${mn} = ${via} km, so ${group(pn)} cannot be the shortest distance. At least one of the three answers is wrong, by ${group(pn - via)} km or more in all, though the check cannot say which.`
+    : `All three triangle rules hold: ${group(pn)} ≤ ${pm} + ${mn} = ${via}, ${pm} ≤ ${group(pn)} + ${mn}, and ${mn} ≤ ${group(pn)} + ${pm}. The answers are consistent with each other, which does not prove that any of them is right.`;
+  const P = { x: 70, y: 150 };
+  const M = { x: 230, y: 50 };
+  const N = { x: 390, y: 150 };
+  return (
+    <Frame
+      title="A rule the answers must obey"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">planner says Pune to Nashik is</span>
+          {TC_OPTIONS.map((v) => (
+            <button key={v} type="button" className="btn btn-secondary btn-small" aria-pressed={v === pn} onClick={() => setPn(v)}>
+              {`${group(v)} km`}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 184" role="img" aria-label={broken ? "The triangle rule is broken" : "The triangle rule holds"}>
+        <line x1={P.x} y1={P.y} x2={M.x} y2={M.y} className="fig-line" />
+        <line x1={M.x} y1={M.y} x2={N.x} y2={N.y} className="fig-line" />
+        <line x1={P.x} y1={P.y} x2={N.x} y2={N.y} className={broken ? "fig-accent-line" : "fig-line"} style={{ strokeWidth: broken ? 3 : undefined }} />
+        {[
+          { c: P, name: "Pune" },
+          { c: M, name: "Mumbai" },
+          { c: N, name: "Nashik" },
+        ].map(({ c, name }) => (
+          <g key={name}>
+            <circle cx={c.x} cy={c.y} r={7} className="fig-fill" />
+            <text x={c.x} y={c.y + (c.y < 100 ? -14 : 24)} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+              {name}
+            </text>
+          </g>
+        ))}
+        <text x={(P.x + M.x) / 2 - 14} y={(P.y + M.y) / 2} textAnchor="end" className="fig-small">
+          {`${pm} km`}
+        </text>
+        <text x={(M.x + N.x) / 2 + 14} y={(M.y + N.y) / 2} className="fig-small">
+          {`${mn} km`}
+        </text>
+        <text x={(P.x + N.x) / 2} y={P.y - 8} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`${group(pn)} km`}
+        </text>
+        <text x={10} y={16} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {broken ? `broken: ${group(pn)} > ${via}` : `consistent: ${group(pn)} ≤ ${via}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -10368,6 +10431,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "test-order": TestOrder,
   "test-doubles": TestDoubles,
   "property-runs": PropertyRuns,
+  "triangle-check": TriangleCheck,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
