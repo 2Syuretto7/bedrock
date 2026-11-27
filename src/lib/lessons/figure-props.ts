@@ -126,6 +126,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "page-cursor": z.strictObject({ mode: z.enum(["offset", "cursor"]).optional(), arrived: z.number().optional() }),
   "decision-matrix": z.strictObject({ cost: z.number().optional(), effort: z.number().optional(), scale: z.number().optional() }),
   "content-store": z.strictObject({ changed: z.array(z.string()).optional() }),
+  "three-way-merge": z.strictObject({ scenario: z.enum(["separate", "same", "identical", "oneside"]).optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),

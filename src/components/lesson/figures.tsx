@@ -8108,6 +8108,93 @@ function ContentStore(props: Props) {
   );
 }
 
+const TWM_BASE = ["mon rajma", "tue chole", "wed idli", "thu poha", "fri biryani"];
+const TWM_CASES: Record<string, { label: string; ours: string[]; theirs: string[] }> = {
+  separate: { label: "different lines", ours: ["mon rajma", "tue bhature", "wed idli", "thu poha", "fri biryani"], theirs: ["mon rajma", "tue chole", "wed idli", "thu upma", "fri biryani"] },
+  same: { label: "same line, different edits", ours: ["mon rajma", "tue chole", "wed dosa", "thu poha", "fri biryani"], theirs: ["mon rajma", "tue chole", "wed pongal", "thu poha", "fri biryani"] },
+  identical: { label: "same edit on both", ours: ["mon rajma", "tue chole", "wed idli", "thu poha", "fri pulao"], theirs: ["mon rajma", "tue chole", "wed idli", "thu poha", "fri pulao"] },
+  oneside: { label: "only one side edits", ours: TWM_BASE, theirs: ["mon kadhi", "tue chole", "wed idli", "thu poha", "fri pulao"] },
+};
+
+/** A line-by-line three-way merge of a week's menu, with the rule each line follows. */
+function ThreeWayMerge(props: Props) {
+  const keys = Object.keys(TWM_CASES);
+  const [key, setKey] = useState(typeof props.scenario === "string" && keys.includes(props.scenario) ? props.scenario : "separate");
+  const { ours, theirs } = TWM_CASES[key];
+  const rows = TWM_BASE.map((base, i) => {
+    const o = ours[i];
+    const t = theirs[i];
+    if (o === t) return { base, o, t, result: o, rule: o === base ? "same" : "both" };
+    if (o === base) return { base, o, t, result: t, rule: "theirs" };
+    if (t === base) return { base, o, t, result: o, rule: "ours" };
+    return { base, o, t, result: "CONFLICT", rule: "conflict" };
+  });
+  const conflicts = rows.filter((r) => r.rule === "conflict").length;
+  const fromOurs = rows.filter((r) => r.rule === "ours").length;
+  const fromTheirs = rows.filter((r) => r.rule === "theirs").length;
+  const fromBoth = rows.filter((r) => r.rule === "both").length;
+  const parts: string[] = [];
+  if (fromOurs) parts.push(`${fromOurs} ${fromOurs === 1 ? "line" : "lines"} changed only on ours, so ours is taken`);
+  if (fromTheirs) parts.push(`${fromTheirs} ${fromTheirs === 1 ? "line" : "lines"} changed only on theirs, so theirs is taken`);
+  if (fromBoth) parts.push(`${fromBoth} ${fromBoth === 1 ? "line" : "lines"} changed the same way on both, so that change is taken once`);
+  if (conflicts) parts.push(`${conflicts} ${conflicts === 1 ? "line" : "lines"} changed differently on both, a conflict that a person must resolve`);
+  const summary = `Compared with the common base: ${parts.join("; ")}. ${conflicts ? "The merge stops until the conflict is resolved." : "Every other line is unchanged, and the merge completes on its own."}`;
+  const cols: [string, (r: (typeof rows)[number]) => string, (r: (typeof rows)[number]) => boolean][] = [
+    ["base", (r) => r.base, () => false],
+    ["ours", (r) => r.o, (r) => r.o !== r.base],
+    ["theirs", (r) => r.t, (r) => r.t !== r.base],
+    ["merged", (r) => r.result, (r) => r.result !== r.base],
+  ];
+  return (
+    <Frame
+      title="A three-way merge, line by line"
+      summary={summary}
+      controls={
+        <>
+          {keys.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={k === key} onClick={() => setKey(k)}>
+              {TWM_CASES[k].label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 172" role="img" aria-label={`Merged menu: ${conflicts} ${conflicts === 1 ? "conflict" : "conflicts"}`}>
+        {cols.map(([name], c) => (
+          <text key={name} x={8 + c * 114} y={16} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+            {name}
+          </text>
+        ))}
+        {rows.map((r, i) =>
+          cols.map(([name, text, hot], c) => {
+            const conflict = c === 3 && r.rule === "conflict";
+            const filled = conflict || (c === 3 && hot(r));
+            return (
+              <g key={`${name}-${i}`}>
+                <rect
+                  x={6 + c * 114}
+                  y={26 + i * 26}
+                  width={106}
+                  height={22}
+                  rx={2}
+                  className={filled ? "fig-accent" : "fig-ghost"}
+                  style={!filled && hot(r) ? { stroke: "var(--text)", strokeWidth: 2 } : undefined}
+                />
+                <text x={12 + c * 114} y={41 + i * 26} className="fig-small" style={{ fill: filled ? "var(--bg)" : "var(--text)", fontWeight: filled ? 600 : 400 }}>
+                  {text(r)}
+                </text>
+              </g>
+            );
+          }),
+        )}
+        <text x={8} y={164} className="fig-small">
+          outlined: changed from base; filled: merged line that differs
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -9449,6 +9536,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "page-cursor": PageCursor,
   "decision-matrix": DecisionMatrix,
   "content-store": ContentStore,
+  "three-way-merge": ThreeWayMerge,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
