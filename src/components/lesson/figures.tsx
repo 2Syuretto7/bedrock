@@ -8587,6 +8587,85 @@ function AmdahlSpeedup(props: Props) {
     </Frame>
   );
 }
+/** A CI pipeline in three stages on a pool of runners: what more runners and a dependency cache each buy. */
+function CiPipeline(props: Props) {
+  const [runners, setRunners] = useState(clamp(Math.round(num(props.runners, 1)), 1, 4));
+  const [cache, setCache] = useState(props.cache === true);
+  const install = cache ? 1 : 6;
+  const middle = [
+    { name: "lint", mins: 2 },
+    { name: "types", mins: 3 },
+    { name: "unit", mins: 9 },
+    { name: "build", mins: 5 },
+  ];
+  const e2e = 7;
+  const bars: { name: string; runner: number; start: number; mins: number }[] = [{ name: "install", runner: 0, start: 0, mins: install }];
+  const freeAt = Array.from({ length: runners }, () => install);
+  for (const job of middle) {
+    let first = 0;
+    for (let i = 1; i < runners; i++) if (freeAt[i] < freeAt[first]) first = i;
+    bars.push({ name: job.name, runner: first, start: freeAt[first], mins: job.mins });
+    freeAt[first] += job.mins;
+  }
+  const middleEnd = Math.max(...freeAt);
+  bars.push({ name: "e2e", runner: 0, start: middleEnd, mins: e2e });
+  const total = middleEnd + e2e;
+  const middleLen = middleEnd - install;
+  const bound = runners >= 3 ? " The 9-minute unit tests now set the length of the middle stage, so another runner would not help; splitting the unit tests into smaller jobs would." : "";
+  const summary = `With ${plural(runners, "runner")}${cache ? " and a dependency cache" : ""}, installing takes ${plural(install, "minute")}, the four checks take ${plural(middleLen, "minute")} between them, and the end-to-end tests ${e2e} more: ${plural(total, "minute")} from push to result.${bound}`;
+  const scale = 440 / 32;
+  const rowH = 26;
+  return (
+    <Frame
+      title="A pipeline on a pool of runners"
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="runners" value={runners} min={1} max={4} onChange={setRunners} />
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={cache} onClick={() => setCache(!cache)}>
+            cache dependencies
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 184" role="img" aria-label={`Pipeline takes ${plural(total, "minute")} on ${plural(runners, "runner")}`}>
+        <text x={10} y={14} className="fig-small">
+          one row per runner; time runs left to right
+        </text>
+        {Array.from({ length: 4 }, (_, r) => (
+          <rect key={r} x={10} y={24 + r * rowH} width={440} height={rowH - 4} className={r < runners ? "fig-ghost" : "fig-grid"} style={r < runners ? undefined : { fill: "none" }} />
+        ))}
+        {bars.map((b) => {
+          const w = b.mins * scale;
+          return (
+            <g key={b.name}>
+              <rect x={10 + b.start * scale} y={24 + b.runner * rowH} width={Math.max(w - 1.5, 1)} height={rowH - 4} className={b.name === "unit" ? "fig-accent" : "fig-fill"} />
+              {w >= 34 ? (
+                <text x={10 + b.start * scale + w / 2} y={24 + b.runner * rowH + 15} textAnchor="middle" className="fig-small" style={{ fill: "var(--bg)" }}>
+                  {b.name}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+        {[install, middleEnd].map((t, i) => (
+          <line key={i} x1={10 + t * scale} y1={20} x2={10 + t * scale} y2={24 + 4 * rowH} className="fig-guide" />
+        ))}
+        {[0, 8, 16, 24, 32].map((t) => (
+          <text key={t} x={10 + t * scale} y={142} textAnchor="middle" className="fig-small">
+            {t}
+          </text>
+        ))}
+        <text x={10} y={158} className="fig-small">
+          jobs in order: install, lint, types, unit (highlighted), build, e2e
+        </text>
+        <text x={10} y={176} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`push to result: ${plural(total, "minute")}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -9934,6 +10013,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "version-ranges": VersionRanges,
   "bisect-commits": BisectCommits,
   "amdahl-speedup": AmdahlSpeedup,
+  "ci-pipeline": CiPipeline,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

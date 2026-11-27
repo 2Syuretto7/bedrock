@@ -132,6 +132,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "version-ranges": z.strictObject({ other: z.enum(["ge16", "tilde15", "caret2"]).optional() }),
   "bisect-commits": z.strictObject({ bad: z.number().optional(), steps: z.number().optional() }),
   "amdahl-speedup": z.strictObject({ part: z.string().optional(), factor: z.number().optional() }),
+  "ci-pipeline": z.strictObject({ runners: z.number().optional(), cache: z.boolean().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),
