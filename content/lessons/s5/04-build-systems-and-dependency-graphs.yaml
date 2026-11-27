@@ -1,0 +1,565 @@
+concept: s5.build-systems-and-dependency-graphs
+minutes: 80
+claim: You can describe a build as a graph of steps with declared inputs and outputs, order the steps with a topological sort, work out exactly which outputs a change makes stale, explain why timestamps can mislead and why caching by a hash of every input, flags included, is safer, find the shortest possible build time with unlimited machines from the critical path, and explain how undeclared inputs make builds wrong.
+recalls: [s5.code-review, s3.topological-sort]
+uses: [s2.graphs-and-their-representations, s5.version-control-as-a-content-addressed-store, s3.dynamic-programming, s4.modules-coupling-and-cohesion]
+leads: [s5.packages-and-reproducible-environments, s5.continuous-integration, h3.build-tools-make-and-compiler-flags, d7.building-images]
+starter: |
+  # Scratch space. Which targets does a change to utils.h reach?
+  deps = {
+      "menu.o": ["menu.c", "utils.h"],
+      "orders.o": ["orders.c", "utils.h"],
+      "app": ["menu.o", "orders.o"],
+  }
+  dirty = {"utils.h"}
+  for target in ["menu.o", "orders.o", "app"]:
+      if any(i in dirty for i in deps[target]):
+          dirty.add(target)
+  print(sorted(dirty))
+parts:
+  recall:
+    - text: |
+        [[s5.code-review]] left the tireless checking to machines: build every change and run every test, every time. That is only practical if building is fast, and building is fast only if a machine knows exactly what depends on what, so that it redoes the work a change affects and nothing more. [[s3.topological-sort]] already gave the order in which dependent tasks can run. This lesson turns it into a build system. Three quick pulls first.
+  puzzle:
+    - text: |
+        A small program's full build has seven steps. Compiling `utils.o` takes 30 seconds, `menu.o` 40, `orders.o` 50 and `pay.o` 20; each needs only its own source files. Linking `app` takes 10 seconds and needs all four compiled files. Running `tests` takes 60 seconds and needs `app`. Generating `docs` takes 25 seconds and needs only source files.
+
+        Done one after another, the build takes 235 seconds.
+
+        **With as many machines as you like, each step starting the moment its inputs are ready, how many seconds does the full build take?**
+  intuition:
+    - text: |
+        A wedding caterer in Hyderabad plans the biryani by working backwards. The rice must be par-boiled before layering, the meat marinated before it goes in the pot, the onions fried before both, and the dum cooking cannot start until the pot is layered. Some jobs can run side by side, with one cook frying onions while another washes rice; others must wait. And if the client changes the marinade at the last minute, the caterer knows exactly what must be redone: the marinade, the meat, the layering and the dum, but not the rice or the onions.
+
+        A **build system** keeps the same kind of plan for software: every step, what it needs, and what it produces. The figure is a small build. Choose a source file to change and see what must be redone.
+    - figure: build-graph
+      props: { changed: utils.h }
+    - text: |
+        A change spreads along the arrows, to everything built from the changed file, then to everything built from those, and so on, exactly the ripple of imports in [[s4.modules-coupling-and-cohesion]]. Everything else is still correct from the last build and can be reused. Changing `utils.h`, a header that two files include, reaches more of the graph than changing `pay.c`, which only one thing uses; that is why widely shared files make builds slow to change.
+  derivation:
+    - text: |
+        **A build is a graph.** Each step, such as compiling a file, linking a program or generating documentation, is a node with declared inputs and outputs. An arrow runs from each input to each step that uses it, giving a directed acyclic graph of the kind stored in [[s2.graphs-and-their-representations]]. A topological order, from [[s3.topological-sort]], runs every step after all of its inputs; a cycle, two steps each needing the other's output, is an error the build system must report rather than loop on.
+
+        **Incremental builds.** After a change, a step must rerun if any of its inputs changed or was itself rebuilt. Starting from the changed files, the set of stale steps grows by repeatedly adding any step that uses something already in the set, until nothing more is added. Everything outside the set is reused.
+    - question:
+        id: derivation-reach
+        type: numeric
+        system: s2
+        prompt: |
+          In the figure's build, how many of the 7 targets must be rebuilt when `utils.c` changes?
+        answer: "3"
+        explanation: |
+          `utils.o` is compiled from it, `app` links `utils.o`, and `tests` runs `app`. Nothing else uses any of these, so the other four targets are reused.
+    - text: |
+        **Deciding what changed: timestamps.** The classic tool, Make, compares modification times: a target is stale if any input file is newer than it. This is cheap, but it guesses. Copying files or switching branches can give old content a new time and force needless rebuilds; a clock that is wrong, or a file restored from a backup with its old time, can make a stale target look fresh. And a timestamp says nothing about how the step was run: change a compiler flag and every timestamp is the same.
+
+        **Deciding what changed: hashes.** Modern build systems such as Bazel instead compute a key for each step from a hash of everything that affects its output: the contents of every input, the command, its flags and the version of each tool. If an output has been stored under that key before, it is reused; otherwise the step runs and its output is stored under the key. This is the content addressing of [[s5.version-control-as-a-content-addressed-store]] applied to work: identical work is done once, on any machine, and a shared cache lets a whole team reuse each other's results.
+    - question:
+        id: derivation-undeclared
+        type: choice
+        system: s2
+        prompt: |
+          A test step reads `prices.json`, but the build file does not list it as an input. Someone edits `prices.json`. What does a hash-keyed build system do the next time the tests are built?
+        options:
+          - "Reuses the cached test result, because nothing in the step's key changed, so the edit goes untested."
+          - "Reruns the tests, because a file in the repository changed."
+          - "Reports that prices.json is undeclared."
+          - "Deletes the cache."
+        answer: 0
+        explanation: |
+          The key covers only what is declared. An undeclared input lets an old result stand for a new situation, which is why serious build systems run steps in a sandbox where undeclared files cannot be seen at all.
+    - text: |
+        **Hermetic builds.** A build is only as correct as its declared dependencies. If a step can read files, environment variables or network resources that are not in its key, two builds with the same key can produce different outputs, and the cache will quietly serve the wrong one. Builds that see only their declared inputs are called hermetic. They are what make it safe to reuse outputs across machines, and they connect to the next lesson: the versions of tools and libraries a build uses are inputs too, and must be pinned like any other.
+
+        **Running steps in parallel.** Steps whose inputs are ready can run at the same time on different machines or cores. Two numbers bound the time a build can take. The **work** is the sum of all step durations, the time on one machine. The **span**, or **critical path**, is the longest chain of steps that must run one after another, found by computing for each step, in topological order, the time it can finish: its own duration plus the latest finish among its inputs, the same bottom-up reasoning as [[s3.dynamic-programming]]. With unlimited machines the build takes exactly the span; with $p$ machines it takes at least the larger of the span and the work divided by $p$.
+    - question:
+        id: order-step
+        type: order
+        system: s2
+        prompt: |
+          Put the steps a hash-keyed build system takes for one build step in order.
+        steps:
+          - "Make sure every input of the step is up to date, building inputs first."
+          - "Hash the inputs' contents together with the command, flags and tool versions to form the step's key."
+          - "Look the key up in the cache."
+          - "Reuse the stored output if the key is found, or run the step and store its output under the key."
+        explanation: |
+          The key can only be computed once the inputs are final, and the cache decides whether the step runs at all. Nothing in this order depends on timestamps.
+    - text: |
+        **Making builds fast is a design problem.** The critical path, not the number of machines, sets the floor, so the way to speed up a build is often to shorten its longest chain: split a huge module that everything waits for, or stop a widely used header from including things most of its users do not need. A dependency graph with few, narrow arrows rebuilds little after each change and parallelises well; a tangle rebuilds everything and runs in a line. The same ideas appear in compiled languages' toolchains, [[h3.build-tools-make-and-compiler-flags]], and in container images, whose layers are rebuilt only from the first changed instruction onwards, [[d7.building-images]].
+  formal:
+    - text: |
+        **Build graph.** A directed acyclic graph of steps, each with declared inputs and outputs; steps run in topological order, and a cycle is an error.
+
+        **Stale set.** The changed files plus every step that uses something in the set, added repeatedly until nothing changes; everything else is reused.
+
+        **Timestamp rebuild.** A target is stale if an input is newer; cheap but blind to flags, tool versions and unreliable clocks.
+
+        **Hash-keyed cache.** A step's key is a hash of its input contents, command, flags and tool versions; equal keys reuse the stored output.
+
+        **Hermetic build.** Steps see only their declared inputs, so equal keys guarantee equal outputs.
+
+        **Work and span.** Work is the total duration of all steps; span is the longest chain of dependent steps. With $p$ machines the build takes at least $\max(\text{span}, \text{work}/p)$, and exactly the span with unlimited machines.
+  drill:
+    - text: Seconds each. Follow the arrows from what changed.
+    - question:
+        id: drill-reach-header
+        type: numeric
+        system: s1
+        prompt: |
+          In the figure's build, how many targets are rebuilt when `pay.c` changes?
+        answer: "3"
+        explanation: "`pay.o`, then `app`, then `tests`."
+    - question:
+        id: drill-cycle
+        type: choice
+        system: s1
+        prompt: |
+          Step A needs B's output and step B needs A's output. What should a build system do?
+        options:
+          - "Report the cycle as an error"
+          - "Run A first"
+          - "Run both at once"
+          - "Run each one twice"
+        answer: 0
+        explanation: Neither can start before the other finishes, so no order works; the graph must be fixed.
+    - question:
+        id: drill-flags
+        type: choice
+        system: s1
+        prompt: |
+          You change a compiler flag from -O0 to -O2 and touch no source file. What does a timestamp-based build do?
+        options:
+          - "Nothing, since no file is newer than its target, so the old -O0 outputs remain"
+          - "Rebuilds everything"
+          - "Rebuilds only the linked program"
+          - "Reports an error"
+        answer: 0
+        explanation: Timestamps see only files, not how a step is run; a hash-keyed build would include the flag in each key.
+    - question:
+        id: drill-bound
+        type: numeric
+        system: s1
+        prompt: |
+          A build's work is 600 seconds and its span is 100 seconds. With 3 machines, what is the least time it can take, in seconds?
+        answer: "200"
+        explanation: $\max(100, 600 / 3) = 200$; here the machines, not the chain, are the limit.
+    - question:
+        id: predict-stale
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          deps = {"b": ["a"], "c": ["b"], "d": ["x"]}
+          dirty = {"a"}
+          for target in ["b", "c", "d"]:
+              if any(i in dirty for i in deps[target]):
+                  dirty.add(target)
+          print(sorted(dirty))
+        output: "['a', 'b', 'c']"
+        explanation: b uses a, c uses b, and d uses only x, which did not change.
+    - question:
+        id: predict-finish
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          finish = {}
+          finish["compile"] = 0 + 40
+          finish["lint"] = 0 + 15
+          finish["test"] = max(finish["compile"], finish["lint"]) + 30
+          print(finish["test"])
+        output: "70"
+        explanation: The test step waits for the later of its two inputs, compile at 40, and then takes 30 more.
+  work:
+    - text: Slower now. Each problem is one part of a build system.
+    - question:
+        id: fix-cache-key
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `build` must reuse a cached output only when exactly the same build has been done before. The program should print `binary built with -O2 2`. It prints `binary built with -O0 1`. Find the fault and fix it.
+        starter: |
+          import hashlib
+
+          cache = {}
+          runs = []
+
+
+          def build(sources, flags):
+              # Reuse a cached output only if the same build has already been done.
+              key = hashlib.sha256("\n".join(sources).encode()).hexdigest()
+              if key not in cache:
+                  runs.append(flags)
+                  cache[key] = "binary built with " + flags
+              return cache[key]
+
+
+          src = ["print('menu')", "print('orders')"]
+          a = build(src, "-O0")
+          b = build(src, "-O2")
+          c = build(src, "-O2")
+          print(b, len(runs))
+        solution: |
+          import hashlib
+
+          cache = {}
+          runs = []
+
+
+          def build(sources, flags):
+              # Reuse a cached output only if the same build has already been done.
+              key = hashlib.sha256((flags + "\n" + "\n".join(sources)).encode()).hexdigest()
+              if key not in cache:
+                  runs.append(flags)
+                  cache[key] = "binary built with " + flags
+              return cache[key]
+
+
+          src = ["print('menu')", "print('orders')"]
+          a = build(src, "-O0")
+          b = build(src, "-O2")
+          c = build(src, "-O2")
+          print(b, len(runs))
+        tests: |
+          cache.clear()
+          runs.clear()
+          _s1 = ["a = 1"]
+          _s2 = ["a = 2"]
+          assert build(_s1, "-O0") == "binary built with -O0"
+          assert build(_s1, "-O2") == "binary built with -O2", "Building the same sources with different flags must not reuse the other flags' output"
+          assert build(_s2, "-O2") == "binary built with -O2"
+          _n = len(runs)
+          assert _n == 3, "Three different builds should run 3 times, not " + str(_n)
+          build(_s1, "-O0")
+          build(_s1, "-O2")
+          build(_s2, "-O2")
+          assert len(runs) == 3, "Repeating builds already done, even after switching flags back, must reuse the cache; it ran " + str(len(runs) - 3) + " extra builds"
+          build(_s1, "-Og")
+          assert len(runs) == 4, "New flags with old sources are a new build, so it must run"
+          assert output.strip() == "binary built with -O2 2", "The program should print binary built with -O2 2"
+        wrong:
+          - |
+            import hashlib
+
+            cache = {}
+            runs = []
+
+
+            def build(sources, flags):
+                # Reuse a cached output only if the same build has already been done.
+                key = hashlib.sha256(flags.encode()).hexdigest()
+                if key not in cache:
+                    runs.append(flags)
+                    cache[key] = "binary built with " + flags
+                return cache[key]
+
+
+            src = ["print('menu')", "print('orders')"]
+            a = build(src, "-O0")
+            b = build(src, "-O2")
+            c = build(src, "-O2")
+            print(b, len(runs))
+          - |
+            import hashlib
+
+            cache = {}
+            runs = []
+
+
+            def build(sources, flags):
+                # Reuse a cached output only if the same build has already been done.
+                key = hashlib.sha256("\n".join(sources).encode()).hexdigest() + flags[:2]
+                if key not in cache:
+                    runs.append(flags)
+                    cache[key] = "binary built with " + flags
+                return cache[key]
+
+
+            src = ["print('menu')", "print('orders')"]
+            a = build(src, "-O0")
+            b = build(src, "-O2")
+            c = build(src, "-O2")
+            print(b, len(runs))
+          - |
+            import hashlib
+
+            cache = {}
+            runs = []
+
+
+            last_flags = []
+
+
+            def build(sources, flags):
+                # Reuse a cached output only if the same build has already been done.
+                key = hashlib.sha256("\n".join(sources).encode()).hexdigest()
+                if last_flags != [flags]:
+                    cache.clear()
+                    last_flags.clear()
+                    last_flags.append(flags)
+                if key not in cache:
+                    runs.append(flags)
+                    cache[key] = "binary built with " + flags
+                return cache[key]
+
+
+            src = ["print('menu')", "print('orders')"]
+            a = build(src, "-O0")
+            b = build(src, "-O2")
+            c = build(src, "-O2")
+            print(b, len(runs))
+        explanation: |
+          The key hashed only the sources, so the -O2 build found the -O0 output under the same key and returned it. The flags affect the output, so they belong in the key. Hashing only the flags lets different sources share an output; keeping only part of the flags makes -O0 and -O2 collide; and clearing the cache whenever the flags change rebuilds work that is already stored.
+    - question:
+        id: write-to-rebuild
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `to_rebuild(deps, changed)`, where `deps` maps each target to the list of its inputs and `changed` is a set of changed files. Return the sorted list of targets that depend on a changed file, directly or through other targets, whatever order `deps` lists them in. The program should print `['app', 'menu.o', 'orders.o', 'tests'] ['app', 'docs', 'orders.o', 'pay.o', 'tests']`.
+        starter: |
+          def to_rebuild(deps, changed):
+              # deps maps each target to the list of its inputs. Return the sorted
+              # list of targets that depend on a changed file, directly or through
+              # other targets.
+              return []
+
+
+          deps = {
+              "utils.o": ["utils.c"],
+              "menu.o": ["menu.c", "utils.h"],
+              "orders.o": ["orders.c", "utils.h"],
+              "pay.o": ["pay.c"],
+              "docs": ["menu.c", "orders.c"],
+              "app": ["utils.o", "menu.o", "orders.o", "pay.o"],
+              "tests": ["app"],
+          }
+          print(to_rebuild(deps, {"utils.h"}), to_rebuild(deps, {"pay.c", "orders.c"}))
+        solution: |
+          def to_rebuild(deps, changed):
+              dirty = set(changed)
+              grew = True
+              while grew:
+                  grew = False
+                  for target in deps:
+                      if target not in dirty and any(i in dirty for i in deps[target]):
+                          dirty.add(target)
+                          grew = True
+              return sorted(t for t in dirty if t in deps)
+
+
+          deps = {
+              "utils.o": ["utils.c"],
+              "menu.o": ["menu.c", "utils.h"],
+              "orders.o": ["orders.c", "utils.h"],
+              "pay.o": ["pay.c"],
+              "docs": ["menu.c", "orders.c"],
+              "app": ["utils.o", "menu.o", "orders.o", "pay.o"],
+              "tests": ["app"],
+          }
+          print(to_rebuild(deps, {"utils.h"}), to_rebuild(deps, {"pay.c", "orders.c"}))
+        tests: |
+          _d = {"z": ["y"], "y": ["x"], "x": ["s"], "w": ["t"], "v": ["s", "t"]}
+          _got = to_rebuild(_d, {"s"})
+          assert _got == ["v", "x", "y", "z"], "Changing s rebuilds x and v directly, then y through x and z through y: ['v', 'x', 'y', 'z'], not " + str(_got)
+          _got = to_rebuild(_d, {"t"})
+          assert _got == ["v", "w"], "Changing t rebuilds ['v', 'w'], not " + str(_got)
+          _got = to_rebuild(_d, set())
+          assert _got == [], "With nothing changed, nothing is rebuilt, not " + str(_got)
+          _got = to_rebuild(_d, {"unrelated.txt"})
+          assert _got == [], "A changed file that nothing uses rebuilds nothing, not " + str(_got)
+          assert output.strip() == "['app', 'menu.o', 'orders.o', 'tests'] ['app', 'docs', 'orders.o', 'pay.o', 'tests']", "The program should print ['app', 'menu.o', 'orders.o', 'tests'] ['app', 'docs', 'orders.o', 'pay.o', 'tests']"
+        wrong:
+          - |
+            def to_rebuild(deps, changed):
+                return sorted(t for t in deps if any(i in changed for i in deps[t]))
+
+
+            deps = {
+                "utils.o": ["utils.c"],
+                "menu.o": ["menu.c", "utils.h"],
+                "orders.o": ["orders.c", "utils.h"],
+                "pay.o": ["pay.c"],
+                "docs": ["menu.c", "orders.c"],
+                "app": ["utils.o", "menu.o", "orders.o", "pay.o"],
+                "tests": ["app"],
+            }
+            print(to_rebuild(deps, {"utils.h"}), to_rebuild(deps, {"pay.c", "orders.c"}))
+          - |
+            def to_rebuild(deps, changed):
+                dirty = set(changed)
+                for target in deps:
+                    if any(i in dirty for i in deps[target]):
+                        dirty.add(target)
+                return sorted(t for t in dirty if t in deps)
+
+
+            deps = {
+                "utils.o": ["utils.c"],
+                "menu.o": ["menu.c", "utils.h"],
+                "orders.o": ["orders.c", "utils.h"],
+                "pay.o": ["pay.c"],
+                "docs": ["menu.c", "orders.c"],
+                "app": ["utils.o", "menu.o", "orders.o", "pay.o"],
+                "tests": ["app"],
+            }
+            print(to_rebuild(deps, {"utils.h"}), to_rebuild(deps, {"pay.c", "orders.c"}))
+          - |
+            def to_rebuild(deps, changed):
+                dirty = set(changed)
+                grew = True
+                while grew:
+                    grew = False
+                    for target in deps:
+                        if target not in dirty and any(i in dirty for i in deps[target]):
+                            dirty.add(target)
+                            grew = True
+                return sorted(dirty)
+
+
+            deps = {
+                "utils.o": ["utils.c"],
+                "menu.o": ["menu.c", "utils.h"],
+                "orders.o": ["orders.c", "utils.h"],
+                "pay.o": ["pay.c"],
+                "docs": ["menu.c", "orders.c"],
+                "app": ["utils.o", "menu.o", "orders.o", "pay.o"],
+                "tests": ["app"],
+            }
+            print(to_rebuild(deps, {"utils.h"}), to_rebuild(deps, {"pay.c", "orders.c"}))
+        explanation: |
+          Keep adding targets that use anything already stale until a full pass adds nothing. Looking only at direct inputs misses everything built from rebuilt targets; a single pass works only when the dictionary happens to list targets in build order; and returning the whole stale set includes the changed source files, which are not targets.
+    - question:
+        id: write-finish-time
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `finish_time(times, deps)`, which returns when the last step of a build finishes if every step starts as soon as all the steps it depends on are done, with as many machines as needed. The program should print `240`.
+        starter: |
+          def finish_time(times, deps):
+              # times maps each step to its duration in seconds; deps maps each step to
+              # the steps that must finish before it starts. With as many machines as
+              # needed, every step starts as soon as all its inputs are done. Return
+              # the time at which the last step finishes.
+              return sum(times.values())
+
+
+          times = {"lint": 20, "compile": 90, "unit": 60, "bundle": 30, "e2e": 120, "docs": 45}
+          deps = {"lint": [], "compile": [], "unit": ["compile"], "bundle": ["compile"], "e2e": ["bundle"], "docs": []}
+          print(finish_time(times, deps))
+        solution: |
+          def finish_time(times, deps):
+              done = {}
+
+              def finish(step):
+                  if step not in done:
+                      start = 0
+                      for before in deps[step]:
+                          start = max(start, finish(before))
+                      done[step] = start + times[step]
+                  return done[step]
+
+              return max(finish(step) for step in times)
+
+
+          times = {"lint": 20, "compile": 90, "unit": 60, "bundle": 30, "e2e": 120, "docs": 45}
+          deps = {"lint": [], "compile": [], "unit": ["compile"], "bundle": ["compile"], "e2e": ["bundle"], "docs": []}
+          print(finish_time(times, deps))
+        tests: |
+          _t = {"a": 5, "b": 3, "c": 4, "d": 2}
+          _g = {"a": [], "b": ["a"], "c": ["a"], "d": ["b", "c"]}
+          _got = finish_time(_t, _g)
+          assert _got == 11, "a takes 5, then b and c run side by side, c finishing at 9, then d runs to 11; got " + str(_got)
+          _got = finish_time({"x": 7, "y": 9}, {"x": [], "y": []})
+          assert _got == 9, "Two independent steps run side by side, so the build takes 9, not " + str(_got)
+          _t2 = {"p": 1, "q": 1, "r": 1, "s": 1}
+          _g2 = {"p": [], "q": ["p"], "r": ["q"], "s": ["r"]}
+          _got = finish_time(_t2, _g2)
+          assert _got == 4, "A chain of four 1-second steps takes 4 seconds, not " + str(_got)
+          _t3 = {"m": 2, "n": 10, "o": 1}
+          _g3 = {"m": [], "n": [], "o": ["m", "n"]}
+          _got = finish_time(_t3, _g3)
+          assert _got == 11, "o waits for its slowest input, n, which finishes at 10, so the build ends at 11, not " + str(_got)
+          _t4 = {"k1": 3, "k2": 3, "k3": 3, "k4": 3}
+          _g4 = {"k1": [], "k2": ["k1"], "k3": ["k2"], "k4": ["k1", "k3"]}
+          _got = finish_time(_t4, _g4)
+          assert _got == 12, "k4 waits for k3, which finishes at 9 after k1 and k2, so the build ends at 12, not " + str(_got)
+          assert output.strip() == "240", "The program should print 240"
+        wrong:
+          - |
+            def finish_time(times, deps):
+                done = {}
+
+                def finish(step):
+                    if step not in done:
+                        start = 0
+                        for before in deps[step]:
+                            start = start + finish(before)
+                        done[step] = start + times[step]
+                    return done[step]
+
+                return max(finish(step) for step in times)
+
+
+            times = {"lint": 20, "compile": 90, "unit": 60, "bundle": 30, "e2e": 120, "docs": 45}
+            deps = {"lint": [], "compile": [], "unit": ["compile"], "bundle": ["compile"], "e2e": ["bundle"], "docs": []}
+            print(finish_time(times, deps))
+          - |
+            def finish_time(times, deps):
+                return max(times.values())
+
+
+            times = {"lint": 20, "compile": 90, "unit": 60, "bundle": 30, "e2e": 120, "docs": 45}
+            deps = {"lint": [], "compile": [], "unit": ["compile"], "bundle": ["compile"], "e2e": ["bundle"], "docs": []}
+            print(finish_time(times, deps))
+          - |
+            def finish_time(times, deps):
+                done = {}
+
+                def finish(step):
+                    if step not in done:
+                        start = 0
+                        for before in deps[step]:
+                            start = max(start, times[before])
+                        done[step] = start + times[step]
+                    return done[step]
+
+                return max(finish(step) for step in times)
+
+
+            times = {"lint": 20, "compile": 90, "unit": 60, "bundle": 30, "e2e": 120, "docs": 45}
+            deps = {"lint": [], "compile": [], "unit": ["compile"], "bundle": ["compile"], "e2e": ["bundle"], "docs": []}
+            print(finish_time(times, deps))
+        explanation: |
+          Each step finishes at its own duration plus the latest finish among the steps it waits for, remembered so that shared steps are computed once; the answer is the latest finish of all. Adding the inputs' finish times counts parallel work as if it were serial; the longest single step ignores chains; and using the inputs' durations instead of their finish times forgets what those inputs were waiting for.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          How many seconds does the puzzle's full build take with unlimited machines?
+        answer: "120"
+        explanation: |
+          All four compilations and the docs start at once. The slowest compilation, `orders.o`, ends at 50 seconds, so linking runs from 50 to 60 and the tests from 60 to 120. The docs finish at 25, long before. The critical path is $50 + 10 + 60 = 120$ seconds.
+    - question:
+        id: work-faster
+        type: choice
+        system: s2
+        prompt: |
+          The puzzle's team wants the build faster. Which change would shorten it most?
+        options:
+          - "Split the 60-second test step into three 20-second groups that run in parallel after linking."
+          - "Add more machines."
+          - "Make docs generation twice as fast."
+          - "Make pay.o compile twice as fast."
+        answer: 0
+        explanation: |
+          The tests sit on the critical path, so running them as three parallel groups cuts the build to $50 + 10 + 20 = 80$ seconds. More machines do nothing once every step already has one, and docs and `pay.o` are not on the critical path at all.
+  connections:
+    - text: |
+        120 seconds. The steps that do not depend on each other all run at once, so what remains is the longest chain: `orders.o` for 50 seconds, linking for 10 and the tests for 60. The other 115 seconds of work happen alongside that chain and cost nothing extra. Only shortening the chain itself can make the build faster.
+
+        A build's inputs include more than the project's own files. The compiler, the Python interpreter and every library the code imports are inputs too, and if a teammate's laptop or the build server has a different version of one of them, the same sources can build into a different program. Pinning those versions so that a build means the same thing everywhere is [[s5.packages-and-reproducible-environments]].

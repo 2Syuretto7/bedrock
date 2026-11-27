@@ -8249,6 +8249,106 @@ function ReviewSize(props: Props) {
   );
 }
 
+const BG_NODES: Record<string, { x: number; y: number; source?: boolean }> = {
+  "utils.h": { x: 10, y: 22, source: true },
+  "utils.c": { x: 100, y: 22, source: true },
+  "menu.c": { x: 190, y: 22, source: true },
+  "orders.c": { x: 280, y: 22, source: true },
+  "pay.c": { x: 370, y: 22, source: true },
+  "utils.o": { x: 10, y: 96 },
+  "menu.o": { x: 100, y: 96 },
+  "orders.o": { x: 190, y: 96 },
+  "pay.o": { x: 280, y: 96 },
+  docs: { x: 370, y: 96 },
+  app: { x: 145, y: 160 },
+  tests: { x: 145, y: 214 },
+};
+const BG_DEPS: Record<string, string[]> = {
+  "utils.o": ["utils.c"],
+  "menu.o": ["menu.c", "utils.h"],
+  "orders.o": ["orders.c", "utils.h"],
+  "pay.o": ["pay.c"],
+  docs: ["menu.c", "orders.c"],
+  app: ["utils.o", "menu.o", "orders.o", "pay.o"],
+  tests: ["app"],
+};
+
+/** A small build graph: which targets must be rebuilt when one source file changes. */
+function BuildGraph(props: Props) {
+  const sources = Object.keys(BG_NODES).filter((n) => BG_NODES[n].source);
+  const [changed, setChanged] = useState(typeof props.changed === "string" && sources.includes(props.changed) ? props.changed : "utils.h");
+  const dirty = new Set<string>([changed]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [t, ins] of Object.entries(BG_DEPS)) {
+      if (!dirty.has(t) && ins.some((i) => dirty.has(i))) {
+        dirty.add(t);
+        grew = true;
+      }
+    }
+  }
+  const targets = Object.keys(BG_DEPS);
+  const rebuilt = targets.filter((t) => dirty.has(t));
+  const reused = targets.filter((t) => !dirty.has(t));
+  const list = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+  const summary = `Changing ${changed} rebuilds ${list(rebuilt)}: ${rebuilt.length} of ${targets.length} targets. ${list(reused)} ${reused.length === 1 ? "does" : "do"} not depend on it, directly or through anything else, so ${reused.length === 1 ? "its last output is" : "their last outputs are"} reused.`;
+  const w = 80;
+  const h = 26;
+  return (
+    <Frame
+      title="What a change forces a build to redo"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">change</span>
+          {sources.map((s) => (
+            <button key={s} type="button" className="btn btn-secondary btn-small" aria-pressed={s === changed} onClick={() => setChanged(s)}>
+              {s}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 252" role="img" aria-label={`Changing ${changed} rebuilds ${rebuilt.length} of ${targets.length} targets`}>
+        {Object.entries(BG_DEPS).flatMap(([t, ins]) =>
+          ins.map((i) => {
+            const a = BG_NODES[i];
+            const b = BG_NODES[t];
+            const hot = dirty.has(i) && dirty.has(t);
+            return <line key={`${i}-${t}`} x1={a.x + w / 2} y1={a.y + h} x2={b.x + w / 2} y2={b.y} className={hot ? "fig-accent-line" : "fig-line"} />;
+          }),
+        )}
+        {Object.entries(BG_NODES).map(([name, n]) => {
+          const hot = dirty.has(name);
+          return (
+            <g key={name}>
+              <rect
+                x={n.x}
+                y={n.y}
+                width={w}
+                height={h}
+                rx={n.source ? 2 : 8}
+                className={hot ? "fig-accent" : "fig-fill"}
+                style={name === changed ? { stroke: "var(--text)", strokeWidth: 3 } : undefined}
+              />
+              <text x={n.x + w / 2} y={n.y + 17} textAnchor="middle" className="fig-small" style={{ fill: hot ? "var(--bg)" : "var(--text)", fontWeight: hot ? 600 : 400 }}>
+                {name}
+              </text>
+            </g>
+          );
+        })}
+        <text x={10} y={16} className="fig-small">
+          sources have square corners; lines join inputs to outputs
+        </text>
+        <text x={250} y={232} className="fig-small">
+          {`rebuilt: ${rebuilt.length} of ${targets.length}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -9592,6 +9692,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "content-store": ContentStore,
   "three-way-merge": ThreeWayMerge,
   "review-size": ReviewSize,
+  "build-graph": BuildGraph,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
