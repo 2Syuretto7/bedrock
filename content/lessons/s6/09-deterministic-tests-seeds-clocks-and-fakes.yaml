@@ -1,0 +1,810 @@
+concept: s6.deterministic-tests-seeds-clocks-and-fakes
+minutes: 80
+claim: You can make a test's result depend only on the code and the test, by finding its hidden inputs, the clock, randomness, the time zone, the environment, the network and the order of events, and passing each one in or pinning it; seed every generator, log the seed and give each case a seed of its own so a failure replays alone; drive time with a fake clock that also fires timers, measure durations with a monotonic clock, and test chosen instants such as month ends and midnight in India; and run a whole system as a deterministic simulation that any failing seed replays exactly.
+recalls: [s6.flaky-tests-and-their-causes]
+uses: [s4.dependency-injection-and-testable-code, s6.fakes-stubs-and-mocks, s6.property-based-testing, s6.unit-tests-and-fixtures, s6.what-a-test-can-prove, f4.simulation-and-pseudo-random-numbers, f4.common-discrete-distributions, f4.expectation-and-linearity]
+leads: [s6.fuzzing, d0.interleavings-and-race-conditions]
+starter: |
+  # Scratch space. Two generators with the same seed give the same numbers.
+  import random
+
+  a = random.Random(2027)
+  b = random.Random(2027)
+  print([a.randint(1, 6) for _ in range(5)])
+  print([b.randint(1, 6) for _ in range(5)])
+parts:
+  recall:
+    - text: |
+        [[s6.flaky-tests-and-their-causes]] listed what makes a test pass on one run and fail on the next: fixed waits, shared state, unseeded randomness, clocks and dates, real networks. This lesson turns that list into a design rule. A test should depend on nothing it does not control, so that its result changes only when the code does. Three quick pulls first.
+  puzzle:
+    - text: |
+        A shop's code works out tomorrow's date as the same year, the same month and the day plus one. That is wrong on the last day of every month, when it produces impossible dates such as 32 January and crashes. Its test calls the code with today's real date, and the build runs the test once a day.
+
+        **On how many days of 2027 does the test fail?**
+  intuition:
+    - text: |
+        A driving test in India is not a drive around town hoping that a slope or a tight reverse turns up. The test track has the slope, the reverse S and the narrow gap built in, so every candidate meets every hard case, and two candidates of equal skill get the same result. A candidate who failed on the slope can be sent back to exactly that slope.
+
+        A test that reads the real date is the drive around town. On most days the date is ordinary and the test passes, whatever the code does with month ends. The figure runs the shop's test once a day through 2027. Move today's date, then switch to a test that is given its dates.
+    - figure: month-end
+      props: { mode: real, day: 73 }
+    - text: |
+        Reading the real clock made the test weak and flaky at once. It missed a real bug on 353 days of the year, and on the other 12 it failed in a way that looked like noise, because the next day's run passed. Giving the code its date, from the test, turns the test into the test track: the month ends are checked on every run, the failure is the same every time, and when the code is fixed the test stays green for a reason.
+  derivation:
+    - text: |
+        **Hidden inputs.** A test is **deterministic** when its result depends only on the code and on the test itself: run it a thousand times on the same commit and it gives the same answer a thousand times. Anything else the result depends on is a **hidden input**. The common ones are the clock and the date, random numbers, the time zone and locale of the machine, environment variables, the current directory and files left on disk, the network and other services, the order in which tests run, the way threads happen to be scheduled, and the order of a set of strings, which Python can change from one process to the next.
+
+        For each hidden input there are two remedies. **Pass it in**, so the test supplies it, the approach of [[s4.dependency-injection-and-testable-code]]: the code takes a clock, a generator or a store as an argument instead of reaching for the real one. Or **pin it**, so it is the same on every run: set the time zone for the whole test process, give each test a fresh temporary directory, sort a set before comparing it. Passing in is stronger, because the test can then choose awkward values on purpose, not just hold one value still.
+
+        Determinism also matters for tests that compare output with a saved copy, sometimes called **golden** or **snapshot** tests. They work only if the output is identical byte for byte on every run, so every timestamp, random identifier and unordered collection in it has to be fixed or sorted first.
+    - question:
+        id: derivation-golden
+        type: choice
+        system: s2
+        prompt: |
+          A test compares a generated invoice with a saved copy, and it has failed on every run since the copy was saved. The only difference is the line "Generated at 27 Nov 2026, 14:05:31". What is the best fix?
+        options:
+          - "Pass the generation time into the invoice code, and give it a fixed time in the test"
+          - "Save a fresh copy of the invoice before every run"
+          - "Rerun the test until the seconds happen to match"
+          - "Compare only the first line of the invoice"
+        answer: 0
+        explanation: |
+          The time is a hidden input. Passing it in fixes the output in the test and keeps the whole invoice under check. Saving a fresh copy every run makes the test compare the code with itself, and comparing one line throws away everything else the test protected.
+    - text: |
+        **Seeds, done properly.** [[s6.property-based-testing]] generated inputs from a seeded generator. Three habits make such tests replayable. First, **log the seed** with every run, so a failure in the nightly build can be rerun on a laptop. Second, give **each case its own seed**, drawn from a master generator. If every case draws from one shared stream, the input of case 300 depends on everything cases 1 to 299 drew, and the only way to replay it is to rerun all of them; with a seed per case, the failing case replays alone in a millisecond. Third, give **each component its own generator**. If the code that picks test passengers and the code that picks delays share one stream, adding one more draw to the first silently changes every delay, and a saved failing seed stops reproducing anything.
+
+        Teams usually run two kinds of seeds. The merge pipeline runs a fixed list, so a red run there means the change broke something. A nightly job runs fresh seeds, logged, to explore new inputs. When the nightly job finds a failing seed, that seed is added to the fixed list, so the bug, once fixed, can never quietly return.
+    - question:
+        id: derivation-nightly
+        type: numeric
+        system: s2
+        prompt: |
+          A nightly job runs a property test on 1,000 fresh seeds. A bug shows up on 1 seed in 50,000, independently. On average, how many nights pass before a nightly run finds it?
+        answer: "50"
+        tolerance: "2"
+        explanation: |
+          One night finds it with probability $1 - (1 - 1/50000)^{1000} \approx 0.0198$. The number of nights until the first success is geometric, with mean $1/0.0198 \approx 50.5$, so about 50 nights.
+    - text: |
+        **Clocks.** Code that reads the time should be handed a clock, and a test's clock should be a **fake clock** that moves only when the test says so. A fake clock makes the slow cases instant: a token that expires after 30 days is tested by moving the clock forward 30 days, which takes microseconds, and the test can check the second before expiry and the second after. A fake clock that also keeps a list of timers, callbacks to run at a given moment, can drive retries, timeouts and reminders the same way: advancing it runs every timer that falls due, in time order.
+
+        Two kinds of real clock exist, and code should use the right one. The **wall clock** tells the date and time, and it can jump: the machine corrects itself against a time server, or someone changes it. A **monotonic clock** only ever moves forward, but its value means nothing as a date. Measure how long something took with the monotonic clock; a duration measured with the wall clock can come out negative.
+
+        With the clock under control, a test can choose its instants. Good choices are the last day of a month, 29 February, 31 December at 23:59:59, and, for anything that groups by Indian dates, 18:30 UTC, which is midnight in India, since India is 5 hours 30 minutes ahead of UTC and never changes its clocks. The time zone itself is an input: store and compare moments in UTC, and convert to Indian time only where a person reads it.
+    - question:
+        id: derivation-monotonic
+        type: choice
+        system: s2
+        prompt: |
+          A payment service records how long each payment took as the wall-clock time at the end minus the wall-clock time at the start. Once in a while a test sees a negative duration. What is the most likely cause?
+        options:
+          - "The wall clock was corrected backwards during the payment; durations should use a monotonic clock"
+          - "The payment finished before it started"
+          - "Floating-point rounding made a small duration negative"
+          - "The test ran in the wrong time zone"
+        answer: 0
+        explanation: |
+          The wall clock can jump when the machine corrects it, so the difference of two readings can be anything. A monotonic clock never goes backwards, which is exactly what a duration needs. Time zones do not affect a difference of two moments.
+    - text: |
+        **Simulating a whole system.** The hardest hidden input is the order of events when several things happen at once: two requests racing for the last seat, a message arriving after a timeout instead of before it. Some teams building databases and payment systems test this with **deterministic simulation**. The whole system runs in one thread, on a fake clock, with a fake network and a fake disk, the stand-ins of [[s6.fakes-stubs-and-mocks]]. A single seeded generator decides everything that would be left to chance in production: which message is delivered next, which is delayed or lost, which disk write fails, when a machine restarts. The test checks the system's invariants after every step.
+
+        Each seed is one possible history of the system, so thousands of seeds explore thousands of histories, many of them stranger than anything a hand-written test would set up. And because the generator decides everything, a failing seed replays the identical history, step for step, as often as needed. A race that would show up once a month in production becomes a bug that fails every time on one seed. The problems such simulations hunt for, events interleaving in an order nobody expected, come next in [[d0.interleavings-and-race-conditions]].
+    - question:
+        id: derivation-simulation
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of one deterministic simulation run in order.
+        steps:
+          - "Choose a seed and write it to the log."
+          - "Build the system on a fake clock, fake network and fake disk, all driven by one generator seeded with it."
+          - "Let the generator choose which message is delivered next and which faults happen."
+          - "Check the system's invariants after every step."
+          - "On a failure, rerun with the same seed to replay the identical history."
+        explanation: |
+          The seed has to exist, and be recorded, before anything is built from it; the generator then drives every choice; the invariants are the oracle; and the logged seed is what makes the failure replayable.
+  formal:
+    - text: |
+        **Deterministic test.** A test whose result depends only on the code under test and the test itself.
+
+        **Hidden input.** Anything else a result depends on, such as the clock, random numbers, the time zone, environment variables, files, the network, test order or thread scheduling. Remedies: pass it in, or pin it.
+
+        **Replayable randomness.** Seed every generator and log the seed; give each case its own seed drawn from a master generator, and each component its own generator. Fixed seeds on every merge; fresh, logged seeds nightly; failing seeds join the fixed list.
+
+        **Fake clock.** A clock that moves only when the test advances it, firing any timers that fall due, in time order.
+
+        **Wall and monotonic clocks.** The wall clock gives the date and can jump; the monotonic clock never goes backwards and is for measuring durations.
+
+        **Deterministic simulation.** Running a whole system on fake time, network and storage, with every choice made by one seeded generator, so that any failing seed replays the same history.
+  drill:
+    - text: Seconds each. For every test, ask what could change between two runs.
+    - question:
+        id: drill-duration
+        type: choice
+        system: s1
+        prompt: |
+          Which clock should measure how long a request took?
+        options:
+          - "A monotonic clock"
+          - "The wall clock"
+          - "The clock of the user's phone"
+          - "Any clock, since only the difference matters"
+        answer: 0
+        explanation: The wall clock can jump forwards or backwards when it is corrected; a monotonic clock cannot.
+    - question:
+        id: drill-expiry
+        type: numeric
+        system: s1
+        prompt: |
+          A login token expires 30 days after it is issued. How many seconds must a test advance a fake clock to reach the moment of expiry?
+        answer: "2592000"
+        explanation: $30 \times 24 \times 60 \times 60 = 2{,}592{,}000$ seconds, which a fake clock covers instantly.
+    - question:
+        id: predict-same-seed
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import random
+          a = random.Random(7).randint(1, 100)
+          b = random.Random(7).randint(1, 100)
+          print(a == b)
+        output: "True"
+        explanation: Two generators given the same seed produce the same sequence, which is what makes a logged seed replayable.
+    - question:
+        id: predict-ist-midnight
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          utc = 18 * 3600 + 30 * 60      # 18:30 UTC, in seconds after midnight UTC
+          ist = utc + 5 * 3600 + 30 * 60
+          print(ist // 86400)
+        output: "1"
+        explanation: 18:30 UTC is midnight in India, so the moment already belongs to the next Indian day, day 1.
+  work:
+    - text: Slower now. Each problem takes one hidden input and puts it under the test's control.
+    - question:
+        id: fix-case-seed
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `first_failure` runs a randomised check case by case and reports the seed of the first failing case, so that it can be replayed alone. The program should print `972076 False`: the seed, and the check failing again when replayed. It prints `418131 True`, because the reported seed does not reproduce the failure. Find the fault and fix it.
+        starter: |
+          import random
+
+
+          def first_failure(check, master_seed, cases):
+              # Run check(rng) on up to `cases` cases. Each case should get its own
+              # generator, seeded from the master generator, so that a failing case
+              # can be replayed alone from its seed. Return the seed of the first
+              # failing case, or None if every case passes.
+              master = random.Random(master_seed)
+              for i in range(cases):
+                  case_seed = master.randint(0, 10 ** 6)
+                  if not check(master):
+                      return case_seed
+              return None
+
+
+          def rupees(paise):
+              # Format an amount in paise as rupees, such as 1205 -> "12.05".
+              return str(paise // 100) + "." + str(paise % 100)
+
+
+          def check_rupees(rng):
+              paise = rng.randint(0, 99999)
+              whole, part = rupees(paise).split(".")
+              return len(part) == 2 and int(whole) * 100 + int(part) == paise
+
+
+          seed = first_failure(check_rupees, 2027, 200)
+          print(seed, check_rupees(random.Random(seed)))
+        solution: |
+          import random
+
+
+          def first_failure(check, master_seed, cases):
+              # Run check(rng) on up to `cases` cases. Each case should get its own
+              # generator, seeded from the master generator, so that a failing case
+              # can be replayed alone from its seed. Return the seed of the first
+              # failing case, or None if every case passes.
+              master = random.Random(master_seed)
+              for i in range(cases):
+                  case_seed = master.randint(0, 10 ** 6)
+                  if not check(random.Random(case_seed)):
+                      return case_seed
+              return None
+
+
+          def rupees(paise):
+              # Format an amount in paise as rupees, such as 1205 -> "12.05".
+              return str(paise // 100) + "." + str(paise % 100)
+
+
+          def check_rupees(rng):
+              paise = rng.randint(0, 99999)
+              whole, part = rupees(paise).split(".")
+              return len(part) == 2 and int(whole) * 100 + int(part) == paise
+
+
+          seed = first_failure(check_rupees, 2027, 200)
+          print(seed, check_rupees(random.Random(seed)))
+        tests: |
+          def _ref(_check, _master_seed, _cases):
+              _m = random.Random(_master_seed)
+              for _ in range(_cases):
+                  _s = _m.randint(0, 10 ** 6)
+                  if not _check(random.Random(_s)):
+                      return _s
+              return None
+
+
+          _calls = []
+
+
+          def _always(_rng):
+              _calls.append(1)
+              _rng.randint(1, 6)
+              return True
+
+
+          assert first_failure(_always, 5, 7) is None, "When every case passes, first_failure should return None"
+          assert len(_calls) == 7, "With cases=7 and no failures, check should be called exactly 7 times, not " + str(len(_calls))
+
+
+          def _seven(_rng):
+              return _rng.randint(1, 10) != 7
+
+
+          def _two_draws(_rng):
+              _a = _rng.randint(1, 20)
+              _b = _rng.randint(1, 20)
+              return _a + _b != 21
+
+
+          for _check, _ms, _n in [(_seven, 1, 100), (_seven, 99, 100), (_two_draws, 3, 300), (check_rupees, 2027, 200), (check_rupees, 8, 200)]:
+              _want = _ref(_check, _ms, _n)
+              _got = first_failure(_check, _ms, _n)
+              assert _got == _want, "With master seed " + str(_ms) + ", the first failing case has seed " + str(_want) + ", but first_failure returned " + str(_got)
+              assert not _check(random.Random(_got)), "Replaying the returned seed " + str(_got) + " on its own should fail the check again"
+          assert output.strip() == "972076 False", "The program should print 972076 False"
+        wrong:
+          - |
+            import random
+
+
+            def first_failure(check, master_seed, cases):
+                # Run check(rng) on up to `cases` cases. Each case should get its own
+                # generator, seeded from the master generator, so that a failing case
+                # can be replayed alone from its seed. Return the seed of the first
+                # failing case, or None if every case passes.
+                master = random.Random(master_seed)
+                for i in range(cases):
+                    case_seed = master.randint(0, 10 ** 6)
+                    if not check(random.Random(case_seed)):
+                        return i
+                return None
+
+
+            def rupees(paise):
+                # Format an amount in paise as rupees, such as 1205 -> "12.05".
+                return str(paise // 100) + "." + str(paise % 100)
+
+
+            def check_rupees(rng):
+                paise = rng.randint(0, 99999)
+                whole, part = rupees(paise).split(".")
+                return len(part) == 2 and int(whole) * 100 + int(part) == paise
+
+
+            seed = first_failure(check_rupees, 2027, 200)
+            print(seed, check_rupees(random.Random(seed)))
+          - |
+            import random
+
+
+            def first_failure(check, master_seed, cases):
+                # Run check(rng) on up to `cases` cases. Each case should get its own
+                # generator, seeded from the master generator, so that a failing case
+                # can be replayed alone from its seed. Return the seed of the first
+                # failing case, or None if every case passes.
+                for i in range(cases):
+                    master = random.Random(master_seed)
+                    case_seed = master.randint(0, 10 ** 6)
+                    if not check(random.Random(case_seed)):
+                        return case_seed
+                return None
+
+
+            def rupees(paise):
+                # Format an amount in paise as rupees, such as 1205 -> "12.05".
+                return str(paise // 100) + "." + str(paise % 100)
+
+
+            def check_rupees(rng):
+                paise = rng.randint(0, 99999)
+                whole, part = rupees(paise).split(".")
+                return len(part) == 2 and int(whole) * 100 + int(part) == paise
+
+
+            seed = first_failure(check_rupees, 2027, 200)
+            print(seed, check_rupees(random.Random(seed)))
+          - |
+            import random
+
+
+            def first_failure(check, master_seed, cases):
+                # Run check(rng) on up to `cases` cases. Each case should get its own
+                # generator, seeded from the master generator, so that a failing case
+                # can be replayed alone from its seed. Return the seed of the first
+                # failing case, or None if every case passes.
+                master = random.Random(master_seed)
+                for i in range(cases):
+                    case_seed = master.randint(0, 10 ** 6)
+                    if not check(random.Random(case_seed)):
+                        return master_seed
+                return None
+
+
+            def rupees(paise):
+                # Format an amount in paise as rupees, such as 1205 -> "12.05".
+                return str(paise // 100) + "." + str(paise % 100)
+
+
+            def check_rupees(rng):
+                paise = rng.randint(0, 99999)
+                whole, part = rupees(paise).split(".")
+                return len(part) == 2 and int(whole) * 100 + int(part) == paise
+
+
+            seed = first_failure(check_rupees, 2027, 200)
+            print(seed, check_rupees(random.Random(seed)))
+        explanation: |
+          Each case draws a seed from the master generator but then runs the check on the master generator itself, so the case's input depends on every earlier draw and the logged seed reproduces nothing. Run the check on `random.Random(case_seed)`. Returning the case number or the master seed gives something that cannot be replayed alone, and making a new master generator inside the loop gives every case the same seed, so most bugs are never found.
+    - question:
+        id: write-fake-clock
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Finish `FakeClock`, a test clock that moves only when advanced and fires timers as they fall due. The program should print two lines: the four events of a login screen with their times, 2, 5, 5 and 35 seconds, then `40`.
+        starter: |
+          class FakeClock:
+              # A clock for tests. Time starts at 0 and moves only when advance() is
+              # called. call_later(delay, fn) asks for fn() to be called once, delay
+              # seconds from now. advance(seconds) moves time forward by that much,
+              # calling every callback that falls due, in time order; callbacks due at
+              # the same moment run in the order they were scheduled. While a callback
+              # runs, now() gives its due time. A callback may schedule more
+              # callbacks, and any that fall due within the same advance run too.
+              def __init__(self):
+                  self.time = 0
+
+              def now(self):
+                  return self.time
+
+              def call_later(self, delay, fn):
+                  pass
+
+              def advance(self, seconds):
+                  self.time += seconds
+
+
+          clock = FakeClock()
+          log = []
+
+
+          def send_otp():
+              log.append(("otp sent", clock.now()))
+              clock.call_later(30, lambda: log.append(("otp expired", clock.now())))
+
+
+          clock.call_later(5, send_otp)
+          clock.call_later(5, lambda: log.append(("screen shown", clock.now())))
+          clock.call_later(2, lambda: log.append(("page loaded", clock.now())))
+          clock.advance(40)
+          print(log)
+          print(clock.now())
+        solution: |
+          class FakeClock:
+              # A clock for tests. Time starts at 0 and moves only when advance() is
+              # called. call_later(delay, fn) asks for fn() to be called once, delay
+              # seconds from now. advance(seconds) moves time forward by that much,
+              # calling every callback that falls due, in time order; callbacks due at
+              # the same moment run in the order they were scheduled. While a callback
+              # runs, now() gives its due time. A callback may schedule more
+              # callbacks, and any that fall due within the same advance run too.
+              def __init__(self):
+                  self.time = 0
+                  self.pending = []
+                  self.count = 0
+
+              def now(self):
+                  return self.time
+
+              def call_later(self, delay, fn):
+                  self.pending.append((self.time + delay, self.count, fn))
+                  self.count += 1
+
+              def advance(self, seconds):
+                  end = self.time + seconds
+                  while True:
+                      due = [p for p in self.pending if p[0] <= end]
+                      if not due:
+                          break
+                      first = min(due, key=lambda p: (p[0], p[1]))
+                      self.pending.remove(first)
+                      self.time = first[0]
+                      first[2]()
+                  self.time = end
+
+
+          clock = FakeClock()
+          log = []
+
+
+          def send_otp():
+              log.append(("otp sent", clock.now()))
+              clock.call_later(30, lambda: log.append(("otp expired", clock.now())))
+
+
+          clock.call_later(5, send_otp)
+          clock.call_later(5, lambda: log.append(("screen shown", clock.now())))
+          clock.call_later(2, lambda: log.append(("page loaded", clock.now())))
+          clock.advance(40)
+          print(log)
+          print(clock.now())
+        tests: |
+          _c = FakeClock()
+          assert _c.now() == 0, "A new FakeClock should start at time 0"
+          _seen = []
+          _c.call_later(10, lambda: _seen.append(("a", _c.now())))
+          _c.call_later(3, lambda: _seen.append(("b", _c.now())))
+          _c.call_later(10, lambda: _seen.append(("c", _c.now())))
+          _c.advance(2)
+          assert _seen == [] and _c.now() == 2, "After advance(2) nothing is due yet and now() should be 2"
+          _c.advance(1)
+          assert _seen == [("b", 3)], "A callback due exactly at the end of an advance should run, at its due time; got " + repr(_seen)
+          _c.advance(20)
+          assert _seen == [("b", 3), ("a", 10), ("c", 10)], "Callbacks should run in time order, ties in the order scheduled, each seeing its own due time; got " + repr(_seen)
+          assert _c.now() == 23, "After all the advances, now() should be 23, not " + str(_c.now())
+          _c.advance(100)
+          assert len(_seen) == 3, "Each callback should run only once"
+
+          _d = FakeClock()
+          _ticks = []
+
+
+          def _tick():
+              _ticks.append(_d.now())
+              if len(_ticks) < 5:
+                  _d.call_later(4, _tick)
+
+
+          _d.call_later(4, _tick)
+          _d.advance(13)
+          assert _ticks == [4, 8, 12], "A callback that schedules itself every 4 seconds should run at 4, 8 and 12 within advance(13); got " + repr(_ticks)
+          _d.advance(13)
+          assert _ticks == [4, 8, 12, 16, 20], "It should stop after five runs, at 16 and 20; got " + repr(_ticks)
+          _d.call_later(0, lambda: _ticks.append(("now", _d.now())))
+          _d.advance(0)
+          assert _ticks[-1] == ("now", 26), "A callback with delay 0 should run on advance(0); got " + repr(_ticks[-1])
+          _e = FakeClock()
+          _order = []
+          _e.call_later(5, lambda: _order.append("later"))
+          _e.call_later(1, lambda: _order.append("sooner"))
+          _e.advance(10)
+          assert _order == ["sooner", "later"], "A callback due at 1 second should run before one due at 5, even if scheduled second; got " + repr(_order)
+          assert output.splitlines()[0] == "[('page loaded', 2), ('otp sent', 5), ('screen shown', 5), ('otp expired', 35)]", "The program's first line should list the four events at 2, 5, 5 and 35 seconds"
+        wrong:
+          - |
+            class FakeClock:
+                # A clock for tests. Time starts at 0 and moves only when advance() is
+                # called. call_later(delay, fn) asks for fn() to be called once, delay
+                # seconds from now. advance(seconds) moves time forward by that much,
+                # calling every callback that falls due, in time order; callbacks due at
+                # the same moment run in the order they were scheduled. While a callback
+                # runs, now() gives its due time. A callback may schedule more
+                # callbacks, and any that fall due within the same advance run too.
+                def __init__(self):
+                    self.time = 0
+                    self.pending = []
+                    self.count = 0
+
+                def now(self):
+                    return self.time
+
+                def call_later(self, delay, fn):
+                    self.pending.append((self.time + delay, self.count, fn))
+                    self.count += 1
+
+                def advance(self, seconds):
+                    end = self.time + seconds
+                    while True:
+                        due = [p for p in self.pending if p[0] <= end]
+                        if not due:
+                            break
+                        first = min(due, key=lambda p: p[1])
+                        self.pending.remove(first)
+                        self.time = first[0]
+                        first[2]()
+                    self.time = end
+
+
+            clock = FakeClock()
+            log = []
+
+
+            def send_otp():
+                log.append(("otp sent", clock.now()))
+                clock.call_later(30, lambda: log.append(("otp expired", clock.now())))
+
+
+            clock.call_later(5, send_otp)
+            clock.call_later(5, lambda: log.append(("screen shown", clock.now())))
+            clock.call_later(2, lambda: log.append(("page loaded", clock.now())))
+            clock.advance(40)
+            print(log)
+            print(clock.now())
+          - |
+            class FakeClock:
+                # A clock for tests. Time starts at 0 and moves only when advance() is
+                # called. call_later(delay, fn) asks for fn() to be called once, delay
+                # seconds from now. advance(seconds) moves time forward by that much,
+                # calling every callback that falls due, in time order; callbacks due at
+                # the same moment run in the order they were scheduled. While a callback
+                # runs, now() gives its due time. A callback may schedule more
+                # callbacks, and any that fall due within the same advance run too.
+                def __init__(self):
+                    self.time = 0
+                    self.pending = []
+                    self.count = 0
+
+                def now(self):
+                    return self.time
+
+                def call_later(self, delay, fn):
+                    self.pending.append((self.time + delay, self.count, fn))
+                    self.count += 1
+
+                def advance(self, seconds):
+                    end = self.time + seconds
+                    due = sorted([p for p in self.pending if p[0] <= end], key=lambda p: (p[0], p[1]))
+                    for p in due:
+                        self.pending.remove(p)
+                        self.time = p[0]
+                        p[2]()
+                    self.time = end
+
+
+            clock = FakeClock()
+            log = []
+
+
+            def send_otp():
+                log.append(("otp sent", clock.now()))
+                clock.call_later(30, lambda: log.append(("otp expired", clock.now())))
+
+
+            clock.call_later(5, send_otp)
+            clock.call_later(5, lambda: log.append(("screen shown", clock.now())))
+            clock.call_later(2, lambda: log.append(("page loaded", clock.now())))
+            clock.advance(40)
+            print(log)
+            print(clock.now())
+          - |
+            class FakeClock:
+                # A clock for tests. Time starts at 0 and moves only when advance() is
+                # called. call_later(delay, fn) asks for fn() to be called once, delay
+                # seconds from now. advance(seconds) moves time forward by that much,
+                # calling every callback that falls due, in time order; callbacks due at
+                # the same moment run in the order they were scheduled. While a callback
+                # runs, now() gives its due time. A callback may schedule more
+                # callbacks, and any that fall due within the same advance run too.
+                def __init__(self):
+                    self.time = 0
+                    self.pending = []
+                    self.count = 0
+
+                def now(self):
+                    return self.time
+
+                def call_later(self, delay, fn):
+                    self.pending.append((self.time + delay, self.count, fn))
+                    self.count += 1
+
+                def advance(self, seconds):
+                    end = self.time + seconds
+                    while True:
+                        due = [p for p in self.pending if p[0] <= end]
+                        if not due:
+                            break
+                        first = min(due, key=lambda p: (p[0], p[1]))
+                        self.pending.remove(first)
+                        self.time = end
+                        first[2]()
+                    self.time = end
+
+
+            clock = FakeClock()
+            log = []
+
+
+            def send_otp():
+                log.append(("otp sent", clock.now()))
+                clock.call_later(30, lambda: log.append(("otp expired", clock.now())))
+
+
+            clock.call_later(5, send_otp)
+            clock.call_later(5, lambda: log.append(("screen shown", clock.now())))
+            clock.call_later(2, lambda: log.append(("page loaded", clock.now())))
+            clock.advance(40)
+            print(log)
+            print(clock.now())
+        explanation: |
+          Keep pending timers as (due time, sequence number, callback). To advance, repeatedly take the earliest due timer, ties broken by sequence number, set the time to its due time and call it, until none falls due before the end; then set the time to the end. Picking the next timer by scheduling order runs a 2-second timer after 5-second ones; collecting the due timers once misses the OTP expiry that a callback schedules during the advance; and moving time to the end first makes every callback see the wrong time.
+    - question:
+        id: write-ist-totals
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `daily_totals(orders)`, which adds up order amounts by Indian calendar date when the orders are timed in UTC. The program should print three lines: `1 Nov 370`, `2 Nov 380` and `4 Nov 500`.
+        starter: |
+          def daily_totals(orders):
+              # orders is a list of (seconds, amount) pairs. seconds counts from
+              # midnight UTC at the start of 1 November 2026, which is 5:30 a.m. on
+              # 1 November in India, since India is 5 hours 30 minutes ahead of UTC.
+              # Add up the amounts for each Indian calendar date and return a list of
+              # (date, total) pairs sorted by date, where date is the day of November
+              # in India, from 1 to 30.
+              return []
+
+
+          orders = [
+              (40000, 250),       # 4:36 p.m. on 1 November in India
+              (66599, 120),       # one second before midnight in India
+              (66600, 300),       # midnight in India: 2 November begins
+              (90000, 80),        # 6:30 a.m. on 2 November in India
+              (242800, 500),      # 12:56 a.m. on 4 November in India, still 3 November in UTC
+          ]
+          for date, total in daily_totals(orders):
+              print(date, "Nov", total)
+        solution: |
+          def daily_totals(orders):
+              # orders is a list of (seconds, amount) pairs. seconds counts from
+              # midnight UTC at the start of 1 November 2026, which is 5:30 a.m. on
+              # 1 November in India, since India is 5 hours 30 minutes ahead of UTC.
+              # Add up the amounts for each Indian calendar date and return a list of
+              # (date, total) pairs sorted by date, where date is the day of November
+              # in India, from 1 to 30.
+              totals = {}
+              for seconds, amount in orders:
+                  date = (seconds + 19800) // 86400 + 1
+                  totals[date] = totals.get(date, 0) + amount
+              return sorted(totals.items())
+
+
+          orders = [
+              (40000, 250),       # 4:36 p.m. on 1 November in India
+              (66599, 120),       # one second before midnight in India
+              (66600, 300),       # midnight in India: 2 November begins
+              (90000, 80),        # 6:30 a.m. on 2 November in India
+              (242800, 500),      # 12:56 a.m. on 4 November in India, still 3 November in UTC
+          ]
+          for date, total in daily_totals(orders):
+              print(date, "Nov", total)
+        tests: |
+          assert daily_totals([]) == [], "With no orders, daily_totals should return an empty list"
+          for _s, _want in [(0, 1), (66599, 1), (66600, 2), (66600 + 86399, 2), (66600 + 86400, 3), (29 * 86400 + 66599, 30)]:
+              _got = daily_totals([(_s, 10)])
+              assert _got == [(_want, 10)], "An order at " + str(_s) + " seconds is on " + str(_want) + " November in India, so the result should be " + repr([(_want, 10)]) + ", not " + repr(_got)
+          _mixed = [(5 * 86400, 40), (100, 15), (5 * 86400 + 60000, 5), (200, 25)]
+          _got = daily_totals(_mixed)
+          assert _got == [(1, 40), (6, 45)], "Orders given out of order should still come back sorted by date with one total per date; got " + repr(_got)
+          assert output.splitlines() == ["1 Nov 370", "2 Nov 380", "4 Nov 500"], "The program should print three lines: 1 Nov 370, 2 Nov 380 and 4 Nov 500"
+        wrong:
+          - |
+            def daily_totals(orders):
+                # orders is a list of (seconds, amount) pairs. seconds counts from
+                # midnight UTC at the start of 1 November 2026, which is 5:30 a.m. on
+                # 1 November in India, since India is 5 hours 30 minutes ahead of UTC.
+                # Add up the amounts for each Indian calendar date and return a list of
+                # (date, total) pairs sorted by date, where date is the day of November
+                # in India, from 1 to 30.
+                totals = {}
+                for seconds, amount in orders:
+                    date = seconds // 86400 + 1
+                    totals[date] = totals.get(date, 0) + amount
+                return sorted(totals.items())
+
+
+            orders = [
+                (40000, 250),       # 4:36 p.m. on 1 November in India
+                (66599, 120),       # one second before midnight in India
+                (66600, 300),       # midnight in India: 2 November begins
+                (90000, 80),        # 6:30 a.m. on 2 November in India
+                (242800, 500),      # 12:56 a.m. on 4 November in India, still 3 November in UTC
+            ]
+            for date, total in daily_totals(orders):
+                print(date, "Nov", total)
+          - |
+            def daily_totals(orders):
+                # orders is a list of (seconds, amount) pairs. seconds counts from
+                # midnight UTC at the start of 1 November 2026, which is 5:30 a.m. on
+                # 1 November in India, since India is 5 hours 30 minutes ahead of UTC.
+                # Add up the amounts for each Indian calendar date and return a list of
+                # (date, total) pairs sorted by date, where date is the day of November
+                # in India, from 1 to 30.
+                totals = {}
+                for seconds, amount in orders:
+                    date = (seconds + 18000) // 86400 + 1
+                    totals[date] = totals.get(date, 0) + amount
+                return sorted(totals.items())
+
+
+            orders = [
+                (40000, 250),       # 4:36 p.m. on 1 November in India
+                (66599, 120),       # one second before midnight in India
+                (66600, 300),       # midnight in India: 2 November begins
+                (90000, 80),        # 6:30 a.m. on 2 November in India
+                (242800, 500),      # 12:56 a.m. on 4 November in India, still 3 November in UTC
+            ]
+            for date, total in daily_totals(orders):
+                print(date, "Nov", total)
+          - |
+            def daily_totals(orders):
+                # orders is a list of (seconds, amount) pairs. seconds counts from
+                # midnight UTC at the start of 1 November 2026, which is 5:30 a.m. on
+                # 1 November in India, since India is 5 hours 30 minutes ahead of UTC.
+                # Add up the amounts for each Indian calendar date and return a list of
+                # (date, total) pairs sorted by date, where date is the day of November
+                # in India, from 1 to 30.
+                totals = {}
+                for seconds, amount in orders:
+                    date = (seconds + 19800) // 86400 + 1
+                    totals[date] = totals.get(date, 0) + amount
+                return list(totals.items())
+
+
+            orders = [
+                (40000, 250),       # 4:36 p.m. on 1 November in India
+                (66599, 120),       # one second before midnight in India
+                (66600, 300),       # midnight in India: 2 November begins
+                (90000, 80),        # 6:30 a.m. on 2 November in India
+                (242800, 500),      # 12:56 a.m. on 4 November in India, still 3 November in UTC
+            ]
+            for date, total in daily_totals(orders):
+                print(date, "Nov", total)
+        explanation: |
+          Add India's offset, 19,800 seconds, before dividing by the 86,400 seconds in a day, then add 1 because the dates start at 1 November. Without the offset, an order at 11:59 p.m. India time and one at 12:00 midnight both land on 1 November; an offset of 5 hours instead of 5 hours 30 minutes gets the half hour after midnight wrong; and returning the totals in the order first seen breaks as soon as orders arrive out of date order. Only times a test chooses, such as one second either side of 18:30 UTC, catch the first two.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, the shop's code fails on the last day of each month and its test runs once a day on the real date. On how many days of 2027 does the test fail?
+        answer: "12"
+        explanation: |
+          2027 is not a leap year, and each of its 12 months has one last day, 31 January, 28 February, 31 March and so on to 31 December. On those 12 days the code builds an impossible date; on the other 353 the test passes and the bug stays hidden.
+    - question:
+        id: work-nightly-seed
+        type: choice
+        system: s2
+        prompt: |
+          Meera's nightly property test failed on seed 81723. When she reran the test with fresh seeds, it passed. What should she do first?
+        options:
+          - "Replay seed 81723 to reproduce the failure, then add it to the fixed seeds run on every merge."
+          - "Ignore it, since the rerun passed."
+          - "Run the nightly job twice as often."
+          - "Remove the property test, since it is flaky."
+        answer: 0
+        explanation: |
+          The seed is the bug report. Replaying it reproduces the failure exactly, and keeping it in the fixed list guards the fix for ever. A passing rerun on fresh seeds says only that those other inputs were fine, and the test is not flaky at all: the same seed fails every time.
+  connections:
+    - text: |
+        12. The code is wrong on the last day of each month, and 2027 has twelve of them, so a test on the real date fails on 12 days and passes on 353. Each failure looks like a flake because the next run passes, and the real bug can survive for months. With the date passed in, the test checks 31 January, 28 February and 31 December on every run and fails every time until the code is right.
+
+        The same rule, give the test control of everything that varies, runs through all of testing. Seeds make random inputs replayable; fake clocks make time something a test sets; fakes and simulation make the network and the order of events something a test chooses. [[s6.fuzzing]] takes the replayable random input to its extreme, throwing millions of generated inputs at parsers and other code that reads untrusted data, and keeping every input that crashes it. [[d0.interleavings-and-race-conditions]] looks at the event orders that deterministic simulation explores, and at why they are so hard to get right.

@@ -141,6 +141,7 @@ export const FIGURE_PROPS: Record<FigureName, z.ZodType> = {
   "test-pyramid": z.strictObject({ mix: z.string().optional() }),
   "mutation-score": z.strictObject({ tests: z.array(z.string()).optional() }),
   "sleep-poll": z.strictObject({ wait: z.union([z.string(), z.number()]).optional() }),
+  "month-end": z.strictObject({ mode: z.enum(["real", "chosen"]).optional(), day: z.number().optional() }),
   "graph-walk": z.strictObject({ mode: z.enum(["breadth", "depth"]).optional(), step: z.number().optional() }),
   "sort-steps": z.strictObject({ method: z.enum(["insertion", "merge"]).optional(), step: z.number().optional() }),
   "binary-search": z.strictObject({ missing: z.boolean().optional(), target: z.number().optional() }),

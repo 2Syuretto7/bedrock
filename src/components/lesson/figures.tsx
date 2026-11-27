@@ -9299,6 +9299,101 @@ function SleepPoll(props: Props) {
     </Frame>
   );
 }
+const ME_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const ME_LENGTHS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const ME_CHOSEN: [number, number][] = [
+  [5, 15],
+  [0, 31],
+  [1, 28],
+  [3, 30],
+  [11, 31],
+];
+
+function meDayOfYear(month: number, day: number) {
+  let n = day;
+  for (let m = 0; m < month; m++) n += ME_LENGTHS[m];
+  return n;
+}
+
+function meDate(doy: number): [number, number] {
+  let rest = doy;
+  for (let m = 0; m < 12; m++) {
+    if (rest <= ME_LENGTHS[m]) return [m, rest];
+    rest -= ME_LENGTHS[m];
+  }
+  return [11, 31];
+}
+
+/** A test of a "tomorrow" function that is wrong on the last day of each month, run on the real date every day of 2027 or on chosen dates every run. */
+function MonthEnd(props: Props) {
+  const [mode, setMode] = useState(props.mode === "chosen" ? "chosen" : "real");
+  const [day, setDay] = useState(clamp(Math.round(num(props.day, 73)), 1, 365));
+  const [rm, rd] = meDate(day);
+  const label = (m: number, d: number) => `${d} ${ME_MONTHS[m]}`;
+  const lastDays: number[] = [];
+  for (let m = 0; m < 12; m++) lastDays.push(meDayOfYear(m, ME_LENGTHS[m]));
+  const failedSoFar = lastDays.filter((n) => n <= day);
+  const chosen = mode === "chosen";
+  const failedNames = failedSoFar.map((n) => {
+    const [m, d] = meDate(n);
+    return label(m, d);
+  });
+  const todayFails = lastDays.includes(day);
+  const summary = chosen
+    ? "With the clock passed in, every run checks the same five dates: 15 June, 31 January, 28 February, 30 April and 31 December. Four of them are month ends, so every run fails, on the same dates, until the code is fixed."
+    : `The test reads the real date and has run once a day from 1 January to ${label(rm, rd)}. Today's run ${todayFails ? "fails" : "passes"}. It has failed on ${failedSoFar.length === 0 ? "no days" : plural(failedSoFar.length, "day")}${failedNames.length > 0 && failedNames.length <= 3 ? `, ${failedNames.join(" and ")},` : ""} and passed on ${plural(day - failedSoFar.length, "other day")}. Each failure looked like a flake, because the next day's run passed. Over the whole year it fails on 12 of 365 days.`;
+  const cell = 13;
+  const x0 = 34;
+  const y0 = 24;
+  return (
+    <Frame
+      title="The real clock against chosen dates"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">the test</span>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!chosen} onClick={() => setMode("real")}>
+            reads the real date
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={chosen} onClick={() => setMode("chosen")}>
+            is given chosen dates
+          </button>
+          {chosen ? null : <Slider label="today" value={day} min={1} max={365} onChange={setDay} text={label(rm, rd)} />}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 200" role="img" aria-label={chosen ? "Five chosen dates, four of them month ends, fail on every run" : `Runs up to ${label(rm, rd)}: ${failedSoFar.length} failed`}>
+        <text x={10} y={14} className="fig-small">
+          {chosen ? "2027: the dates the test checks on every run" : "2027: one run a day, failures marked"}
+        </text>
+        {ME_MONTHS.map((name, m) => (
+          <g key={name}>
+            <text x={10} y={y0 + m * cell + 10} className="fig-small">
+              {name}
+            </text>
+            {Array.from({ length: ME_LENGTHS[m] }, (_, i) => {
+              const d = i + 1;
+              const n = meDayOfYear(m, d);
+              const isLast = d === ME_LENGTHS[m];
+              const isChosen = ME_CHOSEN.some(([cm, cd]) => cm === m && cd === d);
+              let cls = "fig-ghost";
+              if (chosen) {
+                if (isChosen) cls = isLast ? "fig-accent" : "fig-fill";
+              } else if (n <= day) {
+                cls = isLast ? "fig-accent" : "fig-fill";
+              }
+              return <rect key={d} x={x0 + i * cell} y={y0 + m * cell} width={cell - 2} height={cell - 2} className={cls} />;
+            })}
+          </g>
+        ))}
+        {chosen ? null : <rect x={x0 + (rd - 1) * cell - 2} y={y0 + rm * cell - 2} width={cell + 2} height={cell + 2} className="fig-line" />}
+        <text x={10} y={y0 + 12 * cell + 20} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {chosen ? "failures: 4 of 5 dates, on every run" : `failures so far: ${failedSoFar.length} of ${day} runs`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -10655,6 +10750,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "test-pyramid": TestPyramid,
   "mutation-score": MutationScore,
   "sleep-poll": SleepPoll,
+  "month-end": MonthEnd,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
