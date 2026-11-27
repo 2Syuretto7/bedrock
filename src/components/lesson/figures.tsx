@@ -9079,6 +9079,76 @@ function TriangleCheck(props: Props) {
     </Frame>
   );
 }
+const TP_MIXES: Record<string, { label: string; unit: number; integ: number; e2e: number }> = {
+  units: { label: "unit tests only", unit: 5200, integ: 0, e2e: 0 },
+  pyramid: { label: "pyramid", unit: 5000, integ: 200, e2e: 20 },
+  cone: { label: "mostly end-to-end", unit: 200, integ: 100, e2e: 300 },
+};
+const TP_BUGS: { name: string; needs: "unit" | "integ" | "e2e" }[] = [
+  { name: "fare rounded the wrong way", needs: "unit" },
+  { name: "time stored without its time zone", needs: "integ" },
+  { name: "app sends rupees, server expects paise", needs: "integ" },
+  { name: "Pay button hidden on small phones", needs: "e2e" },
+];
+
+/** Three mixes of unit, integration and end-to-end tests: time per run, chance of a clean run, and which bugs each catches. */
+function TestPyramid(props: Props) {
+  const [key, setKey] = useState(typeof props.mix === "string" && props.mix in TP_MIXES ? props.mix : "pyramid");
+  const m = TP_MIXES[key];
+  const secs = m.unit * 0.005 + m.integ * 2 + m.e2e * 30;
+  const mins = Math.round(secs / 60);
+  const clean = Math.pow(0.999, m.integ) * Math.pow(0.99, m.e2e);
+  const caught = TP_BUGS.filter((b) => (b.needs === "unit" ? m.unit > 0 : b.needs === "integ" ? m.integ > 0 || m.e2e > 0 : m.e2e > 0));
+  const time = mins >= 120 ? `${(secs / 3600).toLocaleString("en-IN", { maximumFractionDigits: 1 })} hours` : plural(Math.max(mins, 1), "minute");
+  const cleanPct = Math.round(clean * 100);
+  const summary = `${group(m.unit)} unit, ${group(m.integ)} integration and ${group(m.e2e)} end-to-end tests take about ${time} a run on one machine. With integration tests failing by accident 1 time in 1,000 and end-to-end tests 1 time in 100, ${cleanPct}% of runs come back clean. The suite catches ${caught.length} of the 4 bugs${caught.length < 4 ? `, missing: ${TP_BUGS.filter((b) => !caught.includes(b)).map((b) => b.name).join("; ")}` : ""}.`;
+  const layers = [
+    { name: "end-to-end", n: m.e2e },
+    { name: "integration", n: m.integ },
+    { name: "unit", n: m.unit },
+  ];
+  return (
+    <Frame
+      title="How a test suite is balanced"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">mix</span>
+          {Object.keys(TP_MIXES).map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={k === key} onClick={() => setKey(k)}>
+              {TP_MIXES[k].label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 200" role="img" aria-label={`${TP_MIXES[key].label}: about ${time} a run, ${cleanPct}% clean, ${caught.length} of 4 bugs caught`}>
+        {layers.map((l, i) => {
+          const max = Math.max(m.unit, m.integ, m.e2e, 1);
+          const filled = l.n === 0 ? 0 : Math.max(6, (Math.log10(l.n + 1) / Math.log10(max + 1)) * 290);
+          return (
+            <g key={l.name}>
+              <text x={10} y={32 + i * 40} className="fig-small" style={{ fill: "var(--text)" }}>
+                {`${l.name}: ${group(l.n)}`}
+              </text>
+              <rect x={160} y={12 + i * 40} width={290} height={30} className="fig-ghost" />
+              <rect x={160} y={12 + i * 40} width={filled} height={30} className={l.name === "end-to-end" && m.e2e > m.unit ? "fig-accent" : "fig-fill"} />
+            </g>
+          );
+        })}
+        <text x={10} y={150} className="fig-small">
+          bar widths on a logarithmic scale
+        </text>
+        <text x={10} y={170} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`about ${time} a run; ${cleanPct}% of runs clean`}
+        </text>
+        <text x={10} y={190} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`bugs caught: ${caught.length} of 4`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -10432,6 +10502,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "test-doubles": TestDoubles,
   "property-runs": PropertyRuns,
   "triangle-check": TriangleCheck,
+  "test-pyramid": TestPyramid,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

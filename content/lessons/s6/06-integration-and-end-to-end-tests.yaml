@@ -1,0 +1,618 @@
+concept: s6.integration-and-end-to-end-tests
+minutes: 80
+claim: You can explain which bugs only appear when real components meet, test a component against a real database or a real data format instead of a double, write contract checks that let two teams change their sides of an interface safely, decide what an end-to-end test through the whole product is worth, and balance a suite so that it is fast, reliable and still catches bugs at every level.
+recalls: [s6.oracles-and-invariants]
+uses: [s6.fakes-stubs-and-mocks, s6.unit-tests-and-fixtures, q0.writes-constraints-and-transactions, s1.files-and-data-formats, s4.designing-apis, s5.continuous-integration]
+leads: [s6.coverage-and-mutation-testing, s6.flaky-tests-and-their-causes, r2.security-testing, h5.performance-regression-testing, r4.safe-deployment-canaries-and-progressive-delivery]
+starter: |
+  # Scratch space. Both sides pass their own tests; together they disagree.
+  import json
+
+  sent = json.dumps({"fare": 45050 / 100})
+  received = json.loads(sent)["fare"]
+  print(sent, received, received == 45050)
+parts:
+  recall:
+    - text: |
+        [[s6.oracles-and-invariants]] judged components one at a time, each with doubles in place of its neighbours and a model or a rule to compare against. Every one of those tests can pass while the product fails, because the pieces were never tested together. This lesson is about the bugs that live between components, and about how much testing of the whole is worth its cost. Three quick pulls first.
+  puzzle:
+    - text: |
+        A team's continuous integration budget is 12 minutes per run on one machine. Their end-to-end tests drive the real app in a browser and take 30 seconds each; integration tests against a real database take 2 seconds each; unit tests take 5 milliseconds each.
+
+        They keep 8 end-to-end tests and 150 integration tests.
+
+        **How many unit tests fit in what is left of the 12 minutes?**
+  intuition:
+    - text: |
+        A new metro line is tested in stages. Each train's brakes are tested in the factory, alone. Each station's ticket gates are tested on their own. Then a train runs over the track with the signals, and finally the line opens for a day of trial runs with staff as passengers. Each stage finds bugs the earlier ones could not: brakes that work perfectly but are tuned for a different gradient, gates that read cards perfectly but not the cards the line actually issued. Nobody would test brakes by running the whole line, though; it is too slow, and when something fails nobody knows which part to blame.
+
+        Software is tested in the same layers. The figure shows three ways to balance a suite between fast unit tests, integration tests of components working together, and end-to-end tests that drive the whole product as a user would.
+    - figure: test-pyramid
+      props: { mix: pyramid }
+    - text: |
+        Unit tests alone are fast and steady but catch only one of the four bugs, because the other three live where components meet or where the product meets a screen. A suite made mostly of end-to-end tests catches everything in principle, but takes hours, and with three hundred slightly unreliable tests almost no run comes back clean, so nobody trusts a red result. The pyramid, many unit tests, fewer integration tests and a handful of end-to-end tests, catches all four bugs in under twenty minutes. The shape is a budget, spent where each kind of test pays for itself.
+  derivation:
+    - text: |
+        **What goes wrong between components.** Each component can be correct by its own tests and still disagree with its neighbour. An app sends a fare in rupees and the server reads paise. A timestamp loses its time zone on the way into the database. A field is renamed on one side of an API. A database constraint the fake never had rejects a write. A configuration file names a queue that does not exist. None of these is visible to a unit test with a double, because the double was written by someone who shared the same assumption. They are visible only when the real pieces run together.
+
+        **Integration tests.** An integration test runs a component against its real collaborators: the actual database, the actual file format, the actual message broker. It is slower than a unit test, seconds rather than milliseconds, because something real must start, but it checks exactly what doubles assume. Modern tools make the real thing cheap to start: an in-memory or temporary database, a database server in a container started for the test run. Each test still needs a known starting state, so the fixtures of [[s6.unit-tests-and-fixtures]] reappear: create the tables, load a few rows, and undo everything afterwards, often by running each test inside a transaction that is rolled back at the end, as in [[q0.writes-constraints-and-transactions]].
+    - question:
+        id: derivation-which-layer
+        type: choice
+        system: s2
+        prompt: |
+          A booking saved at 21:30 in India comes back from the database as 16:00. The repository's unit tests, which use a dictionary as a fake database, all pass. Which test would have caught it?
+        options:
+          - "An integration test that saves a booking through the real database and reads it back"
+          - "Another unit test with the dictionary fake"
+          - "A test of the fare calculation"
+          - "A code review of the dictionary fake"
+        answer: 0
+        explanation: |
+          The dictionary keeps whatever object it is given, time zone and all; the real database's column type is what dropped the zone. Only a round trip through the real database exercises that conversion.
+    - text: |
+        **Contract tests between services.** When two teams own the two sides of an API, as in [[s4.designing-apis]], neither wants to run the other's whole system in every test. Instead the consumer writes down what it relies on, which fields with which types, and the provider runs those expectations against its real responses in its own pipeline. Extra fields are fine; a missing field or a changed type fails the provider's build before it ships. These are the contract tests of [[s6.fakes-stubs-and-mocks]], applied across a team boundary, and they let each side change its own code without a shared test environment.
+
+        **End-to-end tests.** An end-to-end test drives the product as a user does: open the page in a real browser, type, tap, wait for the confirmation, and check what appears on screen and in the database. It is the only test that sees the product the way users do, including layout, which is why Bedrock's own pipeline drives every page in a browser at laptop, tablet and phone sizes. But it is slow, tens of seconds; it depends on everything at once, so a failure can mean anything; and it is the most likely kind of test to fail by accident, because so many moving parts are involved.
+    - question:
+        id: derivation-flaky-many
+        type: numeric
+        system: s2
+        prompt: |
+          A suite has 50 end-to-end tests, and each fails by accident 2% of the time, independently, even when the product is fine. What is the chance, in per cent, that a run has no accidental failure?
+        answer: "36"
+        tolerance: "1"
+        explanation: |
+          $0.98^{50} \approx 0.364$, so about 36%. Nearly two runs in three are red for no reason, and people soon stop believing red runs. Accidental failures are the subject of [[s6.flaky-tests-and-their-causes]].
+    - text: |
+        **The pyramid.** Each kind of test has a cost per test, in time and in accidental failures, and a set of bugs only it can catch. The usual balance is a pyramid: thousands of unit tests, because they are cheap and pinpoint failures; hundreds of integration tests at the boundaries where bugs actually occur; and a handful of end-to-end tests for the journeys that matter most, such as searching, booking and paying. An inverted pyramid, mostly end-to-end tests, is sometimes called an ice-cream cone: slow, unreliable and hard to debug. The shape is not a law, and some systems are mostly integration, but every suite should know what each layer is for.
+
+        **Where tests run.** Unit and integration tests run on every change, in [[s5.continuous-integration]]. End-to-end tests may run on every change too if they are few and fast enough, or against a staging copy of the system before release, or even against production on a schedule, as synthetic checks that a real journey still works.
+    - question:
+        id: order-e2e
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of one end-to-end test of booking a seat in order.
+        steps:
+          - "Start the app against a fresh test database seeded with one bus and its seats."
+          - "Open the booking page in a browser at phone size."
+          - "Choose seat 12A, fill in the passenger and press Book."
+          - "Check that the confirmation shows 12A and that the database holds the booking."
+          - "Discard the test database."
+        explanation: |
+          The environment exists before the browser can reach it; the test acts as a user would; it checks both what the user sees and what was stored; and the clean-up leaves nothing for the next test to trip over.
+  formal:
+    - text: |
+        **Integration test.** Runs a component with its real collaborators, such as a database, file format or broker, to check what unit tests' doubles assume.
+
+        **Contract test.** The consumer's expectations of an interface, which fields with which types, checked against the provider's real responses; extra fields allowed.
+
+        **End-to-end test.** Drives the whole product through its user interface or public API as a user would; slow, broad and the most prone to accidental failure.
+
+        **Test pyramid.** Many unit tests, fewer integration tests, few end-to-end tests, each layer catching bugs the others cannot.
+
+        **Clean runs.** With $n$ tests each failing by accident with probability $f$, a run is clean with probability $(1 - f)^n$.
+  drill:
+    - text: Seconds each. Ask where the bug would have to live.
+    - question:
+        id: drill-unit-time
+        type: numeric
+        system: s1
+        prompt: |
+          2,000 unit tests take 5 milliseconds each. How many seconds is that?
+        answer: "10"
+        explanation: $2000 \times 0.005 = 10$ seconds.
+    - question:
+        id: drill-most
+        type: choice
+        system: s1
+        prompt: |
+          In a test pyramid, which kind of test is most numerous?
+        options:
+          - "Unit tests"
+          - "End-to-end tests"
+          - "Integration tests"
+          - "All three equally"
+        answer: 0
+        explanation: They are the cheapest and point most precisely at a fault.
+    - question:
+        id: drill-blame
+        type: choice
+        system: s1
+        prompt: |
+          An end-to-end test of paying for a ticket fails. What is the main difficulty?
+        options:
+          - "Working out which of the many components involved caused it"
+          - "The test cannot run in a browser"
+          - "End-to-end tests never fail"
+          - "The failure is always in the test itself"
+        answer: 0
+        explanation: The test touches everything, so its failure points at nothing in particular until someone investigates.
+    - question:
+        id: predict-json-fare
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import json
+          print(json.dumps({"fare": 45050 / 100}))
+        output: '{"fare": 450.5}'
+        explanation: Dividing by 100 gives the float 450.5, rupees, which a server expecting paise would misread.
+    - question:
+        id: predict-json-types
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import json
+          print(type(json.loads("450")).__name__, type(json.loads("450.0")).__name__)
+        output: "int float"
+        explanation: JSON numbers with a decimal point come back as floats, so a type check at the boundary sees the difference.
+  work:
+    - text: Slower now. Each problem sits where two components meet.
+    - question:
+        id: fix-paise
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The app's `encode_booking` and the server's `decode_booking` must agree on the format. The program should print `('12A', 45050, '21:30')`. It prints `('12A', 450.5, '21:30')`. Find the fault and fix it.
+        starter: |
+          import json
+
+
+          def encode_booking(seat, fare_paise, time):
+              # The app's side of the API. The agreed format: fare as a whole number
+              # of paise, time as "HH:MM".
+              return json.dumps({"seat": seat, "fare": fare_paise / 100, "time": time})
+
+
+          def decode_booking(text):
+              # The server's side: reads the same agreed format.
+              d = json.loads(text)
+              return d["seat"], d["fare"], d["time"]
+
+
+          print(decode_booking(encode_booking("12A", 45050, "21:30")))
+        solution: |
+          import json
+
+
+          def encode_booking(seat, fare_paise, time):
+              # The app's side of the API. The agreed format: fare as a whole number
+              # of paise, time as "HH:MM".
+              return json.dumps({"seat": seat, "fare": fare_paise, "time": time})
+
+
+          def decode_booking(text):
+              # The server's side: reads the same agreed format.
+              d = json.loads(text)
+              return d["seat"], d["fare"], d["time"]
+
+
+          print(decode_booking(encode_booking("12A", 45050, "21:30")))
+        tests: |
+          for _seat, _fare, _time in [("1A", 0, "00:00"), ("12B", 45050, "21:30"), ("3C", 99, "06:05"), ("40D", 123456789, "23:59"), ("7E", 100, "12:00")]:
+              _got = decode_booking(encode_booking(_seat, _fare, _time))
+              assert tuple(_got) == (_seat, _fare, _time), "A booking of " + repr((_seat, _fare, _time)) + " should arrive unchanged, not as " + repr(_got)
+              assert type(_got[1]) is int, "The fare should arrive as a whole number of paise, not as " + type(_got[1]).__name__
+          _d = json.loads(encode_booking("9F", 2500, "08:15"))
+          assert _d == {"seat": "9F", "fare": 2500, "time": "08:15"}, "The JSON sent should be exactly the agreed format, not " + repr(_d)
+          assert output.strip() == "('12A', 45050, '21:30')", "The program should print ('12A', 45050, '21:30')"
+        wrong:
+          - |
+            import json
+
+
+            def encode_booking(seat, fare_paise, time):
+                # The app's side of the API. The agreed format: fare as a whole number
+                # of paise, time as "HH:MM".
+                return json.dumps({"seat": seat, "fare": int(fare_paise / 100), "time": time})
+
+
+            def decode_booking(text):
+                # The server's side: reads the same agreed format.
+                d = json.loads(text)
+                return d["seat"], d["fare"], d["time"]
+
+
+            print(decode_booking(encode_booking("12A", 45050, "21:30")))
+          - |
+            import json
+
+
+            def encode_booking(seat, fare_paise, time):
+                # The app's side of the API. The agreed format: fare as a whole number
+                # of paise, time as "HH:MM".
+                return json.dumps({"seat": seat, "fare": str(fare_paise), "time": time})
+
+
+            def decode_booking(text):
+                # The server's side: reads the same agreed format.
+                d = json.loads(text)
+                return d["seat"], d["fare"], d["time"]
+
+
+            print(decode_booking(encode_booking("12A", 45050, "21:30")))
+          - |
+            import json
+
+
+            def encode_booking(seat, fare_paise, time):
+                # The app's side of the API. The agreed format: fare as a whole number
+                # of paise, time as "HH:MM".
+                return json.dumps({"seat": seat, "fare": round(fare_paise / 100) * 100, "time": time})
+
+
+            def decode_booking(text):
+                # The server's side: reads the same agreed format.
+                d = json.loads(text)
+                return d["seat"], d["fare"], d["time"]
+
+
+            print(decode_booking(encode_booking("12A", 45050, "21:30")))
+        explanation: |
+          The agreed format carries the fare as whole paise, so the app must send `fare_paise` as it is. Converting to whole rupees still sends a different unit and drops the paise; sending the number as a string changes its type; and rounding to the nearest rupee and back loses the 50 paise. Each side's own unit tests would pass in every version, which is why the round trip through both sides is the test that matters.
+    - question:
+        id: write-sql-store
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `SqlSeatStore`, the real booking store on SQLite, keeping the same contract as the fake. The program should print two lines: `refused`, then `Meena None`.
+        starter: |
+          import sqlite3
+
+
+          class SeatTaken(Exception):
+              pass
+
+
+          class SqlSeatStore:
+              # The real booking store, on SQLite. Same contract as the fake: book
+              # raises SeatTaken for a seat already booked and leaves the first
+              # booking; holder returns the passenger or None; cancel frees the seat.
+              def __init__(self, conn):
+                  self.conn = conn
+
+              def book(self, seat, passenger):
+                  pass
+
+              def holder(self, seat):
+                  return None
+
+              def cancel(self, seat):
+                  pass
+
+
+          store = SqlSeatStore(sqlite3.connect(":memory:"))
+          store.book("12A", "Ravi")
+          try:
+              store.book("12A", "Meena")
+          except SeatTaken:
+              print("refused")
+          store.cancel("12A")
+          store.book("12A", "Meena")
+          print(store.holder("12A"), store.holder("12B"))
+        solution: |
+          import sqlite3
+
+
+          class SeatTaken(Exception):
+              pass
+
+
+          class SqlSeatStore:
+              # The real booking store, on SQLite. Same contract as the fake: book
+              # raises SeatTaken for a seat already booked and leaves the first
+              # booking; holder returns the passenger or None; cancel frees the seat.
+              def __init__(self, conn):
+                  self.conn = conn
+                  conn.execute("CREATE TABLE seats (seat TEXT PRIMARY KEY, passenger TEXT NOT NULL)")
+
+              def book(self, seat, passenger):
+                  try:
+                      self.conn.execute("INSERT INTO seats VALUES (?, ?)", (seat, passenger))
+                  except sqlite3.IntegrityError:
+                      raise SeatTaken(seat)
+
+              def holder(self, seat):
+                  row = self.conn.execute("SELECT passenger FROM seats WHERE seat = ?", (seat,)).fetchone()
+                  return row[0] if row else None
+
+              def cancel(self, seat):
+                  self.conn.execute("DELETE FROM seats WHERE seat = ?", (seat,))
+
+
+          store = SqlSeatStore(sqlite3.connect(":memory:"))
+          store.book("12A", "Ravi")
+          try:
+              store.book("12A", "Meena")
+          except SeatTaken:
+              print("refused")
+          store.cancel("12A")
+          store.book("12A", "Meena")
+          print(store.holder("12A"), store.holder("12B"))
+        tests: |
+          def _fresh():
+              return SqlSeatStore(sqlite3.connect(":memory:"))
+
+
+          _s = _fresh()
+          assert _s.holder("1A") is None, "A new store should have no holder for 1A, not " + repr(_s.holder("1A"))
+          _s.book("1A", "Asha")
+          assert _s.holder("1A") == "Asha", "After booking 1A for Asha, holder should be 'Asha', not " + repr(_s.holder("1A"))
+          _kind = None
+          try:
+              _s.book("1A", "Bilal")
+          except SeatTaken:
+              _kind = "SeatTaken"
+          except Exception as _e:
+              _kind = type(_e).__name__
+          assert _kind == "SeatTaken", "Booking 1A again should raise SeatTaken, not " + repr(_kind)
+          assert _s.holder("1A") == "Asha", "The refused booking must leave Asha holding 1A, not " + repr(_s.holder("1A"))
+          _s.cancel("1A")
+          assert _s.holder("1A") is None, "After cancelling, 1A should have no holder"
+          _s.book("1A", "Bilal")
+          assert _s.holder("1A") == "Bilal", "A cancelled seat can be booked again"
+          _s.cancel("9Z")
+          _t = _fresh()
+          assert _t.holder("1A") is None, "Two stores on different databases must not share bookings"
+          assert output.strip() == "refused\nMeena None", "The program should print refused, then Meena None"
+        wrong:
+          - |
+            import sqlite3
+
+
+            class SeatTaken(Exception):
+                pass
+
+
+            class SqlSeatStore:
+                # The real booking store, on SQLite. Same contract as the fake: book
+                # raises SeatTaken for a seat already booked and leaves the first
+                # booking; holder returns the passenger or None; cancel frees the seat.
+                def __init__(self, conn):
+                    self.conn = conn
+                    conn.execute("CREATE TABLE seats (seat TEXT, passenger TEXT)")
+
+                def book(self, seat, passenger):
+                    self.conn.execute("INSERT INTO seats VALUES (?, ?)", (seat, passenger))
+
+                def holder(self, seat):
+                    row = self.conn.execute("SELECT passenger FROM seats WHERE seat = ?", (seat,)).fetchone()
+                    return row[0] if row else None
+
+                def cancel(self, seat):
+                    self.conn.execute("DELETE FROM seats WHERE seat = ?", (seat,))
+
+
+            store = SqlSeatStore(sqlite3.connect(":memory:"))
+            store.book("12A", "Ravi")
+            try:
+                store.book("12A", "Meena")
+            except SeatTaken:
+                print("refused")
+            store.cancel("12A")
+            store.book("12A", "Meena")
+            print(store.holder("12A"), store.holder("12B"))
+          - |
+            import sqlite3
+
+
+            class SeatTaken(Exception):
+                pass
+
+
+            class SqlSeatStore:
+                # The real booking store, on SQLite. Same contract as the fake: book
+                # raises SeatTaken for a seat already booked and leaves the first
+                # booking; holder returns the passenger or None; cancel frees the seat.
+                def __init__(self, conn):
+                    self.conn = conn
+                    conn.execute("CREATE TABLE seats (seat TEXT PRIMARY KEY, passenger TEXT NOT NULL)")
+
+                def book(self, seat, passenger):
+                    self.conn.execute("INSERT OR REPLACE INTO seats VALUES (?, ?)", (seat, passenger))
+
+                def holder(self, seat):
+                    row = self.conn.execute("SELECT passenger FROM seats WHERE seat = ?", (seat,)).fetchone()
+                    return row[0] if row else None
+
+                def cancel(self, seat):
+                    self.conn.execute("DELETE FROM seats WHERE seat = ?", (seat,))
+
+
+            store = SqlSeatStore(sqlite3.connect(":memory:"))
+            store.book("12A", "Ravi")
+            try:
+                store.book("12A", "Meena")
+            except SeatTaken:
+                print("refused")
+            store.cancel("12A")
+            store.book("12A", "Meena")
+            print(store.holder("12A"), store.holder("12B"))
+          - |
+            import sqlite3
+
+
+            class SeatTaken(Exception):
+                pass
+
+
+            class SqlSeatStore:
+                # The real booking store, on SQLite. Same contract as the fake: book
+                # raises SeatTaken for a seat already booked and leaves the first
+                # booking; holder returns the passenger or None; cancel frees the seat.
+                def __init__(self, conn):
+                    self.conn = conn
+                    conn.execute("CREATE TABLE seats (seat TEXT PRIMARY KEY, passenger TEXT NOT NULL)")
+
+                def book(self, seat, passenger):
+                    try:
+                        self.conn.execute("INSERT INTO seats VALUES (?, ?)", (seat, passenger))
+                    except sqlite3.IntegrityError:
+                        raise SeatTaken(seat)
+
+                def holder(self, seat):
+                    return self.conn.execute("SELECT passenger FROM seats WHERE seat = ?", (seat,)).fetchone()
+
+                def cancel(self, seat):
+                    self.conn.execute("DELETE FROM seats WHERE seat = ?", (seat,))
+
+
+            store = SqlSeatStore(sqlite3.connect(":memory:"))
+            store.book("12A", "Ravi")
+            try:
+                store.book("12A", "Meena")
+            except SeatTaken:
+                print("refused")
+            store.cancel("12A")
+            store.book("12A", "Meena")
+            print(store.holder("12A"), store.holder("12B"))
+        explanation: |
+          A primary key on the seat makes the database itself refuse a second booking, and translating its `IntegrityError` into `SeatTaken` keeps the contract the rest of the code relies on. Without the key, double bookings are silently stored; `INSERT OR REPLACE` hands the seat to the second passenger; and returning the row instead of its first column gives callers a tuple where they expect a name.
+    - question:
+        id: write-contract-check
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `contract_problems(response, contract)`, a consumer's contract check run against the provider's real responses. The program should print `['fare should be int', 'missing time']`.
+        starter: |
+          def contract_problems(response, contract):
+              # contract maps each field the app relies on to the name of the type it
+              # expects: "str", "int", "bool" or "list". Return a sorted list of
+              # problems: "missing FIELD" for an absent field and "FIELD should be
+              # TYPE" for a field whose value has a different type. Fields the app
+              # does not rely on are allowed, so a server can add fields safely.
+              return []
+
+
+          contract = {"seat": "str", "fare": "int", "time": "str", "ac": "bool"}
+          response = {"seat": "12A", "fare": 450.5, "departure": "21:30", "ac": True, "operator": "KSRTC"}
+          print(contract_problems(response, contract))
+        solution: |
+          def contract_problems(response, contract):
+              # contract maps each field the app relies on to the name of the type it
+              # expects: "str", "int", "bool" or "list". Return a sorted list of
+              # problems: "missing FIELD" for an absent field and "FIELD should be
+              # TYPE" for a field whose value has a different type. Fields the app
+              # does not rely on are allowed, so a server can add fields safely.
+              problems = []
+              for field, kind in contract.items():
+                  if field not in response:
+                      problems.append("missing " + field)
+                  elif type(response[field]).__name__ != kind:
+                      problems.append(field + " should be " + kind)
+              return sorted(problems)
+
+
+          contract = {"seat": "str", "fare": "int", "time": "str", "ac": "bool"}
+          response = {"seat": "12A", "fare": 450.5, "departure": "21:30", "ac": True, "operator": "KSRTC"}
+          print(contract_problems(response, contract))
+        tests: |
+          _c = {"id": "int", "name": "str", "tags": "list", "open": "bool"}
+          _cases = [
+              ({"id": 1, "name": "a", "tags": [], "open": False}, []),
+              ({"id": 1, "name": "a", "tags": [], "open": False, "extra": 5}, []),
+              ({"name": "a", "tags": []}, ["missing id", "missing open"]),
+              ({"id": "1", "name": "a", "tags": [], "open": False}, ["id should be int"]),
+              ({"id": 1, "name": 7, "tags": "x", "open": "yes"}, ["name should be str", "open should be bool", "tags should be list"]),
+              ({"id": True, "name": "a", "tags": [], "open": 1}, ["id should be int", "open should be bool"]),
+              ({}, ["missing id", "missing name", "missing open", "missing tags"]),
+          ]
+          for _r, _want in _cases:
+              _got = contract_problems(dict(_r), _c)
+              assert list(_got) == _want, "For the response " + repr(_r) + ", the problems should be " + repr(_want) + ", not " + repr(_got)
+          assert output.strip() == "['fare should be int', 'missing time']", "The program should print ['fare should be int', 'missing time']"
+        wrong:
+          - |
+            def contract_problems(response, contract):
+                # contract maps each field the app relies on to the name of the type it
+                # expects: "str", "int", "bool" or "list". Return a sorted list of
+                # problems: "missing FIELD" for an absent field and "FIELD should be
+                # TYPE" for a field whose value has a different type. Fields the app
+                # does not rely on are allowed, so a server can add fields safely.
+                problems = []
+                for field, kind in contract.items():
+                    if field not in response:
+                        problems.append("missing " + field)
+                    elif type(response[field]).__name__ != kind:
+                        problems.append(field + " should be " + kind)
+                for field in response:
+                    if field not in contract:
+                        problems.append("unexpected " + field)
+                return sorted(problems)
+
+
+            contract = {"seat": "str", "fare": "int", "time": "str", "ac": "bool"}
+            response = {"seat": "12A", "fare": 450.5, "departure": "21:30", "ac": True, "operator": "KSRTC"}
+            print(contract_problems(response, contract))
+          - |
+            def contract_problems(response, contract):
+                # contract maps each field the app relies on to the name of the type it
+                # expects: "str", "int", "bool" or "list". Return a sorted list of
+                # problems: "missing FIELD" for an absent field and "FIELD should be
+                # TYPE" for a field whose value has a different type. Fields the app
+                # does not rely on are allowed, so a server can add fields safely.
+                problems = []
+                for field, kind in contract.items():
+                    if field not in response:
+                        problems.append("missing " + field)
+                return sorted(problems)
+
+
+            contract = {"seat": "str", "fare": "int", "time": "str", "ac": "bool"}
+            response = {"seat": "12A", "fare": 450.5, "departure": "21:30", "ac": True, "operator": "KSRTC"}
+            print(contract_problems(response, contract))
+          - |
+            def contract_problems(response, contract):
+                # contract maps each field the app relies on to the name of the type it
+                # expects: "str", "int", "bool" or "list". Return a sorted list of
+                # problems: "missing FIELD" for an absent field and "FIELD should be
+                # TYPE" for a field whose value has a different type. Fields the app
+                # does not rely on are allowed, so a server can add fields safely.
+                problems = []
+                for field, kind in contract.items():
+                    if field not in response:
+                        problems.append("missing " + field)
+                    elif kind == "int" and not isinstance(response[field], int):
+                        problems.append(field + " should be " + kind)
+                return sorted(problems)
+
+
+            contract = {"seat": "str", "fare": "int", "time": "str", "ac": "bool"}
+            response = {"seat": "12A", "fare": 450.5, "departure": "21:30", "ac": True, "operator": "KSRTC"}
+            print(contract_problems(response, contract))
+        explanation: |
+          Walk the contract, not the response: every field the consumer relies on must be present with the right type, compared by the type's exact name so that `True` is not accepted as an `int`. Reporting extra fields forbids the provider from ever adding one; checking only presence misses the fare that changed type; and checking only integers lets wrongly typed strings, lists and booleans through.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, the budget is 12 minutes, with 8 end-to-end tests at 30 seconds, 150 integration tests at 2 seconds, and unit tests at 5 milliseconds. How many unit tests fit in the time left?
+        answer: "36000"
+        explanation: |
+          12 minutes is 720 seconds. The end-to-end tests take $8 \times 30 = 240$ and the integration tests $150 \times 2 = 300$, leaving 180 seconds, room for $180 / 0.005 = 36{,}000$ unit tests.
+    - question:
+        id: work-which-test
+        type: choice
+        system: s2
+        prompt: |
+          After a release, customers on small phones cannot see the Pay button, which has slid below the screen. Every unit and integration test passed. What test should the team add?
+        options:
+          - "An end-to-end test that opens the payment page in a browser at a small phone's size and checks that the Pay button is visible and can be pressed"
+          - "A unit test of the payment function"
+          - "An integration test of the payment gateway adapter"
+          - "A contract test of the payment API"
+        answer: 0
+        explanation: |
+          The bug is in how the whole page lays out on one screen size, which only a browser-driven test at that size can see. The payment code and its interfaces were never at fault.
+  connections:
+    - text: |
+        36,000. Twelve minutes is 720 seconds; 8 end-to-end tests take 240 and 150 integration tests take 300, leaving 180 seconds, and at 5 milliseconds each that is 36,000 unit tests. Eight slow tests cost as much time as 48,000 fast ones, which is why the top of the pyramid stays narrow and is kept for the journeys that matter most.
+
+        A suite of tens of thousands of tests raises its own question: does it actually exercise the code, and would it notice if the code were wrong? Measuring which lines the tests run, and deliberately breaking the code to see whether any test objects, is [[s6.coverage-and-mutation-testing]].
