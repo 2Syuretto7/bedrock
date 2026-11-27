@@ -8195,6 +8195,60 @@ function ThreeWayMerge(props: Props) {
   );
 }
 
+/** A simple model of review: the same 1,200-line change sent as one pull request or split into several smaller ones. */
+function ReviewSize(props: Props) {
+  const total = 1200;
+  const defects = 12;
+  const [k, setK] = useState(clamp(Math.round(num(props.prs, 1)), 1, 12));
+  const size = total / k;
+  const p = size <= 200 ? 0.7 : (0.7 * 200) / size;
+  const caught = defects * p;
+  const pct = Math.round(p * 100);
+  const one = (x: number) => (Math.round(x * 10) / 10).toLocaleString("en-IN");
+  const summary =
+    k === 1
+      ? `One pull request of 1,200 lines. In this model each of its 12 defects is spotted with probability ${pct}%, so a review catches about ${one(caught)} of them on average, and the rest reach the main branch.`
+      : `${k} pull requests of ${group(Math.round(size))} lines each. In this model each defect is spotted with probability ${pct}%, so the reviews catch about ${one(caught)} of the 12 on average${size <= 200 ? ", the most any split can reach" : ""}.`;
+  const barW = 440 / k;
+  return (
+    <Frame
+      title="The same change, reviewed whole or in pieces"
+      summary={summary}
+      controls={<Stepper label="pull requests" value={k} min={1} max={12} onChange={setK} />}
+    >
+      <svg viewBox="0 0 460 196" role="img" aria-label={`${k} pull requests: about ${one(caught)} of 12 defects caught`}>
+        <text x={10} y={16} className="fig-small">
+          up to 200 lines: 70% chance per defect; beyond that, it thins
+        </text>
+        {Array.from({ length: k }, (_, i) => (
+          <g key={i}>
+            <rect x={10 + i * barW + 2} y={30} width={Math.max(4, barW - 4)} height={34} rx={3} className="fig-ghost" />
+            {k <= 6 ? (
+              <text x={10 + i * barW + barW / 2} y={52} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+                {`${group(Math.round(size))} lines`}
+              </text>
+            ) : null}
+          </g>
+        ))}
+        <text x={10} y={92} className="fig-small">
+          of 12 defects, caught on average (filled) and missed
+        </text>
+        <rect x={10} y={102} width={440} height={26} rx={3} className="fig-ghost" />
+        <rect x={10} y={102} width={(440 * caught) / defects} height={26} rx={3} className="fig-accent" />
+        <text x={16} y={120} className="fig-small" style={{ fill: "var(--bg)", fontWeight: 600 }}>
+          {caught >= 1.2 ? one(caught) : ""}
+        </text>
+        <text x={10} y={152} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`${k} × ${group(Math.round(size))} lines: ${pct}% per defect, about ${one(caught)} caught and ${one(defects - caught)} missed`}
+        </text>
+        <text x={10} y={176} className="fig-small">
+          70% and 200 lines are assumptions, not measurements
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -9537,6 +9591,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "decision-matrix": DecisionMatrix,
   "content-store": ContentStore,
   "three-way-merge": ThreeWayMerge,
+  "review-size": ReviewSize,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
