@@ -953,8 +953,7 @@ test("a test on the real date fails on month ends, chosen dates fail every run",
   await page.goto("/gallery");
   const figure = page.locator('.gallery-item[data-figure="month-end"]').first().getByRole("figure");
   await expect(figure).toContainText("It has failed on 2 days, 31 January and 28 February, and passed on 71 other days.");
-  await figure.getByRole("slider").fill("365");
-  await expect(figure).toContainText("It has failed on 12 days and passed on 353 other days.");
+  await slide(figure, "today", "365", "It has failed on 12 days and passed on 353 other days.");
   await figure.getByRole("button", { name: "is given chosen dates", exact: true }).click();
   await expect(figure).toContainText("Four of them are month ends, so every run fails, on the same dates");
 });
@@ -967,6 +966,5 @@ test("keeping inputs that reach new code gets past a header that random bytes ca
   for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Decrease header bytes" }).click();
   await expect(figure).toContainText("A 2-byte header.");
   await expect(figure).toContainText("got past the whole header after 903 inputs");
-  await figure.getByRole("slider").fill("10");
-  await expect(figure).toContainText("getting past it after about 65,536 inputs");
+  await slide(figure, "inputs tried", "10", "getting past it after about 65,536 inputs");
 });
