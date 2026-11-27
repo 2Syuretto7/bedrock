@@ -1,0 +1,586 @@
+concept: s5.code-review
+minutes: 75
+claim: You can explain what code review is for and what it is not for, prepare a change that is easy to review by keeping it small, single-purpose and well described, review someone else's change in a useful order, write comments that are specific, kind and clear about what must change, estimate how much extra reviewers help and why the estimate is optimistic, and build small tools that measure a change and route it to its owners.
+recalls: [s5.branches-merges-and-rebases]
+uses: [s4.refactoring, s4.writing-design-documents, f4.independence, f4.expectation-and-linearity]
+leads: [s5.build-systems-and-dependency-graphs, s5.continuous-integration, s6.what-a-test-can-prove]
+starter: |
+  # Scratch space. Count the added and removed lines in a small diff.
+  diff = """--- a/menu.py
+  +++ b/menu.py
+  -    return "rajma"
+  +    return "chole"
+  +    # changed for Tuesday
+  """
+  added = [line for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++")]
+  removed = [line for line in diff.splitlines() if line.startswith("-") and not line.startswith("---")]
+  print(len(added), len(removed))
+parts:
+  recall:
+    - text: |
+        [[s5.branches-merges-and-rebases]] ended with a warning: two changes can merge cleanly as text and still break each other, and a merge that completes on its own proves nothing about whether the program works. Teams add a second pair of eyes before any change joins the shared branch. This lesson is about using those eyes well, as the author and as the reviewer. Three quick pulls first.
+  puzzle:
+    - text: |
+        A pull request contains 10 defects. Two reviewers read it, one after the other. Each spots any given defect with probability 0.6, and, as a simplifying assumption, each reviewer's chance of spotting a defect is independent of whether the other spotted it.
+
+        **On average, how many of the 10 defects get past both reviewers?**
+  intuition:
+    - text: |
+        Before an important letter leaves a government office, it goes to a second officer who reads it with the file beside them. They are not there to retype it or to change the font. They check that it says what was decided, that the figures match the file, that the right people are copied, and that nothing in it will embarrass the office next month. A second reader catches what the writer, who knows what they meant, reads straight past. But hand that officer a 90-page bundle at six in the evening and the check becomes a signature.
+
+        **Code review** is that second reading for a change to a program. Its value depends heavily on the size of what is reviewed. The figure uses a simple model, with assumed numbers, to show the shape of the effect.
+    - figure: review-size
+      props: { prs: 1 }
+    - text: |
+        In the model, a reviewer's attention covers about 200 lines well; beyond that, the same attention is spread thinner over more lines. One 1,200-line pull request gets one thin read, and most of its defects pass. Split the same work into six pull requests of 200 lines and each gets a full read. The exact numbers are assumptions, but the direction matches what teams consistently report: small changes get careful reviews, and large ones get approved.
+  derivation:
+    - text: |
+        **What review is for.** Review catches defects, and catching them before they merge is far cheaper than after release. But it does more. It spreads knowledge, so that more than one person understands each part of the system. It keeps the codebase consistent, because a reviewer notices when a change solves a problem differently from everywhere else. And it teaches, in both directions. What review is not for is anything a machine can check: formatting, import order, unused variables and type mistakes belong to formatters, linters and type checkers, run automatically, so that people spend their attention on what only people can judge.
+
+        **How much a second reviewer adds.** If each of two reviewers misses a given defect with probability $1 - p$, and their misses were independent as in [[f4.independence]], the defect would pass both with probability $(1 - p)^2$. With $p = 0.6$, that is 0.16 instead of 0.4. By [[f4.expectation-and-linearity]], the expected number of defects that pass is the sum of each defect's probability of passing, whatever the defects are. Real reviewers are not independent: they share blind spots, since both find a confusing loop hard, and neither may know the payments rules. So the true gain from a second reviewer is smaller than the formula suggests, and a reviewer who knows the area is worth more than an extra one who does not.
+    - question:
+        id: derivation-three
+        type: numeric
+        system: s2
+        prompt: |
+          Three reviewers each spot a given defect with probability 0.5, independently. What is the probability, in per cent, that the defect passes all three?
+        answer: "12.5"
+        explanation: |
+          Each misses it with probability 0.5, so all three miss it with probability $0.5^3 = 0.125$, or 12.5%, if their misses were independent. Shared blind spots make the real figure higher.
+    - text: |
+        **Preparing a change for review.** Most of what makes a review good is decided by the author before the reviewer opens it.
+
+        - **Keep it small.** A few hundred changed lines at most, and preferably fewer. Larger work is split into a sequence of pull requests, each of which leaves the system working.
+        - **Give it one purpose.** Keep refactoring separate from changes in behaviour, as [[s4.refactoring]] insisted: a rename across forty files in its own pull request is easy to approve at a glance, while the same rename mixed with a change to an interest calculation hides the one line that matters.
+        - **Describe it.** Say what changes, why, and how it was tested, linking the design document of [[s4.writing-design-documents]] or the issue it addresses. Point the reviewer at the part that needs the most thought.
+        - **Review it yourself first.** Read your own diff as a stranger would; authors catch a surprising share of their own mistakes this way.
+    - question:
+        id: derivation-mixed
+        type: choice
+        system: s2
+        prompt: |
+          A pull request renames a variable in 40 files and also changes how late fees are calculated in one of them. What should the reviewer ask for?
+        options:
+          - "Split it into two pull requests: the rename alone, then the fee change with its tests."
+          - "Approve it, since renames are harmless."
+          - "Ask for the rename to be undone."
+          - "Review only the fee change and ignore the rest."
+        answer: 0
+        explanation: |
+          Mixed together, the one behavioural change hides among 40 files of mechanical edits. Separately, the rename can be checked quickly, and the fee change gets the full attention it needs.
+    - text: |
+        **Reviewing a change.** A useful order is from the outside in. Read the description and any linked design first, to know what the change is meant to do. Check that the automatic checks pass, since there is no point reviewing code that does not build. Read the tests, which say what the author believes the code does, and notice what they leave out. Then read the code, asking in turn: does it do what the description says; is it correct at the edges, on empty input, on errors, on retries; is it clear to someone who did not write it; does it handle money, personal data or permissions safely; and does it fit the rest of the system. Performance matters only where the description or the data size says it does.
+    - question:
+        id: order-review
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of reviewing a pull request in a useful order.
+        steps:
+          - "Read the description and the linked design or issue."
+          - "Check that the automatic build and tests pass."
+          - "Read the tests to see what behaviour is claimed and what is missing."
+          - "Read the code for correctness, edge cases and clarity."
+          - "Leave comments marked as required or optional, then approve or request changes."
+        explanation: |
+          Knowing the intent comes first, and a failing build makes everything after it wasted effort. Tests before code tells you what to look for, and the verdict comes last, once every comment is written.
+    - text: |
+        **Writing comments.** A good review comment is specific: it points at a line and says what could go wrong, such as "if `orders` is empty, `max` raises ValueError here". It explains why, so the author learns something rather than just obeying. It says how much it matters, separating what must change before merging from suggestions the author may decline, which many teams mark with a prefix such as "nit". And it is about the code, never the person: "this function is hard to follow" rather than "you wrote this badly". Questions are often better than verdicts, since the author may know something you do not.
+
+        **Speed matters too.** A pull request waiting two days for review blocks its author, grows stale against `main`, and invites the large batched changes that review poorly. Many teams aim to give a first response within a working day. Tools help route each change to the right people: a list of path rules, often called code owners, names the team responsible for each part of the repository, so a change to the payments code automatically asks the payments team to review it. And the checks that machines can do, building and testing every pull request, are the subject of [[s5.continuous-integration]], which runs before any human looks.
+  formal:
+    - text: |
+        **Code review.** A second person reads a change before it joins the shared branch, to catch defects, spread knowledge and keep the codebase consistent; machine-checkable rules are left to tools.
+
+        **Reviewable change.** Small, with one purpose, described with its intent and how it was tested; refactoring kept separate from behaviour.
+
+        **Reviewing order.** Description, automatic checks, tests, then code: correctness, edge cases, clarity, safety, fit.
+
+        **Good comment.** Specific, explained, marked as required or optional, about the code and not the person.
+
+        **Several reviewers.** With independent misses, a defect passes $k$ reviewers who each spot it with probability $p$ with probability $(1 - p)^k$; shared blind spots make the real figure higher.
+  drill:
+    - text: Seconds each. Ask what a reviewer's attention is best spent on.
+    - question:
+        id: drill-linter
+        type: choice
+        system: s1
+        prompt: |
+          Which of these should a tool catch, so that reviewers never need to comment on it?
+        options:
+          - "Inconsistent indentation"
+          - "A refund paid twice when a request is retried"
+          - "A confusing name for a business concept"
+          - "A missing test for an empty order"
+        answer: 0
+        explanation: A formatter fixes indentation mechanically; the other three need someone who understands the code.
+    - question:
+        id: drill-one
+        type: numeric
+        system: s1
+        prompt: |
+          One reviewer spots each defect with probability 0.7. A change has 10 defects. On average, how many get past?
+        answer: "3"
+        explanation: Each passes with probability 0.3, and $10 \times 0.3 = 3$.
+    - question:
+        id: drill-comment
+        type: choice
+        system: s1
+        prompt: |
+          Which review comment is the most useful?
+        options:
+          - "If items is empty, total / len(items) divides by zero here; can we return 0 for an empty cart?"
+          - "This is wrong."
+          - "Why did you do it this way?"
+          - "I would have written this differently."
+        answer: 0
+        explanation: It names the line, the case that breaks, the consequence and a possible fix.
+    - question:
+        id: drill-size
+        type: choice
+        system: s1
+        prompt: |
+          A feature needs about 1,500 changed lines. How is it best sent for review?
+        options:
+          - "As several pull requests, each small, working and reviewable on its own"
+          - "As one pull request, so the reviewer sees everything together"
+          - "Directly to main, with a review afterwards"
+          - "As one pull request with the tests removed to make it shorter"
+        answer: 0
+        explanation: Small steps each get a careful read, and the system keeps working after every one.
+    - question:
+        id: predict-split
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          total = 1000
+          people = 3
+          share = total // people
+          extra = total % people
+          shares = [share + 1] * extra + [share] * (people - extra)
+          print(shares, sum(shares))
+        output: "[334, 333, 333] 1000"
+        explanation: The one leftover paisa goes to the first person, so the shares add up to the total.
+    - question:
+        id: predict-owner
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          rules = [("", "core"), ("src/", "app"), ("src/pay/", "payments")]
+          owner = ""
+          for prefix, team in rules:
+              if "src/pay/upi.py".startswith(prefix):
+                  owner = team
+          print(owner)
+        output: "payments"
+        explanation: All three prefixes match, and the last matching rule decides.
+  work:
+    - text: Slower now. Two tools a review process uses, and one bug a reviewer should have caught.
+    - question:
+        id: fix-split-bill
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This change was approved in review, and it loses money. `split_bill` must return shares that add up to the total, with any leftover paise going one each to the first people in the list. The program should print `[3334, 3333, 3333] 10000`. It prints `[3333, 3333, 3333] 9999`. Find the fault and fix it.
+        starter: |
+          def split_bill(total_paise, people):
+              # Shares should add up to the total; any paise left over go one each
+              # to the first people in the list.
+              share = total_paise // people
+              return [share] * people
+
+
+          shares = split_bill(10000, 3)  # ₹100 split three ways
+          print(shares, sum(shares))
+        solution: |
+          def split_bill(total_paise, people):
+              # Shares should add up to the total; any paise left over go one each
+              # to the first people in the list.
+              share = total_paise // people
+              extra = total_paise % people
+              return [share + 1] * extra + [share] * (people - extra)
+
+
+          shares = split_bill(10000, 3)  # ₹100 split three ways
+          print(shares, sum(shares))
+        tests: |
+          for _total, _n in [(10000, 3), (20000, 3), (100, 7), (5, 5), (4, 6), (123457, 10), (0, 4)]:
+              _got = split_bill(_total, _n)
+              assert len(_got) == _n, "split_bill(" + str(_total) + ", " + str(_n) + ") should return " + str(_n) + " shares, not " + str(len(_got))
+              assert sum(_got) == _total, "split_bill(" + str(_total) + ", " + str(_n) + ") gives " + str(_got) + ", which adds up to " + str(sum(_got)) + " paise instead of " + str(_total)
+              assert max(_got) - min(_got) <= 1, "Shares should differ by at most one paisa, not " + str(_got)
+              assert list(_got) == sorted(_got, reverse=True), "The extra paise go to the first people in the list: " + str(_got)
+          assert output.strip() == "[3334, 3333, 3333] 10000", "The program should print [3334, 3333, 3333] 10000"
+        wrong:
+          - |
+            def split_bill(total_paise, people):
+                # Shares should add up to the total; any paise left over go one each
+                # to the first people in the list.
+                share = round(total_paise / people)
+                return [share] * people
+
+
+            shares = split_bill(10000, 3)  # ₹100 split three ways
+            print(shares, sum(shares))
+          - |
+            def split_bill(total_paise, people):
+                # Shares should add up to the total; any paise left over go one each
+                # to the first people in the list.
+                share = total_paise // people
+                extra = total_paise % people
+                return [share + extra] + [share] * (people - 1)
+
+
+            shares = split_bill(10000, 3)  # ₹100 split three ways
+            print(shares, sum(shares))
+          - |
+            def split_bill(total_paise, people):
+                # Shares should add up to the total; any paise left over go one each
+                # to the first people in the list.
+                share = total_paise // people
+                extra = total_paise % people
+                return [share + extra] * people
+
+
+            shares = split_bill(10000, 3)  # ₹100 split three ways
+            print(shares, sum(shares))
+        explanation: |
+          Integer division throws the remainder away, so a paisa vanished from every split that did not divide exactly. A reviewer's best question here is "do the parts add up to the whole?". Rounding the share only moves the error, sometimes above the total; giving the whole remainder to the first person makes shares differ by more than a paisa; and adding it to everyone overcharges.
+    - question:
+        id: write-diff-stats
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `diff_stats(diff)`, which returns a dictionary from each changed file's name, taken from its `+++ b/name` header, to a pair: the number of lines in that file's part of the diff that start with `+`, and the number that start with `-`, not counting the `+++` and `---` headers. The program should print `{'app.py': (3, 1), 'menu.py': (1, 1)} 6 False`.
+        starter: |
+          def diff_stats(diff):
+              # Return a dictionary from each changed file's name to (added, removed):
+              # the number of lines starting with "+" and with "-" in that file's part
+              # of the diff, not counting the "+++ b/name" and "--- a/name" headers.
+              return {}
+
+
+          diff = """--- a/app.py
+          +++ b/app.py
+          @@ -1,4 +1,5 @@
+           import menu
+          -print(menu.today())
+          +day = menu.today()
+          +print(day)
+          +print("Enjoy your tiffin")
+          --- a/menu.py
+          +++ b/menu.py
+          @@ -3,3 +3,3 @@
+           def today():
+          -    return "rajma"
+          +    return "chole"
+          """
+          stats = diff_stats(diff)
+          changed = sum(a + r for a, r in stats.values())
+          print(stats, changed, changed > 400)
+        solution: |
+          def diff_stats(diff):
+              stats = {}
+              name = ""
+              for line in diff.splitlines():
+                  if line.startswith("+++ b/"):
+                      name = line[6:]
+                      stats[name] = (0, 0)
+                  elif line.startswith("---"):
+                      pass
+                  elif line.startswith("+"):
+                      added, removed = stats[name]
+                      stats[name] = (added + 1, removed)
+                  elif line.startswith("-"):
+                      added, removed = stats[name]
+                      stats[name] = (added, removed + 1)
+              return stats
+
+
+          diff = """--- a/app.py
+          +++ b/app.py
+          @@ -1,4 +1,5 @@
+           import menu
+          -print(menu.today())
+          +day = menu.today()
+          +print(day)
+          +print("Enjoy your tiffin")
+          --- a/menu.py
+          +++ b/menu.py
+          @@ -3,3 +3,3 @@
+           def today():
+          -    return "rajma"
+          +    return "chole"
+          """
+          stats = diff_stats(diff)
+          changed = sum(a + r for a, r in stats.values())
+          print(stats, changed, changed > 400)
+        tests: |
+          _d = "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a = 1\n+a = 2\n context\n--- a/y/z.py\n+++ b/y/z.py\n@@ -0,0 +1,3 @@\n+one\n+two\n+three\n--- a/w.txt\n+++ b/w.txt\n@@ -1,2 +0,0 @@\n-gone\n"
+          _got = diff_stats(_d)
+          _want = {"x.py": (1, 1), "y/z.py": (3, 0), "w.txt": (0, 1)}
+          assert _got == _want, "diff_stats should return " + str(_want) + ", not " + str(_got)
+          assert diff_stats("") == {}, "An empty diff has no files"
+          assert output.strip() == "{'app.py': (3, 1), 'menu.py': (1, 1)} 6 False", "The program should print {'app.py': (3, 1), 'menu.py': (1, 1)} 6 False"
+        wrong:
+          - |
+            def diff_stats(diff):
+                stats = {}
+                name = ""
+                for line in diff.splitlines():
+                    if line.startswith("+++ b/"):
+                        name = line[6:]
+                        stats[name] = (0, 0)
+                    if line.startswith("+"):
+                        added, removed = stats[name]
+                        stats[name] = (added + 1, removed)
+                    elif line.startswith("-"):
+                        if name in stats:
+                            added, removed = stats[name]
+                            stats[name] = (added, removed + 1)
+                return stats
+
+
+            diff = """--- a/app.py
+            +++ b/app.py
+            @@ -1,4 +1,5 @@
+             import menu
+            -print(menu.today())
+            +day = menu.today()
+            +print(day)
+            +print("Enjoy your tiffin")
+            --- a/menu.py
+            +++ b/menu.py
+            @@ -3,3 +3,3 @@
+             def today():
+            -    return "rajma"
+            +    return "chole"
+            """
+            stats = diff_stats(diff)
+            changed = sum(a + r for a, r in stats.values())
+            print(stats, changed, changed > 400)
+          - |
+            def diff_stats(diff):
+                stats = {}
+                name = ""
+                for line in diff.splitlines():
+                    if line.startswith("+++ b/"):
+                        name = line[6:]
+                        stats[name] = (0, 0)
+                    elif line.startswith("---") or line.startswith("@@"):
+                        pass
+                    elif line.startswith("-"):
+                        added, removed = stats[name]
+                        stats[name] = (added, removed + 1)
+                    elif name != "":
+                        added, removed = stats[name]
+                        stats[name] = (added + 1, removed)
+                return stats
+
+
+            diff = """--- a/app.py
+            +++ b/app.py
+            @@ -1,4 +1,5 @@
+             import menu
+            -print(menu.today())
+            +day = menu.today()
+            +print(day)
+            +print("Enjoy your tiffin")
+            --- a/menu.py
+            +++ b/menu.py
+            @@ -3,3 +3,3 @@
+             def today():
+            -    return "rajma"
+            +    return "chole"
+            """
+            stats = diff_stats(diff)
+            changed = sum(a + r for a, r in stats.values())
+            print(stats, changed, changed > 400)
+          - |
+            def diff_stats(diff):
+                stats = {}
+                added = 0
+                removed = 0
+                for line in diff.splitlines():
+                    if line.startswith("+++ b/"):
+                        stats[line[6:]] = (added, removed)
+                    elif line.startswith("---"):
+                        pass
+                    elif line.startswith("+"):
+                        added = added + 1
+                    elif line.startswith("-"):
+                        removed = removed + 1
+                return stats
+
+
+            diff = """--- a/app.py
+            +++ b/app.py
+            @@ -1,4 +1,5 @@
+             import menu
+            -print(menu.today())
+            +day = menu.today()
+            +print(day)
+            +print("Enjoy your tiffin")
+            --- a/menu.py
+            +++ b/menu.py
+            @@ -3,3 +3,3 @@
+             def today():
+            -    return "rajma"
+            +    return "chole"
+            """
+            stats = diff_stats(diff)
+            changed = sum(a + r for a, r in stats.values())
+            print(stats, changed, changed > 400)
+        explanation: |
+          Each `+++ b/` header starts a new file's counts, the headers themselves are skipped, and every other line starting with `+` or `-` is counted against the current file. Counting the headers inflates every file; counting unchanged context lines as additions inflates the size; and keeping one running count records each file's totals before its own lines are counted.
+    - question:
+        id: write-reviewers
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `reviewers_for(changed, owners)`. Each rule in `owners` is a `(prefix, team)` pair; a rule matches a file whose path starts with the prefix, and the last matching rule decides the file's owner. Return the sorted list of distinct teams that own the changed files. The program should print `['core', 'payments', 'upi']`.
+        starter: |
+          def reviewers_for(changed, owners):
+              # owners is a list of (prefix, team) rules. A rule matches a file whose
+              # path starts with its prefix, and the last matching rule decides the
+              # file's owner. Return the sorted list of teams that must review.
+              return []
+
+
+          owners = [
+              ("", "core"),
+              ("src/payments/", "payments"),
+              ("src/payments/upi/", "upi"),
+              ("docs/", "writers"),
+          ]
+          changed = ["src/payments/upi/refund.py", "src/payments/card.py", "src/menu.py", "src/payments/upi/collect.py"]
+          print(reviewers_for(changed, owners))
+        solution: |
+          def reviewers_for(changed, owners):
+              teams = set()
+              for path in changed:
+                  owner = ""
+                  for prefix, team in owners:
+                      if path.startswith(prefix):
+                          owner = team
+                  teams.add(owner)
+              return sorted(teams)
+
+
+          owners = [
+              ("", "core"),
+              ("src/payments/", "payments"),
+              ("src/payments/upi/", "upi"),
+              ("docs/", "writers"),
+          ]
+          changed = ["src/payments/upi/refund.py", "src/payments/card.py", "src/menu.py", "src/payments/upi/collect.py"]
+          print(reviewers_for(changed, owners))
+        tests: |
+          _o = [("", "core"), ("web/", "frontend"), ("web/static/", "design"), ("api/", "backend"), ("api/auth.py", "security")]
+          _cases = [
+              (["web/static/logo.svg"], ["design"]),
+              (["web/app.js", "api/orders.py"], ["backend", "frontend"]),
+              (["api/auth.py", "api/auth.py", "README.md"], ["core", "security"]),
+              (["web/static/a.css", "web/static/b.css", "web/index.html"], ["design", "frontend"]),
+              ([], []),
+          ]
+          for _changed, _want in _cases:
+              _got = reviewers_for(list(_changed), _o)
+              assert _got == _want, "For " + str(_changed) + " the reviewers should be " + str(_want) + ", not " + str(_got) + ". The last matching rule decides each file's owner"
+          _got = reviewers_for(["web/static/x.png"], [("web/static/", "design"), ("web/", "frontend")])
+          assert _got == ["frontend"], "When a broader rule comes later, it wins, because the last matching rule decides: expected ['frontend'], got " + str(_got)
+          assert output.strip() == "['core', 'payments', 'upi']", "The program should print ['core', 'payments', 'upi']"
+        wrong:
+          - |
+            def reviewers_for(changed, owners):
+                teams = set()
+                for path in changed:
+                    for prefix, team in owners:
+                        if path.startswith(prefix):
+                            teams.add(team)
+                            break
+                return sorted(teams)
+
+
+            owners = [
+                ("", "core"),
+                ("src/payments/", "payments"),
+                ("src/payments/upi/", "upi"),
+                ("docs/", "writers"),
+            ]
+            changed = ["src/payments/upi/refund.py", "src/payments/card.py", "src/menu.py", "src/payments/upi/collect.py"]
+            print(reviewers_for(changed, owners))
+          - |
+            def reviewers_for(changed, owners):
+                teams = set()
+                for path in changed:
+                    for prefix, team in owners:
+                        if path.startswith(prefix):
+                            teams.add(team)
+                return sorted(teams)
+
+
+            owners = [
+                ("", "core"),
+                ("src/payments/", "payments"),
+                ("src/payments/upi/", "upi"),
+                ("docs/", "writers"),
+            ]
+            changed = ["src/payments/upi/refund.py", "src/payments/card.py", "src/menu.py", "src/payments/upi/collect.py"]
+            print(reviewers_for(changed, owners))
+          - |
+            def reviewers_for(changed, owners):
+                teams = []
+                for path in changed:
+                    owner = ""
+                    for prefix, team in owners:
+                        if path.startswith(prefix):
+                            owner = team
+                    teams.append(owner)
+                return teams
+
+
+            owners = [
+                ("", "core"),
+                ("src/payments/", "payments"),
+                ("src/payments/upi/", "upi"),
+                ("docs/", "writers"),
+            ]
+            changed = ["src/payments/upi/refund.py", "src/payments/card.py", "src/menu.py", "src/payments/upi/collect.py"]
+            print(reviewers_for(changed, owners))
+        explanation: |
+          For each file, walk every rule and keep the last team that matched, then collect the teams in a set and sort them. Stopping at the first match lets the catch-all rule claim everything; adding every matching team asks the whole company to review; and returning a list per file repeats teams in no useful order.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          On average, how many of the puzzle's 10 defects get past both reviewers?
+        answer: "1.6"
+        tolerance: "0.01"
+        explanation: |
+          Each defect passes one reviewer with probability $0.4$ and both, independently, with probability $0.4 \times 0.4 = 0.16$. By linearity of expectation, $10 \times 0.16 = 1.6$.
+    - question:
+        id: work-slow
+        type: choice
+        system: s2
+        prompt: |
+          In a team of eight, pull requests wait three days on average for a first review, and authors have started bundling a week's work into each one to avoid the wait. What is the best change?
+        options:
+          - "Agree to give every pull request a first response within a working day, and keep pull requests small so that responding is quick."
+          - "Require four approvals on every pull request to make reviews more thorough."
+          - "Let authors merge their own pull requests after three days without review."
+          - "Review only the largest pull requests."
+        answer: 0
+        explanation: |
+          Slow reviews cause large batches, which review badly, which slows reviews further. A short response time and small changes break the loop. More required approvals deepen the wait, and merging unreviewed work gives up review entirely.
+  connections:
+    - text: |
+        1.6 defects. Each of the 10 passes one reviewer with probability 0.4 and both with probability 0.16, so on average 1.6 get through, against 4 with a single reviewer. That is a real improvement, but it rests on an assumption that rarely holds: two reviewers reading the same confusing code tend to miss the same things. The defects that pass are exactly the ones people are bad at seeing.
+
+        That is why review is one layer among several. Machines do what people do badly: building every change and running every test, every time, without tiring. Building quickly enough to do that on every pull request depends on knowing exactly what depends on what, and rebuilding only what a change affects, which is [[s5.build-systems-and-dependency-graphs]]. Running the whole set of checks automatically on every change is [[s5.continuous-integration]], and what those tests can and cannot prove is where [[s6.what-a-test-can-prove]] begins.

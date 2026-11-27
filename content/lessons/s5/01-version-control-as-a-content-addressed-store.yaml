@@ -1,0 +1,626 @@
+concept: s5.version-control-as-a-content-addressed-store
+minutes: 80
+claim: You can explain how a version control system such as Git stores a project's history as objects named by the hash of their contents, build blob, tree and commit ids yourself, predict which objects a new commit adds and which it shares, use equal ids to compare snapshots without reading files, detect damaged or tampered history from its hashes, and estimate why accidental collisions do not happen in practice.
+recalls: [s4.writing-design-documents, s2.hash-tables]
+uses: [f4.the-birthday-problem-and-collisions, h0.characters-unicode-and-utf-8, s1.classes-and-objects]
+leads: [s5.branches-merges-and-rebases, s5.code-review, s5.build-systems-and-dependency-graphs, d7.images-and-layers]
+starter: |
+  # Scratch space. Name some texts by the hash of their contents.
+  import hashlib
+
+
+  def object_id(text):
+      return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+  store = {}
+  for text in ["monday,rajma", "tuesday,chole", "monday,rajma"]:
+      store[object_id(text)] = text
+  print(len(store), store)
+parts:
+  recall:
+    - text: |
+        [[s4.writing-design-documents]] ended with decisions recorded in documents and decision records that are kept next to the code, changing alongside it. [[s2.hash-tables]] turned a key into a number with a hash function, so that the key's slot could be found without searching. Put the two together and you have the design of modern version control: every version of every file is kept, and each one is found by a hash of its own contents. Three quick pulls first.
+  puzzle:
+    - text: |
+        A project's folder holds 1,000 files and no subfolders. Its first commit saves all 1,000. Then come 200 more commits, and each one changes exactly 2 files, always to contents the project has never had before.
+
+        The version control system stores each distinct file content once, plus one tree, a list of names and the ids of their contents, and one commit record for every commit.
+
+        **How many objects does it store in all, after the 201 commits?**
+  intuition:
+    - text: |
+        Imagine a family in Kolkata that keeps every recipe it has ever written, and files each card not by the dish's name but by a fingerprint of its exact words, written in the corner. When two cousins copy out the same recipe for shorshe ilish word for word, both copies carry the same fingerprint, and the family keeps only one card. When an aunt changes one pinch of salt, the new card gets a different fingerprint, and the old card stays exactly where it was. To check that a card has not been smudged or altered, anyone can recompute its fingerprint and compare it with the corner.
+
+        That is a **content-addressed store**: things are named by their contents, so identical things share a name, changed things get a new name, and every name doubles as a check. Git, the version control system almost every software team uses, is built this way. The figure shows two commits of a three-file project. Choose which files the second commit changes.
+    - figure: content-store
+      props: { changed: [app.py] }
+    - text: |
+        Each file's contents become a **blob**, named by its hash. A **tree** lists the file names with the ids of their blobs, and is named by the hash of that list. A **commit** records the id of its tree and the id of its parent commit, and is named by the hash of that record. When commit 2 changes one file, only that file gets a new blob; the tree changes because one of its entries changed, and the commit is new by definition. The unchanged files' entries carry exactly the same ids as before, so they point at blobs already in the store, which is why keeping every version costs far less than copying the project each time.
+  derivation:
+    - text: |
+        **Names from contents.** The hash functions of [[s2.hash-tables]] only had to spread keys evenly over a few thousand slots. Version control uses a **cryptographic hash** such as SHA-1 or SHA-256, which turns any sequence of bytes into a fixed-length number, 160 or 256 bits, written as 40 or 64 hexadecimal digits. It has two extra properties. Change any single byte and the hash changes beyond recognition. And nobody knows how to find two different inputs with the same hash, or an input that has a chosen hash, without an impossible amount of computing. A hash is computed on bytes, so text is first encoded, usually in UTF-8 as [[h0.characters-unicode-and-utf-8]] described, and the same characters always give the same bytes.
+
+        Could two different files collide by accident? This is [[f4.the-birthday-problem-and-collisions]] on a vast scale: with $N$ possible hash values, a collision becomes likely only once about $\sqrt{N}$ objects exist.
+    - question:
+        id: derivation-birthday
+        type: numeric
+        system: s2
+        prompt: |
+          Git's original hash has 160 bits, so $N = 2^{160}$. A collision among accidentally different objects becomes likely at about $\sqrt{N} = 2^k$ objects. What is $k$?
+        answer: "80"
+        explanation: |
+          $\sqrt{2^{160}} = 2^{80}$, about $10^{24}$ objects: a billion repositories each with a thousand billion objects would still fall far short. Deliberate collisions are a different matter, which is why Git is moving from SHA-1 to SHA-256 after researchers forged a SHA-1 collision in 2017.
+    - text: |
+        **Three kinds of object.** A **blob** holds a file's contents and nothing else: not its name, not its date. A **tree** is a directory listing: for each entry, a name and the id of a blob or of another tree for a subfolder, always in sorted order so that the same listing produces the same bytes. A **commit** holds the id of the tree for the whole project, the ids of its parent commits, the author, the time and the message. Each object is stored under the hash of its own bytes.
+
+        Two rules follow. First, objects never change: an object with different contents is a different object with a different name. Second, a change ripples upwards. Edit `src/lib/util.py` and its blob is new, so the `lib` tree that names it is new, so the `src` tree that names `lib` is new, so the root tree is new, and so is the commit. Every other blob and every other subtree is shared with the previous commit, unchanged and uncopied.
+    - question:
+        id: derivation-ripple
+        type: numeric
+        system: s2
+        prompt: |
+          A commit changes only `src/lib/util.py`. The project's root folder contains `src`, which contains `lib`. How many new objects does the commit add to the store?
+        answer: "5"
+        explanation: |
+          One blob for the new contents, one tree each for `lib`, `src` and the root, because each of their listings now holds a different id, and one commit. Every other object is shared.
+    - text: |
+        **What the design buys.** Naming by contents gives several things at once, without any extra machinery.
+
+        - **Deduplication.** The same contents are stored once, whether they appear in two files, two folders or two hundred commits.
+        - **Cheap snapshots.** Every commit is a complete snapshot of the project, yet adding one costs only the objects that changed.
+        - **Fast comparison.** If two trees have the same id, everything inside them is identical, so a comparison can skip them without opening a file. Comparing two commits only descends into subtrees whose ids differ, and compares files by their blob ids.
+        - **Integrity.** Reading an object, you can hash it again and compare the result with its name. A damaged disk or a corrupted download is caught at once.
+        - **Tamper evidence.** A commit names its parent by hash, which names its parent, and so on back to the first commit. Altering anything in an old commit changes its id, which changes the parent recorded in the next commit, and so on to the newest. A history is therefore identified completely by the id of its latest commit.
+    - question:
+        id: order-commit
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of saving a commit into a content-addressed store in order.
+        steps:
+          - "Hash each changed file's contents and store any blob the store does not yet have."
+          - "Build each changed folder's sorted listing of names and ids, from the deepest folder up, and store it as a tree."
+          - "Write a commit record naming the root tree, the parent commit, the author and the message."
+          - "Hash the commit record and store it under that id."
+          - "Move the branch name to point at the new commit's id."
+        explanation: |
+          Every object needs the ids of the objects it names, so the work goes from file contents up through folders to the commit, and the branch name moves last, once everything it points at exists.
+    - text: |
+        **Branches are names.** If commits are immutable and named by hashes, what is a branch? Only a small, movable label: a file holding the id of one commit. Committing on a branch writes the new objects and then moves the label to the new commit. Creating a branch writes one label; nothing is copied. This is why branching in Git is instant, and how one store can hold many lines of work at once, the subject of [[s5.branches-merges-and-rebases]]. The same idea reaches well beyond source code: container images are stacks of layers named by their hashes, so that machines download only the layers they lack, as [[d7.images-and-layers]] will show.
+    - question:
+        id: derivation-tamper
+        type: choice
+        system: s2
+        prompt: |
+          Someone edits the message of a commit made a month ago, deep in the history of a shared branch, and nothing else. What happens to the ids of the commits made after it?
+        options:
+          - "They all change, because each names its parent by id and the edited commit has a new id."
+          - "Nothing; only the edited commit's id changes."
+          - "Nothing; messages are not part of a commit's id."
+          - "Only the very next commit's id changes."
+        answer: 0
+        explanation: |
+          The message is part of the commit's bytes, so its id changes; the next commit records that id as its parent, so its own bytes and id change too, and so on to the newest commit. Everyone who holds the old ids can see at once that the history was rewritten.
+  formal:
+    - text: |
+        **Content-addressed store.** A store in which every object is named by a cryptographic hash of its contents; identical contents share one name, and the name verifies the contents.
+
+        **Blob.** The contents of one file, without its name. **Tree.** A sorted listing of names with the ids of blobs and subtrees. **Commit.** The id of a root tree, the ids of parent commits, an author, a time and a message.
+
+        **Immutability.** Objects never change; a change produces new objects, and the change ripples from the blob up through every enclosing tree to a new commit.
+
+        **Collision.** Two different contents with the same hash; for a $b$-bit hash, accidental collisions become likely only near $2^{b/2}$ objects.
+
+        **Branch.** A movable name holding the id of one commit.
+  drill:
+    - text: Seconds each. Ask which bytes are hashed and what names what.
+    - question:
+        id: drill-same
+        type: choice
+        system: s1
+        prompt: |
+          Two different files in a project, `a.txt` and `docs/b.txt`, have exactly the same contents. How many blobs hold them?
+        options:
+          - "One, shared by both tree entries"
+          - "Two, one for each name"
+          - "Two, one for each folder"
+          - "None; identical files are not stored"
+        answer: 0
+        explanation: A blob holds only the contents, so the same contents have one id and are stored once.
+    - question:
+        id: drill-rename
+        type: choice
+        system: s1
+        prompt: |
+          A commit renames `menu.csv` to `menus.csv` without changing its contents. Which new objects does it add?
+        options:
+          - "A new tree and a new commit, but no new blob"
+          - "A new blob, a new tree and a new commit"
+          - "Only a new commit"
+          - "Only a new blob"
+        answer: 0
+        explanation: The name lives in the tree, so the tree changes; the contents, and so the blob, do not.
+    - question:
+        id: drill-hex
+        type: numeric
+        system: s1
+        prompt: |
+          A SHA-256 hash has 256 bits. How many hexadecimal digits does it take to write it?
+        answer: "64"
+        explanation: Each hexadecimal digit carries 4 bits, and $256 / 4 = 64$.
+    - question:
+        id: drill-equal
+        type: choice
+        system: s1
+        prompt: |
+          Two commits have root trees with the same id. What do you know about the projects they record?
+        options:
+          - "Every file and folder is identical"
+          - "Only the file names are identical"
+          - "Nothing until each file is compared"
+          - "The commits are the same commit"
+        answer: 0
+        explanation: Equal tree ids mean equal listings, which mean equal blob and subtree ids all the way down. The commits themselves may still differ in parent, author or message.
+    - question:
+        id: predict-hash
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import hashlib
+
+          a = hashlib.sha256("chai".encode()).hexdigest()
+          b = hashlib.sha256("chai".encode()).hexdigest()
+          c = hashlib.sha256("Chai".encode()).hexdigest()
+          print(a == b, a == c, len(a))
+        output: "True False 64"
+        explanation: The same bytes always give the same hash, one changed letter gives a different one, and a SHA-256 hash is 64 hexadecimal digits long.
+    - question:
+        id: predict-dedupe
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import hashlib
+
+          store = {}
+          for text in ["dal", "roti", "dal", "dal"]:
+              store[hashlib.sha256(text.encode()).hexdigest()] = text
+          print(len(store))
+        output: "2"
+        explanation: The three copies of "dal" all land on the same key, so the store holds two objects.
+  work:
+    - text: Slower now. Each problem is one piece of a content-addressed store.
+    - question:
+        id: fix-tree-order
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The same set of files, with the same contents, must always give the same tree id, on any machine and in any order the files were listed. The program should print `True False`. It prints `False False`. Find the fault and fix it.
+        starter: |
+          import hashlib
+
+
+          def object_id(text):
+              return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+          def tree_id(files):
+              # files maps each file name to its content
+              lines = []
+              for name in files:
+                  lines.append(name + " " + object_id(files[name]))
+              return object_id("\n".join(lines))
+
+
+          laptop = {"app.py": "print(menu)", "menu.csv": "monday,rajma"}
+          phone = {"menu.csv": "monday,rajma", "app.py": "print(menu)"}
+          edited = {"app.py": "print(menu)", "menu.csv": "monday,chole"}
+          print(tree_id(laptop) == tree_id(phone), tree_id(laptop) == tree_id(edited))
+        solution: |
+          import hashlib
+
+
+          def object_id(text):
+              return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+          def tree_id(files):
+              # files maps each file name to its content
+              lines = []
+              for name in sorted(files):
+                  lines.append(name + " " + object_id(files[name]))
+              return object_id("\n".join(lines))
+
+
+          laptop = {"app.py": "print(menu)", "menu.csv": "monday,rajma"}
+          phone = {"menu.csv": "monday,rajma", "app.py": "print(menu)"}
+          edited = {"app.py": "print(menu)", "menu.csv": "monday,chole"}
+          print(tree_id(laptop) == tree_id(phone), tree_id(laptop) == tree_id(edited))
+        tests: |
+          _a = {"a.py": "x = 1", "b.py": "y = 2", "c.txt": "notes"}
+          _b = {"c.txt": "notes", "a.py": "x = 1", "b.py": "y = 2"}
+          _c = {"b.py": "y = 2", "c.txt": "notes", "a.py": "x = 1"}
+          assert tree_id(_a) == tree_id(_b) == tree_id(_c), "The same files with the same contents must give the same tree id, whatever order the dictionary was built in"
+          assert tree_id(_a) != tree_id({"a.py": "x = 1", "b.py": "y = 3", "c.txt": "notes"}), "Changing one file's content must change the tree id"
+          assert tree_id({"a.py": "x = 1"}) != tree_id({"b.py": "x = 1"}), "Renaming a file must change the tree id, since a tree records names as well as contents"
+          assert tree_id({"a.py": "x = 1", "b.py": "y = 2"}) != tree_id({"a.py": "y = 2", "b.py": "x = 1"}), "Swapping the contents of two files must change the tree id"
+          assert tree_id({"one.txt": "same", "two.txt": "same"}) == tree_id({"two.txt": "same", "one.txt": "same"}), "Two files with identical contents, listed in either order, must still give one tree id"
+          assert len(tree_id(_a)) == 12, "A tree id should be 12 hex digits, like every other object id"
+          assert output.strip() == "True False", "The program should print True False"
+        wrong:
+          - |
+            import hashlib
+
+
+            def object_id(text):
+                return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+            def tree_id(files):
+                # files maps each file name to its content
+                lines = []
+                for name in sorted(files):
+                    lines.append(object_id(files[name]))
+                return object_id("\n".join(lines))
+
+
+            laptop = {"app.py": "print(menu)", "menu.csv": "monday,rajma"}
+            phone = {"menu.csv": "monday,rajma", "app.py": "print(menu)"}
+            edited = {"app.py": "print(menu)", "menu.csv": "monday,chole"}
+            print(tree_id(laptop) == tree_id(phone), tree_id(laptop) == tree_id(edited))
+          - |
+            import hashlib
+
+
+            def object_id(text):
+                return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+            def tree_id(files):
+                # files maps each file name to its content
+                lines = []
+                for name in sorted(files, key=lambda n: files[n]):
+                    lines.append(name + " " + object_id(files[name]))
+                return object_id("\n".join(lines))
+
+
+            laptop = {"app.py": "print(menu)", "menu.csv": "monday,rajma"}
+            phone = {"menu.csv": "monday,rajma", "app.py": "print(menu)"}
+            edited = {"app.py": "print(menu)", "menu.csv": "monday,chole"}
+            print(tree_id(laptop) == tree_id(phone), tree_id(laptop) == tree_id(edited))
+          - |
+            import hashlib
+
+
+            def object_id(text):
+                return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+            def tree_id(files):
+                # files maps each file name to its content
+                lines = []
+                for name in sorted(files):
+                    lines.append(name)
+                return object_id("\n".join(lines))
+
+
+            laptop = {"app.py": "print(menu)", "menu.csv": "monday,rajma"}
+            phone = {"menu.csv": "monday,rajma", "app.py": "print(menu)"}
+            edited = {"app.py": "print(menu)", "menu.csv": "monday,chole"}
+            print(tree_id(laptop) == tree_id(phone), tree_id(laptop) == tree_id(edited))
+        explanation: |
+          The listing followed the dictionary's order, which is the order the files happened to be added, so two machines with the same files could compute different trees. Sorting by name makes the bytes, and so the id, depend only on the snapshot. Leaving names out means a rename goes unnoticed; sorting by contents leaves files with equal contents in arbitrary order; and hashing only the names ignores every edit.
+    - question:
+        id: write-store
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `put`, which stores a text under its id, the first 12 hexadecimal digits of the SHA-256 of the text, and returns the id, and `get`, which returns the text stored under an id but raises `ValueError` if the stored text no longer matches its id. The program should print `True 2 [True]`.
+        starter: |
+          import hashlib
+
+
+          class Store:
+              def __init__(self):
+                  self.objects = {}
+
+              def put(self, text):
+                  # Store text under its id, the first 12 hex digits of the SHA-256
+                  # of the text, and return the id.
+                  return ""
+
+              def get(self, object_id):
+                  # Return the text stored under object_id, or raise ValueError if
+                  # the stored text no longer matches its id.
+                  return ""
+
+
+          store = Store()
+          a = store.put("monday,rajma")
+          b = store.put("tuesday,chole")
+          c = store.put("monday,rajma")
+          store.objects[b] = "tuesday,chole!"  # a disk error damages one object
+          damaged = []
+          for object_id in [a, b]:
+              try:
+                  store.get(object_id)
+              except ValueError:
+                  damaged.append(object_id == b)
+          print(a == c, len(store.objects), damaged)
+        solution: |
+          import hashlib
+
+
+          class Store:
+              def __init__(self):
+                  self.objects = {}
+
+              def put(self, text):
+                  object_id = hashlib.sha256(text.encode()).hexdigest()[:12]
+                  self.objects[object_id] = text
+                  return object_id
+
+              def get(self, object_id):
+                  text = self.objects[object_id]
+                  if hashlib.sha256(text.encode()).hexdigest()[:12] != object_id:
+                      raise ValueError("object " + object_id + " is damaged")
+                  return text
+
+
+          store = Store()
+          a = store.put("monday,rajma")
+          b = store.put("tuesday,chole")
+          c = store.put("monday,rajma")
+          store.objects[b] = "tuesday,chole!"  # a disk error damages one object
+          damaged = []
+          for object_id in [a, b]:
+              try:
+                  store.get(object_id)
+              except ValueError:
+                  damaged.append(object_id == b)
+          print(a == c, len(store.objects), damaged)
+        tests: |
+          import hashlib as _h
+
+          _s = Store()
+          _i = _s.put("idli,sambar")
+          assert _i == _h.sha256("idli,sambar".encode()).hexdigest()[:12], "put should return the first 12 hex digits of the text's SHA-256, not " + repr(_i)
+          assert _s.put("idli,sambar") == _i and len(_s.objects) == 1, "Putting the same text twice should give the same id and store it once"
+          _j = _s.put("dosa")
+          assert _j != _i and len(_s.objects) == 2, "Different texts should get different ids and both be stored"
+          assert _s.get(_i) == "idli,sambar" and _s.get(_j) == "dosa", "get should return each stored text"
+          _s.objects[_j] = "dosa "
+          try:
+              _s.get(_j)
+              _raised = False
+          except ValueError:
+              _raised = True
+          assert _raised, "get should raise ValueError when the stored text no longer matches its id"
+          assert len(_s.objects) == 2, "Checking an object must not store anything new; the store now holds " + str(len(_s.objects)) + " objects"
+          assert output.strip() == "True 2 [True]", "The program should print True 2 [True]"
+        wrong:
+          - |
+            import hashlib
+
+
+            class Store:
+                def __init__(self):
+                    self.objects = {}
+
+                def put(self, text):
+                    object_id = hashlib.sha256(text.encode()).hexdigest()[:12]
+                    self.objects[object_id] = text
+                    return object_id
+
+                def get(self, object_id):
+                    return self.objects[object_id]
+
+
+            store = Store()
+            a = store.put("monday,rajma")
+            b = store.put("tuesday,chole")
+            c = store.put("monday,rajma")
+            store.objects[b] = "tuesday,chole!"  # a disk error damages one object
+            damaged = []
+            for object_id in [a, b]:
+                try:
+                    store.get(object_id)
+                except ValueError:
+                    damaged.append(object_id == b)
+            print(a == c, len(store.objects), damaged)
+          - |
+            import hashlib
+
+
+            class Store:
+                def __init__(self):
+                    self.objects = {}
+
+                def put(self, text):
+                    object_id = hashlib.sha256(text.encode()).hexdigest()
+                    self.objects[object_id] = text
+                    return object_id
+
+                def get(self, object_id):
+                    text = self.objects[object_id]
+                    if hashlib.sha256(text.encode()).hexdigest() != object_id:
+                        raise ValueError("object " + object_id + " is damaged")
+                    return text
+
+
+            store = Store()
+            a = store.put("monday,rajma")
+            b = store.put("tuesday,chole")
+            c = store.put("monday,rajma")
+            store.objects[b] = "tuesday,chole!"  # a disk error damages one object
+            damaged = []
+            for object_id in [a, b]:
+                try:
+                    store.get(object_id)
+                except ValueError:
+                    damaged.append(object_id == b)
+            print(a == c, len(store.objects), damaged)
+          - |
+            import hashlib
+
+
+            class Store:
+                def __init__(self):
+                    self.objects = {}
+
+                def put(self, text):
+                    object_id = hashlib.sha256(text.encode()).hexdigest()[:12]
+                    self.objects[object_id] = text
+                    return object_id
+
+                def get(self, object_id):
+                    text = self.objects[object_id]
+                    if self.put(text) != object_id:
+                        raise ValueError("object " + object_id + " is damaged")
+                    return text
+
+
+            store = Store()
+            a = store.put("monday,rajma")
+            b = store.put("tuesday,chole")
+            c = store.put("monday,rajma")
+            store.objects[b] = "tuesday,chole!"  # a disk error damages one object
+            damaged = []
+            for object_id in [a, b]:
+                try:
+                    store.get(object_id)
+                except ValueError:
+                    damaged.append(object_id == b)
+            print(a == c, len(store.objects), damaged)
+        explanation: |
+          Storing under the hash makes equal texts share one entry, and recomputing the hash on the way out catches the damaged object. Returning the text unchecked passes damage on silently; using all 64 digits breaks the agreed id length; and checking by calling `put` again quietly stores the damaged text as a new object.
+    - question:
+        id: write-changed
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `changed(old, new)`, which compares two trees, each a dictionary from file name to blob id, and returns a sorted list of `(name, what)` pairs, where `what` is `"added"`, `"removed"` or `"modified"`. A file whose blob id is the same in both has not changed. The program should print `[('app.py', 'modified'), ('menu.csv', 'removed'), ('orders.csv', 'added')]`.
+        starter: |
+          def changed(old, new):
+              # old and new map file names to blob ids. Return a sorted list of
+              # (name, what) pairs, where what is "added", "removed" or "modified".
+              return []
+
+
+          old = {"README.md": "3f9a01c2b7e4", "app.py": "88d0e1a9c3f2", "menu.csv": "b41c7d2e9a05"}
+          new = {"README.md": "3f9a01c2b7e4", "app.py": "0c5e9f1d2a77", "orders.csv": "e2a6b8c4d1f0"}
+          print(changed(old, new))
+        solution: |
+          def changed(old, new):
+              found = []
+              for name in old:
+                  if name not in new:
+                      found.append((name, "removed"))
+                  elif new[name] != old[name]:
+                      found.append((name, "modified"))
+              for name in new:
+                  if name not in old:
+                      found.append((name, "added"))
+              return sorted(found)
+
+
+          old = {"README.md": "3f9a01c2b7e4", "app.py": "88d0e1a9c3f2", "menu.csv": "b41c7d2e9a05"}
+          new = {"README.md": "3f9a01c2b7e4", "app.py": "0c5e9f1d2a77", "orders.csv": "e2a6b8c4d1f0"}
+          print(changed(old, new))
+        tests: |
+          _old = {"z.py": "111111111111", "m.py": "222222222222", "a.py": "333333333333"}
+          _new = {"z.py": "999999999999", "b.py": "444444444444", "a.py": "333333333333"}
+          _got = changed(_old, _new)
+          _want = [("b.py", "added"), ("m.py", "removed"), ("z.py", "modified")]
+          assert _got == _want, "changed should return " + str(_want) + ", not " + str(_got) + "; a file whose blob id is unchanged has not changed, and the list is sorted by name"
+          _got = changed({"x": "aaaaaaaaaaaa"}, {"x": "aaaaaaaaaaaa"})
+          assert _got == [], "Identical trees have no changes, not " + str(_got)
+          _got = changed({}, {"n": "bbbbbbbbbbbb"})
+          assert _got == [("n", "added")], "From an empty tree, every file is added; got " + str(_got)
+          _got = changed({"q": "cccccccccccc", "p": "dddddddddddd"}, {})
+          assert _got == [("p", "removed"), ("q", "removed")], "To an empty tree, every file is removed, sorted by name; got " + str(_got)
+          assert output.strip() == "[('app.py', 'modified'), ('menu.csv', 'removed'), ('orders.csv', 'added')]", "The program should print [('app.py', 'modified'), ('menu.csv', 'removed'), ('orders.csv', 'added')]"
+        wrong:
+          - |
+            def changed(old, new):
+                found = []
+                for name in new:
+                    if name not in old:
+                        found.append((name, "added"))
+                    elif new[name] != old[name]:
+                        found.append((name, "modified"))
+                return sorted(found)
+
+
+            old = {"README.md": "3f9a01c2b7e4", "app.py": "88d0e1a9c3f2", "menu.csv": "b41c7d2e9a05"}
+            new = {"README.md": "3f9a01c2b7e4", "app.py": "0c5e9f1d2a77", "orders.csv": "e2a6b8c4d1f0"}
+            print(changed(old, new))
+          - |
+            def changed(old, new):
+                found = []
+                for name in old:
+                    if name not in new:
+                        found.append((name, "removed"))
+                    else:
+                        found.append((name, "modified"))
+                for name in new:
+                    if name not in old:
+                        found.append((name, "added"))
+                return sorted(found)
+
+
+            old = {"README.md": "3f9a01c2b7e4", "app.py": "88d0e1a9c3f2", "menu.csv": "b41c7d2e9a05"}
+            new = {"README.md": "3f9a01c2b7e4", "app.py": "0c5e9f1d2a77", "orders.csv": "e2a6b8c4d1f0"}
+            print(changed(old, new))
+          - |
+            def changed(old, new):
+                found = []
+                for name in old:
+                    if name not in new:
+                        found.append((name, "removed"))
+                    elif new[name] != old[name]:
+                        found.append((name, "modified"))
+                for name in new:
+                    if name not in old:
+                        found.append((name, "added"))
+                return found
+
+
+            old = {"README.md": "3f9a01c2b7e4", "app.py": "88d0e1a9c3f2", "menu.csv": "b41c7d2e9a05"}
+            new = {"README.md": "3f9a01c2b7e4", "app.py": "0c5e9f1d2a77", "orders.csv": "e2a6b8c4d1f0"}
+            print(changed(old, new))
+        explanation: |
+          Equal ids mean equal contents, so the comparison never opens a file. Walking only the new tree misses removals; calling every shared file modified ignores the ids that make the comparison cheap; and returning the pairs unsorted makes the output depend on dictionary order.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          How many objects does the puzzle's store hold after the 201 commits?
+        answer: "1802"
+        explanation: |
+          The first commit stores 1,000 blobs, 1 tree and 1 commit: 1,002 objects. Each of the next 200 adds 2 blobs, 1 tree and 1 commit, 4 objects, so 800 more. In all, $1{,}002 + 800 = 1{,}802$.
+    - question:
+        id: work-verify
+        type: choice
+        system: s2
+        prompt: |
+          A teammate sends you the id of the latest commit on a shared branch, over a channel you trust. You then download the whole repository from a mirror you do not trust. How can you be sure you received exactly the history the teammate meant?
+        options:
+          - "Hash every object you received, check each matches its name, and check that the commit you were told about is the branch's latest and that every object it names, directly or indirectly, is present."
+          - "Check that the mirror's web page uses HTTPS."
+          - "Compare the number of commits with your teammate's count."
+          - "Open a few files at random and read them."
+        answer: 0
+        explanation: |
+          The one trusted id pins down the whole history: each object is named by its hash, and each commit names its tree and parent by hash, so any altered byte anywhere would change an id on the path up to that commit. HTTPS protects only the trip from the mirror, not the mirror's honesty; counts and spot checks miss altered contents.
+  connections:
+    - text: |
+        1,802 objects. The first commit stored 1,002: 1,000 blobs, a tree and a commit. Every later commit added only 4, two new blobs, a new tree and a commit, because the other 998 entries of each tree pointed at blobs already stored. Copying the project for each of the 201 commits would have meant 2,01,000 file copies, more than a hundred times as many.
+
+        The puzzle's history was a straight line, one commit after another. Real teams work on many things at once: one person on a feature, another on a fix, each committing on a branch of their own. Because a branch is only a name for a commit id, making one costs nothing. The interesting part is joining branches back together, when two people have changed the same files: [[s5.branches-merges-and-rebases]]. Every change that reaches the main branch is first read by someone else, which is [[s5.code-review]]; and build systems reuse the same trick of naming things by the hash of their inputs to avoid rebuilding what has not changed, which is part of [[s5.build-systems-and-dependency-graphs]].

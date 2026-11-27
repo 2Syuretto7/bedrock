@@ -1,0 +1,511 @@
+concept: s5.continuous-integration
+minutes: 80
+claim: You can explain why a team should merge small changes often and have a machine check every one, design a pipeline that builds and tests each change in a clean, pinned environment, read exit codes the way a pipeline does, keep feedback fast with caching, parallel runners and path filters, test the result of a merge rather than the branch alone, and keep the main branch working.
+recalls: [s5.profiling-programs]
+uses: [s5.version-control-as-a-content-addressed-store, s5.branches-merges-and-rebases, s5.code-review, s5.build-systems-and-dependency-graphs, s5.packages-and-reproducible-environments, s5.debugging-methodically]
+leads: [s6.what-a-test-can-prove, s6.flaky-tests-and-their-causes, h5.performance-regression-testing, r4.safe-deployment-canaries-and-progressive-delivery, m6.continuous-training-pipelines]
+starter: |
+  # Scratch space. A pipeline stops at the first step with a non-zero exit code.
+  steps = [("install", 0), ("lint", 0), ("test", 1), ("build", 0)]
+  for name, code in steps:
+      print(name, "ok" if code == 0 else "FAILED")
+      if code != 0:
+          break
+parts:
+  recall:
+    - text: |
+        [[s5.profiling-programs]] ended with a wish: that measurements of speed, and of correctness, would run on every change by themselves, so that a slow or broken commit is noticed the day it is written. Every tool in this cluster, version control, review, builds, locked environments, debugging and profiling, comes together in the machine that grants that wish. Three quick pulls first.
+  puzzle:
+    - text: |
+        A project's test suite has 1,200 tests that take 3 seconds each on average. On one machine, one after another, the suite takes an hour, and nobody waits an hour for feedback on a small change.
+
+        The team can split the tests evenly across several identical machines that run at the same time. Each machine first spends 2 minutes setting itself up before it starts on its share.
+
+        **What is the smallest number of machines that gets the whole suite done within 10 minutes?**
+  intuition:
+    - text: |
+        Imagine a tailor's workshop making a sherwani for a wedding. One tailor makes the sleeves, another the collar, a third the body, and each works alone for three weeks. On the night before the wedding they sew the pieces together for the first time, and discover that the sleeves were cut for a different pattern and the collar does not meet the neck. Each piece was fine on its own. The trouble was in the joining, and it was found at the worst possible moment.
+
+        A wiser workshop pins the pieces together every evening and has the groom try it on. Each fitting takes a few minutes and finds small problems while they are still small. Software teams do the same: everyone merges small changes into the main branch often, and a machine builds and tests the joined result every time. The figure shows one such check as a pipeline of jobs on a pool of machines called runners. Add runners, and switch on the dependency cache.
+    - figure: ci-pipeline
+      props: { runners: 1, cache: false }
+    - text: |
+        On one runner the four checks queue up behind each other and the whole pipeline takes 32 minutes. Two runners bring it to 24 and three to 22, but a fourth changes nothing: the 9-minute unit tests now decide when the middle stage ends, so the next improvement must come from splitting them up. The cache works on a different part, cutting the install from 6 minutes to 1 by reusing packages downloaded before. Each speed-up attacks a different piece of the timeline, which is Amdahl's law again.
+  derivation:
+    - text: |
+        **Integrate continuously.** Long-lived branches drift apart. The longer two lines of work stay separate, the more each assumes about code the other is changing, and the larger and riskier the eventual merge, as [[s5.branches-merges-and-rebases]] showed with conflicts. **Continuous integration** turns this around: everyone merges small changes into the main branch at least daily, and an automated system checks every change, so that the main branch is always in a state that works. Small changes are also the changes that [[s5.code-review]] reviews well and that bisection of [[s5.debugging-methodically]] pins down quickly.
+
+        **A pipeline.** When a pull request is opened or updated, the CI system checks out that exact commit, named by its hash as in [[s5.version-control-as-a-content-addressed-store]], on a fresh machine. It then runs a pipeline of jobs: install dependencies from the lock file, exactly as [[s5.packages-and-reproducible-environments]] prescribes, so the result does not depend on what some earlier job left lying around; run quick checks such as linting and type checking; run the tests; build the artefact that will be shipped; and perhaps run slower end-to-end tests against it. Jobs form a dependency graph, like the build graph of [[s5.build-systems-and-dependency-graphs]], and independent jobs run at the same time on separate runners. The result appears on the pull request, and the repository can require that certain checks pass before anything is merged.
+    - question:
+        id: order-pipeline
+        type: order
+        system: s2
+        prompt: |
+          Put the jobs of a typical pipeline for one pull request in order.
+        steps:
+          - "Check out the exact commit on a fresh runner."
+          - "Install dependencies from the lock file."
+          - "Run the fast checks: linting and type checking."
+          - "Run the unit tests."
+          - "Build the artefact and run end-to-end tests against it."
+          - "Report the result on the pull request."
+        explanation: |
+          Nothing can run before the code and its dependencies are in place; cheap checks go first so that a typo fails in seconds rather than after a long test run; end-to-end tests need the built artefact; and the report comes last, carrying every job's result.
+    - text: |
+        **Exit codes are the contract.** A pipeline knows whether a step passed by one number: the exit code the program returns when it finishes. Zero means success; anything else, 1, 2, 127 for a command that was not found, or a negative code for a process killed by the operating system, means failure. A pipeline that only checks for one particular failure code, or that pipes a test command's output into another command and so sees that command's exit code instead, will happily report success for a run that failed. Test the pipeline itself: make a test fail on purpose once, and confirm the pipeline goes red.
+
+        **Fast feedback.** A pipeline that takes an hour gets ignored, or batched, or bypassed. The common ways to keep it short each attack a different part of the timeline. **Caching** stores the installed dependencies keyed by a hash of the lock file, so that they are reused until the lock file changes, content addressing once more. **Parallelism** splits independent jobs, and large test suites, across runners. **Path filters** skip jobs that a change cannot affect: a change only to documentation need not rebuild the mobile app. And ordering cheap checks first means most failures are reported within a minute or two.
+    - question:
+        id: derivation-stage
+        type: numeric
+        system: s2
+        prompt: |
+          A pipeline has three stages that run one after another. The first is a single 4-minute install job. The second has jobs of 3, 8 and 5 minutes, and there are enough runners for all three to start together. The third is a single 6-minute job. How many minutes does the pipeline take?
+        answer: "18"
+        explanation: |
+          A stage with jobs running side by side lasts as long as its longest job, 8 minutes here. The pipeline takes $4 + 8 + 6 = 18$ minutes.
+    - text: |
+        **Test what will be merged.** A pull request's checks run on its branch, but what lands on main is the merge of that branch with whatever main has become meanwhile. Two pull requests can each pass on their own and still break main together: one renames a function, the other, written before the rename, adds a new call to the old name. Neither branch alone has the bug; only their combination does. The cure is to test the merged result. A **merge queue** does this systematically: pull requests waiting to merge are lined up, each is tested on top of main plus every pull request ahead of it in the queue, and it merges only if that combination passes.
+    - question:
+        id: derivation-rename
+        type: choice
+        system: s2
+        prompt: |
+          Pull request A renames `total_price` to `order_total` everywhere. Pull request B, branched off main before A merged, adds a new call to `total_price`. Both pass CI on their branches, both are merged, and main fails. What would have caught it before merging?
+        options:
+          - "Testing B merged with the current main, which already contained A"
+          - "Running B's tests twice on its own branch"
+          - "A stricter code review of A"
+          - "Caching dependencies so B's checks run faster"
+        answer: 0
+        explanation: |
+          The fault exists only in the combination of A and B. B's branch never contained A, so no number of runs there could find it; testing the merge result, as a merge queue does, would have.
+    - text: |
+        A merge queue makes main safe at a price: changes merge one test run at a time. Queues speed this up by testing several pull requests together in a batch, and splitting the batch to find the culprit when it fails, which is bisection again.
+    - question:
+        id: derivation-queue
+        type: numeric
+        system: s2
+        prompt: |
+          A merge queue tests each pull request on top of the ones ahead of it, one at a time, and each test run takes 20 minutes. How many pull requests can it merge in an 8-hour working day?
+        answer: "24"
+        explanation: |
+          8 hours is 480 minutes, and $480 / 20 = 24$ runs, each merging one pull request.
+    - text: |
+        **Keep main green.** When main fails, every pull request branched from it inherits the failure and nobody can tell whether their own change is to blame. So a red main is the whole team's first priority, and the fastest fix is usually to revert the change that broke it, then reland it with a fix and a test. A test that fails at random, sometimes red and sometimes green on the same code, is especially corrosive: people learn to rerun until green and stop believing failures. Such flaky tests are a subject of their own in [[s6.flaky-tests-and-their-causes]].
+
+        **Beyond tests.** Once every change is built and tested automatically, the same pipeline can do more: check that performance has not slipped, using the measurements of [[s5.profiling-programs]], which is [[h5.performance-regression-testing]]; and hand the tested artefact to a deployment system that releases it to a small share of users first, which is [[r4.safe-deployment-canaries-and-progressive-delivery]]. The artefact is built once and the same bytes are tested and shipped.
+  formal:
+    - text: |
+        **Continuous integration.** Merging small changes into the main branch frequently, with every change built and tested automatically in a clean, pinned environment before it merges.
+
+        **Pipeline.** A graph of jobs run for each change; a stage of jobs that run side by side lasts as long as its longest job, and stages in sequence add up.
+
+        **Exit code.** The number a program returns when it ends: 0 for success, anything else for failure. A pipeline stops at the first failing step.
+
+        **Merge queue.** A line of pull requests, each tested on top of main and every request ahead of it, and merged only if that combination passes.
+
+        **Green main.** The rule that the main branch always builds and passes its tests, with breakages reverted or fixed first.
+  drill:
+    - text: Seconds each. Read exit codes and stage lengths the way the machine does.
+    - question:
+        id: drill-exit
+        type: choice
+        system: s1
+        prompt: |
+          A pipeline step exits with code 3. What does the pipeline conclude?
+        options:
+          - "The step failed"
+          - "The step passed with three warnings"
+          - "The step passed, since only code 1 means failure"
+          - "Nothing until the step is rerun"
+        answer: 0
+        explanation: Only 0 means success; every other code is a failure.
+    - question:
+        id: drill-stage-length
+        type: numeric
+        system: s1
+        prompt: |
+          A stage runs jobs of 4, 6 and 5 minutes at the same time on three runners. How many minutes does the stage take?
+        answer: "6"
+        explanation: The stage ends when its longest job ends.
+    - question:
+        id: drill-cache-key
+        type: choice
+        system: s1
+        prompt: |
+          A pipeline caches installed dependencies. What should decide whether the cache can be reused?
+        options:
+          - "A hash of the lock file"
+          - "The date of the last run"
+          - "The name of the branch"
+          - "The number of files in the repository"
+        answer: 0
+        explanation: The installed packages depend exactly on the lock file, so its hash changes exactly when the cache must be rebuilt.
+    - question:
+        id: predict-steps
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          steps = [("install", 0), ("lint", 1), ("test", 0)]
+          print([name for name, code in steps if code != 0], all(code == 0 for _, code in steps))
+        output: "['lint'] False"
+        explanation: Only `lint` has a non-zero exit code, so the list holds just its name and not every step succeeded.
+    - question:
+        id: predict-paths
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          changed = ["docs/a.md", "src/b.py"]
+          print(any(p.startswith("src/") for p in changed), all(p.startswith("docs/") for p in changed))
+        output: "True False"
+        explanation: One changed path is under `src/`, so a job filtered on `src/` runs; not every path is under `docs/`, so this is not a documentation-only change.
+  work:
+    - text: Slower now. Each problem is part of a CI system.
+    - question:
+        id: fix-exit-codes
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `run_pipeline` runs steps in order and stops at the first failure. The program should print `(False, 'typecheck', 3)`. It prints `(True, None, 4)`. Find the fault and fix it.
+        starter: |
+          def run_pipeline(steps):
+              # steps is a list of (name, exit_code) pairs in the order they run. An
+              # exit code of 0 means success and any other code means failure. Stop
+              # at the first failure. Return (passed, failed_step, steps_run), with
+              # failed_step None when every step passes.
+              count = 0
+              for name, code in steps:
+                  count += 1
+                  if code == 1:
+                      return False, name, count
+              return True, None, count
+
+
+          steps = [("install", 0), ("lint", 0), ("typecheck", 2), ("test", 0)]
+          print(run_pipeline(steps))
+        solution: |
+          def run_pipeline(steps):
+              # steps is a list of (name, exit_code) pairs in the order they run. An
+              # exit code of 0 means success and any other code means failure. Stop
+              # at the first failure. Return (passed, failed_step, steps_run), with
+              # failed_step None when every step passes.
+              count = 0
+              for name, code in steps:
+                  count += 1
+                  if code != 0:
+                      return False, name, count
+              return True, None, count
+
+
+          steps = [("install", 0), ("lint", 0), ("typecheck", 2), ("test", 0)]
+          print(run_pipeline(steps))
+        tests: |
+          _cases = [
+              ([("a", 0), ("b", 0)], (True, None, 2)),
+              ([("a", 1), ("b", 0)], (False, "a", 1)),
+              ([("a", 0), ("b", 5), ("c", 1)], (False, "b", 2)),
+              ([("build", 0), ("test", -9), ("deploy", 0)], (False, "test", 2)),
+              ([("lint", 127), ("test", 0)], (False, "lint", 1)),
+              ([], (True, None, 0)),
+          ]
+          for _steps, _want in _cases:
+              _got = run_pipeline(list(_steps))
+              assert tuple(_got) == _want, "For steps " + repr(_steps) + ", run_pipeline should return " + repr(_want) + ", not " + repr(_got)
+          assert output.strip() == "(False, 'typecheck', 3)", "The program should print (False, 'typecheck', 3)"
+        wrong:
+          - |
+            def run_pipeline(steps):
+                # steps is a list of (name, exit_code) pairs in the order they run. An
+                # exit code of 0 means success and any other code means failure. Stop
+                # at the first failure. Return (passed, failed_step, steps_run), with
+                # failed_step None when every step passes.
+                count = 0
+                for name, code in steps:
+                    count += 1
+                    if code > 0:
+                        return False, name, count
+                return True, None, count
+
+
+            steps = [("install", 0), ("lint", 0), ("typecheck", 2), ("test", 0)]
+            print(run_pipeline(steps))
+          - |
+            def run_pipeline(steps):
+                # steps is a list of (name, exit_code) pairs in the order they run. An
+                # exit code of 0 means success and any other code means failure. Stop
+                # at the first failure. Return (passed, failed_step, steps_run), with
+                # failed_step None when every step passes.
+                count = 0
+                failed = None
+                for name, code in steps:
+                    count += 1
+                    if code != 0:
+                        failed = name
+                if failed is not None:
+                    return False, failed, count
+                return True, None, count
+
+
+            steps = [("install", 0), ("lint", 0), ("typecheck", 2), ("test", 0)]
+            print(run_pipeline(steps))
+          - |
+            def run_pipeline(steps):
+                # steps is a list of (name, exit_code) pairs in the order they run. An
+                # exit code of 0 means success and any other code means failure. Stop
+                # at the first failure. Return (passed, failed_step, steps_run), with
+                # failed_step None when every step passes.
+                count = 0
+                for name, code in steps:
+                    count += 1
+                    if code != 0 and name == "test":
+                        return False, name, count
+                return True, None, count
+
+
+            steps = [("install", 0), ("lint", 0), ("typecheck", 2), ("test", 0)]
+            print(run_pipeline(steps))
+        explanation: |
+          Every non-zero exit code is a failure, not only 1, so the test must be `code != 0`. Checking `code > 0` misses processes killed by the system, which report negative codes; recording failures without stopping runs every later step and reports the last failure instead of the first; and treating only the test step's failures as real lets a failed build or lint through.
+    - question:
+        id: write-path-filters
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `jobs_to_run(changed, jobs)`, which applies path filters to decide which jobs a pull request needs. The program should print `['docs-site', 'lint', 'unit-tests']`.
+        starter: |
+          def jobs_to_run(changed, jobs):
+              # changed lists the paths a pull request touches. jobs maps each job's
+              # name to its path filter, a list of folder prefixes such as "src/". A
+              # job runs if any changed path starts with any of its prefixes; a job
+              # with an empty filter always runs. Return the sorted names of the jobs
+              # that run.
+              return sorted(jobs)
+
+
+          jobs = {"lint": [], "unit-tests": ["src/", "tests/"], "docs-site": ["docs/"],
+                  "mobile-build": ["mobile/"], "migration-check": ["src/db/", "migrations/"]}
+          print(jobs_to_run(["docs/guide.md", "src/billing/tax.py"], jobs))
+        solution: |
+          def jobs_to_run(changed, jobs):
+              # changed lists the paths a pull request touches. jobs maps each job's
+              # name to its path filter, a list of folder prefixes such as "src/". A
+              # job runs if any changed path starts with any of its prefixes; a job
+              # with an empty filter always runs. Return the sorted names of the jobs
+              # that run.
+              chosen = []
+              for name, prefixes in jobs.items():
+                  if not prefixes or any(path.startswith(p) for path in changed for p in prefixes):
+                      chosen.append(name)
+              return sorted(chosen)
+
+
+          jobs = {"lint": [], "unit-tests": ["src/", "tests/"], "docs-site": ["docs/"],
+                  "mobile-build": ["mobile/"], "migration-check": ["src/db/", "migrations/"]}
+          print(jobs_to_run(["docs/guide.md", "src/billing/tax.py"], jobs))
+        tests: |
+          _jobs = {"lint": [], "unit": ["src/", "tests/"], "docs": ["docs/"], "db": ["src/db/", "migrations/"], "app": ["mobile/"]}
+          _cases = [
+              (["src/db/models.py"], ["db", "lint", "unit"]),
+              (["docs/src/notes.md"], ["docs", "lint"]),
+              (["README.md"], ["lint"]),
+              (["tests/test_tax.py", "mobile/app.kt"], ["app", "lint", "unit"]),
+              (["migrations/0042.sql", "docs/db.md"], ["db", "docs", "lint"]),
+              ([], ["lint"]),
+          ]
+          for _changed, _want in _cases:
+              _got = jobs_to_run(list(_changed), dict(_jobs))
+              assert list(_got) == _want, "When " + repr(_changed) + " change, the jobs that run should be " + repr(_want) + ", not " + repr(_got)
+          assert output.strip() == "['docs-site', 'lint', 'unit-tests']", "The program should print ['docs-site', 'lint', 'unit-tests']"
+        wrong:
+          - |
+            def jobs_to_run(changed, jobs):
+                # changed lists the paths a pull request touches. jobs maps each job's
+                # name to its path filter, a list of folder prefixes such as "src/". A
+                # job runs if any changed path starts with any of its prefixes; a job
+                # with an empty filter always runs. Return the sorted names of the jobs
+                # that run.
+                chosen = []
+                for name, prefixes in jobs.items():
+                    if any(path.startswith(p) for path in changed for p in prefixes):
+                        chosen.append(name)
+                return sorted(chosen)
+
+
+            jobs = {"lint": [], "unit-tests": ["src/", "tests/"], "docs-site": ["docs/"],
+                    "mobile-build": ["mobile/"], "migration-check": ["src/db/", "migrations/"]}
+            print(jobs_to_run(["docs/guide.md", "src/billing/tax.py"], jobs))
+          - |
+            def jobs_to_run(changed, jobs):
+                # changed lists the paths a pull request touches. jobs maps each job's
+                # name to its path filter, a list of folder prefixes such as "src/". A
+                # job runs if any changed path starts with any of its prefixes; a job
+                # with an empty filter always runs. Return the sorted names of the jobs
+                # that run.
+                chosen = []
+                for name, prefixes in jobs.items():
+                    if not prefixes or any(p in path for path in changed for p in prefixes):
+                        chosen.append(name)
+                return sorted(chosen)
+
+
+            jobs = {"lint": [], "unit-tests": ["src/", "tests/"], "docs-site": ["docs/"],
+                    "mobile-build": ["mobile/"], "migration-check": ["src/db/", "migrations/"]}
+            print(jobs_to_run(["docs/guide.md", "src/billing/tax.py"], jobs))
+          - |
+            def jobs_to_run(changed, jobs):
+                # changed lists the paths a pull request touches. jobs maps each job's
+                # name to its path filter, a list of folder prefixes such as "src/". A
+                # job runs if any changed path starts with any of its prefixes; a job
+                # with an empty filter always runs. Return the sorted names of the jobs
+                # that run.
+                chosen = []
+                for name, prefixes in jobs.items():
+                    if not prefixes or all(any(path.startswith(p) for p in prefixes) for path in changed):
+                        chosen.append(name)
+                return sorted(chosen)
+
+
+            jobs = {"lint": [], "unit-tests": ["src/", "tests/"], "docs-site": ["docs/"],
+                    "mobile-build": ["mobile/"], "migration-check": ["src/db/", "migrations/"]}
+            print(jobs_to_run(["docs/guide.md", "src/billing/tax.py"], jobs))
+        explanation: |
+          A job runs when its filter is empty or when some changed path starts with some prefix in it. Forgetting the empty filter skips jobs such as lint that must always run; matching the prefix anywhere in the path runs the unit tests for `docs/src/notes.md`; and requiring every changed path to match skips jobs whenever a pull request also touches something else.
+    - question:
+        id: write-runners
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `pipeline_minutes(stages, runners)`, which works out how long a pipeline takes on a fixed number of runners, as the comment describes. The program should print `[29, 21, 16]`.
+        starter: |
+          def pipeline_minutes(stages, runners):
+              # stages run one after another; each is a list of job durations in
+              # minutes. Within a stage, each job in turn starts on whichever of the
+              # runners becomes free first, and the stage ends when its last job
+              # finishes. Return the minutes the whole pipeline takes.
+              return 0
+
+
+          stages = [[2], [6, 4, 3, 5], [8, 1]]
+          print([pipeline_minutes(stages, r) for r in (1, 2, 4)])
+        solution: |
+          def pipeline_minutes(stages, runners):
+              # stages run one after another; each is a list of job durations in
+              # minutes. Within a stage, each job in turn starts on whichever of the
+              # runners becomes free first, and the stage ends when its last job
+              # finishes. Return the minutes the whole pipeline takes.
+              total = 0
+              for stage in stages:
+                  free_at = [0] * runners
+                  for job in stage:
+                      first = 0
+                      for i in range(runners):
+                          if free_at[i] < free_at[first]:
+                              first = i
+                      free_at[first] += job
+                  total += max(free_at)
+              return total
+
+
+          stages = [[2], [6, 4, 3, 5], [8, 1]]
+          print([pipeline_minutes(stages, r) for r in (1, 2, 4)])
+        tests: |
+          _cases = [
+              ([[5]], 1, 5),
+              ([[5]], 3, 5),
+              ([[1, 1, 1, 1]], 2, 2),
+              ([[1, 1, 1, 1]], 3, 2),
+              ([[7, 1, 1, 1, 1]], 2, 7),
+              ([[2, 2], [3]], 2, 5),
+              ([[4, 1, 1], [1, 1, 1, 1]], 2, 6),
+              ([[3, 3, 3], [10]], 5, 13),
+              ([], 2, 0),
+          ]
+          for _stages, _r, _want in _cases:
+              _got = pipeline_minutes([list(s) for s in _stages], _r)
+              assert _got == _want, "With stages " + repr(_stages) + " on " + str(_r) + (" runner" if _r == 1 else " runners") + ", the pipeline should take " + str(_want) + " minutes, not " + str(_got)
+          assert output.strip() == "[29, 21, 16]", "The program should print [29, 21, 16]"
+        wrong:
+          - |
+            def pipeline_minutes(stages, runners):
+                # stages run one after another; each is a list of job durations in
+                # minutes. Within a stage, each job in turn starts on whichever of the
+                # runners becomes free first, and the stage ends when its last job
+                # finishes. Return the minutes the whole pipeline takes.
+                return sum(max(stage) for stage in stages)
+
+
+            stages = [[2], [6, 4, 3, 5], [8, 1]]
+            print([pipeline_minutes(stages, r) for r in (1, 2, 4)])
+          - |
+            def pipeline_minutes(stages, runners):
+                # stages run one after another; each is a list of job durations in
+                # minutes. Within a stage, each job in turn starts on whichever of the
+                # runners becomes free first, and the stage ends when its last job
+                # finishes. Return the minutes the whole pipeline takes.
+                total = 0
+                free_at = [0] * runners
+                for stage in stages:
+                    for job in stage:
+                        first = 0
+                        for i in range(runners):
+                            if free_at[i] < free_at[first]:
+                                first = i
+                        free_at[first] += job
+                return max(free_at)
+
+
+            stages = [[2], [6, 4, 3, 5], [8, 1]]
+            print([pipeline_minutes(stages, r) for r in (1, 2, 4)])
+          - |
+            def pipeline_minutes(stages, runners):
+                # stages run one after another; each is a list of job durations in
+                # minutes. Within a stage, each job in turn starts on whichever of the
+                # runners becomes free first, and the stage ends when its last job
+                # finishes. Return the minutes the whole pipeline takes.
+                total = 0
+                for stage in stages:
+                    free_at = [0] * runners
+                    for i, job in enumerate(stage):
+                        free_at[i % runners] += job
+                    total += max(free_at)
+                return total
+
+
+            stages = [[2], [6, 4, 3, 5], [8, 1]]
+            print([pipeline_minutes(stages, r) for r in (1, 2, 4)])
+        explanation: |
+          For each stage, track when each runner becomes free, give each job to the runner that frees up first, and add the stage's latest finish to the total. Taking each stage's longest job assumes unlimited runners; letting jobs of a later stage start before the earlier stage ends ignores that stages run in sequence; and dealing jobs to runners in turn ignores which runner is actually free.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, 1,200 tests of 3 seconds each are split evenly across machines that each need 2 minutes to set up. What is the smallest number of machines that finishes within 10 minutes?
+        answer: "8"
+        explanation: |
+          The tests take 3,600 seconds, or 60 minutes, in all. With $k$ machines each takes $2 + 60/k$ minutes, which is at most 10 when $60/k \le 8$, that is $k \ge 7.5$. So 8 machines are needed, finishing in 9.5 minutes; 7 would take about 10.6.
+    - question:
+        id: work-red-main
+        type: choice
+        system: s2
+        prompt: |
+          Main has failed since a pull request merged an hour ago, and five other pull requests are now failing because of it. Its author, Meera, is in a long meeting. What should the team do?
+        options:
+          - "Revert the merge on main now, and let Meera reland it later with a fix and a test."
+          - "Wait for Meera to come out of the meeting and fix it."
+          - "Turn off the failing check until the fix arrives."
+          - "Merge the other five pull requests anyway, since their own changes are fine."
+        answer: 0
+        explanation: |
+          Reverting restores a green main within minutes, unblocks everyone, and loses nothing, since the change is still in history and can be relanded. Waiting blocks the team for as long as the meeting runs; turning the check off hides further breakages; and merging on a red main makes it impossible to tell which change broke what.
+  connections:
+    - text: |
+        Eight. The tests add up to 3,600 seconds, an hour. Spread over $k$ machines, each needs 2 minutes to set up and then $60/k$ minutes of tests, and $2 + 60/k \le 10$ requires $k \ge 7.5$, so 8 machines, done in 9.5 minutes. Notice that the 2 minutes of setup can never be split: with a hundred machines the suite would still take over 2 minutes, a ceiling that caching the setup, not more machines, would lift.
+
+        The cluster is complete. Version control names every state of the code, branches and merges let people work side by side, review and builds and locked environments turn a change into something trustworthy, debugging and profiling find what is wrong or slow, and continuous integration runs the checks on every change. But a green pipeline is only as meaningful as the tests it runs. What a passing test actually tells you, and what it cannot, opens the next cluster: [[s6.what-a-test-can-prove]].

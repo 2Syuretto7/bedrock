@@ -1,0 +1,306 @@
+cluster: S5
+title: Untangling a bad release at a bus-ticket startup
+minutes: 100
+claim: You will have taken a bus-ticket startup from a broken Friday release to a pipeline that would have stopped it, merging two lines of work and spotting the real conflict, splitting an unreviewable pull request, pinning the environment that made the same commit give different fares, predicting what a change rebuilds, bisecting history with cached CI results, speeding up the slow nightly job where the time actually goes, and choosing the CI rule that catches changes that are only wrong together.
+brief: |
+  This cluster was about the tools that let a team change code together without fear: version control that names every state by its contents, branches and merges, review, builds driven by a dependency graph, locked and isolated environments, methodical debugging, profiling, and continuous integration that checks every change.
+
+  **The project.** A six-person startup in Bengaluru sells intercity bus tickets through an app. Last Friday's release went wrong in two ways. Some fares came out a few rupees wrong, and customers noticed before the team did. And the nightly settlement job, which pays each bus operator for the day's tickets, has crept from 20 minutes to 70, so that it sometimes overlaps the morning rush. The team has a week to find out what happened and make sure it cannot happen the same way again.
+
+  Each stage below is one step of that week. Every stage draws on one or more lessons of this cluster, and the skill being tested is choosing the step that turns a vague worry into a fact, and a fact into a check that runs by itself.
+starter: |
+  # Scratch space for the bus-ticket startup.
+  commits = ["c" + str(i) for i in range(16)]
+  lo, hi = 0, len(commits) - 1
+  mid = (lo + hi) // 2
+  print("first commit to test:", commits[mid])
+stages:
+  - title: Two changes to the fares
+    blocks:
+      - text: |
+          Two developers changed `fares.py` on separate branches from the same starting commit. At that commit the file said `ROUND_TO = 1`, `SURCHARGE = 0` and `MIN_FARE = 150`, one setting to a line. Farah's branch rounds fares to the nearest 5 rupees, so she set `ROUND_TO = 5`, and she also raised `MIN_FARE` to 199. Joseph's branch adds a festival surcharge, so he set `SURCHARGE = 40`, and he raised `MIN_FARE` to 175.
+      - question:
+          id: fares-merge
+          type: choice
+          system: s2
+          concepts: [s5.branches-merges-and-rebases]
+          prompt: |
+            When the two branches are merged, what does a three-way merge do with these three lines?
+          options:
+            - "It takes ROUND_TO = 5 and SURCHARGE = 40 automatically, and reports a conflict on MIN_FARE."
+            - "It reports conflicts on all three, because both branches changed the file."
+            - "It keeps whichever branch was merged last, for every line."
+            - "It takes ROUND_TO = 5 and reports conflicts on the other two."
+          answer: 0
+          explanation: |
+            A three-way merge compares each line with the common ancestor. A line changed on only one side takes that side's version, so ROUND_TO comes from Farah and SURCHARGE from Joseph. Only MIN_FARE changed on both sides, to different values, so only it conflicts, and a person must decide whether the minimum is 175 or 199.
+  - title: The pull request nobody could read
+    blocks:
+      - text: |
+          Joseph's pull request touches 1,400 lines. About 1,100 of them come from running a formatter over the whole pricing folder, 200 from renaming `calc` to `fare_for` everywhere, and only about 100 are the surcharge itself. Two reviewers approved it within ten minutes, and the surcharge bug that went out on Friday was in those 100 lines.
+      - question:
+          id: split-pr
+          type: choice
+          system: s2
+          concepts: [s5.code-review]
+          prompt: |
+            How should Joseph have submitted this work?
+          options:
+            - "As three pull requests: the formatting alone, then the rename alone, then the 100-line surcharge change, each reviewed on its own."
+            - "As one pull request, with a third reviewer added."
+            - "As one pull request, with the reviewers asked to skip the formatting changes."
+            - "Without review, since formatting and renames cannot break anything."
+          answer: 0
+          explanation: |
+            Reviewers find defects in proportion to the attention they can give each line, and a 1,400-line diff gets little. Mechanical changes are easy to check when they arrive alone, and the 100 lines of real logic then get a review that can catch the bug. Another reviewer reading the same giant diff finds little more, and asking people to skip parts of a diff invites the logic to hide among them.
+  - title: Same commit, different fares
+    blocks:
+      - text: |
+          On Farah's laptop, the release commit prices a Bengaluru to Mysuru ticket at 385 rupees. The staging server, building the very same commit, prices it at 384. The project's requirements say `money-utils>=2.1`, with no lock file. Farah installed money-utils 2.1.3 in March; staging installed it last week and got 2.4.0, whose release notes mention a new default rounding mode.
+      - question:
+          id: pin-environment
+          type: choice
+          system: s2
+          concepts: [s5.packages-and-reproducible-environments]
+          prompt: |
+            What change makes every machine compute the same fare from the same commit?
+          options:
+            - "Resolve the dependencies once, commit a lock file with exact versions and hashes, and have every machine install only from it in its own virtual environment."
+            - "Change the requirement to money-utils>=2.4 so everyone gets the newest version."
+            - "Ask everyone to upgrade their packages every Monday."
+            - "Copy the staging server's installed packages onto every laptop."
+          answer: 0
+          explanation: |
+            A range lets each install pick whatever was newest that day, which is exactly how two machines ended up with different rounding. A committed lock file names every exact version and hash, so every install gets the same bytes, and upgrades become reviewed changes to the lock. A higher minimum is still a range; a weekly upgrade drifts all the same; and copying folders by hand cannot be reviewed or repeated.
+  - title: What a fix rebuilds
+    blocks:
+      - text: |
+          The app's build has these targets. `fares.o` is built from `fares.py`; `tax.o` from `tax.py`; `pricing.lib` from `fares.o` and `tax.o`; `ui.bundle` from the screen files; `app` from `pricing.lib` and `ui.bundle`; and `docs` from the documentation files. Each target is rebuilt exactly when something it is built from has changed.
+      - question:
+          id: rebuild-count
+          type: numeric
+          system: s2
+          concepts: [s5.build-systems-and-dependency-graphs]
+          prompt: |
+            The fix changes only `fares.py`. How many targets must be rebuilt?
+          answer: "3"
+          explanation: |
+            A change flows only to targets that depend on it, directly or indirectly: `fares.o`, then `pricing.lib`, then `app`. `tax.o`, `ui.bundle` and `docs` do not depend on `fares.py`, so their cached results are reused.
+  - title: Which commit broke the fares
+    blocks:
+      - text: |
+          Between the last good release and Friday's there are 15 commits. The team has a test that prices fifty real journeys and compares them with fares checked by hand; it takes a few minutes to run. CI has already run that test on some of these commits, and it stores each result under the hash of the commit's files, its tree, because commits with identical files must give identical results. Some commits share a tree: one, for instance, only reworded the message of the commit before it.
+      - question:
+          id: find-culprit
+          type: code
+          mode: write
+          system: s2
+          concepts: [s5.debugging-methodically, s5.version-control-as-a-content-addressed-store, s5.continuous-integration]
+          prompt: |
+            Write `find_culprit`, which bisects the commits and reuses any test result already known for a commit's tree, running the test only when it must. The program should print `('c10', 2)`.
+          starter: |
+            def find_culprit(commits, tree_of, cached, run_test):
+                # commits run oldest to newest; commits[0] is known good and commits[-1]
+                # known bad. tree_of[c] is the hash of commit c's files. cached maps a
+                # tree hash to an earlier test result, True for a pass. Bisect: for each
+                # commit you need to test, use the cached result for its tree if there
+                # is one; otherwise call run_test(c) and store its result in cached.
+                # Return (first bad commit, number of calls to run_test).
+                return commits[-1], 0
+
+
+            commits = ["c" + str(i) for i in range(16)]
+            tree_of = {c: "t" + c[1:] for c in commits}
+            tree_of["c9"] = "t8"  # c9 only reworded c8's message, so the files are the same
+            cached = {"t7": True, "t11": False}  # CI already tested these trees
+            print(find_culprit(commits, tree_of, cached, lambda c: int(c[1:]) < 10))
+          solution: |
+            def find_culprit(commits, tree_of, cached, run_test):
+                # commits run oldest to newest; commits[0] is known good and commits[-1]
+                # known bad. tree_of[c] is the hash of commit c's files. cached maps a
+                # tree hash to an earlier test result, True for a pass. Bisect: for each
+                # commit you need to test, use the cached result for its tree if there
+                # is one; otherwise call run_test(c) and store its result in cached.
+                # Return (first bad commit, number of calls to run_test).
+                lo = 0
+                hi = len(commits) - 1
+                runs = 0
+                while hi - lo > 1:
+                    mid = (lo + hi) // 2
+                    tree = tree_of[commits[mid]]
+                    if tree not in cached:
+                        cached[tree] = run_test(commits[mid])
+                        runs += 1
+                    if cached[tree]:
+                        lo = mid
+                    else:
+                        hi = mid
+                return commits[hi], runs
+
+
+            commits = ["c" + str(i) for i in range(16)]
+            tree_of = {c: "t" + c[1:] for c in commits}
+            tree_of["c9"] = "t8"  # c9 only reworded c8's message, so the files are the same
+            cached = {"t7": True, "t11": False}  # CI already tested these trees
+            print(find_culprit(commits, tree_of, cached, lambda c: int(c[1:]) < 10))
+          tests: |
+            def _go(_n, _bad, _trees, _cache):
+                _cs = ["k" + str(i) for i in range(_n)]
+                _tree = {c: _trees.get(c, "T" + c) for c in _cs}
+                _calls = []
+
+                def _run(c):
+                    _calls.append(c)
+                    return int(c[1:]) < _bad
+
+                _cached = dict(_cache)
+                _got = find_culprit(_cs, _tree, _cached, _run)
+                return _got, _calls, _cached, _cs
+
+
+            _got, _calls, _cached, _cs = _go(16, 5, {}, {})
+            assert _got[0] == "k5", "With commit k5 the first bad one and nothing cached, find_culprit should name k5, not " + str(_got[0])
+            assert len(_calls) == 4, "Bisecting 16 commits with nothing cached should call run_test 4 times, not " + str(len(_calls))
+            assert _got[1] == 4, "find_culprit should report 4 calls to run_test, not " + str(_got[1])
+            for _c in _calls:
+                assert ("Tk" + _c[1:]) in _cached, "After testing " + _c + ", its result should be stored in cached under its tree hash"
+            _got, _calls, _, _ = _go(16, 5, {}, {"Tk7": False, "Tk3": True})
+            assert tuple(_got) == ("k5", 2) and len(_calls) == 2, "With k7 and k3 already cached, only two commits need running, so the answer is ('k5', 2), not " + repr(_got)
+            _got, _calls, _, _ = _go(9, 7, {"k5": "same", "k6": "same"}, {"same": True})
+            assert tuple(_got) == ("k7", 2), "When k6 has the same files as a tree that already passed, its result comes from the cache, giving ('k7', 2), not " + repr(_got)
+            _got, _calls, _, _ = _go(16, 11, {"k9": "shared", "k10": "shared"}, {})
+            assert tuple(_got) == ("k11", 3), "When k9 and k10 have the same files, testing k9 also answers for k10, giving ('k11', 3), not " + repr(_got)
+            _got, _calls, _, _ = _go(2, 1, {}, {})
+            assert tuple(_got) == ("k1", 0), "With only a good and a bad commit, the answer is the bad one with no tests run, not " + repr(_got)
+            assert output.strip() == "('c10', 2)", "The program should print ('c10', 2)"
+          wrong:
+            - |
+              def find_culprit(commits, tree_of, cached, run_test):
+                  # commits run oldest to newest; commits[0] is known good and commits[-1]
+                  # known bad. tree_of[c] is the hash of commit c's files. cached maps a
+                  # tree hash to an earlier test result, True for a pass. Bisect: for each
+                  # commit you need to test, use the cached result for its tree if there
+                  # is one; otherwise call run_test(c) and store its result in cached.
+                  # Return (first bad commit, number of calls to run_test).
+                  lo = 0
+                  hi = len(commits) - 1
+                  runs = 0
+                  while hi - lo > 1:
+                      mid = (lo + hi) // 2
+                      passed = run_test(commits[mid])
+                      runs += 1
+                      if passed:
+                          lo = mid
+                      else:
+                          hi = mid
+                  return commits[hi], runs
+
+
+              commits = ["c" + str(i) for i in range(16)]
+              tree_of = {c: "t" + c[1:] for c in commits}
+              tree_of["c9"] = "t8"  # c9 only reworded c8's message, so the files are the same
+              cached = {"t7": True, "t11": False}  # CI already tested these trees
+              print(find_culprit(commits, tree_of, cached, lambda c: int(c[1:]) < 10))
+            - |
+              def find_culprit(commits, tree_of, cached, run_test):
+                  # commits run oldest to newest; commits[0] is known good and commits[-1]
+                  # known bad. tree_of[c] is the hash of commit c's files. cached maps a
+                  # tree hash to an earlier test result, True for a pass. Bisect: for each
+                  # commit you need to test, use the cached result for its tree if there
+                  # is one; otherwise call run_test(c) and store its result in cached.
+                  # Return (first bad commit, number of calls to run_test).
+                  lo = 0
+                  hi = len(commits) - 1
+                  runs = 0
+                  while hi - lo > 1:
+                      mid = (lo + hi) // 2
+                      if cached.get(tree_of[commits[mid]], True):
+                          lo = mid
+                      else:
+                          hi = mid
+                  return commits[hi], runs
+
+
+              commits = ["c" + str(i) for i in range(16)]
+              tree_of = {c: "t" + c[1:] for c in commits}
+              tree_of["c9"] = "t8"  # c9 only reworded c8's message, so the files are the same
+              cached = {"t7": True, "t11": False}  # CI already tested these trees
+              print(find_culprit(commits, tree_of, cached, lambda c: int(c[1:]) < 10))
+            - |
+              def find_culprit(commits, tree_of, cached, run_test):
+                  # commits run oldest to newest; commits[0] is known good and commits[-1]
+                  # known bad. tree_of[c] is the hash of commit c's files. cached maps a
+                  # tree hash to an earlier test result, True for a pass. Bisect: for each
+                  # commit you need to test, use the cached result for its tree if there
+                  # is one; otherwise call run_test(c) and store its result in cached.
+                  # Return (first bad commit, number of calls to run_test).
+                  lo = 0
+                  hi = len(commits) - 1
+                  runs = 0
+                  while hi - lo > 1:
+                      mid = (lo + hi) // 2
+                      tree = tree_of[commits[mid]]
+                      if tree in cached:
+                          passed = cached[tree]
+                      else:
+                          passed = run_test(commits[mid])
+                          runs += 1
+                      if passed:
+                          lo = mid
+                      else:
+                          hi = mid
+                  return commits[hi], runs
+
+
+              commits = ["c" + str(i) for i in range(16)]
+              tree_of = {c: "t" + c[1:] for c in commits}
+              tree_of["c9"] = "t8"  # c9 only reworded c8's message, so the files are the same
+              cached = {"t7": True, "t11": False}  # CI already tested these trees
+              print(find_culprit(commits, tree_of, cached, lambda c: int(c[1:]) < 10))
+          explanation: |
+            Bisect as usual, keeping a known-good `lo` and a known-bad `hi`, but before running the test on a commit, look up its tree. A tree that has been tested before has its answer already, because the result depends only on the files; a new result goes into the cache so that later lookups, including one for a commit with the same files, can use it. Ignoring the cache reruns work CI already did; treating an untested tree as a pass invents results; and not storing new results throws away what was learnt.
+  - title: The slow nightly job
+    blocks:
+      - text: |
+          A profile of the 70-minute settlement job shows 49 minutes in `fetch_bookings`, which runs one database query per booking, 14 minutes building the operators' reports, and 7 minutes in everything else. Rewriting `fetch_bookings` to fetch each operator's bookings in a single query makes that part 7 times faster.
+      - question:
+          id: settlement-time
+          type: numeric
+          system: s2
+          concepts: [s5.profiling-programs]
+          prompt: |
+            How many minutes does the settlement job take after the rewrite?
+          answer: "28"
+          explanation: |
+            The fetching drops from 49 minutes to 7, and the rest does not change: $7 + 14 + 7 = 28$ minutes, 2.5 times faster overall. The profile pointed straight at the part worth rewriting; the same effort on the 14-minute reports could have saved at most 14 minutes.
+  - title: So it cannot happen the same way
+    blocks:
+      - text: |
+          One more fact comes out of the investigation. Farah's rounding change and Joseph's surcharge each passed every check on their own branches. Together, they produce fares that are rounded before the surcharge is added, which is wrong. Main went red only after both had merged, on Friday afternoon, an hour before the release.
+      - question:
+          id: ci-rule
+          type: choice
+          system: s2
+          concepts: [s5.continuous-integration, s5.branches-merges-and-rebases]
+          prompt: |
+            Which change to the team's CI would have stopped this before it reached main?
+          options:
+            - "A merge queue that tests each pull request on top of main and every pull request ahead of it, merging only if that combination passes."
+            - "Running each branch's checks twice to make sure they really pass."
+            - "Path filters, so that the fare tests run only when fares.py changes."
+            - "Allowing merges only on Fridays, after a manual test."
+          answer: 0
+          explanation: |
+            The bug lived only in the combination of the two changes, so it could be found only by testing the combination. A merge queue tests exactly what main will become. Rerunning each branch alone tests the same thing twice; path filters would still run the fare tests on each branch alone; and a weekly manual test batches up more combinations, finds them later, and depends on someone remembering.
+review: |
+  The week is done, and each step came from a lesson of this cluster:
+
+  - The merge took one-sided changes and flagged the single real conflict, the method of [[s5.branches-merges-and-rebases]].
+  - The 1,400-line pull request became three that could each be reviewed properly, as [[s5.code-review]] recommends.
+  - The fare that depended on the machine was pinned with a lock file and isolated environments, from [[s5.packages-and-reproducible-environments]].
+  - The fix rebuilt three targets and reused the rest, because the build follows its dependency graph, as in [[s5.build-systems-and-dependency-graphs]].
+  - The guilty commit was found by bisection, [[s5.debugging-methodically]], reusing results stored under content hashes, the idea at the heart of [[s5.version-control-as-a-content-addressed-store]], from earlier [[s5.continuous-integration]] runs.
+  - The nightly job went from 70 minutes to 28 by fixing the part the profile pointed at, as [[s5.profiling-programs]] teaches.
+  - A merge queue now tests what main will become, from [[s5.continuous-integration]].
+
+  Notice what the wrong answers had in common. Nearly all of them relied on someone remembering, being careful or getting lucky: a third reviewer, a Monday upgrade, rerunning a branch, a manual test on Fridays. The right answers made the computer do the remembering: hashes that say whether two things are the same, a lock file that says exactly what to install, a graph that says what to rebuild, a bisection that is guaranteed to finish, and a pipeline that checks every change. That is the whole idea of this cluster. The next one asks what all those checks actually prove: what a test can and cannot tell you, and how to write tests worth trusting.

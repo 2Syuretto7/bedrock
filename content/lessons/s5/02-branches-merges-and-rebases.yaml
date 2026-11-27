@@ -1,0 +1,644 @@
+concept: s5.branches-merges-and-rebases
+minutes: 80
+claim: You can treat a branch as a movable name for a commit, find the merge base of two branches in the commit graph, merge two lines of work with the three-way rule and say exactly when a conflict arises, tell a fast-forward from a true merge, explain why a rebase gives commits new ids and when that makes it unsafe, count how far two branches have diverged, and choose habits that keep conflicts small.
+recalls: [s5.version-control-as-a-content-addressed-store]
+uses: [s3.breadth-first-and-depth-first-search, f2.equivalence-relations-and-partial-orders, s0.lists-and-tuples]
+leads: [s5.code-review, s5.continuous-integration, d3.multi-leader-replication-and-conflicts]
+starter: |
+  # Scratch space. Merge one line with the three-way rule.
+  def merge_line(base, ours, theirs):
+      if ours == theirs:
+          return ours
+      if ours == base:
+          return theirs
+      if theirs == base:
+          return ours
+      return "CONFLICT: " + ours + " | " + theirs
+
+
+  print(merge_line("idli", "idli", "dosa"), merge_line("idli", "dosa", "pongal"))
+parts:
+  recall:
+    - text: |
+        [[s5.version-control-as-a-content-addressed-store]] stored every snapshot as a commit named by its hash, each commit naming its parent, and a branch was nothing more than a movable name holding one commit's id. That made a branch free to create. This lesson is about what happens when two branches have both moved on and their work must be joined. Three quick pulls first.
+  puzzle:
+    - text: |
+        Asha and Bilal both start from the same commit of a 20-line settings file. On her branch, Asha changes lines 2, 5, 9, 14 and 17. On his, Bilal changes lines 5, 9, 11 and 17. On line 9 they happen to make exactly the same change; on every other line they both touched, their edits differ.
+
+        Their branches are joined by a merge tool that compares the two versions with their common starting point, line by line.
+
+        **How many conflicts does it report?**
+  intuition:
+    - text: |
+        Two cousins are each given a photocopy of grandmother's handwritten wedding guest list to tidy up. One corrects the spelling of three names; the other adds phone numbers to five lines and fixes one of the same three spellings in the same way. Back home, merging their copies is easy if you keep the original beside them: for each line, whoever changed it from the original wins, and if both changed it the same way, there is nothing to decide. Only a line that both changed differently needs grandmother herself. Without the original, you could not even tell which cousin had changed a line and which had left it alone.
+
+        That original is the **merge base**, and comparing two versions against it is a **three-way merge**. The figure merges a week's tiffin menu edited on two branches. Choose what each side did.
+    - figure: three-way-merge
+      props: { scenario: separate }
+    - text: |
+        Each line follows one rule. If both sides agree, take their version. Otherwise, if one side left the line as it was in the base, take the other side's change. If both changed it, differently, stop: that is a **conflict**, and only a person who understands both changes can decide. Try the case where only one side edits: the merge simply takes that side's lines, and nothing could conflict.
+  derivation:
+    - text: |
+        **History is a graph.** Every commit names its parents, so commits form a directed acyclic graph: arrows point from each commit to the ones it was built on, and following them can never lead back to where you started. "Is an ancestor of" is a partial order on commits, in the sense of [[f2.equivalence-relations-and-partial-orders]]: some pairs are ordered, one built on the other, while two commits made on different branches since they split are not ordered at all. A branch is a name pointing at one commit; `main` might point at `c5` while `feature` points at `f2`. Committing on a branch adds a commit whose parent is the branch's commit and moves the name forward.
+
+        **The merge base.** To merge `feature` into `main`, a tool needs the base: the most recent commit both branches contain. Collect every ancestor of each branch, by the graph search of [[s3.breadth-first-and-depth-first-search]], and intersect the two sets. Among these common ancestors, the merge base is one that is not itself an ancestor of another common ancestor: the latest point where the two lines of work were still the same.
+    - question:
+        id: derivation-two-way
+        type: choice
+        system: s2
+        prompt: |
+          Why does a merge compare both branches with their merge base, rather than only with each other?
+        options:
+          - "Without the base, a line that differs between the branches could have been changed by either side, so the tool could not tell which change to keep."
+          - "Comparing with the base is faster than comparing two files."
+          - "The base contains the newest version of each line."
+          - "Comparing with each other would always report a conflict."
+        answer: 0
+        explanation: |
+          Two versions that differ only show that something changed, not who changed it. The base answers that: the side that still matches it left the line alone, so the other side's change wins.
+    - text: |
+        **Fast-forward or merge commit.** If `main` has not moved since `feature` branched off, then `main`'s commit is an ancestor of `feature`'s, and there is nothing to combine: the tool can simply move the name `main` forward to `feature`'s commit. That is a **fast-forward**. If both have moved, the tool performs a three-way merge of the trees, file by file and, within a file, region by region, and records a **merge commit** with two parents, one from each branch. Real tools compare changed regions, called hunks, rather than single lines, so edits to neighbouring lines can conflict too, but the rule is the one in the figure.
+
+        **Resolving a conflict.** The tool writes both versions into the file between conflict markers and stops. A person edits the file into what it should be, which may be either version, both, or something new, and then completes the merge commit. The resolution is part of the merge commit's snapshot, so it is reviewed and stored like any other change.
+    - question:
+        id: order-conflict
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of merging a branch that conflicts in order.
+        steps:
+          - "Find the merge base of the two branches."
+          - "Merge each file three ways against the base, writing markers where both sides changed the same region differently."
+          - "Edit each conflicted file into what it should be and remove the markers."
+          - "Run the tests on the merged result."
+          - "Record the merge commit with both branches' commits as its parents."
+        explanation: |
+          The base must be known before any comparison, conflicts are resolved by a person, and the result is tested before it is committed, because two changes that merge cleanly as text can still break each other's logic.
+    - text: |
+        **Rebasing.** A rebase takes the commits on your branch since the merge base and replays them, one by one, on top of another branch's latest commit, as if you had started your work there. The result is a straight history with no merge commit. But a replayed commit has a different parent, and the parent is part of a commit's bytes, so every replayed commit gets a new id, exactly as [[s5.version-control-as-a-content-addressed-store]] predicted for any change to history. The old commits still exist; they are simply no longer on the branch.
+    - question:
+        id: derivation-rebase
+        type: numeric
+        system: s2
+        prompt: |
+          Your branch has 4 commits since it split from `main`, which has since gained 6 commits. You rebase your branch onto the new `main`. How many new commit ids does the rebase create?
+        answer: "4"
+        explanation: |
+          Each of your 4 commits is replayed with a new parent, so each becomes a new commit with a new id. The 6 commits on `main` are untouched, and most blobs and trees are shared with the old commits wherever the files are the same.
+    - text: |
+        **When rebasing is unsafe.** New ids are harmless while the commits exist only on your machine. Once others have fetched your branch and built on it, rebasing it gives them a history whose commits no longer match theirs: the same changes now appear twice under different ids, and merging the two versions produces duplicates and confusing conflicts. Hence the usual rule: rebase your own unpublished work freely, and never rewrite commits that others already have. Teams choose between merging, which preserves exactly what happened, and rebasing or squashing before merging, which gives a cleaner straight line; both are fine when applied consistently.
+
+        **Keeping conflicts small.** Conflicts grow with the time two branches spend apart and with how much each changes. Short-lived branches, merged within a day or two, rarely conflict much; long-lived ones become painful to join. Teams therefore keep branches small and merge often, and rely on automatic checks on every merge to keep the shared branch healthy, the practice of [[s5.continuous-integration]]. The same problem, two copies changed independently and then reconciled, returns in distributed databases that accept writes in several places at once: [[d3.multi-leader-replication-and-conflicts]].
+    - question:
+        id: derivation-published
+        type: choice
+        system: s2
+        prompt: |
+          Meera rebases a branch that three teammates have already pulled and built on, and pushes it with force. What will the teammates see?
+        options:
+          - "Their copies hold the old commits, the branch now holds new commits with the same changes, and merging the two duplicates the work."
+          - "Nothing; a rebase keeps commit ids."
+          - "Their copies update automatically to the new history."
+          - "Git refuses the rebase because others have the branch."
+        answer: 0
+        explanation: |
+          Replayed commits have new ids, so the teammates' old commits and the branch's new ones look like different work. Git cannot know who else has fetched a branch, so it does not stop the rebase; the rule is a team habit.
+  formal:
+    - text: |
+        **Commit graph.** Commits form a directed acyclic graph through their parents; "is an ancestor of" is a partial order.
+
+        **Branch.** A movable name holding one commit's id; committing moves it to the new commit.
+
+        **Merge base.** A common ancestor of two commits that is not an ancestor of any other common ancestor.
+
+        **Three-way merge.** For each region: if both sides agree, take it; if one side matches the base, take the other; if both changed it differently, it is a conflict.
+
+        **Fast-forward.** When one branch's commit is an ancestor of the other's, the name moves forward and no merge commit is needed.
+
+        **Rebase.** Replaying a branch's commits onto another commit; each replayed commit has a new parent and so a new id. Do not rebase commits others have built on.
+  drill:
+    - text: Seconds each. For every line, ask who changed it from the base.
+    - question:
+        id: drill-rule-theirs
+        type: choice
+        system: s1
+        prompt: |
+          Base "poha", ours "poha", theirs "upma". What does a three-way merge write?
+        options:
+          - "upma"
+          - "poha"
+          - "A conflict"
+          - "poha upma"
+        answer: 0
+        explanation: Ours left the line as it was, so theirs is the only change.
+    - question:
+        id: drill-rule-same
+        type: choice
+        system: s1
+        prompt: |
+          Base "idli", ours "dosa", theirs "dosa". What does a three-way merge write?
+        options:
+          - "dosa"
+          - "A conflict"
+          - "idli"
+          - "dosa dosa"
+        answer: 0
+        explanation: Both sides made the same change, so there is nothing to decide.
+    - question:
+        id: drill-fast-forward
+        type: choice
+        system: s1
+        prompt: |
+          `main` points at `c5`, and `c5` is an ancestor of `feature`'s commit `f3`. What does merging `feature` into `main` do?
+        options:
+          - "Moves main forward to f3 with no merge commit"
+          - "Creates a merge commit with parents c5 and f3"
+          - "Reports a conflict"
+          - "Replays feature's commits with new ids"
+        answer: 0
+        explanation: Everything on main is already in f3, so main's name can simply move to f3.
+    - question:
+        id: drill-ahead
+        type: numeric
+        system: s1
+        prompt: |
+          Since they split, `feature` has gained 3 commits and `main` has gained 5. How many commits is `feature` behind `main`?
+        answer: "5"
+        explanation: Behind counts the commits main has that feature lacks, the 5 made on main since the split.
+    - question:
+        id: predict-merge-line
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def merge_line(base, ours, theirs):
+              if ours == theirs:
+                  return ours
+              if ours == base:
+                  return theirs
+              if theirs == base:
+                  return ours
+              return "CONFLICT"
+
+
+          print([merge_line("a", "a", "b"), merge_line("a", "c", "a"), merge_line("a", "c", "d")])
+        output: "['b', 'c', 'CONFLICT']"
+        explanation: The first line changed only on theirs, the second only on ours, and the third differently on both.
+    - question:
+        id: predict-common
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          main = {"c1", "c2", "c3", "c4"}
+          feature = {"c1", "c2", "f1", "f2", "f3"}
+          print(sorted(main & feature), len(feature - main), len(main - feature))
+        output: "['c1', 'c2'] 3 2"
+        explanation: The two histories share c1 and c2; feature has 3 commits main lacks, and main has 2 that feature lacks.
+  work:
+    - text: Slower now. Each problem works on the commit graph or on a merge.
+    - question:
+        id: fix-merge-line
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `merge_line` should follow the three-way rule, reporting `"CONFLICT: ours | theirs"` when both sides changed a line differently instead of silently keeping one. The program should print `['rajma rice', 'chole bhature', 'CONFLICT: dosa | pongal', 'poha']`. It prints `['rajma rice', 'chole bhature', 'dosa', 'poha']`. Find the fault and fix it.
+        starter: |
+          def merge_line(base, ours, theirs):
+              if ours == theirs:
+                  return ours
+              if ours != base:
+                  return ours
+              if theirs != base:
+                  return theirs
+              return base
+
+
+          base = ["rajma", "chole", "idli", "poha"]
+          ours = ["rajma", "chole bhature", "dosa", "poha"]
+          theirs = ["rajma rice", "chole", "pongal", "poha"]
+          print([merge_line(b, o, t) for b, o, t in zip(base, ours, theirs)])
+        solution: |
+          def merge_line(base, ours, theirs):
+              if ours == theirs:
+                  return ours
+              if ours == base:
+                  return theirs
+              if theirs == base:
+                  return ours
+              return "CONFLICT: " + ours + " | " + theirs
+
+
+          base = ["rajma", "chole", "idli", "poha"]
+          ours = ["rajma", "chole bhature", "dosa", "poha"]
+          theirs = ["rajma rice", "chole", "pongal", "poha"]
+          print([merge_line(b, o, t) for b, o, t in zip(base, ours, theirs)])
+        tests: |
+          _cases = [
+              (("a", "a", "a"), "a", "nobody changed the line"),
+              (("a", "b", "a"), "b", "only ours changed it"),
+              (("a", "a", "c"), "c", "only theirs changed it"),
+              (("a", "d", "d"), "d", "both made the same change"),
+              (("a", "b", "c"), "CONFLICT: b | c", "both changed it differently"),
+              (("a", "", "a"), "", "ours deleted the text"),
+              (("a", "", "c"), "CONFLICT:  | c", "ours deleted the text and theirs changed it"),
+          ]
+          for _args, _want, _why in _cases:
+              _got = merge_line(_args[0], _args[1], _args[2])
+              assert _got == _want, "With base " + repr(_args[0]) + ", ours " + repr(_args[1]) + " and theirs " + repr(_args[2]) + ", " + _why + ", so the merge should give " + repr(_want) + ", not " + repr(_got)
+          assert output.strip() == "['rajma rice', 'chole bhature', 'CONFLICT: dosa | pongal', 'poha']", "The program should print ['rajma rice', 'chole bhature', 'CONFLICT: dosa | pongal', 'poha']"
+        wrong:
+          - |
+            def merge_line(base, ours, theirs):
+                if ours != base and theirs != base:
+                    return "CONFLICT: " + ours + " | " + theirs
+                if ours == base:
+                    return theirs
+                return ours
+
+
+            base = ["rajma", "chole", "idli", "poha"]
+            ours = ["rajma", "chole bhature", "dosa", "poha"]
+            theirs = ["rajma rice", "chole", "pongal", "poha"]
+            print([merge_line(b, o, t) for b, o, t in zip(base, ours, theirs)])
+          - |
+            def merge_line(base, ours, theirs):
+                if ours == theirs:
+                    return ours
+                if theirs != base:
+                    return theirs
+                if ours != base:
+                    return ours
+                return base
+
+
+            base = ["rajma", "chole", "idli", "poha"]
+            ours = ["rajma", "chole bhature", "dosa", "poha"]
+            theirs = ["rajma rice", "chole", "pongal", "poha"]
+            print([merge_line(b, o, t) for b, o, t in zip(base, ours, theirs)])
+          - |
+            def merge_line(base, ours, theirs):
+                if ours == theirs:
+                    return ours
+                if ours == base:
+                    return theirs
+                if theirs == base:
+                    return ours
+                return base
+
+
+            base = ["rajma", "chole", "idli", "poha"]
+            ours = ["rajma", "chole bhature", "dosa", "poha"]
+            theirs = ["rajma rice", "chole", "pongal", "poha"]
+            print([merge_line(b, o, t) for b, o, t in zip(base, ours, theirs)])
+        explanation: |
+          The function asked only whether ours had changed, so when both sides changed a line it kept ours and threw theirs away without a word. Asking whether each side still matches the base, and reporting a conflict when neither does, keeps every change or stops for a person. Checking for a conflict before checking for agreement turns identical edits into conflicts; letting theirs win silently loses ours instead; and falling back to the base loses both.
+    - question:
+        id: write-merge-base
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `merge_base(parents, a, b)`, which returns, sorted, the common ancestors of `a` and `b` that are not ancestors of any other common ancestor. `parents` maps each commit to the list of its parents, and `ancestors` is given. The program should print `['c3'] ['c4']`.
+        starter: |
+          def ancestors(parents, commit):
+              # Every commit reachable from commit by following parents, commit included.
+              seen = set()
+              todo = [commit]
+              while todo:
+                  c = todo.pop()
+                  if c not in seen:
+                      seen.add(c)
+                      for p in parents[c]:
+                          todo.append(p)
+              return seen
+
+
+          def merge_base(parents, a, b):
+              # Return, sorted, the common ancestors of a and b that are not
+              # ancestors of any other common ancestor.
+              return []
+
+
+          parents = {
+              "c1": [], "c2": ["c1"], "c3": ["c2"], "c4": ["c3"], "c5": ["c4"],
+              "f1": ["c3"], "f2": ["f1"],
+          }
+          print(merge_base(parents, "c5", "f2"), merge_base(parents, "c5", "c4"))
+        solution: |
+          def ancestors(parents, commit):
+              # Every commit reachable from commit by following parents, commit included.
+              seen = set()
+              todo = [commit]
+              while todo:
+                  c = todo.pop()
+                  if c not in seen:
+                      seen.add(c)
+                      for p in parents[c]:
+                          todo.append(p)
+              return seen
+
+
+          def merge_base(parents, a, b):
+              common = ancestors(parents, a) & ancestors(parents, b)
+              best = []
+              for c in common:
+                  if not any(c in ancestors(parents, d) for d in common if d != c):
+                      best.append(c)
+              return sorted(best)
+
+
+          parents = {
+              "c1": [], "c2": ["c1"], "c3": ["c2"], "c4": ["c3"], "c5": ["c4"],
+              "f1": ["c3"], "f2": ["f1"],
+          }
+          print(merge_base(parents, "c5", "f2"), merge_base(parents, "c5", "c4"))
+        tests: |
+          _p = {"a": [], "b": ["a"], "c": ["b"], "x": ["b"], "y": ["x"], "m": ["c", "y"], "z": ["y"]}
+          _got = merge_base(_p, "c", "y")
+          assert _got == ["b"], "c and y last shared commit b, so merge_base should be ['b'], not " + str(_got)
+          _got = merge_base(_p, "m", "z")
+          assert _got == ["y"], "m merged y in through its second parent, so the merge base of m and z is ['y'], not " + str(_got)
+          _got = merge_base(_p, "c", "c")
+          assert _got == ["c"], "A commit's merge base with itself is ['c'], not " + str(_got)
+          _q = {"r": [], "p": ["r"], "q": ["r"], "m1": ["p", "q"], "m2": ["q", "p"]}
+          _got = merge_base(_q, "m1", "m2")
+          assert _got == ["p", "q"], "After a criss-cross merge, p and q are both best common ancestors, so the answer is ['p', 'q'], not " + str(_got)
+          assert output.strip() == "['c3'] ['c4']", "The program should print ['c3'] ['c4']"
+        wrong:
+          - |
+            def ancestors(parents, commit):
+                # Every commit reachable from commit by following parents, commit included.
+                seen = set()
+                todo = [commit]
+                while todo:
+                    c = todo.pop()
+                    if c not in seen:
+                        seen.add(c)
+                        for p in parents[c]:
+                            todo.append(p)
+                return seen
+
+
+            def merge_base(parents, a, b):
+                return sorted(ancestors(parents, a) & ancestors(parents, b))
+
+
+            parents = {
+                "c1": [], "c2": ["c1"], "c3": ["c2"], "c4": ["c3"], "c5": ["c4"],
+                "f1": ["c3"], "f2": ["f1"],
+            }
+            print(merge_base(parents, "c5", "f2"), merge_base(parents, "c5", "c4"))
+          - |
+            def ancestors(parents, commit):
+                # Every commit reachable from commit by following parents, commit included.
+                seen = set()
+                todo = [commit]
+                while todo:
+                    c = todo.pop()
+                    if c not in seen:
+                        seen.add(c)
+                        for p in parents[c]:
+                            todo.append(p)
+                return seen
+
+
+            def merge_base(parents, a, b):
+                common = ancestors(parents, a) & ancestors(parents, b)
+                best = []
+                for c in common:
+                    if len(parents[c]) == 0:
+                        best.append(c)
+                return sorted(best)
+
+
+            parents = {
+                "c1": [], "c2": ["c1"], "c3": ["c2"], "c4": ["c3"], "c5": ["c4"],
+                "f1": ["c3"], "f2": ["f1"],
+            }
+            print(merge_base(parents, "c5", "f2"), merge_base(parents, "c5", "c4"))
+          - |
+            def ancestors(parents, commit):
+                # Every commit reachable from commit by following parents, commit included.
+                seen = set()
+                todo = [commit]
+                while todo:
+                    c = todo.pop()
+                    if c not in seen:
+                        seen.add(c)
+                        for p in parents[c]:
+                            todo.append(p)
+                return seen
+
+
+            def first_parents(parents, commit):
+                seen = set()
+                c = commit
+                while True:
+                    seen.add(c)
+                    if len(parents[c]) == 0:
+                        return seen
+                    c = parents[c][0]
+
+
+            def merge_base(parents, a, b):
+                common = first_parents(parents, a) & first_parents(parents, b)
+                best = []
+                for c in common:
+                    if not any(c in ancestors(parents, d) for d in common if d != c):
+                        best.append(c)
+                return sorted(best)
+
+
+            parents = {
+                "c1": [], "c2": ["c1"], "c3": ["c2"], "c4": ["c3"], "c5": ["c4"],
+                "f1": ["c3"], "f2": ["f1"],
+            }
+            print(merge_base(parents, "c5", "f2"), merge_base(parents, "c5", "c4"))
+        explanation: |
+          Intersect the two ancestor sets, then keep only the commits that no other common commit descends from. Returning every common ancestor includes all the older history; returning the root finds the oldest common commit rather than the latest; and following only first parents ignores everything a merge brought in through its second parent.
+    - question:
+        id: write-ahead-behind
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `ahead_behind(parents, a, b)`, which returns a pair: how many commits `a` has that `b` lacks, and how many `b` has that `a` lacks. The program should print `(2, 2) (3, 0)`.
+        starter: |
+          def ancestors(parents, commit):
+              # Every commit reachable from commit by following parents, commit included.
+              seen = set()
+              todo = [commit]
+              while todo:
+                  c = todo.pop()
+                  if c not in seen:
+                      seen.add(c)
+                      for p in parents[c]:
+                          todo.append(p)
+              return seen
+
+
+          def ahead_behind(parents, a, b):
+              # Return (ahead, behind): how many commits a has that b lacks,
+              # and how many b has that a lacks.
+              return (0, 0)
+
+
+          parents = {
+              "c1": [], "c2": ["c1"], "c3": ["c2"], "c4": ["c3"], "c5": ["c4"],
+              "f1": ["c3"], "f2": ["f1"], "m1": ["f2", "c5"],
+          }
+          print(ahead_behind(parents, "f2", "c5"), ahead_behind(parents, "m1", "c5"))
+        solution: |
+          def ancestors(parents, commit):
+              # Every commit reachable from commit by following parents, commit included.
+              seen = set()
+              todo = [commit]
+              while todo:
+                  c = todo.pop()
+                  if c not in seen:
+                      seen.add(c)
+                      for p in parents[c]:
+                          todo.append(p)
+              return seen
+
+
+          def ahead_behind(parents, a, b):
+              mine = ancestors(parents, a)
+              theirs = ancestors(parents, b)
+              return (len(mine - theirs), len(theirs - mine))
+
+
+          parents = {
+              "c1": [], "c2": ["c1"], "c3": ["c2"], "c4": ["c3"], "c5": ["c4"],
+              "f1": ["c3"], "f2": ["f1"], "m1": ["f2", "c5"],
+          }
+          print(ahead_behind(parents, "f2", "c5"), ahead_behind(parents, "m1", "c5"))
+        tests: |
+          _p = {"a": [], "b": ["a"], "c": ["b"], "d": ["c"], "x": ["b"], "y": ["x"], "z": ["y"], "m": ["d", "z"]}
+          _got = ahead_behind(_p, "z", "d")
+          assert tuple(_got) == (3, 2), "z has x, y and z that d lacks, and d has c and d that z lacks, so the answer is (3, 2), not " + str(_got)
+          _got = ahead_behind(_p, "d", "z")
+          assert tuple(_got) == (2, 3), "Swapping the branches swaps the counts: (2, 3), not " + str(_got)
+          _got = ahead_behind(_p, "m", "z")
+          assert tuple(_got) == (3, 0), "After merging z through its second parent, m is 3 ahead (c, d and m) and 0 behind, not " + str(_got)
+          _got = ahead_behind(_p, "b", "b")
+          assert tuple(_got) == (0, 0), "A branch compared with itself is (0, 0), not " + str(_got)
+          assert output.strip() == "(2, 2) (3, 0)", "The program should print (2, 2) (3, 0)"
+        wrong:
+          - |
+            def ancestors(parents, commit):
+                # Every commit reachable from commit by following parents, commit included.
+                seen = set()
+                todo = [commit]
+                while todo:
+                    c = todo.pop()
+                    if c not in seen:
+                        seen.add(c)
+                        for p in parents[c]:
+                            todo.append(p)
+                return seen
+
+
+            def first_parents(parents, commit):
+                seen = set()
+                c = commit
+                while True:
+                    seen.add(c)
+                    if len(parents[c]) == 0:
+                        return seen
+                    c = parents[c][0]
+
+
+            def ahead_behind(parents, a, b):
+                mine = first_parents(parents, a)
+                theirs = first_parents(parents, b)
+                return (len(mine - theirs), len(theirs - mine))
+
+
+            parents = {
+                "c1": [], "c2": ["c1"], "c3": ["c2"], "c4": ["c3"], "c5": ["c4"],
+                "f1": ["c3"], "f2": ["f1"], "m1": ["f2", "c5"],
+            }
+            print(ahead_behind(parents, "f2", "c5"), ahead_behind(parents, "m1", "c5"))
+          - |
+            def ancestors(parents, commit):
+                # Every commit reachable from commit by following parents, commit included.
+                seen = set()
+                todo = [commit]
+                while todo:
+                    c = todo.pop()
+                    if c not in seen:
+                        seen.add(c)
+                        for p in parents[c]:
+                            todo.append(p)
+                return seen
+
+
+            def ahead_behind(parents, a, b):
+                mine = ancestors(parents, a)
+                theirs = ancestors(parents, b)
+                return (len(theirs - mine), len(mine - theirs))
+
+
+            parents = {
+                "c1": [], "c2": ["c1"], "c3": ["c2"], "c4": ["c3"], "c5": ["c4"],
+                "f1": ["c3"], "f2": ["f1"], "m1": ["f2", "c5"],
+            }
+            print(ahead_behind(parents, "f2", "c5"), ahead_behind(parents, "m1", "c5"))
+          - |
+            def ancestors(parents, commit):
+                # Every commit reachable from commit by following parents, commit included.
+                seen = set()
+                todo = [commit]
+                while todo:
+                    c = todo.pop()
+                    if c not in seen:
+                        seen.add(c)
+                        for p in parents[c]:
+                            todo.append(p)
+                return seen
+
+
+            def ahead_behind(parents, a, b):
+                mine = ancestors(parents, a)
+                theirs = ancestors(parents, b)
+                return (len(mine) - len(theirs), len(theirs) - len(mine))
+
+
+            parents = {
+                "c1": [], "c2": ["c1"], "c3": ["c2"], "c4": ["c3"], "c5": ["c4"],
+                "f1": ["c3"], "f2": ["f1"], "m1": ["f2", "c5"],
+            }
+            print(ahead_behind(parents, "f2", "c5"), ahead_behind(parents, "m1", "c5"))
+        explanation: |
+          Two set differences of the ancestor sets give both counts. Following only first parents misses commits that a merge brought in, so a branch that has merged main still looks behind; swapping the differences reports behind as ahead; and subtracting the sizes measures how much bigger one history is, not how they differ.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          How many conflicts does the puzzle's merge report?
+        answer: "2"
+        explanation: |
+          Lines 2 and 14 were changed only by Asha and line 11 only by Bilal, so each takes the one change. Line 9 was changed identically by both, so it is not a conflict. Lines 5 and 17 were changed differently by both: 2 conflicts.
+    - question:
+        id: work-habit
+        type: choice
+        system: s2
+        prompt: |
+          A team's feature branches live for three to four weeks, and merging them takes a day of untangling conflicts each time. What change would help most?
+        options:
+          - "Split work into pieces small enough to merge within a day or two, merging main into each branch often in the meantime."
+          - "Rebase every branch onto main once, just before merging, after the four weeks."
+          - "Let only one person commit at a time."
+          - "Stop using branches and email files to each other."
+        answer: 0
+        explanation: |
+          Conflicts grow with how long branches spend apart and how much they change, so small, short-lived branches keep each merge small. A single rebase at the end faces the same pile of conflicts; serialising commits wastes everyone's time; and emailing files throws away the merge base that makes merging possible at all.
+  connections:
+    - text: |
+        2 conflicts. Line 9 looked like a clash but was not: both made the same change, so the three-way rule takes it once. Lines 2, 11 and 14 were each changed on one side only, so the tool takes those changes without asking. Only lines 5 and 17, changed differently by both, need a person.
+
+        A merge that completes without conflicts is still not proof that the result works. Asha might rename a setting on line 2 that Bilal's new line 11 refers to by its old name: each change is fine alone, they merge cleanly as text, and the program breaks. Catching that takes a person reading the change with care before it joins the shared branch, which is [[s5.code-review]], and machines that build and test every merged result, which is [[s5.continuous-integration]].

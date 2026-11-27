@@ -8001,6 +8001,671 @@ function DecisionMatrix(props: Props) {
   );
 }
 
+const CS_FILES: [string, string][] = [
+  ["README.md", "Tiffin app: how to run it"],
+  ["app.py", "print(menu_for(today))"],
+  ["menu.csv", "monday,rajma chawal"],
+];
+
+/** A short, stable fingerprint of a text (FNV-1a, 32 bits), standing in for a real content hash. */
+function csHash(text: string) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0").slice(0, 7);
+}
+
+/** Two commits of a three-file project in a content-addressed store: what a new commit adds and what it shares. */
+function ContentStore(props: Props) {
+  const start = Array.isArray(props.changed) ? props.changed.filter((n): n is string => typeof n === "string") : ["app.py"];
+  const [changed, setChanged] = useState<string[]>(CS_FILES.map(([n]) => n).filter((n) => start.includes(n)));
+  const v1 = CS_FILES.map(([name, text]) => ({ name, id: csHash(text) }));
+  const v2 = CS_FILES.map(([name, text]) => ({ name, id: changed.includes(name) ? csHash(`${text} (edited)`) : csHash(text) }));
+  const treeText = (entries: { name: string; id: string }[]) => entries.map((e) => `${e.name} ${e.id}`).join("\n");
+  const t1 = csHash(treeText(v1));
+  const t2 = csHash(treeText(v2));
+  const c1 = csHash(`tree ${t1}\nfirst menu`);
+  const c2 = csHash(`tree ${t2}\nparent ${c1}\nnext week`);
+  const newBlobs = v2.filter((e) => changed.includes(e.name));
+  const sameTree = t2 === t1;
+  const objects: { kind: string; id: string; added: boolean }[] = [
+    ...v1.map((e) => ({ kind: "blob", id: e.id, added: false })),
+    { kind: "tree", id: t1, added: false },
+    { kind: "commit", id: c1, added: false },
+    ...newBlobs.map((e) => ({ kind: "blob", id: e.id, added: true })),
+    ...(sameTree ? [] : [{ kind: "tree", id: t2, added: true }]),
+    { kind: "commit", id: c2, added: true },
+  ];
+  const added = objects.filter((o) => o.added).length;
+  const toggle = (name: string) => setChanged(changed.includes(name) ? changed.filter((n) => n !== name) : [...changed, name]);
+  const names = CS_FILES.map(([n]) => n).filter((n) => changed.includes(n));
+  const listed = names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const kept = CS_FILES.length - changed.length;
+  const summary =
+    changed.length === 0
+      ? `Commit 2 changes no file, so its tree has the same entries and the same id as commit 1's, and the store gains only the new commit record: 1 object.`
+      : `Commit 2 changes ${listed}: ${newBlobs.length} new ${newBlobs.length === 1 ? "blob" : "blobs"}, 1 new tree and 1 new commit, ${added} objects added.${kept === 0 ? " Every file changed, so nothing is shared." : ` The other ${kept === 1 ? "file points" : `${kept} files point`} at ${kept === 1 ? "a blob" : "blobs"} already stored, by the same id.`}`;
+  const entryRows = (entries: { name: string; id: string }[], x: number, mark: boolean) =>
+    entries.map((e, i) => {
+      const hot = mark && changed.includes(e.name);
+      return (
+        <g key={`${x}-${e.name}`}>
+          <rect x={x} y={52 + i * 22} width={200} height={18} rx={2} className={hot ? "fig-accent" : "fig-ghost"} />
+          <text x={x + 6} y={65 + i * 22} className="fig-small" style={{ fill: hot ? "var(--bg)" : "var(--text)" }}>
+            {`${e.name} → ${e.id}`}
+          </text>
+        </g>
+      );
+    });
+  return (
+    <Frame
+      title="Two commits in a content-addressed store"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">changed in commit 2</span>
+          {CS_FILES.map(([name]) => (
+            <button key={name} type="button" className="btn btn-secondary btn-small" aria-pressed={changed.includes(name)} onClick={() => toggle(name)}>
+              {name}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 236" role="img" aria-label={`Commit 2 adds ${added} ${added === 1 ? "object" : "objects"} to the store, ${objects.length} in all`}>
+        <text x={10} y={16} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`commit 1: ${c1}`}
+        </text>
+        <text x={10} y={32} className="fig-small">
+          {`tree ${t1}, no parent`}
+        </text>
+        <text x={250} y={16} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`commit 2: ${c2}`}
+        </text>
+        <text x={250} y={32} className="fig-small">
+          {`tree ${t2}, parent ${c1}`}
+        </text>
+        {entryRows(v1, 10, false)}
+        {entryRows(v2, 250, true)}
+        <text x={10} y={142} className="fig-small">
+          {`the store: ${objects.length} objects, filled = added by commit 2`}
+        </text>
+        {objects.map((o, i) => (
+          <g key={`o${i}`}>
+            <rect x={10 + (i % 5) * 89} y={152 + Math.floor(i / 5) * 34} width={84} height={28} rx={3} className={o.added ? "fig-accent" : "fig-ghost"} />
+            <text x={52 + (i % 5) * 89} y={163 + Math.floor(i / 5) * 34} textAnchor="middle" className="fig-small" style={{ fill: o.added ? "var(--bg)" : "var(--text)" }}>
+              {o.kind}
+            </text>
+            <text x={52 + (i % 5) * 89} y={175 + Math.floor(i / 5) * 34} textAnchor="middle" className="fig-small" style={{ fill: o.added ? "var(--bg)" : "var(--text)" }}>
+              {o.id}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </Frame>
+  );
+}
+
+const TWM_BASE = ["mon rajma", "tue chole", "wed idli", "thu poha", "fri biryani"];
+const TWM_CASES: Record<string, { label: string; ours: string[]; theirs: string[] }> = {
+  separate: { label: "different lines", ours: ["mon rajma", "tue bhature", "wed idli", "thu poha", "fri biryani"], theirs: ["mon rajma", "tue chole", "wed idli", "thu upma", "fri biryani"] },
+  same: { label: "same line, different edits", ours: ["mon rajma", "tue chole", "wed dosa", "thu poha", "fri biryani"], theirs: ["mon rajma", "tue chole", "wed pongal", "thu poha", "fri biryani"] },
+  identical: { label: "same edit on both", ours: ["mon rajma", "tue chole", "wed idli", "thu poha", "fri pulao"], theirs: ["mon rajma", "tue chole", "wed idli", "thu poha", "fri pulao"] },
+  oneside: { label: "only one side edits", ours: TWM_BASE, theirs: ["mon kadhi", "tue chole", "wed idli", "thu poha", "fri pulao"] },
+};
+
+/** A line-by-line three-way merge of a week's menu, with the rule each line follows. */
+function ThreeWayMerge(props: Props) {
+  const keys = Object.keys(TWM_CASES);
+  const [key, setKey] = useState(typeof props.scenario === "string" && keys.includes(props.scenario) ? props.scenario : "separate");
+  const { ours, theirs } = TWM_CASES[key];
+  const rows = TWM_BASE.map((base, i) => {
+    const o = ours[i];
+    const t = theirs[i];
+    if (o === t) return { base, o, t, result: o, rule: o === base ? "same" : "both" };
+    if (o === base) return { base, o, t, result: t, rule: "theirs" };
+    if (t === base) return { base, o, t, result: o, rule: "ours" };
+    return { base, o, t, result: "CONFLICT", rule: "conflict" };
+  });
+  const conflicts = rows.filter((r) => r.rule === "conflict").length;
+  const fromOurs = rows.filter((r) => r.rule === "ours").length;
+  const fromTheirs = rows.filter((r) => r.rule === "theirs").length;
+  const fromBoth = rows.filter((r) => r.rule === "both").length;
+  const parts: string[] = [];
+  if (fromOurs) parts.push(`${fromOurs} ${fromOurs === 1 ? "line" : "lines"} changed only on ours, so ours is taken`);
+  if (fromTheirs) parts.push(`${fromTheirs} ${fromTheirs === 1 ? "line" : "lines"} changed only on theirs, so theirs is taken`);
+  if (fromBoth) parts.push(`${fromBoth} ${fromBoth === 1 ? "line" : "lines"} changed the same way on both, so that change is taken once`);
+  if (conflicts) parts.push(`${conflicts} ${conflicts === 1 ? "line" : "lines"} changed differently on both, a conflict that a person must resolve`);
+  const summary = `Compared with the common base: ${parts.join("; ")}. ${conflicts ? "The merge stops until the conflict is resolved." : "Every other line is unchanged, and the merge completes on its own."}`;
+  const cols: [string, (r: (typeof rows)[number]) => string, (r: (typeof rows)[number]) => boolean][] = [
+    ["base", (r) => r.base, () => false],
+    ["ours", (r) => r.o, (r) => r.o !== r.base],
+    ["theirs", (r) => r.t, (r) => r.t !== r.base],
+    ["merged", (r) => r.result, (r) => r.result !== r.base],
+  ];
+  return (
+    <Frame
+      title="A three-way merge, line by line"
+      summary={summary}
+      controls={
+        <>
+          {keys.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={k === key} onClick={() => setKey(k)}>
+              {TWM_CASES[k].label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 172" role="img" aria-label={`Merged menu: ${conflicts} ${conflicts === 1 ? "conflict" : "conflicts"}`}>
+        {cols.map(([name], c) => (
+          <text key={name} x={8 + c * 114} y={16} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+            {name}
+          </text>
+        ))}
+        {rows.map((r, i) =>
+          cols.map(([name, text, hot], c) => {
+            const conflict = c === 3 && r.rule === "conflict";
+            const filled = conflict || (c === 3 && hot(r));
+            return (
+              <g key={`${name}-${i}`}>
+                <rect
+                  x={6 + c * 114}
+                  y={26 + i * 26}
+                  width={106}
+                  height={22}
+                  rx={2}
+                  className={filled ? "fig-accent" : "fig-ghost"}
+                  style={!filled && hot(r) ? { stroke: "var(--text)", strokeWidth: 2 } : undefined}
+                />
+                <text x={12 + c * 114} y={41 + i * 26} className="fig-small" style={{ fill: filled ? "var(--bg)" : "var(--text)", fontWeight: filled ? 600 : 400 }}>
+                  {text(r)}
+                </text>
+              </g>
+            );
+          }),
+        )}
+        <text x={8} y={164} className="fig-small">
+          outlined: changed from base; filled: merged line that differs
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** A simple model of review: the same 1,200-line change sent as one pull request or split into several smaller ones. */
+function ReviewSize(props: Props) {
+  const total = 1200;
+  const defects = 12;
+  const [k, setK] = useState(clamp(Math.round(num(props.prs, 1)), 1, 12));
+  const size = total / k;
+  const p = size <= 200 ? 0.7 : (0.7 * 200) / size;
+  const caught = defects * p;
+  const pct = Math.round(p * 100);
+  const one = (x: number) => (Math.round(x * 10) / 10).toLocaleString("en-IN");
+  const summary =
+    k === 1
+      ? `One pull request of 1,200 lines. In this model each of its 12 defects is spotted with probability ${pct}%, so a review catches about ${one(caught)} of them on average, and the rest reach the main branch.`
+      : `${k} pull requests of ${group(Math.round(size))} lines each. In this model each defect is spotted with probability ${pct}%, so the reviews catch about ${one(caught)} of the 12 on average${size <= 200 ? ", the most any split can reach" : ""}.`;
+  const barW = 440 / k;
+  return (
+    <Frame
+      title="The same change, reviewed whole or in pieces"
+      summary={summary}
+      controls={<Stepper label="pull requests" value={k} min={1} max={12} onChange={setK} />}
+    >
+      <svg viewBox="0 0 460 196" role="img" aria-label={`${k} pull requests: about ${one(caught)} of 12 defects caught`}>
+        <text x={10} y={16} className="fig-small">
+          up to 200 lines: 70% chance per defect; beyond that, it thins
+        </text>
+        {Array.from({ length: k }, (_, i) => (
+          <g key={i}>
+            <rect x={10 + i * barW + 2} y={30} width={Math.max(4, barW - 4)} height={34} rx={3} className="fig-ghost" />
+            {k <= 6 ? (
+              <text x={10 + i * barW + barW / 2} y={52} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+                {`${group(Math.round(size))} lines`}
+              </text>
+            ) : null}
+          </g>
+        ))}
+        <text x={10} y={92} className="fig-small">
+          of 12 defects, caught on average (filled) and missed
+        </text>
+        <rect x={10} y={102} width={440} height={26} rx={3} className="fig-ghost" />
+        <rect x={10} y={102} width={(440 * caught) / defects} height={26} rx={3} className="fig-accent" />
+        <text x={16} y={120} className="fig-small" style={{ fill: "var(--bg)", fontWeight: 600 }}>
+          {caught >= 1.2 ? one(caught) : ""}
+        </text>
+        <text x={10} y={152} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`${k} × ${group(Math.round(size))} lines: ${pct}% per defect, about ${one(caught)} caught and ${one(defects - caught)} missed`}
+        </text>
+        <text x={10} y={176} className="fig-small">
+          70% and 200 lines are assumptions, not measurements
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const BG_NODES: Record<string, { x: number; y: number; source?: boolean }> = {
+  "utils.h": { x: 10, y: 22, source: true },
+  "utils.c": { x: 100, y: 22, source: true },
+  "menu.c": { x: 190, y: 22, source: true },
+  "orders.c": { x: 280, y: 22, source: true },
+  "pay.c": { x: 370, y: 22, source: true },
+  "utils.o": { x: 10, y: 96 },
+  "menu.o": { x: 100, y: 96 },
+  "orders.o": { x: 190, y: 96 },
+  "pay.o": { x: 280, y: 96 },
+  docs: { x: 370, y: 96 },
+  app: { x: 145, y: 160 },
+  tests: { x: 145, y: 214 },
+};
+const BG_DEPS: Record<string, string[]> = {
+  "utils.o": ["utils.c"],
+  "menu.o": ["menu.c", "utils.h"],
+  "orders.o": ["orders.c", "utils.h"],
+  "pay.o": ["pay.c"],
+  docs: ["menu.c", "orders.c"],
+  app: ["utils.o", "menu.o", "orders.o", "pay.o"],
+  tests: ["app"],
+};
+
+/** A small build graph: which targets must be rebuilt when one source file changes. */
+function BuildGraph(props: Props) {
+  const sources = Object.keys(BG_NODES).filter((n) => BG_NODES[n].source);
+  const [changed, setChanged] = useState(typeof props.changed === "string" && sources.includes(props.changed) ? props.changed : "utils.h");
+  const dirty = new Set<string>([changed]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [t, ins] of Object.entries(BG_DEPS)) {
+      if (!dirty.has(t) && ins.some((i) => dirty.has(i))) {
+        dirty.add(t);
+        grew = true;
+      }
+    }
+  }
+  const targets = Object.keys(BG_DEPS);
+  const rebuilt = targets.filter((t) => dirty.has(t));
+  const reused = targets.filter((t) => !dirty.has(t));
+  const list = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+  const summary = `Changing ${changed} rebuilds ${list(rebuilt)}: ${rebuilt.length} of ${targets.length} targets. ${list(reused)} ${reused.length === 1 ? "does" : "do"} not depend on it, directly or through anything else, so ${reused.length === 1 ? "its last output is" : "their last outputs are"} reused.`;
+  const w = 80;
+  const h = 26;
+  return (
+    <Frame
+      title="What a change forces a build to redo"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">change</span>
+          {sources.map((s) => (
+            <button key={s} type="button" className="btn btn-secondary btn-small" aria-pressed={s === changed} onClick={() => setChanged(s)}>
+              {s}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 252" role="img" aria-label={`Changing ${changed} rebuilds ${rebuilt.length} of ${targets.length} targets`}>
+        {Object.entries(BG_DEPS).flatMap(([t, ins]) =>
+          ins.map((i) => {
+            const a = BG_NODES[i];
+            const b = BG_NODES[t];
+            const hot = dirty.has(i) && dirty.has(t);
+            return <line key={`${i}-${t}`} x1={a.x + w / 2} y1={a.y + h} x2={b.x + w / 2} y2={b.y} className={hot ? "fig-accent-line" : "fig-line"} />;
+          }),
+        )}
+        {Object.entries(BG_NODES).map(([name, n]) => {
+          const hot = dirty.has(name);
+          return (
+            <g key={name}>
+              <rect
+                x={n.x}
+                y={n.y}
+                width={w}
+                height={h}
+                rx={n.source ? 2 : 8}
+                className={hot ? "fig-accent" : "fig-fill"}
+                style={name === changed ? { stroke: "var(--text)", strokeWidth: 3 } : undefined}
+              />
+              <text x={n.x + w / 2} y={n.y + 17} textAnchor="middle" className="fig-small" style={{ fill: hot ? "var(--bg)" : "var(--text)", fontWeight: hot ? 600 : 400 }}>
+                {name}
+              </text>
+            </g>
+          );
+        })}
+        <text x={10} y={16} className="fig-small">
+          sources have square corners; lines join inputs to outputs
+        </text>
+        <text x={250} y={232} className="fig-small">
+          {`rebuilt: ${rebuilt.length} of ${targets.length}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const VR_VERSIONS = ["1.2.0", "1.4.0", "1.5.2", "1.6.0", "1.7.1", "1.9.0", "1.10.0", "2.0.0", "2.1.0"];
+const VR_SPECS: Record<string, { label: string; lo: string; hi: string | null }> = {
+  ge16: { label: ">=1.6.0", lo: "1.6.0", hi: null },
+  tilde15: { label: "~1.5.0", lo: "1.5.0", hi: "1.6.0" },
+  caret2: { label: "^2.0.0", lo: "2.0.0", hi: "3.0.0" },
+  caret14: { label: "^1.4.0", lo: "1.4.0", hi: "2.0.0" },
+};
+
+function vrParse(v: string) {
+  return v.split(".").map((x) => Number(x));
+}
+function vrCmp(a: string, b: string) {
+  const x = vrParse(a);
+  const y = vrParse(b);
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return 0;
+}
+
+/** Two packages' version ranges for a shared library, and the version a resolver picks. */
+function VersionRanges(props: Props) {
+  const keys = Object.keys(VR_SPECS).filter((k) => k !== "caret14");
+  const [key, setKey] = useState(typeof props.other === "string" && keys.includes(props.other) ? props.other : "ge16");
+  const ok = (spec: { lo: string; hi: string | null }, v: string) => vrCmp(v, spec.lo) >= 0 && (spec.hi === null || vrCmp(v, spec.hi) < 0);
+  const a = VR_SPECS.caret14;
+  const b = VR_SPECS[key];
+  const both = VR_VERSIONS.filter((v) => ok(a, v) && ok(b, v));
+  const pick = both.length ? both[both.length - 1] : null;
+  const summary = pick
+    ? `orders needs pay-sdk ^1.4.0, from 1.4.0 up to but not including 2.0.0; receipts needs ${b.label}. ${both.length === 1 ? "Only" : "Both allow"} ${both.join(", ")}${both.length === 1 ? " satisfies both" : ""}. The resolver picks the newest, ${pick}, and the lock file records it, so every later install gets ${pick} too.`
+    : `orders needs pay-sdk ^1.4.0, below 2.0.0; receipts needs ${b.label}. No published version satisfies both, so installation fails until one of the two packages changes its requirement.`;
+  const x = (i: number) => 26 + i * 51;
+  return (
+    <Frame
+      title="Two version ranges for one library"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">receipts needs</span>
+          {keys.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={k === key} onClick={() => setKey(k)}>
+              {VR_SPECS[k].label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 184" role="img" aria-label={pick ? `The resolver picks pay-sdk ${pick}` : "No version satisfies both ranges"}>
+        <text x={8} y={14} className="fig-small">
+          published versions of pay-sdk, oldest to newest
+        </text>
+        {VR_VERSIONS.map((v, i) => (
+          <text key={v} x={x(i)} y={32} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)", fontWeight: v === pick ? 600 : 400 }}>
+            {v}
+          </text>
+        ))}
+        {[
+          { name: "orders allows (^1.4.0)", spec: a, y: 40 },
+          { name: `receipts allows (${b.label})`, spec: b, y: 80 },
+        ].map((row) => (
+          <g key={row.name}>
+            <text x={8} y={row.y + 10} className="fig-small">
+              {row.name}
+            </text>
+            {VR_VERSIONS.map((v, i) => (
+              <rect key={v} x={x(i) - 22} y={row.y + 16} width={44} height={16} rx={2} className={ok(row.spec, v) ? "fig-fill" : "fig-ghost"} />
+            ))}
+          </g>
+        ))}
+        <text x={8} y={130} className="fig-small">
+          {"allowed by both (the resolver's pick is highlighted)"}
+        </text>
+        {VR_VERSIONS.map((v, i) => (
+          <rect key={`b${v}`} x={x(i) - 22} y={136} width={44} height={16} rx={2} className={v === pick ? "fig-accent" : both.includes(v) ? "fig-fill" : "fig-ghost"} />
+        ))}
+        <text x={8} y={174} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {pick ? `allowed by both: ${both.length}; picked: ${pick}` : "allowed by both: none; nothing can be installed"}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** Bisecting 64 commits for the first bad one: each test halves the range that can contain it. */
+function BisectCommits(props: Props) {
+  const n = 64;
+  const [bad, setBad] = useState(clamp(Math.round(num(props.bad, 41)), 1, n - 1));
+  const [steps, setSteps] = useState(clamp(Math.round(num(props.steps, 0)), 0, 6));
+  const history: { mid: number; isBad: boolean; lo: number; hi: number }[] = [];
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    const isBad = mid >= bad;
+    if (isBad) hi = mid;
+    else lo = mid;
+    history.push({ mid, isBad, lo, hi });
+  }
+  const total = history.length;
+  const shown = Math.min(steps, total);
+  const now = shown === 0 ? { lo: 0, hi: n - 1 } : history[shown - 1];
+  const next = shown < total ? Math.floor((now.lo + now.hi) / 2) : null;
+  const last = shown === 0 ? null : history[shown - 1];
+  const remaining = now.hi - now.lo;
+  const summary =
+    shown === 0
+      ? `Commit 0 is known good and commit 63 known bad. The first bad commit could be any of commits 1 to 63. The first test is commit ${next}, halfway.`
+      : shown === total
+        ? `After ${total} tests, commit ${now.lo} is good and commit ${now.hi} is bad, so commit ${now.hi} introduced the bug. Testing every commit in turn could have taken up to 63 tests.`
+        : `Test ${shown}: commit ${last?.mid} is ${last?.isBad ? "bad, so the first bad commit is at or before it" : "good, so the first bad commit comes after it"}. ${remaining} ${remaining === 1 ? "commit remains" : "commits remain"} as candidates, ${now.lo + 1} to ${now.hi}; next, test commit ${next}.`;
+  const cell = 440 / n;
+  return (
+    <Frame
+      title="Bisecting history for the commit that broke it"
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="tests done" value={shown} min={0} max={total} onChange={setSteps} />
+          <Stepper label="first bad commit (hidden in real life)" value={bad} min={1} max={n - 1} onChange={(v) => {
+              setBad(v);
+              setSteps(0);
+            }} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 150" role="img" aria-label={`${shown} of ${total} tests done; candidates ${now.lo + 1} to ${now.hi}`}>
+        <text x={10} y={16} className="fig-small">
+          commits 0 to 63: shaded good, outlined candidate, filled bad
+        </text>
+        {Array.from({ length: n }, (_, i) => {
+          const knownBad = i >= now.hi;
+          const knownGood = i <= now.lo;
+          const candidate = !knownBad && !knownGood;
+          return (
+            <rect
+              key={i}
+              x={10 + i * cell}
+              y={28}
+              width={cell - 1.5}
+              height={36}
+              className={knownBad ? "fig-accent" : candidate ? "fig-ghost" : "fig-fill"}
+              style={i === next ? { stroke: "var(--text)", strokeWidth: 2.5 } : undefined}
+            />
+          );
+        })}
+        {[0, 16, 32, 48, 63].map((i) => (
+          <text key={i} x={10 + i * cell + cell / 2} y={80} textAnchor="middle" className="fig-small">
+            {i}
+          </text>
+        ))}
+        {next !== null ? (
+          <text x={10 + next * cell + cell / 2} y={98} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+            test next
+          </text>
+        ) : null}
+        <text x={10} y={136} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`tests: ${shown} of ${total}; candidates left: ${remaining === 1 ? "1, found" : remaining}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const AS_PARTS: { key: string; label: string; secs: number }[] = [
+  { key: "load", label: "load", secs: 9 },
+  { key: "parse", label: "parse", secs: 33 },
+  { key: "compute", label: "compute", secs: 12 },
+  { key: "save", label: "save", secs: 6 },
+];
+
+/** Amdahl's law: speeding up one part of a 60-second program, and how much the whole gains. */
+function AmdahlSpeedup(props: Props) {
+  const keys = AS_PARTS.map((p) => p.key);
+  const [part, setPart] = useState(typeof props.part === "string" && keys.includes(props.part) ? props.part : "compute");
+  const [factor, setFactor] = useState(clamp(Math.round(num(props.factor, 10)), 1, 50));
+  const total = AS_PARTS.reduce((s, p) => s + p.secs, 0);
+  const after = AS_PARTS.map((p) => ({ ...p, secs: p.key === part ? p.secs / factor : p.secs }));
+  const newTotal = after.reduce((s, p) => s + p.secs, 0);
+  const chosen = AS_PARTS.find((p) => p.key === part) ?? AS_PARTS[0];
+  const rest = total - chosen.secs;
+  const fmt = (x: number) => x.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  const speedup = total / newTotal;
+  const ceiling = total / rest;
+  const summary = `${chosen.label} takes ${chosen.secs} of the program's ${total} seconds, ${fmt((100 * chosen.secs) / total)}%. Making it ${factor} times faster brings the whole program from ${total} to ${fmt(newTotal)} seconds, ${fmt(speedup)} times faster. Even if ${chosen.label} took no time at all, the other ${rest} seconds would remain, so the whole could never be more than ${fmt(ceiling)} times faster.`;
+  const scale = 440 / total;
+  const bar = (rows: { key: string; label: string; secs: number }[], y: number) => {
+    let x = 10;
+    return rows.map((p) => {
+      const w = p.secs * scale;
+      const r = (
+        <g key={p.key}>
+          <rect x={x} y={y} width={Math.max(w - 2, 0.5)} height={30} className={p.key === part ? "fig-accent" : "fig-fill"} />
+          {w >= 42 ? (
+            <text x={x + w / 2 - 1} y={y + 19} textAnchor="middle" className="fig-small" style={{ fill: "var(--bg)" }}>
+              {`${p.label} ${fmt(p.secs)}`}
+            </text>
+          ) : null}
+        </g>
+      );
+      x += w;
+      return r;
+    });
+  };
+  return (
+    <Frame
+      title="Speeding up one part of a program"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">speed up</span>
+          {AS_PARTS.map((p) => (
+            <button key={p.key} type="button" className="btn btn-secondary btn-small" aria-pressed={p.key === part} onClick={() => setPart(p.key)}>
+              {p.label}
+            </button>
+          ))}
+          <Stepper label="times faster" value={factor} min={1} max={50} onChange={setFactor} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 170" role="img" aria-label={`Whole program ${fmt(speedup)} times faster, at most ${fmt(ceiling)}`}>
+        <text x={10} y={16} className="fig-small">
+          {`before: ${total} seconds`}
+        </text>
+        {bar(AS_PARTS, 24)}
+        <text x={10} y={76} className="fig-small">
+          {`after: ${fmt(newTotal)} seconds`}
+        </text>
+        {bar(after, 84)}
+        <line x1={10 + newTotal * scale} y1={80} x2={10 + newTotal * scale} y2={120} className="fig-guide" />
+        <text x={10} y={140} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`whole program: ${fmt(speedup)} times faster`}
+        </text>
+        <text x={10} y={158} className="fig-small">
+          {`limit if ${chosen.label} took no time: ${fmt(ceiling)} times`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+/** A CI pipeline in three stages on a pool of runners: what more runners and a dependency cache each buy. */
+function CiPipeline(props: Props) {
+  const [runners, setRunners] = useState(clamp(Math.round(num(props.runners, 1)), 1, 4));
+  const [cache, setCache] = useState(props.cache === true);
+  const install = cache ? 1 : 6;
+  const middle = [
+    { name: "lint", mins: 2 },
+    { name: "types", mins: 3 },
+    { name: "unit", mins: 9 },
+    { name: "build", mins: 5 },
+  ];
+  const e2e = 7;
+  const bars: { name: string; runner: number; start: number; mins: number }[] = [{ name: "install", runner: 0, start: 0, mins: install }];
+  const freeAt = Array.from({ length: runners }, () => install);
+  for (const job of middle) {
+    let first = 0;
+    for (let i = 1; i < runners; i++) if (freeAt[i] < freeAt[first]) first = i;
+    bars.push({ name: job.name, runner: first, start: freeAt[first], mins: job.mins });
+    freeAt[first] += job.mins;
+  }
+  const middleEnd = Math.max(...freeAt);
+  bars.push({ name: "e2e", runner: 0, start: middleEnd, mins: e2e });
+  const total = middleEnd + e2e;
+  const middleLen = middleEnd - install;
+  const bound = runners >= 3 ? " The 9-minute unit tests now set the length of the middle stage, so another runner would not help; splitting the unit tests into smaller jobs would." : "";
+  const summary = `With ${plural(runners, "runner")}${cache ? " and a dependency cache" : ""}, installing takes ${plural(install, "minute")}, the four checks are done ${plural(middleLen, "minute")} after that, and the end-to-end tests take ${e2e} more: ${plural(total, "minute")} from push to result.${bound}`;
+  const scale = 440 / 32;
+  const rowH = 26;
+  return (
+    <Frame
+      title="A pipeline on a pool of runners"
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="runners" value={runners} min={1} max={4} onChange={setRunners} />
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={cache} onClick={() => setCache(!cache)}>
+            cache dependencies
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 184" role="img" aria-label={`Pipeline takes ${plural(total, "minute")} on ${plural(runners, "runner")}`}>
+        <text x={10} y={14} className="fig-small">
+          one row per runner; time runs left to right
+        </text>
+        {Array.from({ length: 4 }, (_, r) => (
+          <rect key={r} x={10} y={24 + r * rowH} width={440} height={rowH - 4} className={r < runners ? "fig-ghost" : "fig-grid"} style={r < runners ? undefined : { fill: "none" }} />
+        ))}
+        {bars.map((b) => {
+          const w = b.mins * scale;
+          return (
+            <g key={b.name}>
+              <rect x={10 + b.start * scale} y={24 + b.runner * rowH} width={Math.max(w - 1.5, 1)} height={rowH - 4} className={b.name === "unit" ? "fig-accent" : "fig-fill"} />
+              {w >= 34 ? (
+                <text x={10 + b.start * scale + w / 2} y={24 + b.runner * rowH + 15} textAnchor="middle" className="fig-small" style={{ fill: "var(--bg)" }}>
+                  {b.name}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+        {[install, middleEnd].map((t, i) => (
+          <line key={i} x1={10 + t * scale} y1={20} x2={10 + t * scale} y2={24 + 4 * rowH} className="fig-guide" />
+        ))}
+        {[0, 8, 16, 24, 32].map((t) => (
+          <text key={t} x={10 + t * scale} y={142} textAnchor="middle" className="fig-small">
+            {t}
+          </text>
+        ))}
+        <text x={10} y={158} className="fig-small">
+          jobs in order: install, lint, types, unit (highlighted), build, e2e
+        </text>
+        <text x={10} y={176} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`push to result: ${plural(total, "minute")}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -9341,6 +10006,14 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "refactor-steps": RefactorSteps,
   "page-cursor": PageCursor,
   "decision-matrix": DecisionMatrix,
+  "content-store": ContentStore,
+  "three-way-merge": ThreeWayMerge,
+  "review-size": ReviewSize,
+  "build-graph": BuildGraph,
+  "version-ranges": VersionRanges,
+  "bisect-commits": BisectCommits,
+  "amdahl-speedup": AmdahlSpeedup,
+  "ci-pipeline": CiPipeline,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

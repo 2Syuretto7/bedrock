@@ -1,0 +1,621 @@
+concept: s5.profiling-programs
+minutes: 80
+claim: You can find where a program's time actually goes before trying to make it faster. You can time sections of code reliably, read a profile's self and total times, explain how a sampling profiler estimates time and how accurate it is, use Amdahl's law to predict what speeding up one part can do for the whole, and check every optimisation by measuring again.
+recalls: [s5.debugging-methodically]
+uses: [s3.measuring-and-predicting-running-time, f4.the-law-of-large-numbers-and-the-central-limit-theorem, s2.hash-tables, s1.generators-and-context-managers]
+leads: [s5.continuous-integration, h5.profilers-sampling-and-instrumentation, h5.measuring-performance-honestly, s8.vectorisation, h4.locality]
+starter: |
+  # Scratch space. Timing two ways of checking membership.
+  import time
+
+  items = list(range(5000))
+  lookup = set(items)
+  start = time.perf_counter()
+  hits = sum(1 for x in range(0, 10000, 7) if x in items)
+  middle = time.perf_counter()
+  hits_again = sum(1 for x in range(0, 10000, 7) if x in lookup)
+  end = time.perf_counter()
+  print(hits, hits_again, round(middle - start, 4), round(end - middle, 4))
+parts:
+  recall:
+    - text: |
+        [[s5.debugging-methodically]] treated a wrong answer as a question to be narrowed down step by step, with every step measured against evidence rather than hunches. A program that gives the right answer too slowly deserves the same treatment. The evidence here is a measurement of where the time goes, and hunches about it are wrong surprisingly often. Three quick pulls first.
+  puzzle:
+    - text: |
+        A shop's nightly job prepares the day's GST invoices. It takes 60 minutes: 45 minutes running database queries, 12 minutes rendering the PDFs, and 3 minutes on everything else.
+
+        Rendering looked like the slow part, so a colleague spent a week rewriting it, and it is now 4 times faster.
+
+        **How many minutes does the nightly job take now?**
+  intuition:
+    - text: |
+        Think of the morning rush to get out of the house: 5 minutes to dress, 20 minutes waiting for the geyser to heat the water, 4 minutes for tea, 6 minutes to find the keys. Buying a faster kettle that boils water in half the time saves two minutes at most. Getting the geyser on a timer saves up to twenty. The kettle is the part you notice, because you stand there watching it; the geyser simply runs in the background. Programs are the same: the part that feels slow is not always the part that is slow, and speeding up something small helps only a little, however clever the speed-up.
+
+        The figure shows a 60-second program in four parts. Choose a part to speed up and by how much, and watch what happens to the whole.
+    - figure: amdahl-speedup
+      props: { part: compute, factor: 10 }
+    - text: |
+        Making compute 10 times faster saves under 11 seconds, because compute was only 12 of the 60. Making it infinitely fast would save 12 and no more: the other 48 seconds remain, so the whole can never become more than 1.25 times faster that way. Now choose parse, the largest part, and even a modest 2 times speeds the whole program up more than an infinite speed-up of compute could. Where the time goes decides what is worth doing, and you cannot know where it goes without measuring.
+  derivation:
+    - text: |
+        **Measure first.** Before changing anything for speed, time the whole program on a realistic input, and then find out where inside it the time goes. [[s3.measuring-and-predicting-running-time]] introduced the tools: `time.perf_counter()` reads a clock built for measuring short intervals, and the difference between two readings is the elapsed time. Measurements are noisy, because other programs share the machine, caches are warm or cold, and the operating system interrupts at will. So repeat each measurement several times and report the minimum or the median, not a single run. Noise almost always adds time, so the fastest run is the one least disturbed.
+
+        **Timing sections.** The simplest way to see where time goes is to read the clock around each section and add up the differences, which a context manager from [[s1.generators-and-context-managers]] makes tidy: entering a `with` block reads the clock, leaving it reads the clock again and adds the difference to that section's total. Code that takes the clock as a parameter, instead of calling it directly, can be tested with a fake clock that advances only when told to, so the tests give the same answer every time.
+
+        **Profilers.** Timing every section by hand does not scale to a program with hundreds of functions, so tools do it for you. An **instrumenting profiler** records every call and return of every function, so it counts calls exactly; the cost is that the recording itself slows each call down, and very small, frequently called functions look slower than they are. A **sampling profiler** instead interrupts the program at regular intervals, a hundred or a thousand times a second, and writes down the call stack it finds. A function that is running in 30% of the samples is estimated to take 30% of the time. Sampling adds almost no overhead, so it can even be used on a live service.
+    - question:
+        id: derivation-samples
+        type: numeric
+        system: s2
+        prompt: |
+          A sampling profiler takes 100 samples a second while a program runs for 30 seconds. A function is the one running, at the top of the stack, in 450 of the samples. Roughly how many seconds of the run did it take?
+        answer: "4.5"
+        tolerance: "0.01"
+        explanation: |
+          There are $100 \times 30 = 3000$ samples, and 450 of them is 15%. 15% of 30 seconds is 4.5 seconds.
+    - text: |
+        **How accurate is sampling?** Each sample is like a random draw: with probability $p$ it lands in a given function, where $p$ is that function's true share of the time. Over $n$ samples the count is close to $np$, and by [[f4.the-law-of-large-numbers-and-the-central-limit-theorem]] the estimated share $\hat p$ has a standard error of about $\sqrt{p(1-p)/n}$. With 3,000 samples and $p = 0.15$, that is about 0.0065, so the 15% is reliable to within a percentage point or so. Functions that appear in only a handful of samples are measured poorly, but those are also the functions that do not matter.
+
+        **Self time and total time.** A profile reports two numbers per function. **Self time** is the time spent running the function's own code: the samples where it was at the top of the stack. **Total time**, also called cumulative or inclusive time, is the time from when it was called to when it returned, including everything it called: the samples where it appeared anywhere on the stack. The `main` function has a total time of 100% and usually a self time near zero, since it spends its life calling others. Look for functions with a large self time to find code that is itself slow, and follow large total times downwards to find which path through the program leads there. A **flame graph** draws exactly this: each stack is a column, each function a bar whose width is its total time, with callees stacked above their callers.
+    - question:
+        id: derivation-self-total
+        type: choice
+        system: s2
+        prompt: |
+          In a profile, `build_report` has a total time of 62% and a self time of 1%. What does that tell you?
+        options:
+          - "Its own code is cheap; the time goes in the functions it calls, so look at them"
+          - "It is the slowest function and should be rewritten first"
+          - "The profiler failed to sample it correctly"
+          - "It is called very many times"
+        answer: 0
+        explanation: |
+          Total time includes callees; self time does not. A large total with a tiny self means `build_report` is mostly waiting on what it calls, so the next step is to see which of its callees carry the 61%.
+    - text: |
+        **Amdahl's law.** If a fraction $p$ of the run time is in the part you speed up, and you make that part $s$ times faster, the new time is $(1 - p) + p/s$ of the old, so the whole program becomes
+        $$\frac{1}{(1 - p) + p/s}$$
+        times faster. As $s$ grows without limit, the speed-up approaches $1/(1 - p)$: the part you did not touch sets a ceiling. A part that takes 20% of the time can never make the whole more than 1.25 times faster, however brilliantly it is optimised, while a part taking 80% can, in principle, make it 5 times faster. The same law reappears when work is spread over many processors: whatever cannot be shared out limits the speed-up.
+    - question:
+        id: derivation-amdahl
+        type: numeric
+        system: s2
+        prompt: |
+          A profile shows one function taking 80% of a program's time. You make that function 4 times faster and change nothing else. How many times faster is the whole program?
+        answer: "2.5"
+        tolerance: "0.01"
+        explanation: |
+          The new time is $0.2 + 0.8/4 = 0.4$ of the old, so the program is $1/0.4 = 2.5$ times faster.
+    - text: |
+        **Fix the right thing, in the right way.** Once a profile shows where the time goes, ask why. Very often the answer is an algorithm or a data structure rather than slow code: a list searched again for every item, where a set from [[s2.hash-tables]] answers each question in constant time; a query run once per row instead of once for all rows; a file read repeatedly instead of once. Changes like these remove whole factors of $n$ and dwarf any amount of tuning of individual lines. Only when the algorithm is right is it worth reducing constant factors, and then the reasons are usually about memory: data laid out so that the processor's caches can serve it, the subject of [[h4.locality]], or work done on whole arrays at once, as [[s8.vectorisation]] will show.
+
+        **Measure again.** After each change, rerun the same measurement on the same input and compare. Sometimes an "obvious" improvement makes no difference, because the time was going elsewhere; sometimes it is slower. Keep a change only if the numbers say so, and keep the tests passing throughout: a fast wrong answer is not an improvement.
+    - question:
+        id: order-profile
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of speeding up a slow program in order.
+        steps:
+          - "Pick a realistic input and time the whole program on it several times."
+          - "Run a profiler to see which functions have the largest self and total times."
+          - "Use Amdahl's law to judge which part is worth working on."
+          - "Change that part, keeping the tests passing."
+          - "Time the program again on the same input and compare."
+        explanation: |
+          A baseline must exist before anything can be compared with it; the profile says where the time goes; Amdahl's law says what a speed-up there could achieve; and only a second measurement shows whether the change worked.
+  formal:
+    - text: |
+        **Elapsed time.** The difference of two readings of a monotonic, high-resolution clock such as `time.perf_counter()`; repeat and report the minimum or median.
+
+        **Instrumenting profiler.** Records every call and return; exact call counts, with overhead on every call.
+
+        **Sampling profiler.** Records the call stack at regular intervals; a function's share of samples estimates its share of time, with standard error about $\sqrt{p(1-p)/n}$ for $n$ samples.
+
+        **Self time and total time.** Self: samples where the function is running its own code, at the top of the stack. Total: samples where it is anywhere on the stack, counted once per sample even if it appears more than once.
+
+        **Amdahl's law.** Speeding up a fraction $p$ of the run time by a factor $s$ makes the whole $1/((1 - p) + p/s)$ times faster, never more than $1/(1 - p)$.
+  drill:
+    - text: Seconds each. Ask how much of the time is in the part being changed.
+    - question:
+        id: drill-ceiling
+        type: numeric
+        system: s1
+        prompt: |
+          A part of a program takes 30% of its run time. If that part took no time at all, how many times faster would the whole be? Give two decimal places.
+        answer: "1.43"
+        tolerance: "0.01"
+        explanation: The other 70% remains, so the best possible is $1/0.7 \approx 1.43$ times faster.
+    - question:
+        id: drill-overhead
+        type: choice
+        system: s1
+        prompt: |
+          Which kind of profiler slows down every single function call while it runs?
+        options:
+          - "An instrumenting profiler"
+          - "A sampling profiler"
+          - "Both equally"
+          - "Neither"
+        answer: 0
+        explanation: An instrumenting profiler records every call and return, so each call pays a little extra; a sampling profiler only looks occasionally.
+    - question:
+        id: drill-runs
+        type: choice
+        system: s1
+        prompt: |
+          Five runs of a benchmark take 2.1, 2.0, 2.4, 2.0 and 3.9 seconds. Which is the better single summary of the code's speed?
+        options:
+          - "2.0, the minimum"
+          - "2.48, the mean"
+          - "3.9, the maximum"
+          - "2.4, the middle run in time order"
+        answer: 0
+        explanation: Interference only ever adds time, so the fastest run is the least disturbed. The mean is dragged up by the one disturbed run of 3.9.
+    - question:
+        id: predict-parts
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          parts = {"load": 9, "parse": 33, "save": 6}
+          parts["parse"] = parts["parse"] / 3
+          print(sum(parts.values()))
+        output: "26.0"
+        explanation: Parsing drops from 33 to 11.0, so the total is 9 + 11.0 + 6, a float because of the division.
+    - question:
+        id: predict-share
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          samples = ["parse", "parse", "load", "parse", "save"]
+          print(sum(1 for s in samples if s == "parse") / len(samples))
+        output: "0.6"
+        explanation: Three of the five samples found `parse` running, so it is estimated to take 60% of the time.
+  work:
+    - text: Slower now. Each problem is part of a profiler.
+    - question:
+        id: fix-sections
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `profile_sections` times each section of a program with the clock it is given, adding up the times of sections that share a name. The program should print `{'load': 3.0, 'parse': 5.0, 'save': 0.5}`. It prints `{'load': 1.0, 'parse': 5.0, 'save': 0.5}`. Find the fault and fix it.
+        starter: |
+          def profile_sections(sections, clock):
+              # sections is a list of (name, function) pairs, run in order. clock()
+              # returns the current time in seconds. Return a dict from each name to
+              # the total seconds its functions took; a name may appear more than once.
+              totals = {}
+              for name, fn in sections:
+                  start = clock()
+                  fn()
+                  totals[name] = clock() - start
+              return totals
+
+
+          class FakeClock:
+              def __init__(self):
+                  self.now = 0.0
+
+              def __call__(self):
+                  return self.now
+
+              def advance(self, seconds):
+                  self.now += seconds
+
+
+          clock = FakeClock()
+          sections = [("load", lambda: clock.advance(2)), ("parse", lambda: clock.advance(5)),
+                      ("load", lambda: clock.advance(1)), ("save", lambda: clock.advance(0.5))]
+          print(profile_sections(sections, clock))
+        solution: |
+          def profile_sections(sections, clock):
+              # sections is a list of (name, function) pairs, run in order. clock()
+              # returns the current time in seconds. Return a dict from each name to
+              # the total seconds its functions took; a name may appear more than once.
+              totals = {}
+              for name, fn in sections:
+                  start = clock()
+                  fn()
+                  totals[name] = totals.get(name, 0) + clock() - start
+              return totals
+
+
+          class FakeClock:
+              def __init__(self):
+                  self.now = 0.0
+
+              def __call__(self):
+                  return self.now
+
+              def advance(self, seconds):
+                  self.now += seconds
+
+
+          clock = FakeClock()
+          sections = [("load", lambda: clock.advance(2)), ("parse", lambda: clock.advance(5)),
+                      ("load", lambda: clock.advance(1)), ("save", lambda: clock.advance(0.5))]
+          print(profile_sections(sections, clock))
+        tests: |
+          class _Clock:
+              def __init__(self, start):
+                  self.now = start
+
+              def __call__(self):
+                  return self.now
+
+
+          def _run(_steps, _start):
+              _c = _Clock(_start)
+
+              def _make(_d):
+                  def _f():
+                      _c.now += _d
+                  return _f
+
+              return profile_sections([(_n, _make(_d)) for _n, _d in _steps], _c)
+
+
+          def _same(_got, _want, _name):
+              assert isinstance(_got, dict), "profile_sections should return a dict, not " + type(_got).__name__
+              assert sorted(_got) == sorted(_want), "For " + _name + ", the names should be " + repr(sorted(_want)) + ", not " + repr(sorted(_got))
+              for _k in _want:
+                  assert abs(_got[_k] - _want[_k]) < 1e-9, "For " + _name + ", " + repr(_k) + " should total " + str(_want[_k]) + " seconds, not " + str(_got[_k])
+
+
+          _same(_run([("a", 3)], 100.0), {"a": 3}, "one section on a clock that starts at 100")
+          _same(_run([("a", 1), ("b", 2), ("a", 4), ("a", 0.5)], 7.0), {"a": 5.5, "b": 2}, "a name that repeats")
+          _same(_run([("x", 0), ("y", 2), ("x", 0)], 0.0), {"x": 0, "y": 2}, "sections that take no time")
+          _same(_run([], 5.0), {}, "no sections")
+          assert output.strip() == "{'load': 3.0, 'parse': 5.0, 'save': 0.5}", "The program should print {'load': 3.0, 'parse': 5.0, 'save': 0.5}"
+        wrong:
+          - |
+            def profile_sections(sections, clock):
+                # sections is a list of (name, function) pairs, run in order. clock()
+                # returns the current time in seconds. Return a dict from each name to
+                # the total seconds its functions took; a name may appear more than once.
+                totals = {}
+                for name, fn in sections:
+                    fn()
+                    start = clock()
+                    totals[name] = totals.get(name, 0) + clock() - start
+                return totals
+
+
+            class FakeClock:
+                def __init__(self):
+                    self.now = 0.0
+
+                def __call__(self):
+                    return self.now
+
+                def advance(self, seconds):
+                    self.now += seconds
+
+
+            clock = FakeClock()
+            sections = [("load", lambda: clock.advance(2)), ("parse", lambda: clock.advance(5)),
+                        ("load", lambda: clock.advance(1)), ("save", lambda: clock.advance(0.5))]
+            print(profile_sections(sections, clock))
+          - |
+            def profile_sections(sections, clock):
+                # sections is a list of (name, function) pairs, run in order. clock()
+                # returns the current time in seconds. Return a dict from each name to
+                # the total seconds its functions took; a name may appear more than once.
+                totals = {}
+                for name, fn in sections:
+                    fn()
+                    totals[name] = totals.get(name, 0) + clock()
+                return totals
+
+
+            class FakeClock:
+                def __init__(self):
+                    self.now = 0.0
+
+                def __call__(self):
+                    return self.now
+
+                def advance(self, seconds):
+                    self.now += seconds
+
+
+            clock = FakeClock()
+            sections = [("load", lambda: clock.advance(2)), ("parse", lambda: clock.advance(5)),
+                        ("load", lambda: clock.advance(1)), ("save", lambda: clock.advance(0.5))]
+            print(profile_sections(sections, clock))
+          - |
+            def profile_sections(sections, clock):
+                # sections is a list of (name, function) pairs, run in order. clock()
+                # returns the current time in seconds. Return a dict from each name to
+                # the total seconds its functions took; a name may appear more than once.
+                totals = {}
+                start = clock()
+                for name, fn in sections:
+                    fn()
+                    totals[name] = totals.get(name, 0) + clock() - start
+                return totals
+
+
+            class FakeClock:
+                def __init__(self):
+                    self.now = 0.0
+
+                def __call__(self):
+                    return self.now
+
+                def advance(self, seconds):
+                    self.now += seconds
+
+
+            clock = FakeClock()
+            sections = [("load", lambda: clock.advance(2)), ("parse", lambda: clock.advance(5)),
+                        ("load", lambda: clock.advance(1)), ("save", lambda: clock.advance(0.5))]
+            print(profile_sections(sections, clock))
+        explanation: |
+          The second `load` section overwrote the first instead of adding to it, so `totals[name]` must start from what is already there. Reading the start time after the section runs measures nothing; adding the clock reading itself instead of a difference adds the time of day; and starting the clock once before the loop charges each section for everything that ran before it.
+    - question:
+        id: write-summarise
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `summarise(samples)`, which turns a sampling profiler's stacks into rows of self and total percentages, as the comment describes. The program should print six rows, starting with `('tokenise', 50, 50)` and ending with `('main', 0, 100)`.
+        starter: |
+          def summarise(samples):
+              # Each sample is the call stack at one moment, outermost function first,
+              # so its last name is the function that was running. Return one
+              # (name, self_pct, total_pct) row per function: self_pct is the share of
+              # samples in which it was running, total_pct the share in which it was
+              # anywhere on the stack, each a whole-number percentage from round().
+              # Sort by self_pct, largest first, breaking ties by name.
+              return []
+
+
+          samples = [("main", "load", "read"), ("main", "parse", "tokenise"), ("main", "parse", "tokenise"),
+                     ("main", "parse"), ("main", "parse", "tokenise"), ("main", "save"),
+                     ("main", "parse", "tokenise"), ("main", "load", "read"), ("main", "parse", "tokenise"),
+                     ("main", "parse")]
+          for row in summarise(samples):
+              print(row)
+        solution: |
+          def summarise(samples):
+              # Each sample is the call stack at one moment, outermost function first,
+              # so its last name is the function that was running. Return one
+              # (name, self_pct, total_pct) row per function: self_pct is the share of
+              # samples in which it was running, total_pct the share in which it was
+              # anywhere on the stack, each a whole-number percentage from round().
+              # Sort by self_pct, largest first, breaking ties by name.
+              own = {}
+              anywhere = {}
+              for stack in samples:
+                  own[stack[-1]] = own.get(stack[-1], 0) + 1
+                  for name in set(stack):
+                      anywhere[name] = anywhere.get(name, 0) + 1
+              n = len(samples)
+              rows = [(name, round(100 * own.get(name, 0) / n), round(100 * anywhere[name] / n)) for name in anywhere]
+              return sorted(rows, key=lambda row: (-row[1], row[0]))
+
+
+          samples = [("main", "load", "read"), ("main", "parse", "tokenise"), ("main", "parse", "tokenise"),
+                     ("main", "parse"), ("main", "parse", "tokenise"), ("main", "save"),
+                     ("main", "parse", "tokenise"), ("main", "load", "read"), ("main", "parse", "tokenise"),
+                     ("main", "parse")]
+          for row in summarise(samples):
+              print(row)
+        tests: |
+          def _rows(_got, _want, _name):
+              assert isinstance(_got, list), "summarise should return a list, not " + type(_got).__name__
+              assert [tuple(_r) for _r in _got] == _want, "For " + _name + ", summarise should return " + repr(_want) + ", not " + repr(_got)
+
+
+          _rows(summarise([("a",), ("a",), ("a", "b")]), [("a", 67, 100), ("b", 33, 33)], "two functions")
+          _rows(summarise([("main", "walk", "walk", "walk"), ("main", "walk"), ("main",), ("main", "walk", "walk")]),
+                [("walk", 75, 75), ("main", 25, 100)], "a recursive function, counted once per sample")
+          _rows(summarise([("m", "z"), ("m", "y"), ("m", "x", "y")]), [("y", 67, 67), ("z", 33, 33), ("m", 0, 100), ("x", 0, 33)], "ties broken by name")
+          _rows(summarise([("m", "f")] * 3 + [("m", "g", "f")] * 5 + [("m", "g")] * 2),
+                [("f", 80, 80), ("g", 20, 70), ("m", 0, 100)], "a function called from two places")
+          assert output.strip().splitlines()[0] == "('tokenise', 50, 50)", "The first row should be ('tokenise', 50, 50)"
+        wrong:
+          - |
+            def summarise(samples):
+                # Each sample is the call stack at one moment, outermost function first,
+                # so its last name is the function that was running. Return one
+                # (name, self_pct, total_pct) row per function: self_pct is the share of
+                # samples in which it was running, total_pct the share in which it was
+                # anywhere on the stack, each a whole-number percentage from round().
+                # Sort by self_pct, largest first, breaking ties by name.
+                own = {}
+                anywhere = {}
+                for stack in samples:
+                    own[stack[-1]] = own.get(stack[-1], 0) + 1
+                    for name in stack:
+                        anywhere[name] = anywhere.get(name, 0) + 1
+                n = len(samples)
+                rows = [(name, round(100 * own.get(name, 0) / n), round(100 * anywhere[name] / n)) for name in anywhere]
+                return sorted(rows, key=lambda row: (-row[1], row[0]))
+
+
+            samples = [("main", "load", "read"), ("main", "parse", "tokenise"), ("main", "parse", "tokenise"),
+                       ("main", "parse"), ("main", "parse", "tokenise"), ("main", "save"),
+                       ("main", "parse", "tokenise"), ("main", "load", "read"), ("main", "parse", "tokenise"),
+                       ("main", "parse")]
+            for row in summarise(samples):
+                print(row)
+          - |
+            def summarise(samples):
+                # Each sample is the call stack at one moment, outermost function first,
+                # so its last name is the function that was running. Return one
+                # (name, self_pct, total_pct) row per function: self_pct is the share of
+                # samples in which it was running, total_pct the share in which it was
+                # anywhere on the stack, each a whole-number percentage from round().
+                # Sort by self_pct, largest first, breaking ties by name.
+                anywhere = {}
+                for stack in samples:
+                    for name in set(stack):
+                        anywhere[name] = anywhere.get(name, 0) + 1
+                n = len(samples)
+                rows = [(name, round(100 * anywhere[name] / n), round(100 * anywhere[name] / n)) for name in anywhere]
+                return sorted(rows, key=lambda row: (-row[1], row[0]))
+
+
+            samples = [("main", "load", "read"), ("main", "parse", "tokenise"), ("main", "parse", "tokenise"),
+                       ("main", "parse"), ("main", "parse", "tokenise"), ("main", "save"),
+                       ("main", "parse", "tokenise"), ("main", "load", "read"), ("main", "parse", "tokenise"),
+                       ("main", "parse")]
+            for row in summarise(samples):
+                print(row)
+          - |
+            def summarise(samples):
+                # Each sample is the call stack at one moment, outermost function first,
+                # so its last name is the function that was running. Return one
+                # (name, self_pct, total_pct) row per function: self_pct is the share of
+                # samples in which it was running, total_pct the share in which it was
+                # anywhere on the stack, each a whole-number percentage from round().
+                # Sort by self_pct, largest first, breaking ties by name.
+                own = {}
+                anywhere = {}
+                for stack in samples:
+                    own[stack[-1]] = own.get(stack[-1], 0) + 1
+                    for name in set(stack):
+                        anywhere[name] = anywhere.get(name, 0) + 1
+                n = len(samples)
+                rows = [(name, round(100 * own.get(name, 0) / n), round(100 * anywhere[name] / n)) for name in anywhere]
+                return sorted(rows, key=lambda row: (-row[2], row[0]))
+
+
+            samples = [("main", "load", "read"), ("main", "parse", "tokenise"), ("main", "parse", "tokenise"),
+                       ("main", "parse"), ("main", "parse", "tokenise"), ("main", "save"),
+                       ("main", "parse", "tokenise"), ("main", "load", "read"), ("main", "parse", "tokenise"),
+                       ("main", "parse")]
+            for row in summarise(samples):
+                print(row)
+        explanation: |
+          Self time counts only the last name on each stack; total time counts every distinct name on the stack, once per sample. Counting every occurrence makes a recursive function's total exceed 100%; counting every name as self time makes `main` look like the slowest function; and sorting by total time puts `main` first, which says nothing about where code is slow.
+    - question:
+        id: write-speedup
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `speedup_needed(parts, name, target)`, which says how many times faster one part of a program must become for the whole to finish in `target` seconds, or `None` if that is impossible. The program should print `[2.54, None, 6.0, None]`.
+        starter: |
+          def speedup_needed(parts, name, target):
+              # parts maps each part of a program to the seconds it takes. Return how
+              # many times faster parts[name] must become for the whole program to
+              # take target seconds, rounded to 2 places, or None if no speed-up of
+              # that part alone can reach the target.
+              return 1.0
+
+
+          parts = {"load": 9, "parse": 33, "compute": 12, "save": 6}
+          goals = [("parse", 40), ("parse", 25), ("compute", 50), ("save", 50)]
+          print([speedup_needed(parts, name, target) for name, target in goals])
+        solution: |
+          def speedup_needed(parts, name, target):
+              # parts maps each part of a program to the seconds it takes. Return how
+              # many times faster parts[name] must become for the whole program to
+              # take target seconds, rounded to 2 places, or None if no speed-up of
+              # that part alone can reach the target.
+              rest = sum(parts.values()) - parts[name]
+              if target <= rest:
+                  return None
+              return round(parts[name] / (target - rest), 2)
+
+
+          parts = {"load": 9, "parse": 33, "compute": 12, "save": 6}
+          goals = [("parse", 40), ("parse", 25), ("compute", 50), ("save", 50)]
+          print([speedup_needed(parts, name, target) for name, target in goals])
+        tests: |
+          _cases = [
+              ({"a": 10, "b": 10}, "a", 15, 2.0),
+              ({"a": 10, "b": 10}, "a", 10, None),
+              ({"a": 10, "b": 10}, "a", 9, None),
+              ({"a": 10, "b": 10}, "a", 20, 1.0),
+              ({"x": 1, "y": 99}, "y", 2, 99.0),
+              ({"x": 1, "y": 99}, "x", 99.5, 2.0),
+              ({"p": 30, "q": 20, "r": 10}, "p", 40, 3.0),
+              ({"p": 30, "q": 20, "r": 10}, "q", 50, 2.0),
+          ]
+          for _parts, _name, _target, _want in _cases:
+              _got = speedup_needed(dict(_parts), _name, _target)
+              if _want is None:
+                  assert _got is None, "With parts " + repr(_parts) + ", no speed-up of " + repr(_name) + " reaches " + str(_target) + " seconds, so the answer should be None, not " + repr(_got)
+              else:
+                  assert _got is not None and abs(_got - _want) < 0.006, "With parts " + repr(_parts) + ", " + repr(_name) + " must become " + str(_want) + " times faster to reach " + str(_target) + " seconds, not " + repr(_got)
+          assert output.strip() == "[2.54, None, 6.0, None]", "The program should print [2.54, None, 6.0, None]"
+        wrong:
+          - |
+            def speedup_needed(parts, name, target):
+                # parts maps each part of a program to the seconds it takes. Return how
+                # many times faster parts[name] must become for the whole program to
+                # take target seconds, rounded to 2 places, or None if no speed-up of
+                # that part alone can reach the target.
+                rest = sum(parts.values()) - parts[name]
+                if target <= rest:
+                    return None
+                return round(sum(parts.values()) / target, 2)
+
+
+            parts = {"load": 9, "parse": 33, "compute": 12, "save": 6}
+            goals = [("parse", 40), ("parse", 25), ("compute", 50), ("save", 50)]
+            print([speedup_needed(parts, name, target) for name, target in goals])
+          - |
+            def speedup_needed(parts, name, target):
+                # parts maps each part of a program to the seconds it takes. Return how
+                # many times faster parts[name] must become for the whole program to
+                # take target seconds, rounded to 2 places, or None if no speed-up of
+                # that part alone can reach the target.
+                rest = sum(parts.values()) - parts[name]
+                if target < rest:
+                    return None
+                return round(parts[name] / (target - rest), 2)
+
+
+            parts = {"load": 9, "parse": 33, "compute": 12, "save": 6}
+            goals = [("parse", 40), ("parse", 25), ("compute", 50), ("save", 50)]
+            print([speedup_needed(parts, name, target) for name, target in goals])
+          - |
+            def speedup_needed(parts, name, target):
+                # parts maps each part of a program to the seconds it takes. Return how
+                # many times faster parts[name] must become for the whole program to
+                # take target seconds, rounded to 2 places, or None if no speed-up of
+                # that part alone can reach the target.
+                rest = sum(parts.values()) - parts[name]
+                return round(parts[name] / (target - rest), 2)
+
+
+            parts = {"load": 9, "parse": 33, "compute": 12, "save": 6}
+            goals = [("parse", 40), ("parse", 25), ("compute", 50), ("save", 50)]
+            print([speedup_needed(parts, name, target) for name, target in goals])
+        explanation: |
+          The other parts take `rest` seconds whatever you do, so the chosen part must fit into `target - rest` seconds, a speed-up of `parts[name] / (target - rest)`. If `target` is no more than `rest`, even an infinitely fast part cannot reach it. Dividing the whole time by the target treats the program as if every part sped up; testing `target < rest` crashes when the target equals the rest, which would need the part to take no time at all; and leaving the check out returns negative or impossible speed-ups.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, the nightly job took 45 minutes of queries, 12 of rendering and 3 of everything else, and rendering became 4 times faster. How many minutes does the job take now?
+        answer: "51"
+        explanation: |
+          Rendering drops from 12 minutes to 3, and the rest is unchanged: $45 + 3 + 3 = 51$ minutes, so the job is only about 1.18 times faster.
+    - question:
+        id: work-slow-page
+        type: choice
+        system: s2
+        prompt: |
+          Users say the order history page is slow. Ravi is sure the cause is the code that formats dates, which he has always thought clumsy. What should happen first?
+        options:
+          - "Time the page on a realistic account with many orders, and profile it to see where the time goes."
+          - "Rewrite the date formatting, since Ravi knows the code best."
+          - "Add a cache in front of every function on the page."
+          - "Move the page to a bigger server."
+        answer: 0
+        explanation: |
+          Until the time has been measured, Ravi's hunch is just a hunch, and Amdahl's law says that speeding up a small part buys little. A profile on realistic data shows where the time really goes. Caching everything adds complexity without knowing what to cache, and a bigger server spends money on a problem nobody has located.
+  connections:
+    - text: |
+        Fifty-one minutes. Rendering dropped from 12 minutes to 3, and the 45 minutes of queries and 3 of everything else did not change. A week of work made the job only about 1.18 times faster. Even if rendering took no time at all, the job would still take 48 minutes. Making the queries just twice as fast, perhaps by fetching all the invoices in one query instead of one query each, would have brought the job to 37 and a half minutes. A profile on the first morning would have pointed there.
+
+        Measurements like these are most useful when they run every time the code changes, so that a commit that makes the nightly job ten minutes slower is noticed the day it is written rather than months later. Running the build, the tests and checks like these automatically on every change is [[s5.continuous-integration]]. How profilers work underneath, and the many ways a measurement can mislead, return in [[h5.profilers-sampling-and-instrumentation]] and [[h5.measuring-performance-honestly]].
