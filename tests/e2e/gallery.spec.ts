@@ -968,3 +968,86 @@ test("keeping inputs that reach new code gets past a header that random bytes ca
   await expect(figure).toContainText("got past the whole header after 903 inputs");
   await slide(figure, "inputs tried", "10", "getting past it after about 65,536 inputs");
 });
+
+test("a scanner reads the longest token at each step and stops at a character that starts none", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="token-scan"]').first().getByRole("figure");
+  await expect(figure).toContainText("The scanner starts at position 0.");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase steps" }).click();
+  await expect(figure).toContainText("Token 3: name base, positions 7 to 10.");
+  await figure.getByRole("button", { name: "x = 3 $ 4", exact: true }).click();
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase steps" }).click();
+  await expect(figure).toContainText("Position 6 holds $, which starts no token, so the scanner stops with an error that names the position, after 3 tokens.");
+});
+
+test("an automaton accepts a number or gets stuck, one character at a time", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="dfa-run"]').first().getByRole("figure");
+  await expect(figure).toContainText("The automaton starts in state start, before reading 3.14.");
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase characters read" }).click();
+  await expect(figure).toContainText("3.14 is accepted: the automaton ends in frac");
+  await figure.getByRole("button", { name: "7.", exact: true }).click();
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase characters read" }).click();
+  await expect(figure).toContainText("7. is rejected: the automaton ends in dot, which does not accept.");
+});
+
+test("the same tokens in a different parse tree give a different answer", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="parse-tree"]').first().getByRole("figure");
+  await expect(figure).toContainText("The tree groups (8 − 4) − 2.");
+  await figure.getByRole("button", { name: "8 − 4 − 2, from the right", exact: true }).click();
+  await expect(figure).toContainText("The tree groups 8 − (4 − 2). The lower subtraction gives 2 and the root gives 8 − 2 = 6.");
+});
+
+test("a tree-walker evaluates children first, and and skips its right side", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="ast-eval"]').first().getByRole("figure");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase steps" }).click();
+  await expect(figure).toContainText("Step 3: + combines its children's values, 2 and 3, giving 5.");
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase steps" }).click();
+  await expect(figure).toContainText("The root's value, 30, is the value of the whole expression.");
+  await figure.getByRole("button", { name: "x ≠ 0 and 10 ÷ x > 2, with x = 0", exact: true }).click();
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase steps" }).click();
+  await expect(figure).toContainText("the division by zero never happens");
+});
+
+test("a stack machine pops the right operand first and runs a loop by jumping", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="stack-machine"]').first().getByRole("figure");
+  await expect(figure).toContainText("The machine starts at instruction 0 with an empty stack and price = 450, tip = 50, qty = 2.");
+  await slide(figure, "instructions run", "3", "Step 3: ADD pops 50 and then 450, and pushes 500.");
+  await figure.getByRole("button", { name: "a loop: total += n while n > 0", exact: true }).click();
+  await slide(figure, "instructions run", "45", "the run is over after 45 instructions, with n = 0, total = 6.");
+});
+
+test("a name is looked up local, enclosing, global, then built-in", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="scope-chain"]').first().getByRole("figure");
+  await expect(figure).toContainText("finds it in the enclosing scope, with the value 2.");
+  await figure.getByRole("button", { name: "make_counter has returned", exact: true }).click();
+  await expect(figure).toContainText("count lives on in a cell that increment holds: that is a closure.");
+  await figure.getByRole("button", { name: "discount", exact: true }).click();
+  await expect(figure).toContainText("finds it in none, and raises NameError.");
+});
+
+test("a checker rejects before running what Python finds, or misses, while running", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="type-check"]').first().getByRole("figure");
+  await expect(figure).toContainText("The checker accepts the program without running it.");
+  await figure.getByRole("button", { name: "fare if seats > 0 else 'sold out'", exact: true }).click();
+  await expect(figure).toContainText("The checker rejects it, although some runs would be fine.");
+  await figure.getByRole("button", { name: "run with seats = 3", exact: true }).click();
+  await expect(figure).toContainText("The checker rejected a run that would have worked.");
+});
+
+test("marking from the roots frees a cycle that counting references cannot", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="mark-sweep"]').first().getByRole("figure");
+  await expect(figure).toContainText("The heap holds 8 objects.");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Mark: cart is reached from session, so it is marked as live. 2 of 8 objects marked so far.");
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Sweep: the 3 objects never reached, log, old_cart and old_item, are freed");
+  await figure.getByRole("button", { name: "count references", exact: true }).click();
+  await expect(figure).toContainText("so counting alone frees none of them.");
+});

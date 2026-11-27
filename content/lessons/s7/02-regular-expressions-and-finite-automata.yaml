@@ -1,0 +1,707 @@
+concept: s7.regular-expressions-and-finite-automata
+minutes: 80
+claim: You can write regular expressions for token-like patterns and use Python's re module to match whole strings, prefixes and every occurrence; run a deterministic finite automaton from its table and use it to find the longest token, as a scanner does; simulate a nondeterministic automaton by tracking every state it could be in; explain how expressions become automata and why the automaton can grow exponentially; recognise patterns that make a backtracking engine take exponential time; and say why no regular expression can check nested brackets.
+recalls: [s7.tokenising]
+uses: [s3.measuring-and-predicting-running-time, s3.breadth-first-and-depth-first-search, s2.hash-tables, f3.counting-with-products-and-sums, s6.fuzzing, f2.sets-and-set-operations]
+leads: [s7.grammars-and-parsing, s7.syntax-trees-and-evaluation]
+starter: |
+  # Scratch space. re.findall returns every match in the text.
+  import re
+
+  print(re.findall(r"[0-9]+", "Platform 4, coach S11, seat 72"))
+  print(re.fullmatch(r"[0-9]{6}", "560001") is not None)
+parts:
+  recall:
+    - text: |
+        [[s7.tokenising]] built a scanner by hand: a digit starts a number, which runs on through digits, then optionally a dot and more digits. Each rule was a pattern of characters. This lesson gives such patterns a notation, regular expressions, and a machine that checks them in one pass, the finite automaton. Three quick pulls first.
+  puzzle:
+    - text: |
+        A regular-expression engine checks the pattern `(a+)+$` against a string of twenty a's followed by `!`. The match is hopeless, because of the `!`, but this kind of engine only gives up after trying every way of cutting the run of twenty a's into one or more non-empty pieces, one piece for each repetition of the group.
+
+        **How many ways are there to cut a run of twenty a's into one or more non-empty pieces?**
+  intuition:
+    - text: |
+        A parking machine at a mall in Pune takes ₹5 and ₹10 coins and issues a ticket at ₹20. It does not remember which coins went in, only how much has: ₹0, ₹5, ₹10, ₹15, or enough. Those five situations are its **states**, and each coin moves it from one state to another by a fixed rule. However long the queue of coins, the machine needs no more memory than that.
+
+        A **finite automaton** is the same idea applied to text. It reads one character at a time and remembers only which of a fixed number of states it is in. The figure shows one that recognises numbers like `3.14`. Step through the inputs.
+    - figure: dfa-run
+      props: { input: "3.14", read: 0 }
+    - text: |
+        Each character moves the automaton along one arrow. The double circles are accepting states: if the input ends there, the automaton says yes. Anything without an arrow leads to stuck, from which nothing escapes. The automaton never goes back and never reads a character twice, so checking a string of a million characters takes a million steps and no more. That guarantee is exactly what the engine in the puzzle threw away.
+  derivation:
+    - text: |
+        **Regular expressions.** A **regular expression** describes a set of strings. Its building blocks are few. A plain character matches itself. Writing two expressions one after the other, **concatenation**, matches the first followed by the second. A vertical bar is **alternation**: `cat|dog` matches either word. A star repeats what comes before it zero or more times, a plus one or more times, and a question mark makes it optional; `{4}` means exactly four times and `{1,3}` one to three. Brackets make a **class**, one character from a set, so `[0-9]` is any digit and `[A-Z]` any capital letter. Round brackets group, so `(ab)+` repeats the pair.
+
+        The tokeniser's number rule becomes `[0-9]+(\.[0-9]+)?`: one or more digits, then optionally a dot and one or more digits. The backslash before the dot is needed because a bare dot means any character.
+
+        Python's `re` module runs such patterns. `re.fullmatch(p, s)` asks whether the whole of `s` matches, `re.match` only whether some beginning of it does, and `re.search` whether any part does; `re.findall` returns every non-overlapping match. Patterns are written as raw strings, `r"..."`, so that Python leaves their backslashes alone. Mixing up `match` and `fullmatch` is a classic validation bug: `re.match(r"[0-9]{6}", "5600019")` succeeds, because the first six characters are a fine PIN code.
+    - question:
+        id: derivation-number-regex
+        type: choice
+        system: s2
+        prompt: |
+          Which of these strings does `[0-9]+(\.[0-9]+)?` match in full?
+        options:
+          - "18.5"
+          - ".5"
+          - "18."
+          - "1.8.5"
+        answer: 0
+        explanation: |
+          The pattern needs at least one digit first, so `.5` fails; a dot must be followed by digits, so `18.` fails; and only one dot-and-digits part is allowed, so `1.8.5` fails.
+    - text: |
+        **Finite automata.** A **deterministic finite automaton**, or DFA, has a finite set of states, one of them the start, some of them accepting, and a table saying, for each state and each character, which state comes next. It reads its input one character at a time, following the table, and accepts if it ends in an accepting state. Stored as a dictionary from (state, character class) to next state, the table is looked up in constant time per character, the hash table of [[s2.hash-tables]], so a DFA checks a string in time proportional to its length.
+
+        A scanner uses a DFA slightly differently. It does not ask whether the whole text matches; it asks how long a token starts at the cursor. So it runs the automaton forward and remembers the last position at which it was in an accepting state. When the automaton gets stuck, that remembered position is the end of the longest token, which is maximal munch done by machine. On `7.x` the automaton accepts after `7`, moves to a non-accepting state on the dot, gets stuck on `x`, and the scanner takes `7`.
+    - question:
+        id: derivation-mod3
+        type: numeric
+        system: s2
+        prompt: |
+          A DFA reads a binary number from left to right and must accept exactly the numbers divisible by 3. Its states record the remainder so far. What is the smallest number of states it needs?
+        answer: "3"
+        explanation: |
+          Reading one more bit turns a number $n$ into $2n$ or $2n + 1$, so the new remainder depends only on the old remainder: three states, for remainders 0, 1 and 2, with 0 accepting. However long the number, three states are enough.
+    - text: |
+        **From expressions to automata.** Every regular expression can be turned into an automaton, and back. The direct construction gives a **nondeterministic** automaton, an NFA, which may have several arrows for the same character, as if it could guess. Alternation is a fork: one branch for each choice. A star is a loop back. The NFA accepts if *some* sequence of choices ends in an accepting state.
+
+        A computer cannot guess, but it can do something better than trying the choices one at a time. It keeps the *set* of states the NFA could be in, and moves the whole set forward on each character, like the breadth-first search of [[s3.breadth-first-and-depth-first-search]], which explores every path at once instead of one path at a time. The work per character is bounded by the number of states, so the whole check stays linear in the length of the text.
+
+        Turning that idea into a table gives the **subset construction**: each DFA state stands for one set of NFA states. The DFA then needs no sets at run time, but there can be many of them. An NFA with $k + 1$ states can recognise "the $k$-th letter from the end is a", and the smallest DFA for it needs $2^k$ states, one for each possible pattern of the last $k$ letters, the counting of [[f3.counting-with-products-and-sums]].
+    - question:
+        id: derivation-blowup
+        type: numeric
+        system: s2
+        prompt: |
+          The smallest DFA for "the tenth letter from the end is a", over the letters a and b, must remember the last ten letters. How many states does it need?
+        answer: "1024"
+        explanation: |
+          Each of the last ten positions can hold a or b, and any two different patterns must lead to different futures, so the DFA needs $2^{10} = 1{,}024$ states. The NFA needs only 11.
+    - text: |
+        **Backtracking and its price.** Python's `re`, like the engines in most languages, does not build an automaton. It **backtracks**: it tries the first choice of each alternation or repetition, and when the match fails later, it returns to the most recent choice and tries the next. Backtracking makes extra features easy, such as a backreference, `(a+)b\1`, which needs the same text twice and so describes strings no finite automaton can recognise. But on patterns with a repetition inside a repetition, such as `(a+)+`, the number of ways to divide the text can grow exponentially, and a failing match tries them all. Twenty-five characters can take seconds, and fifty characters longer than anyone will wait.
+
+        When the text comes from users, that is a denial-of-service attack, sometimes called **ReDoS**: one short request keeps a server busy. The defences are to avoid nested repetition, to limit the length of input before matching, or to use an engine that compiles patterns to automata and guarantees linear time. A fuzzer from [[s6.fuzzing]] that also watches for slow inputs finds these patterns quickly.
+
+        **What regular expressions cannot do.** A finite automaton has finitely many states, say $k$. Show it $k + 1$ opening brackets and two of them must leave it in the same state, by the pigeonhole principle, so it cannot know how many closing brackets it still needs. So no regular expression can check that brackets are balanced to any depth. Tokens are regular, but the nested structure of programs is not, which is why parsing needs a stronger tool.
+    - question:
+        id: derivation-redos
+        type: choice
+        system: s2
+        prompt: |
+          A sign-up form checks names with a pattern containing `([a-zA-Z]+ ?)+$`. A request with a 40-character name followed by `!` keeps a server busy for minutes. What is the best fix?
+        options:
+          - "Rewrite the pattern so no repetition sits inside another, such as `[a-zA-Z]+( [a-zA-Z]+)*`, and cap the length of the name before matching."
+          - "Run the check on a faster server."
+          - "Add `re.IGNORECASE` to the pattern."
+          - "Catch the exception the engine raises when it gives up."
+        answer: 0
+        explanation: |
+          The nested repetition lets the engine divide the letters among repetitions in exponentially many ways. The rewritten pattern gives each letter only one way to be matched, and a length cap bounds the work. A faster server buys a factor, not an exponent; the flag changes nothing; and the engine raises nothing, it just keeps trying.
+  formal:
+    - text: |
+        **Regular expression.** Built from characters by concatenation, alternation `|`, repetition `*`, `+`, `?` and `{m,n}`, character classes `[...]` and grouping `(...)`. In Python: `re.fullmatch`, `re.match`, `re.search`, `re.findall`.
+
+        **DFA.** Finitely many states, a start state, accepting states and a transition table; one step per character, so time proportional to the input's length.
+
+        **Longest match.** Run the DFA from the cursor and keep the last position where it was accepting.
+
+        **NFA.** Several possible moves per character; simulated by tracking the set of possible states. The subset construction turns an NFA into a DFA, with up to $2^n$ states for $n$ NFA states.
+
+        **Equivalence.** Regular expressions, NFAs and DFAs describe exactly the same sets of strings, the regular languages.
+
+        **Backtracking.** Trying choices one at a time; worst-case exponential on nested repetition. **Limits:** no finite automaton recognises balanced brackets of unbounded depth.
+  drill:
+    - text: Seconds each. Read the pattern a character at a time.
+    - question:
+        id: drill-match
+        type: choice
+        system: s1
+        prompt: |
+          What does `re.match(r"[0-9]{6}", "5600019")` find?
+        options:
+          - "A match, because the string begins with six digits"
+          - "No match, because the string has seven digits"
+          - "An error, because the pattern is too short"
+          - "A match of all seven digits"
+        answer: 0
+        explanation: re.match only checks the beginning; re.fullmatch would reject the seventh digit.
+    - question:
+        id: drill-even-ones
+        type: numeric
+        system: s1
+        prompt: |
+          How many states does the smallest DFA need to accept binary strings with an even number of 1s?
+        answer: "2"
+        explanation: One state for "even so far", which accepts, and one for "odd so far"; each 1 swaps them.
+    - question:
+        id: predict-findall
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import re
+          print(re.findall(r"[0-9]+", "Platform 4, coach S11, seat 72"))
+        output: "['4', '11', '72']"
+        explanation: findall returns every non-overlapping match, each as long as it can be.
+    - question:
+        id: predict-fullmatch
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import re
+          print(re.fullmatch(r"[A-Z]{2}[0-9]{2}", "KA01") is not None)
+        output: "True"
+        explanation: Two capital letters then two digits, and nothing else, so the whole string matches.
+  work:
+    - text: Slower now. Run automata by hand in code, then let the re module do it.
+    - question:
+        id: write-longest-match
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `longest_match`, which runs a DFA from a position in the text and returns where the longest accepted token ends. The program should print four lines: `3.14+2 4`, `40 2`, `7.x 1` and `x9 None`.
+        starter: |
+          def longest_match(table, start, accepting, kind, text, i):
+              # Run the automaton from position i of text. table maps (state, class)
+              # to the next state, where kind(c) gives a character's class; a missing
+              # entry means the automaton is stuck. Return the end position of the
+              # longest accepted token starting at i, the position just after its
+              # last character, or None if no prefix is accepted.
+              return None
+
+
+          def kind(c):
+              if c.isdigit():
+                  return "digit"
+              if c == ".":
+                  return "dot"
+              return "other"
+
+
+          TABLE = {
+              ("start", "digit"): "int",
+              ("int", "digit"): "int",
+              ("int", "dot"): "dot",
+              ("dot", "digit"): "frac",
+              ("frac", "digit"): "frac",
+          }
+          ACCEPTING = {"int", "frac"}
+
+          for text in ["3.14+2", "40", "7.x", "x9"]:
+              print(text, longest_match(TABLE, "start", ACCEPTING, kind, text, 0))
+        solution: |
+          def longest_match(table, start, accepting, kind, text, i):
+              # Run the automaton from position i of text. table maps (state, class)
+              # to the next state, where kind(c) gives a character's class; a missing
+              # entry means the automaton is stuck. Return the end position of the
+              # longest accepted token starting at i, the position just after its
+              # last character, or None if no prefix is accepted.
+              state = start
+              best = None
+              j = i
+              while j < len(text):
+                  key = (state, kind(text[j]))
+                  if key not in table:
+                      break
+                  state = table[key]
+                  j += 1
+                  if state in accepting:
+                      best = j
+              return best
+
+
+          def kind(c):
+              if c.isdigit():
+                  return "digit"
+              if c == ".":
+                  return "dot"
+              return "other"
+
+
+          TABLE = {
+              ("start", "digit"): "int",
+              ("int", "digit"): "int",
+              ("int", "dot"): "dot",
+              ("dot", "digit"): "frac",
+              ("frac", "digit"): "frac",
+          }
+          ACCEPTING = {"int", "frac"}
+
+          for text in ["3.14+2", "40", "7.x", "x9"]:
+              print(text, longest_match(TABLE, "start", ACCEPTING, kind, text, 0))
+        tests: |
+          for _text, _i, _want in [
+              ("3.14+2", 0, 4),
+              ("3.14+2", 5, 6),
+              ("3.14+2", 4, None),
+              ("40", 0, 2),
+              ("7.x", 0, 1),
+              ("7.", 0, 1),
+              ("12.5.6", 0, 4),
+              ("", 0, None),
+              ("x9", 1, 2),
+              ("..5", 0, None),
+          ]:
+              _got = longest_match(TABLE, "start", ACCEPTING, kind, _text, _i)
+              assert _got == _want, "On " + repr(_text) + " from position " + str(_i) + ", the longest accepted token should end at " + str(_want) + ", not " + str(_got)
+          _t = {(0, "a"): 1, (1, "a"): 2, (2, "a"): 3, (3, "a"): 4}
+          _got = longest_match(_t, 0, {1, 3}, lambda _c: _c, "aaaa", 0)
+          assert _got == 3, "With accepting states reached after 1 and 3 letters but not after 4, the answer for 'aaaa' is 3, not " + str(_got)
+          assert output.splitlines() == ["3.14+2 4", "40 2", "7.x 1", "x9 None"], "The program should print four lines: 3.14+2 4, 40 2, 7.x 1 and x9 None"
+        wrong:
+          - |
+            def longest_match(table, start, accepting, kind, text, i):
+                # Run the automaton from position i of text. table maps (state, class)
+                # to the next state, where kind(c) gives a character's class; a missing
+                # entry means the automaton is stuck. Return the end position of the
+                # longest accepted token starting at i, the position just after its
+                # last character, or None if no prefix is accepted.
+                state = start
+                best = None
+                j = i
+                while j < len(text):
+                    key = (state, kind(text[j]))
+                    if key not in table:
+                        break
+                    state = table[key]
+                    j += 1
+                    if state in accepting:
+                        return j
+                return best
+
+
+            def kind(c):
+                if c.isdigit():
+                    return "digit"
+                if c == ".":
+                    return "dot"
+                return "other"
+
+
+            TABLE = {
+                ("start", "digit"): "int",
+                ("int", "digit"): "int",
+                ("int", "dot"): "dot",
+                ("dot", "digit"): "frac",
+                ("frac", "digit"): "frac",
+            }
+            ACCEPTING = {"int", "frac"}
+
+            for text in ["3.14+2", "40", "7.x", "x9"]:
+                print(text, longest_match(TABLE, "start", ACCEPTING, kind, text, 0))
+          - |
+            def longest_match(table, start, accepting, kind, text, i):
+                # Run the automaton from position i of text. table maps (state, class)
+                # to the next state, where kind(c) gives a character's class; a missing
+                # entry means the automaton is stuck. Return the end position of the
+                # longest accepted token starting at i, the position just after its
+                # last character, or None if no prefix is accepted.
+                state = start
+                best = None
+                j = i
+                while j < len(text):
+                    key = (state, kind(text[j]))
+                    if key not in table:
+                        break
+                    state = table[key]
+                    j += 1
+                    best = j
+                return best
+
+
+            def kind(c):
+                if c.isdigit():
+                    return "digit"
+                if c == ".":
+                    return "dot"
+                return "other"
+
+
+            TABLE = {
+                ("start", "digit"): "int",
+                ("int", "digit"): "int",
+                ("int", "dot"): "dot",
+                ("dot", "digit"): "frac",
+                ("frac", "digit"): "frac",
+            }
+            ACCEPTING = {"int", "frac"}
+
+            for text in ["3.14+2", "40", "7.x", "x9"]:
+                print(text, longest_match(TABLE, "start", ACCEPTING, kind, text, 0))
+          - |
+            def longest_match(table, start, accepting, kind, text, i):
+                # Run the automaton from position i of text. table maps (state, class)
+                # to the next state, where kind(c) gives a character's class; a missing
+                # entry means the automaton is stuck. Return the end position of the
+                # longest accepted token starting at i, the position just after its
+                # last character, or None if no prefix is accepted.
+                state = start
+                best = None
+                j = i
+                while j < len(text):
+                    key = (state, kind(text[j]))
+                    if key not in table:
+                        break
+                    state = table[key]
+                    j += 1
+                if state in accepting:
+                    return j
+                return None
+
+
+            def kind(c):
+                if c.isdigit():
+                    return "digit"
+                if c == ".":
+                    return "dot"
+                return "other"
+
+
+            TABLE = {
+                ("start", "digit"): "int",
+                ("int", "digit"): "int",
+                ("int", "dot"): "dot",
+                ("dot", "digit"): "frac",
+                ("frac", "digit"): "frac",
+            }
+            ACCEPTING = {"int", "frac"}
+
+            for text in ["3.14+2", "40", "7.x", "x9"]:
+                print(text, longest_match(TABLE, "start", ACCEPTING, kind, text, 0))
+        explanation: |
+          Follow the table one character at a time until there is no entry, and after each move, if the state accepts, remember the position. Return the last remembered position. Returning at the first accepting state gives the shortest token, `3`; remembering every position gives `7.` although the automaton never accepted it; and checking only the state at the very end throws away the `7` that was accepted before the dot.
+    - question:
+        id: write-plate
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `PATTERN` and `normalise`, which check Indian vehicle registration numbers and remove their separators. The program should print six lines: the first three plates normalised, such as `KA 01 AB 1234 -> KA01AB1234`, and `None` for the other three.
+        starter: |
+          import re
+
+          # An Indian registration number: two capital letters for the state, two
+          # digits for the district, one to three capital letters for the series and
+          # four digits for the vehicle. Each gap between the four parts may hold one
+          # space, one hyphen or nothing.
+          PATTERN = r""
+
+
+          def normalise(plate):
+              # Return the four parts joined with no separators, such as
+              # "KA01AB1234", if the whole of plate matches PATTERN; otherwise None.
+              return None
+
+
+          for plate in ["KA 01 AB 1234", "MH12DE1433", "TN-22-K-0007", "KA 1 AB 1234", "MH12DE14335", "ka 01 ab 1234"]:
+              print(plate, "->", normalise(plate))
+        solution: |
+          import re
+
+          # An Indian registration number: two capital letters for the state, two
+          # digits for the district, one to three capital letters for the series and
+          # four digits for the vehicle. Each gap between the four parts may hold one
+          # space, one hyphen or nothing.
+          PATTERN = r"([A-Z]{2})[ -]?([0-9]{2})[ -]?([A-Z]{1,3})[ -]?([0-9]{4})"
+
+
+          def normalise(plate):
+              # Return the four parts joined with no separators, such as
+              # "KA01AB1234", if the whole of plate matches PATTERN; otherwise None.
+              m = re.fullmatch(PATTERN, plate)
+              if m is None:
+                  return None
+              return "".join(m.groups())
+
+
+          for plate in ["KA 01 AB 1234", "MH12DE1433", "TN-22-K-0007", "KA 1 AB 1234", "MH12DE14335", "ka 01 ab 1234"]:
+              print(plate, "->", normalise(plate))
+        tests: |
+          for _p, _want in [
+              ("KA01AB1234", "KA01AB1234"),
+              ("KA 01 AB 1234", "KA01AB1234"),
+              ("KA-01-AB-1234", "KA01AB1234"),
+              ("KA 01-AB1234", "KA01AB1234"),
+              ("DL 08 CAF 5030", "DL08CAF5030"),
+              ("TN22K0007", "TN22K0007"),
+              ("KA  01 AB 1234", None),
+              ("KA 01 AB 123", None),
+              ("KA 01 AB 12345", None),
+              ("KA 01 ABCD 1234", None),
+              ("K 01 AB 1234", None),
+              ("KA 01 AB 1234 ", None),
+              (" KA 01 AB 1234", None),
+              ("KA 01 AB", None),
+              ("KA 01 1234", None),
+              ("ka 01 ab 1234", None),
+              ("KA_01_AB_1234", None),
+          ]:
+              _got = normalise(_p)
+              assert _got == _want, "normalise(" + repr(_p) + ") should give " + repr(_want) + ", not " + repr(_got)
+          assert output.splitlines()[0] == "KA 01 AB 1234 -> KA01AB1234", "The program's first line should be KA 01 AB 1234 -> KA01AB1234"
+        wrong:
+          - |
+            import re
+
+            # An Indian registration number: two capital letters for the state, two
+            # digits for the district, one to three capital letters for the series and
+            # four digits for the vehicle. Each gap between the four parts may hold one
+            # space, one hyphen or nothing.
+            PATTERN = r"([A-Z]{2})[ -]?([0-9]{2})[ -]?([A-Z]{1,3})[ -]?([0-9]{4})"
+
+
+            def normalise(plate):
+                # Return the four parts joined with no separators, such as
+                # "KA01AB1234", if the whole of plate matches PATTERN; otherwise None.
+                m = re.match(PATTERN, plate)
+                if m is None:
+                    return None
+                return "".join(m.groups())
+
+
+            for plate in ["KA 01 AB 1234", "MH12DE1433", "TN-22-K-0007", "KA 1 AB 1234", "MH12DE14335", "ka 01 ab 1234"]:
+                print(plate, "->", normalise(plate))
+          - |
+            import re
+
+            # An Indian registration number: two capital letters for the state, two
+            # digits for the district, one to three capital letters for the series and
+            # four digits for the vehicle. Each gap between the four parts may hold one
+            # space, one hyphen or nothing.
+            PATTERN = r"([A-Z]{2})[ -]*([0-9]{2})[ -]*([A-Z]{1,3})[ -]*([0-9]{4})"
+
+
+            def normalise(plate):
+                # Return the four parts joined with no separators, such as
+                # "KA01AB1234", if the whole of plate matches PATTERN; otherwise None.
+                m = re.fullmatch(PATTERN, plate)
+                if m is None:
+                    return None
+                return "".join(m.groups())
+
+
+            for plate in ["KA 01 AB 1234", "MH12DE1433", "TN-22-K-0007", "KA 1 AB 1234", "MH12DE14335", "ka 01 ab 1234"]:
+                print(plate, "->", normalise(plate))
+          - |
+            import re
+
+            # An Indian registration number: two capital letters for the state, two
+            # digits for the district, one to three capital letters for the series and
+            # four digits for the vehicle. Each gap between the four parts may hold one
+            # space, one hyphen or nothing.
+            PATTERN = r"([A-Z]{2})[ -]?([0-9]{2})[ -]?([A-Z]+)[ -]?([0-9]{4,})"
+
+
+            def normalise(plate):
+                # Return the four parts joined with no separators, such as
+                # "KA01AB1234", if the whole of plate matches PATTERN; otherwise None.
+                m = re.fullmatch(PATTERN, plate)
+                if m is None:
+                    return None
+                return "".join(m.groups())
+
+
+            for plate in ["KA 01 AB 1234", "MH12DE1433", "TN-22-K-0007", "KA 1 AB 1234", "MH12DE14335", "ka 01 ab 1234"]:
+                print(plate, "->", normalise(plate))
+        explanation: |
+          `([A-Z]{2})[ -]?([0-9]{2})[ -]?([A-Z]{1,3})[ -]?([0-9]{4})` names each part with a group and allows at most one separator in each gap; `re.fullmatch` insists that nothing comes before or after, and `"".join(m.groups())` puts the parts together. `re.match` accepts a fifth digit, because the first four are enough for a prefix; `[ -]*` accepts two spaces in a row; and open-ended repetitions such as `{4,}` accept five digits.
+    - question:
+        id: fix-nfa
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `nfa_accepts` should track every state an NFA could be in. The program should print five lines, with `True` for abb, aabb and abaab. Instead, aabb and abaab come out `False`. Find the fault and fix it.
+        starter: |
+          def nfa_accepts(trans, start, accepting, text):
+              # trans maps (state, character) to the set of states the automaton may
+              # move to; a missing entry means no move. Track every state the
+              # automaton could be in after each character, and accept if any of
+              # them is accepting at the end.
+              current = {start}
+              for c in text:
+                  nxt = set()
+                  for s in current:
+                      nxt = trans.get((s, c), set())
+                  current = nxt
+              return len(current & accepting) > 0
+
+
+          # Words over a and b whose third letter from the end is a. State 0 reads
+          # along and may guess, on any a, that it is the one; states 1, 2 and 3
+          # count the letters after it.
+          TRANS = {
+              (0, "a"): {0, 1},
+              (0, "b"): {0},
+              (1, "a"): {2},
+              (1, "b"): {2},
+              (2, "a"): {3},
+              (2, "b"): {3},
+          }
+          for word in ["abb", "bab", "aabb", "babbb", "abaab"]:
+              print(word, nfa_accepts(TRANS, 0, {3}, word))
+        solution: |
+          def nfa_accepts(trans, start, accepting, text):
+              # trans maps (state, character) to the set of states the automaton may
+              # move to; a missing entry means no move. Track every state the
+              # automaton could be in after each character, and accept if any of
+              # them is accepting at the end.
+              current = {start}
+              for c in text:
+                  nxt = set()
+                  for s in current:
+                      nxt = nxt | trans.get((s, c), set())
+                  current = nxt
+              return len(current & accepting) > 0
+
+
+          # Words over a and b whose third letter from the end is a. State 0 reads
+          # along and may guess, on any a, that it is the one; states 1, 2 and 3
+          # count the letters after it.
+          TRANS = {
+              (0, "a"): {0, 1},
+              (0, "b"): {0},
+              (1, "a"): {2},
+              (1, "b"): {2},
+              (2, "a"): {3},
+              (2, "b"): {3},
+          }
+          for word in ["abb", "bab", "aabb", "babbb", "abaab"]:
+              print(word, nfa_accepts(TRANS, 0, {3}, word))
+        tests: |
+          def _third_last_a(_w):
+              return len(_w) >= 3 and _w[-3] == "a"
+
+
+          _words = [""]
+          for _n in range(1, 7):
+              _words = _words + [_w + _c for _w in _words if len(_w) == _n - 1 for _c in "ab"]
+          for _w in _words:
+              _got = nfa_accepts(TRANS, 0, {3}, _w)
+              assert _got == _third_last_a(_w), "nfa_accepts on " + repr(_w) + " should be " + str(_third_last_a(_w)) + ", not " + str(_got)
+          _ends_ab = {(0, "a"): {0, 1}, (0, "b"): {0}, (1, "b"): {2}}
+          for _w, _want in [("ab", True), ("aab", True), ("aba", False), ("abb", False), ("", False), ("bab", True)]:
+              _got = nfa_accepts(_ends_ab, 0, {2}, _w)
+              assert _got == _want, "For words ending in ab, nfa_accepts on " + repr(_w) + " should be " + str(_want) + ", not " + str(_got)
+          assert nfa_accepts({}, 0, {0}, "") is True, "With no input, an automaton whose start state is accepting accepts"
+          assert output.splitlines() == ["abb True", "bab False", "aabb True", "babbb False", "abaab True"], "The program should print five lines, with True for abb, aabb and abaab"
+        wrong:
+          - |
+            def nfa_accepts(trans, start, accepting, text):
+                # trans maps (state, character) to the set of states the automaton may
+                # move to; a missing entry means no move. Track every state the
+                # automaton could be in after each character, and accept if any of
+                # them is accepting at the end.
+                current = {start}
+                for c in text:
+                    nxt = set()
+                    for s in current:
+                        nxt = nxt | trans.get((s, c), set())
+                    current = current | nxt
+                return len(current & accepting) > 0
+
+
+            # Words over a and b whose third letter from the end is a. State 0 reads
+            # along and may guess, on any a, that it is the one; states 1, 2 and 3
+            # count the letters after it.
+            TRANS = {
+                (0, "a"): {0, 1},
+                (0, "b"): {0},
+                (1, "a"): {2},
+                (1, "b"): {2},
+                (2, "a"): {3},
+                (2, "b"): {3},
+            }
+            for word in ["abb", "bab", "aabb", "babbb", "abaab"]:
+                print(word, nfa_accepts(TRANS, 0, {3}, word))
+          - |
+            def nfa_accepts(trans, start, accepting, text):
+                # trans maps (state, character) to the set of states the automaton may
+                # move to; a missing entry means no move. Track every state the
+                # automaton could be in after each character, and accept if any of
+                # them is accepting at the end.
+                current = {start}
+                for c in text:
+                    nxt = set()
+                    for s in current:
+                        nxt = nxt | trans.get((s, c), set())
+                    current = nxt
+                return len(current) > 0 and current <= accepting
+
+
+            # Words over a and b whose third letter from the end is a. State 0 reads
+            # along and may guess, on any a, that it is the one; states 1, 2 and 3
+            # count the letters after it.
+            TRANS = {
+                (0, "a"): {0, 1},
+                (0, "b"): {0},
+                (1, "a"): {2},
+                (1, "b"): {2},
+                (2, "a"): {3},
+                (2, "b"): {3},
+            }
+            for word in ["abb", "bab", "aabb", "babbb", "abaab"]:
+                print(word, nfa_accepts(TRANS, 0, {3}, word))
+          - |
+            def nfa_accepts(trans, start, accepting, text):
+                # trans maps (state, character) to the set of states the automaton may
+                # move to; a missing entry means no move. Track every state the
+                # automaton could be in after each character, and accept if any of
+                # them is accepting at the end.
+                current = {start}
+                seen = False
+                for c in text:
+                    nxt = set()
+                    for s in current:
+                        nxt = nxt | trans.get((s, c), set())
+                    current = nxt
+                    if current & accepting:
+                        seen = True
+                return seen
+
+
+            # Words over a and b whose third letter from the end is a. State 0 reads
+            # along and may guess, on any a, that it is the one; states 1, 2 and 3
+            # count the letters after it.
+            TRANS = {
+                (0, "a"): {0, 1},
+                (0, "b"): {0},
+                (1, "a"): {2},
+                (1, "b"): {2},
+                (2, "a"): {3},
+                (2, "b"): {3},
+            }
+            for word in ["abb", "bab", "aabb", "babbb", "abaab"]:
+                print(word, nfa_accepts(TRANS, 0, {3}, word))
+        explanation: |
+          The inner loop replaces `nxt` with each state's moves in turn, so only the last state's moves survive, and the automaton silently commits to one guess. Collect the union: `nxt = nxt | trans.get((s, c), set())`. Keeping the old states as well never forgets a state, so words accepted midway stay accepted; requiring every state to accept rejects nearly everything; and accepting if an accepting state was reached at any point accepts words whose third-from-last letter is a b.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, a run of twenty a's is cut into one or more non-empty pieces. How many ways are there?
+        answer: "524288"
+        explanation: |
+          Between the twenty a's there are nineteen gaps, and each cut is a choice of which gaps to cut at: $2^{19} = 5{,}24{,}288$ ways. Each extra a doubles the count, which is why a backtracking engine that tries them all slows down exponentially.
+    - question:
+        id: work-engine
+        type: choice
+        system: s2
+        prompt: |
+          Rohan must validate millions of user-supplied search filters against patterns that other users write. Which approach keeps every check fast whatever the patterns and inputs?
+        options:
+          - "An engine that compiles each pattern to an automaton and matches in time linear in the input, refusing features such as backreferences."
+          - "Python's re module, with a rule that patterns must be short."
+          - "Python's re module, retrying a match that takes too long."
+          - "Trying each pattern on a few sample inputs before accepting it."
+        answer: 0
+        explanation: |
+          Only an automaton-based engine guarantees linear time for every pattern and input. Short patterns can still be exponential, as `(a+)+$` shows; retrying repeats the slow work; and a few samples will not find the input an attacker picks.
+  connections:
+    - text: |
+        5,24,288, which is $2^{19}$. Each of the nineteen gaps between the a's is either a cut or not, so every extra a doubles the ways, and a backtracking engine that tries them all before failing slows down exponentially. An automaton reads the twenty-one characters once and says no.
+
+        Regular expressions describe tokens perfectly: digits, names, operators, plate numbers. But a finite automaton cannot count, so it cannot check that every opening bracket is closed, and programs are full of nesting: brackets in expressions, blocks inside blocks, calls inside calls. [[s7.grammars-and-parsing]] adds the missing ingredient, rules that may refer to themselves, and builds a parser that turns a list of tokens into a tree.

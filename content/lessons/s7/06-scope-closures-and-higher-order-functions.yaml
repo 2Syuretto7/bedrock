@@ -1,0 +1,712 @@
+concept: s7.scope-closures-and-higher-order-functions
+minutes: 80
+claim: You can predict which variable a name refers to by Python's local, enclosing, global and built-in rule, and when assignment makes a name local; write closures that keep and update state with nonlocal; explain why a closure captures a variable rather than its value and fix the loop that makes every callback see the last value; pass functions to and return them from other functions with map, filter, sorted and reduce; and write decorators and decorator factories, such as a cache and a retry, as functions that take a function and return a new one.
+recalls: [s7.how-python-runs-bytecode-and-the-interpreter-loop]
+uses: [s7.syntax-trees-and-evaluation, s0.functions, s0.dictionaries-and-sets, s1.exceptions, s3.dynamic-programming, s6.flaky-tests-and-their-causes, f1.composition-and-inverses]
+leads: [s7.static-and-dynamic-types, s7.memory-management-and-garbage-collection]
+starter: |
+  # Scratch space. Each counter keeps its own count between calls.
+  def make_counter():
+      count = 0
+
+      def increment():
+          nonlocal count
+          count += 1
+          return count
+
+      return increment
+
+
+  a = make_counter()
+  b = make_counter()
+  print(a(), a(), b(), a())
+parts:
+  recall:
+    - text: |
+        [[s7.how-python-runs-bytecode-and-the-interpreter-loop]] showed that each call gets a frame with its own local variables, and that bytecode refers to variables by name or position. That leaves a question every Python programmer meets sooner or later: when a function uses a name, which variable does it mean, and what happens to it after the call is over? Three quick pulls first.
+  puzzle:
+    - text: |
+        A booking screen makes three buttons in a loop, each with a function to run when it is pressed:
+
+        ```python
+        buttons = []
+        for i in range(3):
+            buttons.append(lambda: i)
+        ```
+
+        Later, after the loop has finished, the first button is pressed.
+
+        **What does `buttons[0]()` return?**
+  intuition:
+    - text: |
+        A notice pinned in Class 7B says "Report to the class teacher". A student who takes it home and reads it in the evening still knows which teacher it means: the one for 7B, where the notice was written, not some teacher near wherever it is read. But the notice names a role, not a person. If 7B's class teacher changes on Monday, the same notice now sends students to the new one.
+
+        Python's names behave the same way. A function's names are looked up in the scopes around where the function was **written**, and what it holds on to is the variable, the role, not the value it had at the time. The figure shows where Python looks for each name used inside a small counter.
+    - figure: scope-chain
+      props: { name: count }
+    - text: |
+        Python searches outwards: the function's own locals, then the function it was written inside, then the module, then the built-ins, and stops at the first match. `count` belongs to `make_counter`, and because `increment` uses it, Python keeps it alive after `make_counter` returns, so the counter remembers its value between calls. A function bundled with the variables it needs from around it is a **closure**.
+  derivation:
+    - text: |
+        **Scopes.** Python has four places to look for a name, searched in a fixed order often called **LEGB**: the **local** scope of the function running, the **enclosing** scopes of any functions it is written inside, the **global** scope of its module, and the **built-in** scope, home of `len`, `print` and the rest. If no scope has the name, Python raises `NameError`. The search depends on where the function's code sits in the file, not on who calls it, which is called **lexical** scoping, the same rule as the evaluator's environments in [[s7.syntax-trees-and-evaluation]].
+
+        One rule surprises nearly everyone once. Python decides which names are local when it compiles a function, before it runs: any name **assigned** anywhere in the function is local throughout it. So in `def f(): total = total + 1`, the `total` on the right is the local one, which has no value yet, and the call fails with `UnboundLocalError` even if a global `total` exists. To assign to a module's variable, declare it `global`; to assign to an enclosing function's variable, declare it `nonlocal`.
+    - question:
+        id: derivation-unbound
+        type: choice
+        system: s2
+        prompt: |
+          A module sets `seats = 10`, and a function in it says `seats = seats - 1`. What happens when the function is called?
+        options:
+          - "UnboundLocalError: the assignment makes seats local to the function, and it is read before it has a value"
+          - "The global seats becomes 9"
+          - "A new local seats becomes 9 and the global stays 10"
+          - "NameError: seats is not defined"
+        answer: 0
+        explanation: |
+          Because `seats` is assigned in the function, every use of it there is local, including the read on the right. Declaring `global seats` would make the assignment change the module's variable.
+    - text: |
+        **Closures.** A function defined inside another can use the outer function's variables, and keeps them alive after the outer call returns. Python stores such a variable in a small object called a **cell**, which both functions share. The inner function plus its cells is a closure. Calling `make_counter()` twice makes two separate closures, each with its own cell for `count`, so two counters never interfere. To change a captured variable, not just read it, the inner function declares it `nonlocal`.
+
+        What a closure captures is the variable, not its value at the moment the function was made. That is what lets a counter count, and it is also the classic trap: functions made in a loop all capture the same loop variable, and when they run later they all see its final value. The usual fixes give each function its own variable: pass the value as a default argument, `lambda i=i: i`, which is evaluated when the function is made, or create each function inside a helper function, so each call of the helper has its own scope.
+    - question:
+        id: derivation-counter
+        type: numeric
+        system: s2
+        prompt: |
+          With `make_counter` from the starter, `a = make_counter()` and `b = make_counter()`. After `a()` is called three times and `b()` once, what does the next `a()` return?
+        answer: "4"
+        explanation: |
+          Each call of `make_counter` creates its own `count`, so `b` has no effect on `a`. Three calls left `a`'s count at 3, and the next makes it 4.
+    - text: |
+        **Higher-order functions.** In Python a function is a value like any other: it can be stored in a list, passed as an argument and returned as a result. A function that takes or returns functions is called **higher-order**, and it is how much repetitive code disappears, the composition of functions from [[f1.composition-and-inverses]] made practical. `sorted(trains, key=lambda t: t.departure)` passes the rule for comparing; `map(f, xs)` applies `f` to every item; `filter(p, xs)` keeps the items for which `p` is true; and `functools.reduce` folds a list into one value with a two-argument function.
+
+        **Decorators.** A **decorator** is a function that takes a function and returns a new one, usually a closure that calls the original with something added around it: a cache, a retry, a timer, a log line. Writing `@memoize` above `def fare(...)` is shorthand for `fare = memoize(fare)`. A cache of results, the memo of [[s3.dynamic-programming]], fits naturally: the wrapper keeps a dictionary in its closure. A decorator that takes settings, such as `@retry(3)`, is a **decorator factory**, one level further out: `retry(3)` returns the decorator, which then receives the function. `functools.wraps` copies the original function's name and documentation onto the wrapper, and `functools.lru_cache` is the standard library's ready-made cache.
+    - question:
+        id: derivation-decorator
+        type: order
+        system: s2
+        prompt: |
+          Put in order what Python does with `@retry(3)` written above `def fetch(pnr): ...`, and a later call `fetch("4521367890")`.
+        steps:
+          - "Call retry(3), which returns a decorator."
+          - "Create the function object for fetch."
+          - "Call the decorator with that function, which returns a wrapper."
+          - "Bind the name fetch to the wrapper."
+          - "When fetch(\"4521367890\") is called, run the wrapper, which calls the original function."
+        explanation: |
+          The decorator expression is evaluated first, then the function is made, then passed through the decorator, and only the result is given the name; every later call goes through the wrapper.
+    - text: |
+        **What it costs.** Closures are cheap, but they keep their cells alive, and the cells keep their values alive. A callback that captures a large list holds the whole list in memory for as long as the callback exists, even if it only ever reads one item, a common source of memory that is never freed, which [[s7.memory-management-and-garbage-collection]] will look at. In bytecode, Python reads local variables from the frame's array, captured variables through their cells and globals by dictionary lookup, which is why code inside functions runs a little faster than the same code at module level.
+
+        Retrying is worth a thought too. A retry decorator is right for an error that is truly temporary, such as a network timeout, and should let every other error through at once. Retrying everything turns a real bug into a slow failure, and in a test it hides the flakiness that [[s6.flaky-tests-and-their-causes]] warned about.
+  formal:
+    - text: |
+        **Name resolution (LEGB).** Local, then enclosing functions, then global (module), then built-in; the first match wins; none raises `NameError`. Scopes follow where code is written, not who calls it.
+
+        **Local by assignment.** A name assigned anywhere in a function is local throughout it, unless declared `global` or `nonlocal`.
+
+        **Closure.** A function together with cells for the variables it uses from enclosing functions; it captures variables, not values, and keeps them alive.
+
+        **Higher-order function.** One that takes or returns functions: `map`, `filter`, `sorted(key=...)`, `functools.reduce`.
+
+        **Decorator.** `@d` above `def f` means `f = d(f)`; a decorator factory `@d(x)` means `f = d(x)(f)`.
+  drill:
+    - text: Seconds each. Ask which variable, and when it is read.
+    - question:
+        id: drill-legb
+        type: choice
+        system: s1
+        prompt: |
+          A function uses the name `len` without defining it, and the module does not define it either. Where does Python find it?
+        options:
+          - "In the built-in scope"
+          - "In the caller's local variables"
+          - "Nowhere: NameError"
+          - "In the enclosing function, if there is one"
+        answer: 0
+        explanation: The built-in scope is searched last, after local, enclosing and global, and it holds len.
+    - question:
+        id: drill-decorator
+        type: choice
+        system: s1
+        prompt: |
+          What does `@timer` above `def report(): ...` mean?
+        options:
+          - "report = timer(report)"
+          - "timer = report(timer)"
+          - "report is called once, timed, when the file loads"
+          - "timer is called every time the module is imported, and report is unchanged"
+        answer: 0
+        explanation: A decorator receives the function and its result replaces the name.
+    - question:
+        id: predict-default
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          fs = [lambda i=i: i * 10 for i in range(3)]
+          print(fs[0](), fs[2]())
+        output: "0 20"
+        explanation: The default value is evaluated when each lambda is made, so each keeps its own i.
+    - question:
+        id: predict-map-filter
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          fares = [450, 1200, 80, 990]
+          print(list(map(lambda f: f * 2, filter(lambda f: f < 1000, fares))))
+        output: "[900, 160, 1980]"
+        explanation: filter keeps the fares under 1,000, and map doubles each one that is left.
+  work:
+    - text: Slower now. Each answer is a function that makes or wraps another function.
+    - question:
+        id: write-memoize
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `memoize`, a decorator that remembers each result by its arguments. The program should print two lines: six fares, `[5400, 3100, 5400, 5600, 3100, 5400]`, and then `3 lookups`.
+        starter: |
+          def memoize(f):
+              # Return a function that behaves like f but remembers the result for
+              # each tuple of arguments it has seen, calling f only for new ones.
+              # Each memoized function has its own memory.
+              return f
+
+
+          FARES = {("BLR", "DEL"): 5400, ("BLR", "BOM"): 3100, ("DEL", "BLR"): 5600}
+          lookups = []
+
+
+          def fare_between(a, b):
+              lookups.append((a, b))          # stands in for a slow database query
+              return FARES[(a, b)]
+
+
+          fare = memoize(fare_between)
+          trips = [("BLR", "DEL"), ("BLR", "BOM"), ("BLR", "DEL"), ("DEL", "BLR"), ("BLR", "BOM"), ("BLR", "DEL")]
+          print([fare(a, b) for a, b in trips])
+          print(len(lookups), "lookups")
+        solution: |
+          def memoize(f):
+              # Return a function that behaves like f but remembers the result for
+              # each tuple of arguments it has seen, calling f only for new ones.
+              # Each memoized function has its own memory.
+              memory = {}
+
+              def wrapper(*args):
+                  if args not in memory:
+                      memory[args] = f(*args)
+                  return memory[args]
+
+              return wrapper
+
+
+          FARES = {("BLR", "DEL"): 5400, ("BLR", "BOM"): 3100, ("DEL", "BLR"): 5600}
+          lookups = []
+
+
+          def fare_between(a, b):
+              lookups.append((a, b))          # stands in for a slow database query
+              return FARES[(a, b)]
+
+
+          fare = memoize(fare_between)
+          trips = [("BLR", "DEL"), ("BLR", "BOM"), ("BLR", "DEL"), ("DEL", "BLR"), ("BLR", "BOM"), ("BLR", "DEL")]
+          print([fare(a, b) for a, b in trips])
+          print(len(lookups), "lookups")
+        tests: |
+          _calls = []
+
+
+          def _sq(_x):
+              _calls.append(_x)
+              return _x * _x
+
+
+          _m = memoize(_sq)
+          assert [_m(3), _m(4), _m(3), _m(3)] == [9, 16, 9, 9], "A memoized square should still give the right answers"
+          assert _calls == [3, 4], "The square of 3 should be computed once, not " + str(_calls.count(3)) + " times"
+          _other_calls = []
+
+
+          def _neg(_x):
+              _other_calls.append(_x)
+              return -_x
+
+
+          _n = memoize(_neg)
+          assert _n(3) == -3, "A second memoized function must not return the first one's remembered results; _n(3) should be -3"
+          _pairs = []
+
+
+          def _sub(_a, _b):
+              _pairs.append((_a, _b))
+              return _a - _b
+
+
+          _s = memoize(_sub)
+          assert [_s(5, 2), _s(5, 3), _s(2, 5), _s(5, 2)] == [3, 2, -3, 3], "With two arguments, each pair of arguments should be remembered separately"
+          assert len(_pairs) == 3, "Three different pairs should mean three real calls, not " + str(len(_pairs))
+          assert output.splitlines() == ["[5400, 3100, 5400, 5600, 3100, 5400]", "3 lookups"], "The program should print two lines: the six fares, then 3 lookups"
+        wrong:
+          - |
+            def memoize(f):
+                # Return a function that behaves like f but remembers the result for
+                # each tuple of arguments it has seen, calling f only for new ones.
+                # Each memoized function has its own memory.
+                def wrapper(*args):
+                    memory = {}
+                    if args not in memory:
+                        memory[args] = f(*args)
+                    return memory[args]
+
+                return wrapper
+
+
+            FARES = {("BLR", "DEL"): 5400, ("BLR", "BOM"): 3100, ("DEL", "BLR"): 5600}
+            lookups = []
+
+
+            def fare_between(a, b):
+                lookups.append((a, b))          # stands in for a slow database query
+                return FARES[(a, b)]
+
+
+            fare = memoize(fare_between)
+            trips = [("BLR", "DEL"), ("BLR", "BOM"), ("BLR", "DEL"), ("DEL", "BLR"), ("BLR", "BOM"), ("BLR", "DEL")]
+            print([fare(a, b) for a, b in trips])
+            print(len(lookups), "lookups")
+          - |
+            def memoize(f):
+                # Return a function that behaves like f but remembers the result for
+                # each tuple of arguments it has seen, calling f only for new ones.
+                # Each memoized function has its own memory.
+                memory = {}
+
+                def wrapper(*args):
+                    if args[0] not in memory:
+                        memory[args[0]] = f(*args)
+                    return memory[args[0]]
+
+                return wrapper
+
+
+            FARES = {("BLR", "DEL"): 5400, ("BLR", "BOM"): 3100, ("DEL", "BLR"): 5600}
+            lookups = []
+
+
+            def fare_between(a, b):
+                lookups.append((a, b))          # stands in for a slow database query
+                return FARES[(a, b)]
+
+
+            fare = memoize(fare_between)
+            trips = [("BLR", "DEL"), ("BLR", "BOM"), ("BLR", "DEL"), ("DEL", "BLR"), ("BLR", "BOM"), ("BLR", "DEL")]
+            print([fare(a, b) for a, b in trips])
+            print(len(lookups), "lookups")
+          - |
+            memory = {}
+
+
+            def memoize(f):
+                # Return a function that behaves like f but remembers the result for
+                # each tuple of arguments it has seen, calling f only for new ones.
+                # Each memoized function has its own memory.
+                def wrapper(*args):
+                    if args not in memory:
+                        memory[args] = f(*args)
+                    return memory[args]
+
+                return wrapper
+
+
+            FARES = {("BLR", "DEL"): 5400, ("BLR", "BOM"): 3100, ("DEL", "BLR"): 5600}
+            lookups = []
+
+
+            def fare_between(a, b):
+                lookups.append((a, b))          # stands in for a slow database query
+                return FARES[(a, b)]
+
+
+            fare = memoize(fare_between)
+            trips = [("BLR", "DEL"), ("BLR", "BOM"), ("BLR", "DEL"), ("DEL", "BLR"), ("BLR", "BOM"), ("BLR", "DEL")]
+            print([fare(a, b) for a, b in trips])
+            print(len(lookups), "lookups")
+        explanation: |
+          Create a dictionary inside `memoize`, outside the wrapper, so it lives in the closure and lasts between calls; the wrapper takes `*args`, the tuple of arguments, as the key. A dictionary made inside the wrapper is new on every call and remembers nothing; keying on the first argument alone confuses Bengaluru to Delhi with Bengaluru to Mumbai; and one dictionary at module level is shared by every memoized function, which then return each other's answers.
+    - question:
+        id: fix-late-binding
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `make_handlers` should give each passenger a function that confirms their own booking. The program should print three lines, for Asha, Ravi and Meera. Instead, all three lines confirm Meera. Find the fault and fix it.
+        starter: |
+          def make_handlers(names):
+              # Return a dict from each passenger's name to a function that, when
+              # called later, returns the confirmation message for that passenger.
+              handlers = {}
+              for name in names:
+                  handlers[name] = lambda: "Booking confirmed for " + name
+              return handlers
+
+
+          handlers = make_handlers(["Asha", "Ravi", "Meera"])
+          for passenger in ["Asha", "Ravi", "Meera"]:
+              print(handlers[passenger]())
+        solution: |
+          def make_handlers(names):
+              # Return a dict from each passenger's name to a function that, when
+              # called later, returns the confirmation message for that passenger.
+              handlers = {}
+              for name in names:
+                  handlers[name] = lambda name=name: "Booking confirmed for " + name
+              return handlers
+
+
+          handlers = make_handlers(["Asha", "Ravi", "Meera"])
+          for passenger in ["Asha", "Ravi", "Meera"]:
+              print(handlers[passenger]())
+        tests: |
+          _h = make_handlers(["Kiran", "Zoya"])
+          assert sorted(_h) == ["Kiran", "Zoya"], "There should be one handler per name"
+          assert _h["Kiran"]() == "Booking confirmed for Kiran", "Kiran's handler should confirm Kiran's booking, not say " + repr(_h["Kiran"]())
+          assert _h["Zoya"]() == "Booking confirmed for Zoya", "Zoya's handler should confirm Zoya's booking, not say " + repr(_h["Zoya"]())
+          _names = ["P" + str(_i) for _i in range(6)]
+          _h = make_handlers(_names)
+          for _n in _names:
+              assert _h[_n]() == "Booking confirmed for " + _n, "Each handler should remember its own name; " + _n + "'s says " + repr(_h[_n]())
+          assert make_handlers([]) == {}, "No names should give no handlers"
+          assert output.splitlines() == ["Booking confirmed for Asha", "Booking confirmed for Ravi", "Booking confirmed for Meera"], "The program should print three lines, one for each of Asha, Ravi and Meera"
+        wrong:
+          - |
+            def make_handlers(names):
+                # Return a dict from each passenger's name to a function that, when
+                # called later, returns the confirmation message for that passenger.
+                handlers = {}
+                for name in names:
+                    handlers[name] = lambda n=name: "Booking confirmed for " + name
+                return handlers
+
+
+            handlers = make_handlers(["Asha", "Ravi", "Meera"])
+            for passenger in ["Asha", "Ravi", "Meera"]:
+                print(handlers[passenger]())
+          - |
+            def make_handlers(names):
+                # Return a dict from each passenger's name to a function that, when
+                # called later, returns the confirmation message for that passenger.
+                handlers = {}
+                for name in names:
+                    message = "Booking confirmed for " + name
+                    handlers[name] = lambda: message
+                return handlers
+
+
+            handlers = make_handlers(["Asha", "Ravi", "Meera"])
+            for passenger in ["Asha", "Ravi", "Meera"]:
+                print(handlers[passenger]())
+          - |
+            def make_handlers(names):
+                # Return a dict from each passenger's name to a function that, when
+                # called later, returns the confirmation message for that passenger.
+                handlers = {}
+                for name in names:
+                    handlers[name] = lambda name=names[0]: "Booking confirmed for " + name
+                return handlers
+
+
+            handlers = make_handlers(["Asha", "Ravi", "Meera"])
+            for passenger in ["Asha", "Ravi", "Meera"]:
+                print(handlers[passenger]())
+        explanation: |
+          Every lambda captures the same variable `name`, and by the time any of them runs the loop has left it at "Meera". Give each lambda its own copy with a default argument, `lambda name=name: ...`, which is evaluated as each lambda is made. A default under another name does nothing while the body still reads `name`; building the message first just moves the problem to the variable `message`; and a default of `names[0]` gives every passenger Asha's message.
+    - question:
+        id: write-retry
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `retry`, a decorator factory that retries a function on `ConnectionError`. The program should print two lines: `PNR 4521367890 confirmed after 3 attempts`, then `gave up: timeout on attempt 3`.
+        starter: |
+          def retry(times):
+              # A decorator factory. @retry(times) wraps a function so that each call
+              # tries it up to `times` times in all: if an attempt raises
+              # ConnectionError, try again; return the first result that comes back.
+              # If every attempt fails, raise the last ConnectionError. Any other
+              # exception is raised at once. Each call starts with a full set of
+              # attempts.
+              def decorate(f):
+                  return f
+              return decorate
+
+
+          def make_flaky(failures):
+              # A stand-in for a booking server that times out `failures` times.
+              count = 0
+
+              def fetch(pnr):
+                  nonlocal count
+                  count += 1
+                  if count <= failures:
+                      raise ConnectionError("timeout on attempt " + str(count))
+                  return "PNR " + pnr + " confirmed after " + str(count) + " attempts"
+
+              return fetch
+
+
+          for failures in [2, 5]:
+              try:
+                  print(retry(3)(make_flaky(failures))("4521367890"))
+              except ConnectionError as error:
+                  print("gave up:", error)
+        solution: |
+          def retry(times):
+              # A decorator factory. @retry(times) wraps a function so that each call
+              # tries it up to `times` times in all: if an attempt raises
+              # ConnectionError, try again; return the first result that comes back.
+              # If every attempt fails, raise the last ConnectionError. Any other
+              # exception is raised at once. Each call starts with a full set of
+              # attempts.
+              def decorate(f):
+                  def wrapper(*args):
+                      last = None
+                      for attempt in range(times):
+                          try:
+                              return f(*args)
+                          except ConnectionError as error:
+                              last = error
+                      raise last
+                  return wrapper
+              return decorate
+
+
+          def make_flaky(failures):
+              # A stand-in for a booking server that times out `failures` times.
+              count = 0
+
+              def fetch(pnr):
+                  nonlocal count
+                  count += 1
+                  if count <= failures:
+                      raise ConnectionError("timeout on attempt " + str(count))
+                  return "PNR " + pnr + " confirmed after " + str(count) + " attempts"
+
+              return fetch
+
+
+          for failures in [2, 5]:
+              try:
+                  print(retry(3)(make_flaky(failures))("4521367890"))
+              except ConnectionError as error:
+                  print("gave up:", error)
+        tests: |
+          _log = []
+
+
+          def _make(_fail, _exc=ConnectionError):
+              _box = [0]
+
+              def _f(_x):
+                  _box[0] += 1
+                  _log.append(_box[0])
+                  if _box[0] <= _fail:
+                      raise _exc("attempt " + str(_box[0]))
+                  return _x * 2
+
+              return _f
+
+
+          def _call(_wrapped, _x, _what):
+              try:
+                  return _wrapped(_x)
+              except (ConnectionError, TypeError) as _e:
+                  raise AssertionError(_what + ", but it raised " + type(_e).__name__ + ": " + str(_e))
+
+
+          assert _call(retry(1)(_make(0)), 4, "With 1 attempt and no failures, the result should come back") == 8, "With no failures, the first attempt's result should come back"
+          assert _call(retry(4)(_make(3)), 5, "Three failures then success should succeed with 4 attempts") == 10, "Three failures then success should give the result"
+          try:
+              retry(3)(_make(3))(1)
+              raise AssertionError("Three failures with 3 attempts should raise ConnectionError")
+          except TypeError as _e:
+              raise AssertionError("When every attempt fails, the last ConnectionError should be raised, not TypeError: " + str(_e))
+          except ConnectionError as _e:
+              assert str(_e) == "attempt 3", "The last ConnectionError should be raised, not " + repr(str(_e))
+          _log.clear()
+          try:
+              retry(5)(_make(1, ValueError))(1)
+              raise AssertionError("A ValueError should not be retried")
+          except ValueError:
+              assert _log == [1], "A ValueError should be raised at once, after 1 attempt, not " + str(len(_log))
+          _box2 = [0]
+
+
+          def _every_other(_x):
+              _box2[0] += 1
+              if _box2[0] % 2 == 1:
+                  raise ConnectionError("odd")
+              return _x
+
+
+          _w = retry(2)(_every_other)
+          assert [_call(_w, 1, "Each call should get its own two attempts"), _call(_w, 2, "Each call should get its own two attempts"), _call(_w, 3, "Each call should get its own two attempts")] == [1, 2, 3], "Each call should get its own two attempts, so every call here should succeed"
+          assert output.splitlines() == ["PNR 4521367890 confirmed after 3 attempts", "gave up: timeout on attempt 3"], "The program should print two lines: the PNR confirmed after 3 attempts, then gave up: timeout on attempt 3"
+        wrong:
+          - |
+            def retry(times):
+                # A decorator factory. @retry(times) wraps a function so that each call
+                # tries it up to `times` times in all: if an attempt raises
+                # ConnectionError, try again; return the first result that comes back.
+                # If every attempt fails, raise the last ConnectionError. Any other
+                # exception is raised at once. Each call starts with a full set of
+                # attempts.
+                def decorate(f):
+                    def wrapper(*args):
+                        last = None
+                        for attempt in range(times - 1):
+                            try:
+                                return f(*args)
+                            except ConnectionError as error:
+                                last = error
+                        raise last
+                    return wrapper
+                return decorate
+
+
+            def make_flaky(failures):
+                # A stand-in for a booking server that times out `failures` times.
+                count = 0
+
+                def fetch(pnr):
+                    nonlocal count
+                    count += 1
+                    if count <= failures:
+                        raise ConnectionError("timeout on attempt " + str(count))
+                    return "PNR " + pnr + " confirmed after " + str(count) + " attempts"
+
+                return fetch
+
+
+            for failures in [2, 5]:
+                try:
+                    print(retry(3)(make_flaky(failures))("4521367890"))
+                except ConnectionError as error:
+                    print("gave up:", error)
+          - |
+            def retry(times):
+                # A decorator factory. @retry(times) wraps a function so that each call
+                # tries it up to `times` times in all: if an attempt raises
+                # ConnectionError, try again; return the first result that comes back.
+                # If every attempt fails, raise the last ConnectionError. Any other
+                # exception is raised at once. Each call starts with a full set of
+                # attempts.
+                def decorate(f):
+                    def wrapper(*args):
+                        last = None
+                        for attempt in range(times):
+                            try:
+                                return f(*args)
+                            except ConnectionError as error:
+                                last = error
+                        return None
+                    return wrapper
+                return decorate
+
+
+            def make_flaky(failures):
+                # A stand-in for a booking server that times out `failures` times.
+                count = 0
+
+                def fetch(pnr):
+                    nonlocal count
+                    count += 1
+                    if count <= failures:
+                        raise ConnectionError("timeout on attempt " + str(count))
+                    return "PNR " + pnr + " confirmed after " + str(count) + " attempts"
+
+                return fetch
+
+
+            for failures in [2, 5]:
+                try:
+                    print(retry(3)(make_flaky(failures))("4521367890"))
+                except ConnectionError as error:
+                    print("gave up:", error)
+          - |
+            def retry(times):
+                # A decorator factory. @retry(times) wraps a function so that each call
+                # tries it up to `times` times in all: if an attempt raises
+                # ConnectionError, try again; return the first result that comes back.
+                # If every attempt fails, raise the last ConnectionError. Any other
+                # exception is raised at once. Each call starts with a full set of
+                # attempts.
+                def decorate(f):
+                    left = [times]
+
+                    def wrapper(*args):
+                        last = None
+                        while left[0] > 0:
+                            left[0] -= 1
+                            try:
+                                return f(*args)
+                            except ConnectionError as error:
+                                last = error
+                        raise last
+                    return wrapper
+                return decorate
+
+
+            def make_flaky(failures):
+                # A stand-in for a booking server that times out `failures` times.
+                count = 0
+
+                def fetch(pnr):
+                    nonlocal count
+                    count += 1
+                    if count <= failures:
+                        raise ConnectionError("timeout on attempt " + str(count))
+                    return "PNR " + pnr + " confirmed after " + str(count) + " attempts"
+
+                return fetch
+
+
+            for failures in [2, 5]:
+                try:
+                    print(retry(3)(make_flaky(failures))("4521367890"))
+                except ConnectionError as error:
+                    print("gave up:", error)
+        explanation: |
+          Three levels: `retry(times)` returns `decorate`, which returns `wrapper`, which loops `times` times, returning the first result and remembering each `ConnectionError`, then raises the last one. Looping `times - 1` times gives one attempt too few; returning `None` after the last failure hides it from the caller; and a count of attempts kept in `decorate` is shared by every call, so later calls start with none left.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, three lambdas are made in a loop over `range(3)`, each returning `i`. What does `buttons[0]()` return once the loop has finished?
+        answer: "2"
+        explanation: |
+          All three lambdas capture the same variable `i`, not its value when each was made. When the button is pressed the loop is over and `i` is 2, so every button returns 2. Writing `lambda i=i: i` would give 0.
+    - question:
+        id: work-sorting
+        type: choice
+        system: s2
+        prompt: |
+          Farhan has a list of trains, each a dictionary with "name", "departure" and "fare". How should he list them by fare, cheapest first, and by departure among equal fares?
+        options:
+          - "sorted(trains, key=lambda t: (t[\"fare\"], t[\"departure\"]))"
+          - "sorted(trains, key=lambda t: t[\"fare\"] + t[\"departure\"])"
+          - "sorted(trains, key=t[\"fare\"])"
+          - "sorted(map(lambda t: t[\"fare\"], trains))"
+        answer: 0
+        explanation: |
+          The key function returns a tuple, and tuples compare element by element, so fare decides first and departure breaks ties. Adding a fare to a departure time mixes unrelated quantities; the third option passes a value, not a function, and fails; and the last sorts the fares themselves, losing the trains.
+  connections:
+    - text: |
+        2. The three lambdas share one variable, `i`, which the loop leaves at 2, and a closure reads its variables when it runs, not when it was made. Capturing the variable is exactly what makes a counter work; here it makes every button the last one.
+
+        Closures, decorators and higher-order functions all pass functions around as values, and nothing in Python checks in advance that a value passed in is the kind the function expects; a mistake shows up only when the line runs. [[s7.static-and-dynamic-types]] looks at that choice: what a type is, when it is checked, and what a checker that runs before the program can and cannot promise.

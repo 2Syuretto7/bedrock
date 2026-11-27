@@ -1,0 +1,999 @@
+concept: s7.memory-management-and-garbage-collection
+minutes: 85
+claim: You can say where a program's values live, in frames on the call stack or as objects on the heap, and why heap memory must be given back; name the two classic bugs of freeing by hand, the leak and the use after free; implement reference counting with its cascade of frees, and show why a cycle defeats it; implement mark and sweep from the roots; explain generational collection and the write barrier and remembered set that keep it correct; describe how CPython combines counting with a cycle collector and what a weak reference is for; and find the leaks a collector cannot fix, objects still reachable but never used again.
+recalls: [s7.static-and-dynamic-types]
+uses: [s7.how-python-runs-bytecode-and-the-interpreter-loop, s7.scope-closures-and-higher-order-functions, s3.breadth-first-and-depth-first-search, s2.graphs-and-their-representations, s2.linked-lists, s3.amortised-analysis]
+leads: [q3.from-sql-to-a-plan, h1.logic-gates]
+starter: |
+  # Scratch space. sys.getrefcount counts the references to an object,
+  # plus one for the argument it is handed.
+  import sys
+
+  ticket = ["PNR", 4521367890]
+  print(sys.getrefcount(ticket))
+  alias = ticket
+  print(sys.getrefcount(ticket))
+  del alias
+  print(sys.getrefcount(ticket))
+parts:
+  recall:
+    - text: |
+        [[s7.static-and-dynamic-types]] ended with Python's values as objects that carry their own type, made and abandoned by the million while a program runs. Nobody writes the code that gives their memory back, so something else must decide when an object is finished with. This last lesson of the cluster looks at how. Three quick pulls first.
+  puzzle:
+    - text: |
+        A messaging app keeps three objects that refer to each other in a ring: a chat refers to its latest message, the message refers to its sender's profile, and the profile refers back to the chat. Then the app drops its only variable that pointed at the chat.
+
+        Reference counting frees an object as soon as the number of references to it falls to 0. **With reference counting alone, how many of the three objects are freed?**
+  intuition:
+    - text: |
+        At the end of term a hostel warden wants to clear out rooms that nobody uses any more. Counting the keys still handed out does not work: two students who left months ago swapped spare keys to each other's rooms, so each of their rooms still has a key out, and both would be kept for ever. A better warden starts from the register of current students, walks to each one's room, follows any note saying "sharing with" to the next room, and marks every room reached that way. Every room left unmarked is cleared, keys or no keys.
+
+        A garbage collector faces the same question about memory. The figure shows a small heap of objects with arrows for references. Step through the marking that starts from the program's variables, and then switch to counting references instead.
+    - figure: mark-sweep
+      props: { step: 0 }
+    - text: |
+        Being referred to is not what makes an object worth keeping; being **reachable** from the program is. The pair old_cart and old_item point at each other, so each has a count of 1, but no chain of references from the variables reaches either. Marking from the roots finds every live object and none of the garbage, cycles included, which is why tracing collectors are the backbone of most language runtimes.
+  derivation:
+    - text: |
+        **Stack and heap.** Every function call gets a frame, as in [[s7.how-python-runs-bytecode-and-the-interpreter-loop]], and frames are freed in strict order as calls return. That region, the **stack**, manages itself. But many values must outlive the call that made them: a list a function returns, or the cells a closure keeps alive in [[s7.scope-closures-and-higher-order-functions]]. Those live on the **heap**, a large region where blocks of memory are handed out on request and must be handed back when finished with. In Python every value is a heap object, and a frame holds only references to them.
+
+        In C the programmer hands memory back by hand, calling `free`, and gets two famous bugs. A **leak** forgets to free, so memory use grows until the program is restarted or killed. A **use after free** frees too early: the block is handed out again for something else, and the old reference now reads or overwrites that something else, which is behind a large share of serious security holes. Freeing the same block twice is a close cousin. **Garbage collection** takes the job away from the programmer. An object is garbage when no chain of references from the **roots**, the variables in live frames and the module globals, can reach it, and the runtime frees garbage on its own.
+    - question:
+        id: derivation-bug
+        type: choice
+        system: s2
+        prompt: |
+          A C program frees a buffer, then later writes through its old pointer to that buffer, after the same memory has been handed out again to hold a password. What is this bug called?
+        options:
+          - "A use after free"
+          - "A memory leak"
+          - "A stack overflow"
+          - "A type error"
+        answer: 0
+        explanation: |
+          The pointer outlived the memory it pointed to, so the write lands on whatever was put there next, here a password. A leak is the opposite mistake, memory never freed.
+    - text: |
+        **Reference counting.** Keep, in each object's header, a count of the references to it. Storing a reference adds 1 to the count, dropping one subtracts 1, and when a count reaches 0 the object is freed on the spot. Freeing an object drops the references it held, which can bring other counts to 0 in turn, a cascade that frees a whole structure at once. Memory comes back the moment it is finished with, pauses are short and predictable, and the idea is simple.
+
+        It has two costs. Every assignment of a reference becomes a little more work, two count updates, and in a program with several threads those updates must be made safe from each other, which costs more. And it cannot free a **cycle**: objects that refer to each other in a ring keep each other's counts at 1 or more even after nothing else can reach them. Cycles are common in real programs: a doubly linked list from [[s2.linked-lists]], a tree whose children point back to their parents, an object that registers itself in a list it also holds.
+    - question:
+        id: derivation-cascade
+        type: numeric
+        system: s2
+        prompt: |
+          A booking refers to a ticket and to a passenger, and neither of those refers to anything. A single variable holds the only reference to the booking, and nothing else refers to the ticket or the passenger. When that variable is set to None, how many objects does reference counting free?
+        answer: "3"
+        explanation: |
+          The booking's count falls to 0 and it is freed. Freeing it drops its references, so the ticket's and the passenger's counts fall to 0 as well, and both are freed in the cascade.
+    - text: |
+        **Tracing: mark and sweep.** A tracing collector starts from the roots and follows references, a depth-first or breadth-first search from [[s3.breadth-first-and-depth-first-search]] over the object graph of [[s2.graphs-and-their-representations]], marking every object it reaches. Then it **sweeps** the heap, freeing every object left unmarked and clearing the marks for next time. Cycles are no problem, because reachability is all it asks about. The cost is that marking takes time in proportion to the live objects and sweeping to the whole heap, all at once, so the program may **pause** while it happens. Modern collectors shrink the pause by marking in small slices, or alongside the running program, and many also **compact**, moving survivors together so that new objects can be handed out by bumping a pointer, the cheapest allocation there is.
+    - question:
+        id: derivation-mark
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of one mark-and-sweep collection in order.
+        steps:
+          - "Pause the program."
+          - "Push every root onto a stack."
+          - "Pop an object; if it is unmarked, mark it and push every object it refers to."
+          - "Repeat until the stack is empty."
+          - "Walk the whole heap, freeing every unmarked object and clearing the other marks."
+          - "Resume the program."
+        explanation: |
+          Marking must finish before sweeping starts, or a live object not yet reached would be freed; and the program must not change references while the collector is looking, unless the collector is designed to cope with that.
+    - text: |
+        **Generations.** Most objects die young: the temporary list in a comprehension, the string built for one line of output, the iterator of a loop. That observation, the **generational hypothesis**, suggests splitting the heap. New objects go into a small **young generation** that is collected often and cheaply, since most of it is garbage; the few survivors are promoted to an **old generation** that is collected rarely. The cost per object, averaged over many collections as in [[s3.amortised-analysis]], falls sharply.
+
+        There is a catch. A minor collection traces only the young generation, so it never looks inside old objects. If an old object comes to refer to a young one, that young object may be reachable only through the old one, and a minor collection would free it while it is still in use. The fix is a **write barrier**: a few extra instructions run on every store of a reference, which notice an old object being made to point at a young one and record it in a **remembered set**. A minor collection treats the remembered objects as extra roots. The Java, .NET and JavaScript runtimes all work this way.
+
+        **CPython** combines both ideas. Reference counting does most of the work, so most objects are freed the moment their last reference goes. A separate **cycle collector**, the `gc` module, runs now and then to find groups of container objects referred to only by each other, and frees them; it too gives younger objects more attention than old ones, and `gc.collect()` runs it on demand. A **weak reference**, `weakref.ref(obj)`, refers to an object without counting, and returns `None` once the object has gone, which is how caches and lists of listeners avoid keeping things alive.
+    - question:
+        id: derivation-barrier
+        type: choice
+        system: s2
+        prompt: |
+          A minor collection traces only the young generation. Why does it need the remembered set?
+        options:
+          - "To find young objects reachable only through an old object, which it would otherwise free while they are in use"
+          - "To find old objects that have become garbage"
+          - "To count the references to each young object"
+          - "To decide which old objects to move back into the young generation"
+        answer: 0
+        explanation: |
+          The minor collection never looks inside old objects, so a reference from old to young would be invisible. The write barrier records such old objects, and their references are treated as roots.
+    - text: |
+        **Leaks a collector cannot fix.** A collector frees what cannot be reached. It cannot free what can still be reached but will never be used again, and that is how programs in collected languages leak. A module-level dictionary used as a cache, keyed by user and never trimmed, grows for as long as the server runs. A list of callbacks to which screens are added but never removed keeps every old screen alive. A closure that captured a large list keeps all of it. The fixes are to bound what grows, with `functools.lru_cache(maxsize=1000)` or an expiry time; to unregister what is finished; or to hold such references weakly. A memory graph that climbs steadily under a steady load is the sign to look for, and Python's `tracemalloc` shows which lines allocated what is still held.
+  formal:
+    - text: |
+        **Heap and roots.** The heap holds objects whose lifetime is not tied to one call. The roots are the references the program holds directly: variables in live frames and globals. An object is live if a chain of references from a root reaches it, and garbage otherwise.
+
+        **Reference counting.** Each object stores the number of references to it; at 0 it is freed at once, and its own references are dropped, possibly in a cascade. It cannot free cycles.
+
+        **Mark and sweep.** Mark every object reachable from the roots by a graph search, then free every unmarked object. Time is proportional to the live objects plus the heap.
+
+        **Generational collection.** Collect a young generation often and promote survivors to an old one collected rarely. A write barrier records old objects that refer to young ones in a remembered set, whose references are roots for a minor collection.
+
+        **CPython.** Reference counting plus a cycle collector, `gc`; `weakref.ref` refers without counting.
+  drill:
+    - text: Seconds each. Ask what can still be reached from the roots.
+    - question:
+        id: drill-reach
+        type: choice
+        system: s1
+        prompt: |
+          An object is referred to by two other objects, but none of the three can be reached from any variable or global. What does a tracing collector do with it?
+        options:
+          - "Frees it, along with the two objects referring to it"
+          - "Keeps it, because two objects refer to it"
+          - "Keeps it until both of the other objects are freed one by one"
+          - "Moves it to the old generation"
+        answer: 0
+        explanation: Only reachability from the roots counts, and none of the three is reachable.
+    - question:
+        id: drill-leak
+        type: choice
+        system: s1
+        prompt: |
+          A server's memory climbs steadily for days, although Python's collector is running. What is the most likely cause?
+        options:
+          - "Something reachable, such as a cache or a list, keeps growing"
+          - "The collector cannot free cycles"
+          - "Reference counts have overflowed"
+          - "The stack is too small"
+        answer: 0
+        explanation: A collector frees only unreachable objects, and CPython's cycle collector does free cycles; a structure that keeps growing stays reachable.
+    - question:
+        id: predict-del
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          fares = [450, 990]
+          alias = fares
+          del fares
+          print(alias)
+        output: "[450, 990]"
+        explanation: del removes a name, not the object. The list still has a reference, alias, so it survives.
+    - question:
+        id: predict-weakref
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import weakref
+
+
+          class Booking:
+              pass
+
+
+          booking = Booking()
+          ref = weakref.ref(booking)
+          print(ref() is booking)
+          booking = None
+          print(ref())
+        output: |
+          True
+          None
+        explanation: The weak reference does not count, so when the only real reference goes, the object is freed at once and the weak reference returns None.
+  work:
+    - text: Slower now. Each answer frees memory, or decides what must not be freed.
+    - question:
+        id: write-mark-sweep
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `collect`, a mark-and-sweep collector for a heap stored as a dictionary of references. The program should print two lines: the freed objects, `['log', 'old_cart', 'old_item']`, then the five that survive.
+        starter: |
+          def collect(heap, roots):
+              # heap maps each object's name to the list of names it refers to.
+              # Mark every object that can be reached from the roots by following
+              # references, however many steps away; then sweep: delete every
+              # unmarked object from heap and return their names, sorted.
+              return []
+
+
+          heap = {
+              "session": ["cart", "user"],
+              "cart": ["item1", "item2"],
+              "item1": ["cart"],
+              "item2": [],
+              "user": [],
+              "old_cart": ["old_item"],
+              "old_item": ["old_cart"],
+              "log": ["log"],
+          }
+          print(collect(heap, ["session"]))
+          print(sorted(heap))
+        solution: |
+          def collect(heap, roots):
+              # heap maps each object's name to the list of names it refers to.
+              # Mark every object that can be reached from the roots by following
+              # references, however many steps away; then sweep: delete every
+              # unmarked object from heap and return their names, sorted.
+              marked = set()
+              stack = list(roots)
+              while stack:
+                  name = stack.pop()
+                  if name in marked:
+                      continue
+                  marked.add(name)
+                  stack.extend(heap[name])
+              freed = sorted(name for name in heap if name not in marked)
+              for name in freed:
+                  del heap[name]
+              return freed
+
+
+          heap = {
+              "session": ["cart", "user"],
+              "cart": ["item1", "item2"],
+              "item1": ["cart"],
+              "item2": [],
+              "user": [],
+              "old_cart": ["old_item"],
+              "old_item": ["old_cart"],
+              "log": ["log"],
+          }
+          print(collect(heap, ["session"]))
+          print(sorted(heap))
+        tests: |
+          def _run(_heap, _roots):
+              _h = {_k: list(_v) for _k, _v in _heap.items()}
+              _freed = collect(_h, _roots)
+              return _freed, sorted(_h)
+
+
+          _got = _run({"a": ["b"], "b": ["c"], "c": ["d"], "d": []}, ["a"])
+          assert _got == ([], ["a", "b", "c", "d"]), "In a chain a -> b -> c -> d with root a, every object is reachable, so nothing should be freed; got " + repr(_got)
+          _got = _run({"a": ["b"], "b": ["a"], "c": []}, [])
+          assert _got == (["a", "b", "c"], []), "With no roots at all, every object should be freed; got " + repr(_got)
+          _got = _run({"r": [], "x": ["y"], "y": ["z"], "z": ["x"]}, ["r"])
+          assert _got == (["x", "y", "z"], ["r"]), "A cycle x -> y -> z -> x that no root reaches should be freed; got " + repr(_got)
+          _got = _run({"p": ["q"], "q": [], "s": ["t"], "t": ["s"], "u": []}, ["p", "s"])
+          assert _got == (["u"], ["p", "q", "s", "t"]), "With two roots p and s, only u is unreachable; got " + repr(_got)
+          _got = _run({"z": [], "m": [], "a": [], "root": []}, ["root"])
+          assert _got[0] == ["a", "m", "z"], "The freed names should be returned sorted; got " + repr(_got[0])
+          _h = {"keep": [], "drop": []}
+          collect(_h, ["keep"])
+          assert "drop" not in _h, "The sweep should delete freed objects from the heap itself"
+          assert output.splitlines() == ["['log', 'old_cart', 'old_item']", "['cart', 'item1', 'item2', 'session', 'user']"], "The program should print the three freed objects, then the five that survive"
+        wrong:
+          - |
+            def collect(heap, roots):
+                # heap maps each object's name to the list of names it refers to.
+                # Mark every object that can be reached from the roots by following
+                # references, however many steps away; then sweep: delete every
+                # unmarked object from heap and return their names, sorted.
+                marked = set(roots)
+                for root in roots:
+                    for name in heap[root]:
+                        marked.add(name)
+                freed = sorted(name for name in heap if name not in marked)
+                for name in freed:
+                    del heap[name]
+                return freed
+
+
+            heap = {
+                "session": ["cart", "user"],
+                "cart": ["item1", "item2"],
+                "item1": ["cart"],
+                "item2": [],
+                "user": [],
+                "old_cart": ["old_item"],
+                "old_item": ["old_cart"],
+                "log": ["log"],
+            }
+            print(collect(heap, ["session"]))
+            print(sorted(heap))
+          - |
+            def collect(heap, roots):
+                # heap maps each object's name to the list of names it refers to.
+                # Mark every object that can be reached from the roots by following
+                # references, however many steps away; then sweep: delete every
+                # unmarked object from heap and return their names, sorted.
+                marked = set(roots)
+                for name in heap:
+                    for other in heap[name]:
+                        marked.add(other)
+                freed = sorted(name for name in heap if name not in marked)
+                for name in freed:
+                    del heap[name]
+                return freed
+
+
+            heap = {
+                "session": ["cart", "user"],
+                "cart": ["item1", "item2"],
+                "item1": ["cart"],
+                "item2": [],
+                "user": [],
+                "old_cart": ["old_item"],
+                "old_item": ["old_cart"],
+                "log": ["log"],
+            }
+            print(collect(heap, ["session"]))
+            print(sorted(heap))
+          - |
+            def collect(heap, roots):
+                # heap maps each object's name to the list of names it refers to.
+                # Mark every object that can be reached from the roots by following
+                # references, however many steps away; then sweep: delete every
+                # unmarked object from heap and return their names, sorted.
+                marked = set()
+                stack = []
+                for root in roots:
+                    stack.extend(heap[root])
+                while stack:
+                    name = stack.pop()
+                    if name in marked:
+                        continue
+                    marked.add(name)
+                    stack.extend(heap[name])
+                freed = sorted(name for name in heap if name not in marked)
+                for name in freed:
+                    del heap[name]
+                return freed
+
+
+            heap = {
+                "session": ["cart", "user"],
+                "cart": ["item1", "item2"],
+                "item1": ["cart"],
+                "item2": [],
+                "user": [],
+                "old_cart": ["old_item"],
+                "old_item": ["old_cart"],
+                "log": ["log"],
+            }
+            print(collect(heap, ["session"]))
+            print(sorted(heap))
+        explanation: |
+          Mark with a stack and a set: pop a name, skip it if already marked, otherwise mark it and push everything it refers to; the set is what stops a cycle looping for ever. Then sweep the unmarked names out of the dictionary. Marking only the roots' direct references misses objects two steps away; keeping every object that something refers to is reference counting, which cannot free a cycle or a self-reference; and starting from the roots' references instead of the roots themselves frees the roots.
+    - question:
+        id: write-refcount
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `decref`, which drops one reference to an object and frees it, and whatever it alone kept alive, when no references are left. The program should print two lines: `freed: ['booking', 'ticket', 'passenger']`, then the two coaches that a cycle keeps alive.
+        starter: |
+          class Heap:
+              def __init__(self):
+                  self.refs = {}
+                  self.count = {}
+                  self.freed = []
+
+              def new(self, name):
+                  self.refs[name] = []
+                  self.count[name] = 0
+
+              def incref(self, name):
+                  self.count[name] += 1
+
+              def link(self, source, target):
+                  # source now holds a reference to target.
+                  self.refs[source].append(target)
+                  self.incref(target)
+
+              def decref(self, name):
+                  # Drop one reference to name. If no references are left, free it:
+                  # append name to self.freed, delete it from self.refs and
+                  # self.count, and then drop the reference it held to each object
+                  # in its refs list, which may free those in turn.
+                  self.count[name] -= 1
+
+
+          h = Heap()
+          for name in ["booking", "ticket", "passenger", "coach_a", "coach_b"]:
+              h.new(name)
+          h.link("booking", "ticket")
+          h.link("booking", "passenger")
+          h.incref("booking")
+          h.link("coach_a", "coach_b")
+          h.link("coach_b", "coach_a")
+          h.incref("coach_a")
+          try:
+              h.decref("booking")
+              h.decref("coach_a")
+          except KeyError as error:
+              print("dropped a reference to an object already freed:", error)
+          print("freed:", h.freed)
+          print("still counted:", sorted(h.count))
+        solution: |
+          class Heap:
+              def __init__(self):
+                  self.refs = {}
+                  self.count = {}
+                  self.freed = []
+
+              def new(self, name):
+                  self.refs[name] = []
+                  self.count[name] = 0
+
+              def incref(self, name):
+                  self.count[name] += 1
+
+              def link(self, source, target):
+                  # source now holds a reference to target.
+                  self.refs[source].append(target)
+                  self.incref(target)
+
+              def decref(self, name):
+                  # Drop one reference to name. If no references are left, free it:
+                  # append name to self.freed, delete it from self.refs and
+                  # self.count, and then drop the reference it held to each object
+                  # in its refs list, which may free those in turn.
+                  self.count[name] -= 1
+                  if self.count[name] > 0:
+                      return
+                  self.freed.append(name)
+                  held = self.refs[name]
+                  del self.refs[name]
+                  del self.count[name]
+                  for target in held:
+                      self.decref(target)
+
+
+          h = Heap()
+          for name in ["booking", "ticket", "passenger", "coach_a", "coach_b"]:
+              h.new(name)
+          h.link("booking", "ticket")
+          h.link("booking", "passenger")
+          h.incref("booking")
+          h.link("coach_a", "coach_b")
+          h.link("coach_b", "coach_a")
+          h.incref("coach_a")
+          try:
+              h.decref("booking")
+              h.decref("coach_a")
+          except KeyError as error:
+              print("dropped a reference to an object already freed:", error)
+          print("freed:", h.freed)
+          print("still counted:", sorted(h.count))
+        tests: |
+          def _fresh(_names):
+              _h = Heap()
+              for _n in _names:
+                  _h.new(_n)
+              return _h
+
+
+          def _drop(_h, _name):
+              try:
+                  _h.decref(_name)
+              except (KeyError, RecursionError) as _e:
+                  raise AssertionError("decref(" + repr(_name) + ") raised " + type(_e).__name__ + ": " + str(_e))
+
+
+          _h = _fresh(["a"])
+          _h.incref("a")
+          _h.incref("a")
+          _drop(_h, "a")
+          assert _h.freed == [] and _h.count.get("a") == 1, "An object with two references should survive losing one, with a count of 1; freed " + repr(_h.freed)
+          _drop(_h, "a")
+          assert _h.freed == ["a"], "An object should be freed when its last reference is dropped; freed " + repr(_h.freed)
+          assert "a" not in _h.count and "a" not in _h.refs, "A freed object should be deleted from refs and count"
+          _h = _fresh(["a", "b", "c", "d"])
+          _h.link("a", "b")
+          _h.link("b", "c")
+          _h.link("c", "d")
+          _h.incref("a")
+          _drop(_h, "a")
+          assert _h.freed == ["a", "b", "c", "d"], "Freeing the head of a chain a -> b -> c -> d should free the whole chain in order; freed " + repr(_h.freed)
+          _h = _fresh(["a", "b", "shared"])
+          _h.link("a", "shared")
+          _h.link("b", "shared")
+          _h.incref("a")
+          _h.incref("b")
+          _drop(_h, "a")
+          assert _h.freed == ["a"], "An object still referred to by b should not be freed when a goes; freed " + repr(_h.freed)
+          assert _h.count.get("shared") == 1, "shared should have a count of 1 once a is freed, not " + repr(_h.count.get("shared"))
+          _drop(_h, "b")
+          assert _h.freed == ["a", "b", "shared"], "Freeing b should then free shared; freed " + repr(_h.freed)
+          _h = _fresh(["x", "y"])
+          _h.link("x", "y")
+          _h.link("y", "x")
+          _h.incref("x")
+          _drop(_h, "x")
+          assert _h.freed == [] and _h.count == {"x": 1, "y": 1}, "A cycle keeps both counts at 1 once the outside reference goes, and nothing is freed"
+          assert output.splitlines() == ["freed: ['booking', 'ticket', 'passenger']", "still counted: ['coach_a', 'coach_b']"], "The program should print the three freed objects, then the two coaches that a cycle keeps alive"
+        wrong:
+          - |
+            class Heap:
+                def __init__(self):
+                    self.refs = {}
+                    self.count = {}
+                    self.freed = []
+
+                def new(self, name):
+                    self.refs[name] = []
+                    self.count[name] = 0
+
+                def incref(self, name):
+                    self.count[name] += 1
+
+                def link(self, source, target):
+                    # source now holds a reference to target.
+                    self.refs[source].append(target)
+                    self.incref(target)
+
+                def decref(self, name):
+                    # Drop one reference to name. If no references are left, free it:
+                    # append name to self.freed, delete it from self.refs and
+                    # self.count, and then drop the reference it held to each object
+                    # in its refs list, which may free those in turn.
+                    self.count[name] -= 1
+                    if self.count[name] > 0:
+                        return
+                    self.freed.append(name)
+                    del self.refs[name]
+                    del self.count[name]
+
+
+            h = Heap()
+            for name in ["booking", "ticket", "passenger", "coach_a", "coach_b"]:
+                h.new(name)
+            h.link("booking", "ticket")
+            h.link("booking", "passenger")
+            h.incref("booking")
+            h.link("coach_a", "coach_b")
+            h.link("coach_b", "coach_a")
+            h.incref("coach_a")
+            try:
+                h.decref("booking")
+                h.decref("coach_a")
+            except KeyError as error:
+                print("dropped a reference to an object already freed:", error)
+            print("freed:", h.freed)
+            print("still counted:", sorted(h.count))
+          - |
+            class Heap:
+                def __init__(self):
+                    self.refs = {}
+                    self.count = {}
+                    self.freed = []
+
+                def new(self, name):
+                    self.refs[name] = []
+                    self.count[name] = 0
+
+                def incref(self, name):
+                    self.count[name] += 1
+
+                def link(self, source, target):
+                    # source now holds a reference to target.
+                    self.refs[source].append(target)
+                    self.incref(target)
+
+                def decref(self, name):
+                    # Drop one reference to name. If no references are left, free it:
+                    # append name to self.freed, delete it from self.refs and
+                    # self.count, and then drop the reference it held to each object
+                    # in its refs list, which may free those in turn.
+                    self.count[name] -= 1
+                    if self.count[name] > 1:
+                        return
+                    self.freed.append(name)
+                    held = self.refs[name]
+                    del self.refs[name]
+                    del self.count[name]
+                    for target in held:
+                        self.decref(target)
+
+
+            h = Heap()
+            for name in ["booking", "ticket", "passenger", "coach_a", "coach_b"]:
+                h.new(name)
+            h.link("booking", "ticket")
+            h.link("booking", "passenger")
+            h.incref("booking")
+            h.link("coach_a", "coach_b")
+            h.link("coach_b", "coach_a")
+            h.incref("coach_a")
+            try:
+                h.decref("booking")
+                h.decref("coach_a")
+            except KeyError as error:
+                print("dropped a reference to an object already freed:", error)
+            print("freed:", h.freed)
+            print("still counted:", sorted(h.count))
+          - |
+            class Heap:
+                def __init__(self):
+                    self.refs = {}
+                    self.count = {}
+                    self.freed = []
+
+                def new(self, name):
+                    self.refs[name] = []
+                    self.count[name] = 0
+
+                def incref(self, name):
+                    self.count[name] += 1
+
+                def link(self, source, target):
+                    # source now holds a reference to target.
+                    self.refs[source].append(target)
+                    self.incref(target)
+
+                def decref(self, name):
+                    # Drop one reference to name. If no references are left, free it:
+                    # append name to self.freed, delete it from self.refs and
+                    # self.count, and then drop the reference it held to each object
+                    # in its refs list, which may free those in turn.
+                    if self.count[name] > 0:
+                        self.count[name] -= 1
+                        return
+                    self.freed.append(name)
+                    held = self.refs[name]
+                    del self.refs[name]
+                    del self.count[name]
+                    for target in held:
+                        self.decref(target)
+
+
+            h = Heap()
+            for name in ["booking", "ticket", "passenger", "coach_a", "coach_b"]:
+                h.new(name)
+            h.link("booking", "ticket")
+            h.link("booking", "passenger")
+            h.incref("booking")
+            h.link("coach_a", "coach_b")
+            h.link("coach_b", "coach_a")
+            h.incref("coach_a")
+            try:
+                h.decref("booking")
+                h.decref("coach_a")
+            except KeyError as error:
+                print("dropped a reference to an object already freed:", error)
+            print("freed:", h.freed)
+            print("still counted:", sorted(h.count))
+        explanation: |
+          Subtract one; if the count is still above 0, stop. Otherwise record the object as freed, remember its references, delete it, and call `decref` on each reference, which frees the rest of the structure by the same rule. Freeing without the cascade leaves the ticket and passenger counted for ever; freeing while one reference remains is a use after free, which the coaches' cycle exposes as a reference dropped twice; and checking the count before subtracting frees nothing until a count goes below 0.
+    - question:
+        id: fix-write-barrier
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A minor collection of this generational heap should never free a young object that an old object still refers to. The program should print three lines: `[]`, then `['temp']`, then `['cart', 'session']`. Instead, its second line is `['cart', 'temp']`. Find the fault and fix it.
+        starter: |
+          class GenerationalHeap:
+              def __init__(self):
+                  self.young = {}
+                  self.old = {}
+                  self.remembered = set()
+
+              def new(self, name):
+                  self.young[name] = []
+
+              def write(self, source, target):
+                  # source now refers to target. An old object that refers to a young
+                  # one must go in the remembered set, so that a minor collection,
+                  # which never scans the whole old generation, still sees it.
+                  if source in self.old:
+                      self.old[source].append(target)
+                  else:
+                      self.young[source].append(target)
+
+              def minor(self, roots):
+                  # Collect the young generation only. Mark from the roots and from
+                  # what remembered old objects refer to, following references within
+                  # the young generation; promote the survivors to old and return the
+                  # names of the young objects freed, sorted.
+                  stack = [name for name in roots if name in self.young]
+                  for name in self.remembered:
+                      stack.extend(self.old[name])
+                  marked = set()
+                  while stack:
+                      name = stack.pop()
+                      if name in marked or name not in self.young:
+                          continue
+                      marked.add(name)
+                      stack.extend(self.young[name])
+                  freed = sorted(name for name in self.young if name not in marked)
+                  for name in marked:
+                      self.old[name] = self.young[name]
+                  self.young = {}
+                  self.remembered = set()
+                  return freed
+
+
+          heap = GenerationalHeap()
+          heap.new("session")
+          print(heap.minor(["session"]))
+          heap.new("cart")
+          heap.new("temp")
+          heap.write("session", "cart")
+          print(heap.minor(["session"]))
+          print(sorted(heap.old))
+        solution: |
+          class GenerationalHeap:
+              def __init__(self):
+                  self.young = {}
+                  self.old = {}
+                  self.remembered = set()
+
+              def new(self, name):
+                  self.young[name] = []
+
+              def write(self, source, target):
+                  # source now refers to target. An old object that refers to a young
+                  # one must go in the remembered set, so that a minor collection,
+                  # which never scans the whole old generation, still sees it.
+                  if source in self.old:
+                      self.old[source].append(target)
+                      if target in self.young:
+                          self.remembered.add(source)
+                  else:
+                      self.young[source].append(target)
+
+              def minor(self, roots):
+                  # Collect the young generation only. Mark from the roots and from
+                  # what remembered old objects refer to, following references within
+                  # the young generation; promote the survivors to old and return the
+                  # names of the young objects freed, sorted.
+                  stack = [name for name in roots if name in self.young]
+                  for name in self.remembered:
+                      stack.extend(self.old[name])
+                  marked = set()
+                  while stack:
+                      name = stack.pop()
+                      if name in marked or name not in self.young:
+                          continue
+                      marked.add(name)
+                      stack.extend(self.young[name])
+                  freed = sorted(name for name in self.young if name not in marked)
+                  for name in marked:
+                      self.old[name] = self.young[name]
+                  self.young = {}
+                  self.remembered = set()
+                  return freed
+
+
+          heap = GenerationalHeap()
+          heap.new("session")
+          print(heap.minor(["session"]))
+          heap.new("cart")
+          heap.new("temp")
+          heap.write("session", "cart")
+          print(heap.minor(["session"]))
+          print(sorted(heap.old))
+        tests: |
+          def _minor(_h, _roots):
+              try:
+                  return _h.minor(_roots)
+              except KeyError as _e:
+                  raise AssertionError("minor raised KeyError: " + str(_e))
+
+
+          _h = GenerationalHeap()
+          _h.new("a")
+          assert _minor(_h, ["a"]) == [] and "a" in _h.old, "A young root should survive a minor collection and be promoted"
+          _h.new("b")
+          _h.new("c")
+          _h.write("a", "b")
+          assert _minor(_h, []) == ["c"], "A young object referred to only by an old one must survive a minor collection, and an unreachable one must be freed"
+          assert sorted(_h.old) == ["a", "b"], "b should be promoted, giving old objects a and b, not " + repr(sorted(_h.old))
+          _h = GenerationalHeap()
+          _h.new("root")
+          _minor(_h, ["root"])
+          _h.new("item")
+          _h.new("cart")
+          _h.write("cart", "item")
+          _h.write("root", "cart")
+          assert _minor(_h, []) == [], "A young object reached through another young object from an old one must survive; cart -> item from root"
+          assert sorted(_h.old) == ["cart", "item", "root"], "cart and item should both be promoted, not " + repr(sorted(_h.old))
+          _h = GenerationalHeap()
+          _h.new("x")
+          _h.new("y")
+          _h.write("x", "y")
+          assert _minor(_h, []) == ["x", "y"], "Young objects that only refer to each other, with no root and no old object pointing in, should be freed"
+          _h = GenerationalHeap()
+          _h.new("old1")
+          _h.new("old2")
+          _minor(_h, ["old1", "old2"])
+          _h.write("old1", "old2")
+          _h.new("fresh")
+          assert _minor(_h, []) == ["fresh"], "A reference between two old objects needs no remembering, and an unreachable young object is still freed"
+          _h = GenerationalHeap()
+          _h.new("p")
+          _h.new("q")
+          _minor(_h, ["p", "q"])
+          _h.new("p_child")
+          _h.new("q_child")
+          _h.write("p", "p_child")
+          _h.write("q", "q_child")
+          assert _minor(_h, []) == [], "Two old objects each referring to a young one should both be remembered, so neither young object is freed"
+          assert output.splitlines() == ["[]", "['temp']", "['cart', 'session']"], "The program should print [], then ['temp'], then ['cart', 'session']"
+        wrong:
+          - |
+            class GenerationalHeap:
+                def __init__(self):
+                    self.young = {}
+                    self.old = {}
+                    self.remembered = set()
+
+                def new(self, name):
+                    self.young[name] = []
+
+                def write(self, source, target):
+                    # source now refers to target. An old object that refers to a young
+                    # one must go in the remembered set, so that a minor collection,
+                    # which never scans the whole old generation, still sees it.
+                    if source in self.old:
+                        self.old[source].append(target)
+                        if target in self.old:
+                            self.remembered.add(source)
+                    else:
+                        self.young[source].append(target)
+
+                def minor(self, roots):
+                    # Collect the young generation only. Mark from the roots and from
+                    # what remembered old objects refer to, following references within
+                    # the young generation; promote the survivors to old and return the
+                    # names of the young objects freed, sorted.
+                    stack = [name for name in roots if name in self.young]
+                    for name in self.remembered:
+                        stack.extend(self.old[name])
+                    marked = set()
+                    while stack:
+                        name = stack.pop()
+                        if name in marked or name not in self.young:
+                            continue
+                        marked.add(name)
+                        stack.extend(self.young[name])
+                    freed = sorted(name for name in self.young if name not in marked)
+                    for name in marked:
+                        self.old[name] = self.young[name]
+                    self.young = {}
+                    self.remembered = set()
+                    return freed
+
+
+            heap = GenerationalHeap()
+            heap.new("session")
+            print(heap.minor(["session"]))
+            heap.new("cart")
+            heap.new("temp")
+            heap.write("session", "cart")
+            print(heap.minor(["session"]))
+            print(sorted(heap.old))
+          - |
+            class GenerationalHeap:
+                def __init__(self):
+                    self.young = {}
+                    self.old = {}
+                    self.remembered = set()
+
+                def new(self, name):
+                    self.young[name] = []
+
+                def write(self, source, target):
+                    # source now refers to target. An old object that refers to a young
+                    # one must go in the remembered set, so that a minor collection,
+                    # which never scans the whole old generation, still sees it.
+                    if source in self.old:
+                        self.old[source].append(target)
+                        if target in self.young:
+                            self.old[target] = self.young.pop(target)
+                    else:
+                        self.young[source].append(target)
+
+                def minor(self, roots):
+                    # Collect the young generation only. Mark from the roots and from
+                    # what remembered old objects refer to, following references within
+                    # the young generation; promote the survivors to old and return the
+                    # names of the young objects freed, sorted.
+                    stack = [name for name in roots if name in self.young]
+                    for name in self.remembered:
+                        stack.extend(self.old[name])
+                    marked = set()
+                    while stack:
+                        name = stack.pop()
+                        if name in marked or name not in self.young:
+                            continue
+                        marked.add(name)
+                        stack.extend(self.young[name])
+                    freed = sorted(name for name in self.young if name not in marked)
+                    for name in marked:
+                        self.old[name] = self.young[name]
+                    self.young = {}
+                    self.remembered = set()
+                    return freed
+
+
+            heap = GenerationalHeap()
+            heap.new("session")
+            print(heap.minor(["session"]))
+            heap.new("cart")
+            heap.new("temp")
+            heap.write("session", "cart")
+            print(heap.minor(["session"]))
+            print(sorted(heap.old))
+          - |
+            class GenerationalHeap:
+                def __init__(self):
+                    self.young = {}
+                    self.old = {}
+                    self.remembered = set()
+
+                def new(self, name):
+                    self.young[name] = []
+
+                def write(self, source, target):
+                    # source now refers to target. An old object that refers to a young
+                    # one must go in the remembered set, so that a minor collection,
+                    # which never scans the whole old generation, still sees it.
+                    if source in self.old:
+                        self.old[source].append(target)
+                        if target in self.young:
+                            self.remembered = {source}
+                    else:
+                        self.young[source].append(target)
+
+                def minor(self, roots):
+                    # Collect the young generation only. Mark from the roots and from
+                    # what remembered old objects refer to, following references within
+                    # the young generation; promote the survivors to old and return the
+                    # names of the young objects freed, sorted.
+                    stack = [name for name in roots if name in self.young]
+                    for name in self.remembered:
+                        stack.extend(self.old[name])
+                    marked = set()
+                    while stack:
+                        name = stack.pop()
+                        if name in marked or name not in self.young:
+                            continue
+                        marked.add(name)
+                        stack.extend(self.young[name])
+                    freed = sorted(name for name in self.young if name not in marked)
+                    for name in marked:
+                        self.old[name] = self.young[name]
+                    self.young = {}
+                    self.remembered = set()
+                    return freed
+
+
+            heap = GenerationalHeap()
+            heap.new("session")
+            print(heap.minor(["session"]))
+            heap.new("cart")
+            heap.new("temp")
+            heap.write("session", "cart")
+            print(heap.minor(["session"]))
+            print(sorted(heap.old))
+        explanation: |
+          `write` is the write barrier, and it never fills the remembered set, so the minor collection cannot see that session, an old object, now refers to cart. When an old source is made to refer to a young target, add the source to `self.remembered`. Remembering only references to old objects misses exactly the case that matters; promoting the target at once leaves anything it refers to unprotected; and replacing the set instead of adding to it forgets every old object but the last.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          A chat, a message and a profile refer to each other in a ring, and the app drops its only variable pointing at the chat. With reference counting alone, how many of the three objects are freed?
+        answer: "0"
+        explanation: |
+          Each object still has one reference, from the one before it in the ring, so no count reaches 0 and nothing is freed, although none of them can be reached. A tracing collector, or CPython's cycle collector, would free all three.
+    - question:
+        id: work-leak
+        type: choice
+        system: s2
+        prompt: |
+          Meera's Python web service grows by about 50 MB an hour until it is restarted. A module-level dictionary caches each user's rendered dashboard by user id and is never cleared. What is the best fix?
+        options:
+          - "Bound the cache, for example with functools.lru_cache(maxsize=...) or an expiry time"
+          - "Call gc.collect() every minute"
+          - "Restart the service every night"
+          - "Delete each request's local variables at the end of the request"
+        answer: 0
+        explanation: |
+          Every cached dashboard is still reachable from the dictionary, so no collector may free it; only removing entries helps. Running the collector more often frees nothing new, nightly restarts hide the leak, and local variables are not what holds the memory.
+  connections:
+    - text: |
+        0. Each object in the ring has exactly one reference, from the one before it, so no count ever reaches 0, although nothing outside the ring can reach any of them. Counting asks the wrong question; reachability from the roots asks the right one, which is why CPython backs its counts with a cycle collector.
+
+        That completes the cluster: text becomes tokens, tokens become a tree, a tree becomes instructions that a loop runs, and the runtime manages names, types and memory underneath. The same pattern returns in databases, where [[q3.from-sql-to-a-plan]] turns a SQL query into a tree of operators that a loop runs; and the machine underneath every interpreter, built up from single gates to a processor that fetches and runs instructions of its own, begins in [[h1.logic-gates]].

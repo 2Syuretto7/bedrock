@@ -1,0 +1,834 @@
+concept: s7.syntax-trees-and-evaluation
+minutes: 80
+claim: You can turn a parse into an abstract syntax tree that keeps only what matters, read the trees Python's ast module builds, and write a tree-walking evaluator with one case per kind of node, an environment for variables and a fresh scope for local bindings; evaluate children before parents but let `and`, `or` and conditionals skip what they do not need; transform trees, such as folding constants, without changing what a program does; and say why walking a tree is simple but slow.
+recalls: [s7.grammars-and-parsing]
+uses: [s7.tokenising, s1.recursion, s0.dictionaries-and-sets, s3.breadth-first-and-depth-first-search, f3.trees-and-their-properties, s1.exceptions, s0.booleans-and-conditionals]
+leads: [s7.how-python-runs-bytecode-and-the-interpreter-loop, s7.scope-closures-and-higher-order-functions, s7.static-and-dynamic-types]
+starter: |
+  # Scratch space. Python will show you the tree it builds.
+  import ast
+
+  tree = ast.parse("(1 + 2) * (3 + 4)", mode="eval")
+  print(ast.dump(tree.body))
+parts:
+  recall:
+    - text: |
+        [[s7.grammars-and-parsing]] built trees from tokens, with the grammar deciding which operator sits lower and so runs first. This lesson trims those trees to their essentials and then does the thing an interpreter exists for: works out what a program means by walking its tree. Three quick pulls first.
+  puzzle:
+    - text: |
+        Python's parser turns the line `(1 + 2) * (3 + 4)` into a tree. The brackets tell the parser which shape to build, but once the shape is built they are no longer needed, so the tree does not keep them.
+
+        **Counting each operation and each number as one node, how many nodes does the tree have?**
+  intuition:
+    - text: |
+        At the end of term, a school adds up its marks in layers. Each section teacher totals the marks for their section; each class teacher adds the section totals; the principal adds the class totals. Nobody can report until everyone below them has, and the principal's number, at the top, is the answer for the whole school.
+
+        Evaluating a syntax tree works the same way: every node waits for its children's values, then combines them and reports upwards. The figure walks two trees one step at a time. Watch the order, and in the second tree watch what `and` does with a false left side.
+    - figure: ast-eval
+      props: { tree: arith, step: 0 }
+    - text: |
+        In the first tree every node is visited once, children before parents, and the root ends with 30. In the second, `and` gets False from its left side and stops: the division by `x`, which would have divided by zero, is never evaluated at all. An evaluator is not only arithmetic on trees; it also decides what to evaluate and when, and that decision is part of what a language means.
+  derivation:
+    - text: |
+        **Abstract syntax trees.** A parse tree records every grammar rule used, including the levels for precedence and the brackets. Once the shape is fixed, most of that is noise. An **abstract syntax tree**, or AST, keeps only what the program says: an operation node with its operator and operands, a number, a name, a call with its function and arguments, a conditional with its test and branches. Brackets disappear, because the tree's shape already says what they said.
+
+        Python shows you its ASTs. `ast.parse("(1 + 2) * 3", mode="eval")` returns a tree whose `body` is `BinOp(left=BinOp(left=Constant(1), op=Add(), right=Constant(2)), op=Mult(), right=Constant(3))`. Every tool that understands Python code without running it, from linters to formatters to the editor that colours your code, works on trees like this one.
+    - question:
+        id: derivation-ast
+        type: choice
+        system: s2
+        prompt: |
+          Python parses `(price + tip) * qty`. What does the AST record that tells it to add before multiplying?
+        options:
+          - "The addition is a child of the multiplication, so it must be evaluated first"
+          - "A node for the brackets around price + tip"
+          - "A precedence number stored on each operator"
+          - "The order of the tokens in the source"
+        answer: 0
+        explanation: |
+          The tree's shape carries the grouping: the multiplication needs its left child's value, which is the sum. The brackets themselves are dropped, and no precedence numbers are stored.
+    - text: |
+        **Walking the tree.** A **tree-walking evaluator** is a recursive function with one case per kind of node, the recursion of [[s1.recursion]] following the tree's shape. A number evaluates to itself. A binary operation evaluates its left child, then its right child, then applies its operator. A name is looked up in an **environment**, a dictionary from names to values, and a name that is not there is an error the evaluator must report, as Python reports `NameError`. This visiting order, children before their parent, is the post-order traversal of a depth-first search, as in [[s3.breadth-first-and-depth-first-search]].
+
+        A construct that introduces a name, such as `let base = 450 in base * 2`, evaluates its value, then evaluates its body in a **new** environment: a copy of the current one with the extra name added. The copy matters. If the evaluator wrote the new name into the existing environment, the name would leak out after the body finished, and an outer variable with the same name would be overwritten for everyone. Scopes are how a language keeps names from colliding, and the next lessons build on exactly this.
+    - question:
+        id: derivation-let
+        type: numeric
+        system: s2
+        prompt: |
+          With `x` equal to 10 in the environment, what is the value of `(let x = 2 in x * x) + x`, evaluated with a fresh scope for the `let`?
+        answer: "14"
+        explanation: |
+          Inside the `let`, `x` is 2, so the left side is 4. The `let` does not change the outer environment, so the `x` on the right is still 10: $4 + 10 = 14$. An evaluator that wrote into the outer environment would give $4 + 2 = 6$.
+    - text: |
+        **Order and laziness.** Post-order is the default, but some constructs must not evaluate all their children. `a and b` evaluates `a`, and only if it is true evaluates `b`; `a or b` evaluates `b` only if `a` is false. Both give back the value that decided, which is why `0 and anything` is `0` in Python and `name or "guest"` supplies a default. A conditional evaluates its test and then only the chosen branch; evaluating both would run code the programmer said not to run, such as a division the test was there to prevent. Function calls, by contrast, usually evaluate every argument first, so `f(a, 1 / 0)` fails before `f` starts.
+
+        Getting this wrong is not a matter of speed. `x != 0 and 10 / x > 2` is a correct, safe expression in Python only because the evaluator skips the division when `x` is 0.
+    - question:
+        id: derivation-skip
+        type: choice
+        system: s2
+        prompt: |
+          An evaluator handles `ticket if seats > 0 else refund()` correctly. With `seats` equal to 3, which of these does it evaluate?
+        options:
+          - "seats > 0, then ticket"
+          - "seats > 0, ticket and refund()"
+          - "ticket and refund(), then seats > 0"
+          - "Only ticket"
+        answer: 0
+        explanation: |
+          A conditional evaluates its test first and then only the chosen branch. Calling `refund()` as well would run a side effect the program never asked for.
+    - text: |
+        **Transforming trees.** Because an AST is just data, programs can rewrite it. **Constant folding** replaces any operation whose operands are known numbers by its result, so `18 * 100 / 2` becomes `900.0` before the program runs, working from the leaves up so that folded children can make their parents foldable too. A transformation must never change what the program does: a division by zero must stay in the tree, to fail when it runs, rather than crash the tool that was only tidying up. Python's own compiler folds constants this way, and other passes remove code that can never run or simplify patterns.
+
+        **Why walking is slow.** A tree-walking interpreter is the easiest kind to write, and many small languages stop there. But every step follows pointers between scattered nodes, decides afresh what kind of node it is looking at, and looks names up in dictionaries. Doing that work again every time a loop goes round is wasteful. Python instead translates the tree once into a compact list of instructions and runs those, which is the subject of the next lesson.
+    - question:
+        id: derivation-pipeline
+        type: order
+        system: s2
+        prompt: |
+          Put the stages of a small tree-walking interpreter in order, from source text to value.
+        steps:
+          - "Split the source text into tokens."
+          - "Parse the tokens into an abstract syntax tree."
+          - "Fold constant subtrees into numbers."
+          - "Walk the tree, evaluating children before parents."
+          - "Return the value computed at the root."
+        explanation: |
+          Each stage needs the output of the one before: tokens for the parser, a tree for folding, and a folded tree for the walk, which ends with the root's value.
+  formal:
+    - text: |
+        **Abstract syntax tree.** A tree with one node per construct, operations, literals, names, calls, conditionals, and no nodes for brackets or precedence levels. Python: `ast.parse(source, mode="eval")`.
+
+        **Tree-walking evaluation.** A recursive function with one case per node kind; by default children are evaluated before their parent, left to right.
+
+        **Environment.** A mapping from names to values. A binding construct evaluates its body in a new environment extending the current one, leaving the current one unchanged.
+
+        **Short-circuit evaluation.** `and`, `or` and conditionals evaluate a child only when its value is needed, and `and` and `or` return the value that decided.
+
+        **Tree transformation.** A function from trees to trees that preserves meaning, such as constant folding, applied from the leaves up.
+  drill:
+    - text: Seconds each. Picture the tree, then walk it.
+    - question:
+        id: drill-nodes
+        type: numeric
+        system: s1
+        prompt: |
+          How many nodes does the AST of `a * b + c` have, counting each name and each operation?
+        answer: "5"
+        explanation: Three names and two operations; the multiplication is the left child of the addition.
+    - question:
+        id: drill-or
+        type: choice
+        system: s1
+        prompt: |
+          What does `"" or "guest"` give in Python?
+        options:
+          - "'guest'"
+          - "True"
+          - "''"
+          - "False"
+        answer: 0
+        explanation: The empty string is false, so `or` evaluates and returns its right side.
+    - question:
+        id: predict-ast-op
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import ast
+          tree = ast.parse("2 + 3 * 4", mode="eval")
+          print(type(tree.body.op).__name__)
+        output: "Add"
+        explanation: The addition is the root, because the multiplication binds tighter and sits below it as its right child.
+    - question:
+        id: predict-literal-eval
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import ast
+          print(ast.literal_eval("(1, [2, 3])"))
+        output: "(1, [2, 3])"
+        explanation: literal_eval walks the tree but accepts only literals, so it can safely read data that someone else typed.
+  work:
+    - text: Slower now. Write the walker, then make it skip and simplify.
+    - question:
+        id: write-evaluate
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `evaluate`, a tree-walking evaluator for numbers, variables, arithmetic and `let`. The program should print two lines: `531.0`, the fare with GST, and then `{'seats': 2}`, the environment unchanged.
+        starter: |
+          def evaluate(node, env):
+              # Nodes are tuples:
+              #   ("num", value)                  a number
+              #   ("var", name)                   look the name up in env, a dict;
+              #                                   if it is missing, raise ValueError
+              #   ("bin", op, left, right)        op is "+", "-", "*" or "/"
+              #   ("let", name, value, body)      evaluate value, then evaluate body
+              #                                   with name bound to it; env itself
+              #                                   must not change
+              return 0
+
+
+          # let base = 450 in base + base * 18 / 100
+          tree = ("let", "base", ("num", 450),
+                  ("bin", "+", ("var", "base"),
+                   ("bin", "/", ("bin", "*", ("var", "base"), ("num", 18)), ("num", 100))))
+          env = {"seats": 2}
+          print(evaluate(tree, env))
+          print(env)
+        solution: |
+          def evaluate(node, env):
+              # Nodes are tuples:
+              #   ("num", value)                  a number
+              #   ("var", name)                   look the name up in env, a dict;
+              #                                   if it is missing, raise ValueError
+              #   ("bin", op, left, right)        op is "+", "-", "*" or "/"
+              #   ("let", name, value, body)      evaluate value, then evaluate body
+              #                                   with name bound to it; env itself
+              #                                   must not change
+              kind = node[0]
+              if kind == "num":
+                  return node[1]
+              if kind == "var":
+                  if node[1] not in env:
+                      raise ValueError("unknown variable " + node[1])
+                  return env[node[1]]
+              if kind == "bin":
+                  a = evaluate(node[2], env)
+                  b = evaluate(node[3], env)
+                  op = node[1]
+                  if op == "+":
+                      return a + b
+                  if op == "-":
+                      return a - b
+                  if op == "*":
+                      return a * b
+                  return a / b
+              if kind == "let":
+                  inner = dict(env)
+                  inner[node[1]] = evaluate(node[2], env)
+                  return evaluate(node[3], inner)
+              raise ValueError("unknown node " + str(kind))
+
+
+          # let base = 450 in base + base * 18 / 100
+          tree = ("let", "base", ("num", 450),
+                  ("bin", "+", ("var", "base"),
+                   ("bin", "/", ("bin", "*", ("var", "base"), ("num", 18)), ("num", 100))))
+          env = {"seats": 2}
+          print(evaluate(tree, env))
+          print(env)
+        tests: |
+          _e = {"x": 10, "y": 4}
+          for _tree, _want in [
+              (("num", 7), 7),
+              (("var", "x"), 10),
+              (("bin", "-", ("var", "x"), ("var", "y")), 6),
+              (("bin", "/", ("num", 9), ("num", 2)), 4.5),
+              (("bin", "*", ("bin", "+", ("num", 2), ("num", 3)), ("bin", "-", ("num", 10), ("num", 4))), 30),
+              (("let", "z", ("num", 5), ("bin", "+", ("var", "z"), ("var", "x"))), 15),
+              (("let", "x", ("num", 1), ("var", "x")), 1),
+              (("let", "a", ("var", "x"), ("let", "x", ("num", 0), ("bin", "-", ("var", "a"), ("var", "x")))), 10),
+              (("bin", "+", ("let", "x", ("num", 1), ("var", "x")), ("var", "x")), 11),
+          ]:
+              _before = dict(_e)
+              try:
+                  _got = evaluate(_tree, _e)
+              except ValueError as _err:
+                  raise AssertionError("evaluate(" + repr(_tree) + ") should give " + repr(_want) + ", but it raised ValueError: " + str(_err))
+              assert _got == _want, "evaluate(" + repr(_tree) + ") with x = 10 and y = 4 should give " + repr(_want) + ", not " + repr(_got)
+              assert _e == _before, "Evaluating " + repr(_tree) + " must not change env, but it became " + repr(_e)
+          try:
+              evaluate(("var", "q"), {})
+              raise AssertionError("An unknown variable should raise ValueError")
+          except ValueError:
+              pass
+          try:
+              evaluate(("let", "t", ("num", 1), ("var", "u")), {"x": 1})
+              raise AssertionError("A let body that uses an unknown variable should raise ValueError")
+          except ValueError:
+              pass
+          assert output.splitlines() == ["531.0", "{'seats': 2}"], "The program should print two lines: 531.0, then {'seats': 2}"
+        wrong:
+          - |
+            def evaluate(node, env):
+                # Nodes are tuples:
+                #   ("num", value)                  a number
+                #   ("var", name)                   look the name up in env, a dict;
+                #                                   if it is missing, raise ValueError
+                #   ("bin", op, left, right)        op is "+", "-", "*" or "/"
+                #   ("let", name, value, body)      evaluate value, then evaluate body
+                #                                   with name bound to it; env itself
+                #                                   must not change
+                kind = node[0]
+                if kind == "num":
+                    return node[1]
+                if kind == "var":
+                    if node[1] not in env:
+                        raise ValueError("unknown variable " + node[1])
+                    return env[node[1]]
+                if kind == "bin":
+                    a = evaluate(node[2], env)
+                    b = evaluate(node[3], env)
+                    op = node[1]
+                    if op == "+":
+                        return a + b
+                    if op == "-":
+                        return a - b
+                    if op == "*":
+                        return a * b
+                    return a / b
+                if kind == "let":
+                    env[node[1]] = evaluate(node[2], env)
+                    return evaluate(node[3], env)
+                raise ValueError("unknown node " + str(kind))
+
+
+            # let base = 450 in base + base * 18 / 100
+            tree = ("let", "base", ("num", 450),
+                    ("bin", "+", ("var", "base"),
+                     ("bin", "/", ("bin", "*", ("var", "base"), ("num", 18)), ("num", 100))))
+            env = {"seats": 2}
+            print(evaluate(tree, env))
+            print(env)
+          - |
+            def evaluate(node, env):
+                # Nodes are tuples:
+                #   ("num", value)                  a number
+                #   ("var", name)                   look the name up in env, a dict;
+                #                                   if it is missing, raise ValueError
+                #   ("bin", op, left, right)        op is "+", "-", "*" or "/"
+                #   ("let", name, value, body)      evaluate value, then evaluate body
+                #                                   with name bound to it; env itself
+                #                                   must not change
+                kind = node[0]
+                if kind == "num":
+                    return node[1]
+                if kind == "var":
+                    if node[1] not in env:
+                        raise ValueError("unknown variable " + node[1])
+                    return env[node[1]]
+                if kind == "bin":
+                    a = evaluate(node[2], env)
+                    b = evaluate(node[3], env)
+                    op = node[1]
+                    if op == "+":
+                        return a + b
+                    if op == "-":
+                        return b - a
+                    if op == "*":
+                        return a * b
+                    return a / b
+                if kind == "let":
+                    inner = dict(env)
+                    inner[node[1]] = evaluate(node[2], env)
+                    return evaluate(node[3], inner)
+                raise ValueError("unknown node " + str(kind))
+
+
+            # let base = 450 in base + base * 18 / 100
+            tree = ("let", "base", ("num", 450),
+                    ("bin", "+", ("var", "base"),
+                     ("bin", "/", ("bin", "*", ("var", "base"), ("num", 18)), ("num", 100))))
+            env = {"seats": 2}
+            print(evaluate(tree, env))
+            print(env)
+          - |
+            def evaluate(node, env):
+                # Nodes are tuples:
+                #   ("num", value)                  a number
+                #   ("var", name)                   look the name up in env, a dict;
+                #                                   if it is missing, raise ValueError
+                #   ("bin", op, left, right)        op is "+", "-", "*" or "/"
+                #   ("let", name, value, body)      evaluate value, then evaluate body
+                #                                   with name bound to it; env itself
+                #                                   must not change
+                kind = node[0]
+                if kind == "num":
+                    return node[1]
+                if kind == "var":
+                    if node[1] not in env:
+                        raise ValueError("unknown variable " + node[1])
+                    return env[node[1]]
+                if kind == "bin":
+                    a = evaluate(node[2], env)
+                    b = evaluate(node[3], env)
+                    op = node[1]
+                    if op == "+":
+                        return a + b
+                    if op == "-":
+                        return a - b
+                    if op == "*":
+                        return a * b
+                    return a / b
+                if kind == "let":
+                    inner = {node[1]: evaluate(node[2], env)}
+                    return evaluate(node[3], inner)
+                raise ValueError("unknown node " + str(kind))
+
+
+            # let base = 450 in base + base * 18 / 100
+            tree = ("let", "base", ("num", 450),
+                    ("bin", "+", ("var", "base"),
+                     ("bin", "/", ("bin", "*", ("var", "base"), ("num", 18)), ("num", 100))))
+            env = {"seats": 2}
+            print(evaluate(tree, env))
+            print(env)
+        explanation: |
+          One case per node kind: a number is itself, a variable is looked up, an operation evaluates both children and applies its operator, and `let` evaluates its value and then its body in a copy of the environment with the new name added. Writing the name into `env` itself leaks it out of the `let`; swapping the operands of `-` gives `-6` for `10 - 4`; and a new environment holding only the bound name loses every outer variable.
+    - question:
+        id: fix-short-circuit
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This evaluator should treat `and` and `or` as Python does. The program should print two lines: `4 True`, then `0 False`. Instead, its second line is `0 crashed: division by zero`. Find the fault and fix it.
+        starter: |
+          def evaluate(node, env):
+              # Nodes: ("num", v), ("var", name), ("bin", op, left, right) for + - * /,
+              # ("cmp", op, left, right) for > and !=, and ("and", left, right) and
+              # ("or", left, right), which behave as in Python: they evaluate the
+              # right side only if the left side does not settle the answer, and
+              # they give back the value of the side that decided.
+              kind = node[0]
+              if kind == "num":
+                  return node[1]
+              if kind == "var":
+                  return env[node[1]]
+              if kind in ("and", "or"):
+                  left = evaluate(node[1], env)
+                  right = evaluate(node[2], env)
+                  if kind == "and":
+                      return left and right
+                  return left or right
+              a = evaluate(node[2], env)
+              b = evaluate(node[3], env)
+              op = node[1]
+              if op == "+":
+                  return a + b
+              if op == "-":
+                  return a - b
+              if op == "*":
+                  return a * b
+              if op == "/":
+                  return a / b
+              if op == ">":
+                  return a > b
+              return a != b
+
+
+          # x != 0 and 10 / x > 2
+          check = ("and", ("cmp", "!=", ("var", "x"), ("num", 0)),
+                   ("cmp", ">", ("bin", "/", ("num", 10), ("var", "x")), ("num", 2)))
+          for x in [4, 0]:
+              try:
+                  print(x, evaluate(check, {"x": x}))
+              except ZeroDivisionError:
+                  print(x, "crashed: division by zero")
+        solution: |
+          def evaluate(node, env):
+              # Nodes: ("num", v), ("var", name), ("bin", op, left, right) for + - * /,
+              # ("cmp", op, left, right) for > and !=, and ("and", left, right) and
+              # ("or", left, right), which behave as in Python: they evaluate the
+              # right side only if the left side does not settle the answer, and
+              # they give back the value of the side that decided.
+              kind = node[0]
+              if kind == "num":
+                  return node[1]
+              if kind == "var":
+                  return env[node[1]]
+              if kind in ("and", "or"):
+                  left = evaluate(node[1], env)
+                  if kind == "and" and not left:
+                      return left
+                  if kind == "or" and left:
+                      return left
+                  return evaluate(node[2], env)
+              a = evaluate(node[2], env)
+              b = evaluate(node[3], env)
+              op = node[1]
+              if op == "+":
+                  return a + b
+              if op == "-":
+                  return a - b
+              if op == "*":
+                  return a * b
+              if op == "/":
+                  return a / b
+              if op == ">":
+                  return a > b
+              return a != b
+
+
+          # x != 0 and 10 / x > 2
+          check = ("and", ("cmp", "!=", ("var", "x"), ("num", 0)),
+                   ("cmp", ">", ("bin", "/", ("num", 10), ("var", "x")), ("num", 2)))
+          for x in [4, 0]:
+              try:
+                  print(x, evaluate(check, {"x": x}))
+              except ZeroDivisionError:
+                  print(x, "crashed: division by zero")
+        tests: |
+          _boom = ("bin", "/", ("num", 1), ("num", 0))
+          for _tree, _want in [
+              (("and", ("num", 0), _boom), 0),
+              (("or", ("num", 5), _boom), 5),
+              (("and", ("num", 3), ("num", 7)), 7),
+              (("or", ("num", 0), ("num", 9)), 9),
+              (("or", ("num", 0), ("num", 0)), 0),
+              (("and", ("num", 2), ("and", ("num", 0), _boom)), 0),
+              (("or", ("and", ("num", 0), _boom), ("num", 8)), 8),
+              (("and", ("cmp", ">", ("num", 1), ("num", 2)), _boom), False),
+          ]:
+              try:
+                  _got = evaluate(_tree, {})
+              except ZeroDivisionError:
+                  raise AssertionError("Evaluating " + repr(_tree) + " divided by zero: the right side should not have been evaluated")
+              assert _got == _want and type(_got) == type(_want), "Evaluating " + repr(_tree) + " should give " + repr(_want) + ", as Python would, not " + repr(_got)
+          assert output.splitlines() == ["4 True", "0 False"], "The program should print two lines: 4 True, then 0 False"
+        wrong:
+          - |
+            def evaluate(node, env):
+                # Nodes: ("num", v), ("var", name), ("bin", op, left, right) for + - * /,
+                # ("cmp", op, left, right) for > and !=, and ("and", left, right) and
+                # ("or", left, right), which behave as in Python: they evaluate the
+                # right side only if the left side does not settle the answer, and
+                # they give back the value of the side that decided.
+                kind = node[0]
+                if kind == "num":
+                    return node[1]
+                if kind == "var":
+                    return env[node[1]]
+                if kind in ("and", "or"):
+                    left = evaluate(node[1], env)
+                    if kind == "and" and not left:
+                        return False
+                    if kind == "or" and left:
+                        return True
+                    return evaluate(node[2], env)
+                a = evaluate(node[2], env)
+                b = evaluate(node[3], env)
+                op = node[1]
+                if op == "+":
+                    return a + b
+                if op == "-":
+                    return a - b
+                if op == "*":
+                    return a * b
+                if op == "/":
+                    return a / b
+                if op == ">":
+                    return a > b
+                return a != b
+
+
+            # x != 0 and 10 / x > 2
+            check = ("and", ("cmp", "!=", ("var", "x"), ("num", 0)),
+                     ("cmp", ">", ("bin", "/", ("num", 10), ("var", "x")), ("num", 2)))
+            for x in [4, 0]:
+                try:
+                    print(x, evaluate(check, {"x": x}))
+                except ZeroDivisionError:
+                    print(x, "crashed: division by zero")
+          - |
+            def evaluate(node, env):
+                # Nodes: ("num", v), ("var", name), ("bin", op, left, right) for + - * /,
+                # ("cmp", op, left, right) for > and !=, and ("and", left, right) and
+                # ("or", left, right), which behave as in Python: they evaluate the
+                # right side only if the left side does not settle the answer, and
+                # they give back the value of the side that decided.
+                kind = node[0]
+                if kind == "num":
+                    return node[1]
+                if kind == "var":
+                    return env[node[1]]
+                if kind in ("and", "or"):
+                    left = evaluate(node[1], env)
+                    if not left:
+                        return left
+                    return evaluate(node[2], env)
+                a = evaluate(node[2], env)
+                b = evaluate(node[3], env)
+                op = node[1]
+                if op == "+":
+                    return a + b
+                if op == "-":
+                    return a - b
+                if op == "*":
+                    return a * b
+                if op == "/":
+                    return a / b
+                if op == ">":
+                    return a > b
+                return a != b
+
+
+            # x != 0 and 10 / x > 2
+            check = ("and", ("cmp", "!=", ("var", "x"), ("num", 0)),
+                     ("cmp", ">", ("bin", "/", ("num", 10), ("var", "x")), ("num", 2)))
+            for x in [4, 0]:
+                try:
+                    print(x, evaluate(check, {"x": x}))
+                except ZeroDivisionError:
+                    print(x, "crashed: division by zero")
+          - |
+            def evaluate(node, env):
+                # Nodes: ("num", v), ("var", name), ("bin", op, left, right) for + - * /,
+                # ("cmp", op, left, right) for > and !=, and ("and", left, right) and
+                # ("or", left, right), which behave as in Python: they evaluate the
+                # right side only if the left side does not settle the answer, and
+                # they give back the value of the side that decided.
+                kind = node[0]
+                if kind == "num":
+                    return node[1]
+                if kind == "var":
+                    return env[node[1]]
+                if kind in ("and", "or"):
+                    right = evaluate(node[2], env)
+                    if kind == "and" and not right:
+                        return right
+                    if kind == "or" and right:
+                        return right
+                    return evaluate(node[1], env)
+                a = evaluate(node[2], env)
+                b = evaluate(node[3], env)
+                op = node[1]
+                if op == "+":
+                    return a + b
+                if op == "-":
+                    return a - b
+                if op == "*":
+                    return a * b
+                if op == "/":
+                    return a / b
+                if op == ">":
+                    return a > b
+                return a != b
+
+
+            # x != 0 and 10 / x > 2
+            check = ("and", ("cmp", "!=", ("var", "x"), ("num", 0)),
+                     ("cmp", ">", ("bin", "/", ("num", 10), ("var", "x")), ("num", 2)))
+            for x in [4, 0]:
+                try:
+                    print(x, evaluate(check, {"x": x}))
+                except ZeroDivisionError:
+                    print(x, "crashed: division by zero")
+        explanation: |
+          Both sides are evaluated before `and` looks at the left one, so the division runs even when `x != 0` is false. Evaluate the left side; for `and` return it if it is false, for `or` return it if it is true; only otherwise evaluate and return the right side. Returning `True` or `False` instead of the deciding value breaks `0 and ...`, which must be `0`; treating `or` like `and` evaluates the right side of `5 or ...`; and evaluating the right side first divides by zero just the same.
+    - question:
+        id: write-fold
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `fold`, which replaces every operation on known numbers by its result, from the leaves up, but leaves a division by zero in place. The program should print the folded tree, in which `2 + 3` has become 5, `4 - 4` has become 0 with the division by it left alone, and `18 * 100 / 2` has become 900.0.
+        starter: |
+          def fold(node):
+              # Constant folding. Nodes are ("num", v), ("var", name) and
+              # ("bin", op, left, right) with op one of + - * /. Return a new tree in
+              # which every operation whose operands are both numbers, after folding
+              # them, is replaced by ("num", result). A division by zero is left
+              # unfolded, so that it fails when the program runs, as it would have.
+              return node
+
+
+          # qty * (2 + 3) * (10 / (4 - 4)) + 18 * 100 / 2
+          tree = ("bin", "+",
+                  ("bin", "*",
+                   ("bin", "*", ("var", "qty"), ("bin", "+", ("num", 2), ("num", 3))),
+                   ("bin", "/", ("num", 10), ("bin", "-", ("num", 4), ("num", 4)))),
+                  ("bin", "/", ("bin", "*", ("num", 18), ("num", 100)), ("num", 2)))
+          print(fold(tree))
+        solution: |
+          def fold(node):
+              # Constant folding. Nodes are ("num", v), ("var", name) and
+              # ("bin", op, left, right) with op one of + - * /. Return a new tree in
+              # which every operation whose operands are both numbers, after folding
+              # them, is replaced by ("num", result). A division by zero is left
+              # unfolded, so that it fails when the program runs, as it would have.
+              if node[0] != "bin":
+                  return node
+              op = node[1]
+              left = fold(node[2])
+              right = fold(node[3])
+              if left[0] == "num" and right[0] == "num":
+                  a = left[1]
+                  b = right[1]
+                  if op == "+":
+                      return ("num", a + b)
+                  if op == "-":
+                      return ("num", a - b)
+                  if op == "*":
+                      return ("num", a * b)
+                  if b != 0:
+                      return ("num", a / b)
+              return ("bin", op, left, right)
+
+
+          # qty * (2 + 3) * (10 / (4 - 4)) + 18 * 100 / 2
+          tree = ("bin", "+",
+                  ("bin", "*",
+                   ("bin", "*", ("var", "qty"), ("bin", "+", ("num", 2), ("num", 3))),
+                   ("bin", "/", ("num", 10), ("bin", "-", ("num", 4), ("num", 4)))),
+                  ("bin", "/", ("bin", "*", ("num", 18), ("num", 100)), ("num", 2)))
+          print(fold(tree))
+        tests: |
+          _n = lambda _v: ("num", _v)
+          _x = ("var", "x")
+          for _tree, _want in [
+              (_n(4), _n(4)),
+              (_x, _x),
+              (("bin", "+", _n(2), _n(3)), _n(5)),
+              (("bin", "-", _n(2), _n(3)), _n(-1)),
+              (("bin", "*", ("bin", "+", _n(1), _n(2)), ("bin", "-", _n(9), _n(4))), _n(15)),
+              (("bin", "/", _n(7), _n(2)), _n(3.5)),
+              (("bin", "/", _n(7), _n(0)), ("bin", "/", _n(7), _n(0))),
+              (("bin", "/", _n(7), ("bin", "-", _n(1), _n(1))), ("bin", "/", _n(7), _n(0))),
+              (("bin", "+", _x, ("bin", "*", _n(2), _n(3))), ("bin", "+", _x, _n(6))),
+              (("bin", "+", ("bin", "+", _x, _n(1)), _n(2)), ("bin", "+", ("bin", "+", _x, _n(1)), _n(2))),
+              (("bin", "*", ("bin", "/", _n(8), ("bin", "*", _n(2), _n(2))), _x), ("bin", "*", _n(2.0), _x)),
+          ]:
+              try:
+                  _got = fold(_tree)
+              except ZeroDivisionError:
+                  raise AssertionError("fold(" + repr(_tree) + ") divided by zero; a division by zero should be left in the tree")
+              assert _got == _want, "fold(" + repr(_tree) + ") should give " + repr(_want) + ", not " + repr(_got)
+          assert output.strip() == "('bin', '+', ('bin', '*', ('bin', '*', ('var', 'qty'), ('num', 5)), ('bin', '/', ('num', 10), ('num', 0))), ('num', 900.0))", "The program should print the folded tree, with 5, the division by 0 left in place, and 900.0"
+        wrong:
+          - |
+            def fold(node):
+                # Constant folding. Nodes are ("num", v), ("var", name) and
+                # ("bin", op, left, right) with op one of + - * /. Return a new tree in
+                # which every operation whose operands are both numbers, after folding
+                # them, is replaced by ("num", result). A division by zero is left
+                # unfolded, so that it fails when the program runs, as it would have.
+                if node[0] != "bin":
+                    return node
+                op = node[1]
+                left = node[2]
+                right = node[3]
+                if left[0] == "num" and right[0] == "num":
+                    a = left[1]
+                    b = right[1]
+                    if op == "+":
+                        return ("num", a + b)
+                    if op == "-":
+                        return ("num", a - b)
+                    if op == "*":
+                        return ("num", a * b)
+                    if b != 0:
+                        return ("num", a / b)
+                return ("bin", op, fold(left), fold(right))
+
+
+            # qty * (2 + 3) * (10 / (4 - 4)) + 18 * 100 / 2
+            tree = ("bin", "+",
+                    ("bin", "*",
+                     ("bin", "*", ("var", "qty"), ("bin", "+", ("num", 2), ("num", 3))),
+                     ("bin", "/", ("num", 10), ("bin", "-", ("num", 4), ("num", 4)))),
+                    ("bin", "/", ("bin", "*", ("num", 18), ("num", 100)), ("num", 2)))
+            print(fold(tree))
+          - |
+            def fold(node):
+                # Constant folding. Nodes are ("num", v), ("var", name) and
+                # ("bin", op, left, right) with op one of + - * /. Return a new tree in
+                # which every operation whose operands are both numbers, after folding
+                # them, is replaced by ("num", result). A division by zero is left
+                # unfolded, so that it fails when the program runs, as it would have.
+                if node[0] != "bin":
+                    return node
+                op = node[1]
+                left = fold(node[2])
+                right = fold(node[3])
+                if left[0] == "num" and right[0] == "num":
+                    a = left[1]
+                    b = right[1]
+                    if op == "+":
+                        return ("num", a + b)
+                    if op == "-":
+                        return ("num", a - b)
+                    if op == "*":
+                        return ("num", a * b)
+                    if b == 0:
+                        return ("num", 0)
+                    return ("num", a / b)
+                return ("bin", op, left, right)
+
+
+            # qty * (2 + 3) * (10 / (4 - 4)) + 18 * 100 / 2
+            tree = ("bin", "+",
+                    ("bin", "*",
+                     ("bin", "*", ("var", "qty"), ("bin", "+", ("num", 2), ("num", 3))),
+                     ("bin", "/", ("num", 10), ("bin", "-", ("num", 4), ("num", 4)))),
+                    ("bin", "/", ("bin", "*", ("num", 18), ("num", 100)), ("num", 2)))
+            print(fold(tree))
+          - |
+            def fold(node):
+                # Constant folding. Nodes are ("num", v), ("var", name) and
+                # ("bin", op, left, right) with op one of + - * /. Return a new tree in
+                # which every operation whose operands are both numbers, after folding
+                # them, is replaced by ("num", result). A division by zero is left
+                # unfolded, so that it fails when the program runs, as it would have.
+                if node[0] != "bin":
+                    return node
+                op = node[1]
+                left = fold(node[2])
+                right = fold(node[3])
+                if left[0] == "num" and right[0] == "num":
+                    a = left[1]
+                    b = right[1]
+                    if op == "+":
+                        return ("num", a + b)
+                    if op == "-":
+                        return ("num", a - b)
+                    if op == "*":
+                        return ("num", a * b)
+                    if b != 0:
+                        return ("num", a / b)
+                return node
+
+
+            # qty * (2 + 3) * (10 / (4 - 4)) + 18 * 100 / 2
+            tree = ("bin", "+",
+                    ("bin", "*",
+                     ("bin", "*", ("var", "qty"), ("bin", "+", ("num", 2), ("num", 3))),
+                     ("bin", "/", ("num", 10), ("bin", "-", ("num", 4), ("num", 4)))),
+                    ("bin", "/", ("bin", "*", ("num", 18), ("num", 100)), ("num", 2)))
+            print(fold(tree))
+        explanation: |
+          Fold both children first, then, if both are numbers, compute the result, unless it is a division by zero; otherwise rebuild the operation from the folded children. Folding a node only when its original children are numbers misses `(1 + 2) * (9 - 4)`, whose children become numbers only once folded; replacing a division by zero with 0 changes what the program does; and returning the original node when it cannot be folded throws away its folded children.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, how many nodes does the AST of `(1 + 2) * (3 + 4)` have?
+        answer: "7"
+        explanation: |
+          One multiplication at the root, two additions below it and four numbers as leaves: $1 + 2 + 4 = 7$. The brackets leave no nodes; their job was done when the tree took its shape.
+    - question:
+        id: work-formulas
+        type: choice
+        system: s2
+        prompt: |
+          Deepak's app lets restaurant owners type pricing formulas such as `base * 1.18 + 40`. How should the app work out a formula's value?
+        options:
+          - "Parse it into a tree and evaluate it with its own walker that allows only numbers, the names it supplies and arithmetic."
+          - "Pass the formula to Python's eval, since it already understands arithmetic."
+          - "Pass it to eval after checking that it contains no letters other than base."
+          - "Store the formula and ask a developer to code each one by hand."
+        answer: 0
+        explanation: |
+          A walker that knows only a few node kinds cannot be made to do anything else, so a hostile formula can at worst be rejected. `eval` runs any Python at all, including code that deletes files, and filtering characters is a race against every trick attackers know.
+  connections:
+    - text: |
+        7. The tree has the multiplication at its root, two additions below and four numbers as leaves. The brackets shaped the tree and then disappeared, because the tree itself now says that both sums come first.
+
+        Tree-walkers are not only for toy languages. Spreadsheet formulas, template engines, configuration languages and the filter expressions in many databases are evaluated this way, because a tree-walker is short, easy to check against the definition of the language, and fast enough when each node does a lot of work. It becomes slow when each node does very little, as in a tight loop over numbers, because then the cost of visiting a node, a function call and a check on its kind, is larger than the work the node stands for.
+
+        A tree-walker is the clearest statement of what a program means, and a fine way to build a small language. Python itself goes one step further: it compiles each tree once into a flat list of simple instructions for a machine with a stack, and its interpreter loop runs those instead. [[s7.how-python-runs-bytecode-and-the-interpreter-loop]] looks inside, at the instructions Python actually executes.

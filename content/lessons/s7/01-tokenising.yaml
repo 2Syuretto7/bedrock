@@ -1,0 +1,730 @@
+concept: s7.tokenising
+minutes: 75
+claim: You can turn source text into tokens, numbers, names, operators and string literals, with a scanner that walks a cursor through the text, decides a token's kind from its first character and takes the longest match; tell keywords from names, handle escapes inside strings, skip spaces and comments, and see how Python turns indentation into tokens; report errors by position; and keep a tokeniser fast and safe on hostile input, every step moving the cursor forward and every bad character raising a clean error.
+recalls: [s6.fuzzing, s3.intractability-p-np-and-heuristics]
+uses: [s0.strings, h0.characters-unicode-and-utf-8, s1.exceptions, s3.measuring-and-predicting-running-time, s6.property-based-testing]
+leads: [s7.regular-expressions-and-finite-automata, s7.grammars-and-parsing, s7.syntax-trees-and-evaluation]
+starter: |
+  # Scratch space. Splitting on spaces is not the same as tokenising.
+  print("fare = base * 1.18".split())
+  print("fare=base*1.18".split())
+parts:
+  recall:
+    - text: |
+        [[s6.fuzzing]] aimed millions of hostile inputs at code that reads text, and the first code such text meets in any language is the tokeniser. [[s3.intractability-p-np-and-heuristics]] ended with problems for which no fast method is known. This cluster begins at the other end: reading a program is a problem with a fast, exact method, and it starts with one pass over the characters. Three quick pulls first.
+  puzzle:
+    - text: |
+        A calculator app reads the line `12+3.5*(4-1)`. Before it can work anything out, it groups the characters into tokens: whole numbers, operators and brackets.
+
+        **How many tokens does the line contain?**
+  intuition:
+    - text: |
+        A bank sends the message "Rs.1,250.00 debited from A/c XX1234 on 27-11-26". Nobody reads it letter by letter. The eye groups "Rs.1,250.00" into one amount, "A/c" into one abbreviation and "27-11-26" into one date before it thinks about what the message means. Get the grouping wrong, reading "1,250" as two numbers, and the meaning is wrong however carefully you think afterwards.
+
+        A language implementation does the same grouping first, and calls it **tokenising**, or scanning. The figure runs a scanner over a line of code. Step through it, and try the other lines.
+    - figure: token-scan
+      props: { source: "fare = base*1.18 + gst2", step: 0 }
+    - text: |
+        The scanner never looks far ahead. At each step it skips spaces, looks at one character to decide what kind of token starts there, and keeps reading for as long as the characters fit that kind. A digit starts a number, a letter starts a name, and an operator character starts an operator. Each token is the longest one that can start at the cursor, which is why `1.18` is one number, `gst2` one name and `>=` one operator.
+  derivation:
+    - text: |
+        **Tokens.** A **token** is the smallest unit with meaning in a language: a number, a name, an operator, a bracket, a string literal. Each has a **kind** and the text it was made from, its **lexeme**, and a good tokeniser also records where in the source it started, so that later errors can point at the right place. Spaces and comments usually produce no tokens at all; they matter only because they separate other tokens.
+
+        Splitting the work this way keeps each stage simple. The next stage, the parser of [[s7.grammars-and-parsing]], reasons about the structure of tokens, an operator between two expressions, without worrying whether a number was written `40` or `40.0` or was followed by three spaces.
+
+        **The scanner loop.** A hand-written tokeniser is a loop with a cursor. At each turn it looks at the character under the cursor. A space moves the cursor on. A digit starts a number, so the scanner advances while it sees digits, then, if it sees a dot followed by a digit, takes the dot and the digits after it. A letter or underscore starts a name, which runs through letters, digits and underscores. An operator character becomes an operator token. Anything else is an error. Because each character is looked at a fixed number of times, scanning takes time proportional to the length of the text, the gentlest growth rate of [[s3.measuring-and-predicting-running-time]].
+    - question:
+        id: derivation-count
+        type: numeric
+        system: s2
+        prompt: |
+          How many tokens does a tokeniser that skips spaces and comments produce for `total = price * 1.18   # with GST`?
+        answer: "5"
+        explanation: |
+          `total`, `=`, `price`, `*` and `1.18`. The spaces separate tokens, and the comment, from `#` to the end of the line, produces none.
+    - text: |
+        **The longest match.** When more than one token could start at the cursor, the scanner takes the longest, a rule called **maximal munch**. In `age>=18` it takes `>=` rather than `>`, in `x**2` it takes `**` rather than `*`, and in `gst2` it takes the whole name rather than stopping at the digit. The rule is simple and almost always what people mean, but it is a rule, not mind-reading: Python reads `a**-b` as `a`, `**`, `-`, `b`, and some languages famously read `x+++y` as `x`, `++`, `+`, `y`, whatever the programmer intended.
+
+        **Keywords.** Words such as `if`, `while` and `return` look exactly like names. Most tokenisers read them as names first, by the usual rule, and then look the finished word up in a table of keywords. That is why `iffy` and `ifs` are ordinary names: the scanner reads the whole word before it asks whether it is special, which maximal munch makes automatic.
+    - question:
+        id: derivation-munch
+        type: choice
+        system: s2
+        prompt: |
+          A scanner uses maximal munch and knows the operators `<`, `=`, `<=` and `==`. How does it split `a<==b`?
+        options:
+          - "a, <=, =, b"
+          - "a, <, ==, b"
+          - "a, <, =, =, b"
+          - "It reports an error, since <== is not an operator"
+        answer: 0
+        explanation: |
+          At the `<`, the longest operator that matches is `<=`. The cursor then stands on the second `=`, where the longest match is `=`. Maximal munch is greedy from left to right; it does not look for the split a person might find more sensible.
+    - text: |
+        **Strings, comments and layout.** Some tokens change the rules for the characters inside them. After an opening quote, the scanner is reading a string, where spaces and operators are just characters, and a backslash **escapes** the next character, so `\"` is a quote inside the string rather than its end and `\n` is a newline. If the text ends before the closing quote, the error should point at the opening one, because that is where the mistake usually is. A comment runs from `#` to the end of the line and is thrown away.
+
+        Python adds one more job. Its blocks are marked by indentation, not brackets, so its tokeniser keeps a stack of indentation levels. When a line is indented more than the one before, it pushes the new level and emits an `INDENT` token; when a line is indented less, it pops levels, emitting one `DEDENT` token for each, until it reaches the line's level. The parser then sees `INDENT` and `DEDENT` exactly as another language's parser sees `{` and `}`.
+    - question:
+        id: derivation-dedent
+        type: numeric
+        system: s2
+        prompt: |
+          A Python file has four lines, indented by 0, 4, 8 and 12 spaces, each opening the next block. A fifth line is indented by 0 spaces. How many `DEDENT` tokens come before the fifth line's first token?
+        answer: "3"
+        explanation: |
+          The stack holds the levels 0, 4, 8 and 12. Returning to 0 pops 12, 8 and 4, one `DEDENT` each, closing three blocks at once.
+    - text: |
+        **Robust tokenisers.** A tokeniser reads text that anyone may have written, so it is a favourite target of [[s6.fuzzing]], and three properties matter. Every turn of the loop must move the cursor forward or stop, otherwise some input makes it loop for ever. Every bad input must end in the tokeniser's own error, such as a `ValueError` naming the position, never an `IndexError` from reading past the end of the text. And the work must stay proportional to the length of the text, so no input can make it slow.
+
+        Characters deserve care too, as [[h0.characters-unicode-and-utf-8]] showed. Python allows names in any script, so `किराया = 450` is a valid assignment. But Python's own `isdigit` says yes to characters such as the superscript `²`, which `int` refuses, so a scanner should decide deliberately which characters may form a number rather than trusting the nearest built-in test. A property worth checking with [[s6.property-based-testing]]: for any input the tokeniser accepts, joining the tokens' texts gives back the input without its spaces.
+    - question:
+        id: derivation-steps
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of reading one token in order.
+        steps:
+          - "Skip any spaces at the cursor."
+          - "Remember the position where the token starts."
+          - "Look at the first character to choose the kind of token."
+          - "Keep reading while the characters fit that kind."
+          - "Record the token's kind, text and position, and leave the cursor just after it."
+        explanation: |
+          The start position must be taken after the spaces, so errors point at the token; the first character decides the kind; maximal munch reads on as far as possible; and the cursor ends where the next token can begin.
+  formal:
+    - text: |
+        **Token.** A pair of a kind, such as number, name, operator or string, and the source text it came from, its lexeme, usually with its position.
+
+        **Tokeniser** (scanner, lexer). A pass that turns a string of characters into a list of tokens, dropping spaces and comments. A hand-written one moves a cursor forward, chooses each token's kind from its first character, and runs in time proportional to the length of the text.
+
+        **Maximal munch.** At each position, take the longest token that matches.
+
+        **Keywords.** Names reserved by the language, usually scanned as names and then looked up in a table.
+
+        **Escapes.** Inside a string literal, a backslash makes the next character part of the string.
+
+        **Indentation tokens.** Python's tokeniser keeps a stack of indentation levels and emits `INDENT` and `DEDENT` tokens as lines move in and out.
+  drill:
+    - text: Seconds each. Count characters into tokens as the scanner would.
+    - question:
+        id: drill-count
+        type: numeric
+        system: s1
+        prompt: |
+          How many tokens are in `(a+b)*c`?
+        answer: "7"
+        explanation: "`(`, `a`, `+`, `b`, `)`, `*`, `c`: every bracket and operator is a token of its own."
+    - question:
+        id: drill-keyword
+        type: choice
+        system: s1
+        prompt: |
+          In Python, what is `iffy` after tokenising?
+        options:
+          - "One name"
+          - "The keyword if followed by the name fy"
+          - "An error"
+          - "Four one-letter names"
+        answer: 0
+        explanation: The scanner reads the whole word first and only then checks it against the keywords, and iffy is not one.
+    - question:
+        id: predict-split
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print("fare=base*1.18".split())
+        output: "['fare=base*1.18']"
+        explanation: Splitting on spaces finds no spaces here, so the whole formula comes back as one piece. Tokens are separated by their kinds, not only by spaces.
+    - question:
+        id: predict-identifier
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print("gst2".isidentifier(), "2gst".isidentifier())
+        output: "True False"
+        explanation: A name may contain digits but may not start with one; 2gst would be scanned as the number 2 followed by the name gst.
+  work:
+    - text: Slower now. Build a scanner one rule at a time.
+    - question:
+        id: write-tokenise
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `tokenise`, which turns a formula into (kind, text) tokens and rejects anything it does not recognise with an error naming the position. The program should print the seven tokens of a fare formula, from `('name', 'fare')` to `('name', 'gst2')`.
+        starter: |
+          def tokenise(text):
+              # Split text into a list of (kind, text) pairs, skipping spaces:
+              #   "number": digits, optionally followed by a dot and more digits
+              #   "name":   a letter or underscore, then letters, digits or underscores
+              #   "op":     one of + - * / ( ) =
+              # Any other character raises ValueError("unexpected C at position P").
+              return []
+
+
+          print(tokenise("fare = base*1.18 + gst2"))
+        solution: |
+          def tokenise(text):
+              # Split text into a list of (kind, text) pairs, skipping spaces:
+              #   "number": digits, optionally followed by a dot and more digits
+              #   "name":   a letter or underscore, then letters, digits or underscores
+              #   "op":     one of + - * / ( ) =
+              # Any other character raises ValueError("unexpected C at position P").
+              tokens = []
+              i = 0
+              while i < len(text):
+                  c = text[i]
+                  if c == " ":
+                      i += 1
+                  elif c.isdigit():
+                      j = i
+                      while j < len(text) and text[j].isdigit():
+                          j += 1
+                      if j + 1 < len(text) and text[j] == "." and text[j + 1].isdigit():
+                          j += 1
+                          while j < len(text) and text[j].isdigit():
+                              j += 1
+                      tokens.append(("number", text[i:j]))
+                      i = j
+                  elif c.isalpha() or c == "_":
+                      j = i
+                      while j < len(text) and (text[j].isalnum() or text[j] == "_"):
+                          j += 1
+                      tokens.append(("name", text[i:j]))
+                      i = j
+                  elif c in "+-*/()=":
+                      tokens.append(("op", c))
+                      i += 1
+                  else:
+                      raise ValueError("unexpected " + c + " at position " + str(i))
+              return tokens
+
+
+          print(tokenise("fare = base*1.18 + gst2"))
+        tests: |
+          import random as _random
+
+          for _text, _want in [
+              ("", []),
+              ("   ", []),
+              ("42", [("number", "42")]),
+              ("3.75", [("number", "3.75")]),
+              ("x_1=(a+b)/2", [("name", "x_1"), ("op", "="), ("op", "("), ("name", "a"), ("op", "+"), ("name", "b"), ("op", ")"), ("op", "/"), ("number", "2")]),
+              ("_tmp - 10.5*rate", [("name", "_tmp"), ("op", "-"), ("number", "10.5"), ("op", "*"), ("name", "rate")]),
+              ("12ab", [("number", "12"), ("name", "ab")]),
+          ]:
+              try:
+                  _got = tokenise(_text)
+              except ValueError as _e:
+                  raise AssertionError("tokenise(" + repr(_text) + ") should give " + repr(_want) + ", but it raised ValueError: " + str(_e))
+              assert _got == _want, "tokenise(" + repr(_text) + ") should give " + repr(_want) + ", not " + repr(_got)
+          for _text, _pos in [("a $ b", 2), ("3.", 1), ("1.2.3", 3), ("fare#", 4)]:
+              try:
+                  tokenise(_text)
+                  raise AssertionError("tokenise(" + repr(_text) + ") should raise ValueError")
+              except ValueError as _e:
+                  assert "position " + str(_pos) in str(_e), "The error for " + repr(_text) + " should say position " + str(_pos) + "; it said " + repr(str(_e))
+          _rng = _random.Random(3)
+          for _ in range(2000):
+              _t = "".join(_rng.choice("ab1_.+( )$9") for _ in range(_rng.randint(0, 8)))
+              try:
+                  _toks = tokenise(_t)
+              except ValueError:
+                  continue
+              except Exception as _e:
+                  raise AssertionError("tokenise(" + repr(_t) + ") raised " + type(_e).__name__ + "; bad input should only ever raise ValueError")
+              assert "".join(_s for _k, _s in _toks) == _t.replace(" ", ""), "The tokens of " + repr(_t) + " should spell out the text without its spaces"
+          assert output.strip() == "[('name', 'fare'), ('op', '='), ('name', 'base'), ('op', '*'), ('number', '1.18'), ('op', '+'), ('name', 'gst2')]", "The program should print the seven tokens of the fare formula"
+        wrong:
+          - |
+            def tokenise(text):
+                # Split text into a list of (kind, text) pairs, skipping spaces:
+                #   "number": digits, optionally followed by a dot and more digits
+                #   "name":   a letter or underscore, then letters, digits or underscores
+                #   "op":     one of + - * / ( ) =
+                # Any other character raises ValueError("unexpected C at position P").
+                tokens = []
+                i = 0
+                while i < len(text):
+                    c = text[i]
+                    if c == " ":
+                        i += 1
+                    elif c.isdigit():
+                        j = i
+                        while j < len(text) and (text[j].isdigit() or text[j] == "."):
+                            j += 1
+                        tokens.append(("number", text[i:j]))
+                        i = j
+                    elif c.isalpha() or c == "_":
+                        j = i
+                        while j < len(text) and (text[j].isalnum() or text[j] == "_"):
+                            j += 1
+                        tokens.append(("name", text[i:j]))
+                        i = j
+                    elif c in "+-*/()=":
+                        tokens.append(("op", c))
+                        i += 1
+                    else:
+                        raise ValueError("unexpected " + c + " at position " + str(i))
+                return tokens
+
+
+            print(tokenise("fare = base*1.18 + gst2"))
+          - |
+            def tokenise(text):
+                # Split text into a list of (kind, text) pairs, skipping spaces:
+                #   "number": digits, optionally followed by a dot and more digits
+                #   "name":   a letter or underscore, then letters, digits or underscores
+                #   "op":     one of + - * / ( ) =
+                # Any other character raises ValueError("unexpected C at position P").
+                tokens = []
+                i = 0
+                while i < len(text):
+                    c = text[i]
+                    if c == " ":
+                        i += 1
+                    elif c.isdigit():
+                        j = i
+                        while j < len(text) and text[j].isdigit():
+                            j += 1
+                        if j + 1 < len(text) and text[j] == "." and text[j + 1].isdigit():
+                            j += 1
+                            while j < len(text) and text[j].isdigit():
+                                j += 1
+                        tokens.append(("number", text[i:j]))
+                        i = j
+                    elif c.isalpha() or c == "_":
+                        j = i
+                        while j < len(text) and (text[j].isalpha() or text[j] == "_"):
+                            j += 1
+                        tokens.append(("name", text[i:j]))
+                        i = j
+                    elif c in "+-*/()=":
+                        tokens.append(("op", c))
+                        i += 1
+                    else:
+                        raise ValueError("unexpected " + c + " at position " + str(i))
+                return tokens
+
+
+            print(tokenise("fare = base*1.18 + gst2"))
+          - |
+            def tokenise(text):
+                # Split text into a list of (kind, text) pairs, skipping spaces:
+                #   "number": digits, optionally followed by a dot and more digits
+                #   "name":   a letter or underscore, then letters, digits or underscores
+                #   "op":     one of + - * / ( ) =
+                # Any other character raises ValueError("unexpected C at position P").
+                tokens = []
+                i = 0
+                while i < len(text):
+                    c = text[i]
+                    if c == " ":
+                        i += 1
+                    elif c.isdigit():
+                        j = i
+                        while j < len(text) and text[j].isdigit():
+                            j += 1
+                        if j + 1 < len(text) and text[j] == "." and text[j + 1].isdigit():
+                            j += 1
+                            while j < len(text) and text[j].isdigit():
+                                j += 1
+                        tokens.append(("number", text[i:j]))
+                        i = j
+                    elif c.isalpha() or c == "_":
+                        j = i
+                        while j < len(text) and (text[j].isalnum() or text[j] == "_"):
+                            j += 1
+                        tokens.append(("name", text[i:j]))
+                        i = j
+                    elif c in "+-*/()=":
+                        tokens.append(("op", c))
+                        i += 1
+                    else:
+                        i += 1
+                return tokens
+
+
+            print(tokenise("fare = base*1.18 + gst2"))
+        explanation: |
+          Choose by the first character: a space moves on, a digit starts a number, a letter or underscore starts a name, and one of the operator characters is a token by itself; anything else raises the error with its position. A number takes its digits, then a dot only if a digit follows it. Letting dots run freely accepts `1.2.3` as a number; stopping names at a digit splits `gst2` in two; and skipping unknown characters silently turns `a $ b` into a different, valid formula.
+    - question:
+        id: fix-longest-match
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          This tokeniser should take the longest operator at each position. The program should print `['age', '>=', '18', 'and', 'fare', '!=', '0']`. It prints `['age', '>', '=', '18', 'and', 'fare', '!=', '0']`. Find the fault and fix it.
+        starter: |
+          OPERATORS = ["<", ">", "=", "<=", ">=", "==", "!="]
+
+
+          def tokenise(text):
+              # Split text into numbers, names and operators, skipping spaces. When
+              # more than one operator matches at a position, take the longest, so
+              # "<=" is one token, not "<" followed by "=".
+              tokens = []
+              i = 0
+              while i < len(text):
+                  c = text[i]
+                  if c == " ":
+                      i += 1
+                  elif c.isdigit() or c.isalpha():
+                      j = i
+                      while j < len(text) and text[j].isalnum():
+                          j += 1
+                      tokens.append(text[i:j])
+                      i = j
+                  else:
+                      found = None
+                      for op in OPERATORS:
+                          if found is None and text.startswith(op, i):
+                              found = op
+                      if found is None:
+                          raise ValueError("unexpected " + c + " at position " + str(i))
+                      tokens.append(found)
+                      i += len(found)
+              return tokens
+
+
+          print(tokenise("age>=18 and fare!=0"))
+        solution: |
+          OPERATORS = ["<=", ">=", "==", "!=", "<", ">", "="]
+
+
+          def tokenise(text):
+              # Split text into numbers, names and operators, skipping spaces. When
+              # more than one operator matches at a position, take the longest, so
+              # "<=" is one token, not "<" followed by "=".
+              tokens = []
+              i = 0
+              while i < len(text):
+                  c = text[i]
+                  if c == " ":
+                      i += 1
+                  elif c.isdigit() or c.isalpha():
+                      j = i
+                      while j < len(text) and text[j].isalnum():
+                          j += 1
+                      tokens.append(text[i:j])
+                      i = j
+                  else:
+                      found = None
+                      for op in OPERATORS:
+                          if found is None and text.startswith(op, i):
+                              found = op
+                      if found is None:
+                          raise ValueError("unexpected " + c + " at position " + str(i))
+                      tokens.append(found)
+                      i += len(found)
+              return tokens
+
+
+          print(tokenise("age>=18 and fare!=0"))
+        tests: |
+          for _text, _want in [
+              ("a<b", ["a", "<", "b"]),
+              ("a<=b", ["a", "<=", "b"]),
+              ("a >= 10", ["a", ">=", "10"]),
+              ("x==y", ["x", "==", "y"]),
+              ("x=y", ["x", "=", "y"]),
+              ("x!=1", ["x", "!=", "1"]),
+              ("p<=q>r", ["p", "<=", "q", ">", "r"]),
+              ("a===b", ["a", "==", "=", "b"]),
+              ("a<==b", ["a", "<=", "=", "b"]),
+              ("", []),
+          ]:
+              try:
+                  _got = tokenise(_text)
+              except ValueError as _e:
+                  raise AssertionError("tokenise(" + repr(_text) + ") should give " + repr(_want) + ", but it raised ValueError: " + str(_e))
+              assert _got == _want, "tokenise(" + repr(_text) + ") should give " + repr(_want) + ", not " + repr(_got)
+          try:
+              tokenise("a ! b")
+              raise AssertionError("A lone ! is not an operator, so tokenise('a ! b') should raise ValueError")
+          except ValueError:
+              pass
+          assert output.strip() == "['age', '>=', '18', 'and', 'fare', '!=', '0']", "The program should print ['age', '>=', '18', 'and', 'fare', '!=', '0']"
+        wrong:
+          - |
+            OPERATORS = ["<=", ">=", "==", "!="]
+
+
+            def tokenise(text):
+                # Split text into numbers, names and operators, skipping spaces. When
+                # more than one operator matches at a position, take the longest, so
+                # "<=" is one token, not "<" followed by "=".
+                tokens = []
+                i = 0
+                while i < len(text):
+                    c = text[i]
+                    if c == " ":
+                        i += 1
+                    elif c.isdigit() or c.isalpha():
+                        j = i
+                        while j < len(text) and text[j].isalnum():
+                            j += 1
+                        tokens.append(text[i:j])
+                        i = j
+                    else:
+                        found = None
+                        for op in OPERATORS:
+                            if found is None and text.startswith(op, i):
+                                found = op
+                        if found is None:
+                            raise ValueError("unexpected " + c + " at position " + str(i))
+                        tokens.append(found)
+                        i += len(found)
+                return tokens
+
+
+            print(tokenise("age>=18 and fare!=0"))
+          - |
+            OPERATORS = ["<=", ">=", "==", "!=", "<", ">", "="]
+
+
+            def tokenise(text):
+                # Split text into numbers, names and operators, skipping spaces. When
+                # more than one operator matches at a position, take the longest, so
+                # "<=" is one token, not "<" followed by "=".
+                tokens = []
+                i = 0
+                while i < len(text):
+                    c = text[i]
+                    if c == " ":
+                        i += 1
+                    elif c.isdigit() or c.isalpha():
+                        j = i
+                        while j < len(text) and text[j].isalnum():
+                            j += 1
+                        tokens.append(text[i:j])
+                        i = j
+                    else:
+                        found = None
+                        for op in OPERATORS:
+                            if found is None and text.startswith(op, i):
+                                found = op
+                        if found is None:
+                            raise ValueError("unexpected " + c + " at position " + str(i))
+                        tokens.append(found)
+                        i += 1
+                return tokens
+
+
+            print(tokenise("age>=18 and fare!=0"))
+          - |
+            OPERATORS = sorted(["<", ">", "=", "<=", ">=", "==", "!="])
+
+
+            def tokenise(text):
+                # Split text into numbers, names and operators, skipping spaces. When
+                # more than one operator matches at a position, take the longest, so
+                # "<=" is one token, not "<" followed by "=".
+                tokens = []
+                i = 0
+                while i < len(text):
+                    c = text[i]
+                    if c == " ":
+                        i += 1
+                    elif c.isdigit() or c.isalpha():
+                        j = i
+                        while j < len(text) and text[j].isalnum():
+                            j += 1
+                        tokens.append(text[i:j])
+                        i = j
+                    else:
+                        found = None
+                        for op in OPERATORS:
+                            if found is None and text.startswith(op, i):
+                                found = op
+                        if found is None:
+                            raise ValueError("unexpected " + c + " at position " + str(i))
+                        tokens.append(found)
+                        i += len(found)
+                return tokens
+
+
+            print(tokenise("age>=18 and fare!=0"))
+        explanation: |
+          The loop keeps the first operator in the list that matches, and the one-character operators come first, so `>` wins before `>=` is tried. Put the two-character operators first. Dropping the one-character operators makes `a<b` an error; advancing the cursor by one whatever matched reads the `=` of `>=` a second time; and sorting the list alphabetically still puts `<` before `<=`.
+    - question:
+        id: write-string
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `read_string`, which reads a string literal with backslash escapes and returns its value and where it ends. The program should print two lines: `He said "chalo" and left`, then `' twice'`.
+        starter: |
+          def read_string(text, i):
+              # text[i] is a double quote that opens a string literal. Read up to the
+              # matching closing quote and return (value, index just after it). Inside
+              # the literal, a backslash escapes the next character: \" is a quote,
+              # \\ is a backslash and \n is a newline. If the text ends before the
+              # closing quote, raise ValueError("unterminated string at position i").
+              return "", i + 1
+
+
+          source = r'say "He said \"chalo\" and left" twice'
+          value, end = read_string(source, 4)
+          print(value)
+          print(repr(source[end:]))
+        solution: |
+          def read_string(text, i):
+              # text[i] is a double quote that opens a string literal. Read up to the
+              # matching closing quote and return (value, index just after it). Inside
+              # the literal, a backslash escapes the next character: \" is a quote,
+              # \\ is a backslash and \n is a newline. If the text ends before the
+              # closing quote, raise ValueError("unterminated string at position i").
+              start = i
+              i += 1
+              chars = []
+              while i < len(text):
+                  c = text[i]
+                  if c == '"':
+                      return "".join(chars), i + 1
+                  if c == "\\" and i + 1 < len(text):
+                      nxt = text[i + 1]
+                      chars.append("\n" if nxt == "n" else nxt)
+                      i += 2
+                  else:
+                      chars.append(c)
+                      i += 1
+              raise ValueError("unterminated string at position " + str(start))
+
+
+          source = r'say "He said \"chalo\" and left" twice'
+          value, end = read_string(source, 4)
+          print(value)
+          print(repr(source[end:]))
+        tests: |
+          for _text, _i, _want in [
+              ('"abc"', 0, ("abc", 5)),
+              ('x = "" + y', 4, ("", 6)),
+              (r'"Namaste\n" end', 0, ("Namaste\n", 11)),
+              (r'"a\"b" c', 0, ('a"b', 6)),
+              (r'"a\\" rest', 0, ("a\\", 5)),
+              (r'"\\\"" !', 0, ('\\"', 6)),
+              ('say "chai" "coffee"', 11, ("coffee", 19)),
+          ]:
+              try:
+                  _got = read_string(_text, _i)
+              except ValueError as _e:
+                  raise AssertionError("read_string(" + repr(_text) + ", " + str(_i) + ") should give " + repr(_want) + ", but it raised ValueError: " + str(_e))
+              assert tuple(_got) == _want, "read_string(" + repr(_text) + ", " + str(_i) + ") should give " + repr(_want) + ", not " + repr(_got)
+          for _text, _i in [('"abc', 0), ('x = "a\\"', 4), ('"', 0)]:
+              try:
+                  read_string(_text, _i)
+                  raise AssertionError("read_string(" + repr(_text) + ", " + str(_i) + ") has no closing quote, so it should raise ValueError")
+              except ValueError as _e:
+                  assert "position " + str(_i) in str(_e), "The error should give the position of the opening quote, " + str(_i) + "; it said " + repr(str(_e))
+          assert output.splitlines() == ['He said "chalo" and left', "' twice'"], "The program should print two lines: the sentence with its quotes, then ' twice'"
+        wrong:
+          - |
+            def read_string(text, i):
+                # text[i] is a double quote that opens a string literal. Read up to the
+                # matching closing quote and return (value, index just after it). Inside
+                # the literal, a backslash escapes the next character: \" is a quote,
+                # \\ is a backslash and \n is a newline. If the text ends before the
+                # closing quote, raise ValueError("unterminated string at position i").
+                start = i
+                i += 1
+                while i < len(text):
+                    if text[i] == '"' and text[i - 1] != "\\":
+                        raw = text[start + 1:i]
+                        value = raw.replace('\\"', '"').replace("\\n", "\n").replace("\\\\", "\\")
+                        return value, i + 1
+                    i += 1
+                raise ValueError("unterminated string at position " + str(start))
+
+
+            source = r'say "He said \"chalo\" and left" twice'
+            value, end = read_string(source, 4)
+            print(value)
+            print(repr(source[end:]))
+          - |
+            def read_string(text, i):
+                # text[i] is a double quote that opens a string literal. Read up to the
+                # matching closing quote and return (value, index just after it). Inside
+                # the literal, a backslash escapes the next character: \" is a quote,
+                # \\ is a backslash and \n is a newline. If the text ends before the
+                # closing quote, raise ValueError("unterminated string at position i").
+                start = i
+                i += 1
+                chars = []
+                while i < len(text):
+                    c = text[i]
+                    if c == '"':
+                        return "".join(chars), i + 1
+                    if c == "\\" and i + 1 < len(text):
+                        chars.append(c + text[i + 1])
+                        i += 2
+                    else:
+                        chars.append(c)
+                        i += 1
+                raise ValueError("unterminated string at position " + str(start))
+
+
+            source = r'say "He said \"chalo\" and left" twice'
+            value, end = read_string(source, 4)
+            print(value)
+            print(repr(source[end:]))
+          - |
+            def read_string(text, i):
+                # text[i] is a double quote that opens a string literal. Read up to the
+                # matching closing quote and return (value, index just after it). Inside
+                # the literal, a backslash escapes the next character: \" is a quote,
+                # \\ is a backslash and \n is a newline. If the text ends before the
+                # closing quote, raise ValueError("unterminated string at position i").
+                start = i
+                i += 1
+                chars = []
+                while i < len(text):
+                    c = text[i]
+                    if c == '"':
+                        return "".join(chars), i + 1
+                    if c == "\\" and i + 1 < len(text):
+                        nxt = text[i + 1]
+                        chars.append("\n" if nxt == "n" else nxt)
+                        i += 2
+                    else:
+                        chars.append(c)
+                        i += 1
+                return "".join(chars), i
+
+
+            source = r'say "He said \"chalo\" and left" twice'
+            value, end = read_string(source, 4)
+            print(value)
+            print(repr(source[end:]))
+        explanation: |
+          Walk forward from just after the opening quote. A backslash means the next character is taken as it is, or as a newline for `n`, and both are consumed together; an unescaped quote ends the string. Checking whether the character before a quote is a backslash fails on an escaped backslash just before the closing quote; keeping the backslashes leaves `\"` in the value; and returning quietly at the end of the text hides an unterminated string that the user needs to hear about.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          In the puzzle, how many tokens does the calculator find in `12+3.5*(4-1)`?
+        answer: "9"
+        explanation: |
+          `12`, `+`, `3.5`, `*`, `(`, `4`, `-`, `1` and `)`. The digits of `12` and of `3.5` each make a single number, by the longest match.
+    - question:
+        id: work-terminates
+        type: choice
+        system: s2
+        prompt: |
+          A fuzzer finds an input on which Kavya's tokeniser runs for ever. Which rule, applied to every turn of the main loop, would have prevented it?
+        options:
+          - "Each turn either moves the cursor forward by at least one character or stops with an error."
+          - "Each turn produces exactly one token."
+          - "Each turn looks at no more than two characters."
+          - "The loop runs at most 1,000 times."
+        answer: 0
+        explanation: |
+          If the cursor always advances, the loop can run at most as many times as there are characters. Turns that skip a space produce no token, so one token per turn is not a rule a tokeniser can follow; looking at few characters does not stop a turn from going nowhere; and a fixed limit wrongly fails on long, valid files.
+  connections:
+    - text: |
+        9. The scanner reads `12` as one number, `+`, `3.5` as one number, `*`, `(`, `4`, `-`, `1` and `)`. Each digit run becomes a single token because the scanner takes the longest match, and the brackets and operators are tokens of their own.
+
+        Every rule in this lesson had the same shape: a pattern of characters that makes one kind of token, such as digits, then optionally a dot and more digits. Patterns like that have their own notation, regular expressions, and their own machine, the finite automaton, which reads one character at a time and remembers only which state it is in. [[s7.regular-expressions-and-finite-automata]] shows how the two fit together, and why they can describe tokens but not the nested brackets that [[s7.grammars-and-parsing]] will need.
