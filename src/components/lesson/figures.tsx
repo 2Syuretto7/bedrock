@@ -9149,6 +9149,80 @@ function TestPyramid(props: Props) {
     </Frame>
   );
 }
+const MS_MUTANTS: { name: string; f: (a: number) => number }[] = [
+  { name: "> for >=", f: (a) => (a > 1000 ? a * 0.9 : a) },
+  { name: "0.8 for 0.9", f: (a) => (a >= 1000 ? a * 0.8 : a) },
+  { name: "100 for 1000", f: (a) => (a >= 100 ? a * 0.9 : a) },
+  { name: "0 for a", f: (a) => (a >= 1000 ? a * 0.9 : 0) },
+  { name: "<= for >=", f: (a) => (a <= 1000 ? a * 0.9 : a) },
+  { name: "- for *", f: (a) => (a >= 1000 ? a - 0.9 : a) },
+];
+const MS_TESTS: { key: string; label: string; inputs: number[]; check: boolean }[] = [
+  { key: "types", label: "types only", inputs: [1500, 500], check: false },
+  { key: "t1500", label: "1,500 gives 1,350", inputs: [1500], check: true },
+  { key: "t1000", label: "1,000 gives 900", inputs: [1000], check: true },
+  { key: "t500", label: "500 gives 500", inputs: [500], check: true },
+];
+
+function msRight(a: number) {
+  return a >= 1000 ? a * 0.9 : a;
+}
+
+/** Coverage against mutation score for a 10% discount on orders of 1,000 or more. */
+function MutationScore(props: Props) {
+  const start = Array.isArray(props.tests) ? props.tests.filter((t): t is string => typeof t === "string") : ["types"];
+  const [on, setOn] = useState<string[]>(MS_TESTS.map((t) => t.key).filter((k) => start.includes(k)));
+  const toggle = (k: string) => setOn(on.includes(k) ? on.filter((x) => x !== k) : [...on, k]);
+  const chosen = MS_TESTS.filter((t) => on.includes(t.key));
+  const inputs = chosen.flatMap((t) => t.inputs);
+  const branches = new Set(inputs.map((a) => (a >= 1000 ? "discount" : "full")));
+  const coverage = Math.round((100 * (1 + branches.size)) / 3);
+  const killedBy = (m: (a: number) => number) => chosen.some((t) => t.check && t.inputs.some((a) => Math.abs(m(a) - msRight(a)) > 1e-9));
+  const killed = MS_MUTANTS.filter((m) => killedBy(m.f));
+  const survivors = MS_MUTANTS.filter((m) => !killedBy(m.f));
+  const lineText = inputs.length === 0 ? "No tests: no line runs" : `Line coverage ${coverage}%`;
+  const summary = `${lineText}. ${killed.length} of ${MS_MUTANTS.length} mutants killed, a mutation score of ${Math.round((100 * killed.length) / MS_MUTANTS.length)}%.${survivors.length ? ` Surviving: ${survivors.map((m) => m.name).join(", ")}.` : " Every mutant is killed."}${chosen.some((t) => !t.check) && !chosen.some((t) => t.check) ? " The tests run every line but check nothing that a mutant could change." : ""}`;
+  return (
+    <Frame
+      title="Coverage against mutants"
+      summary={summary}
+      controls={
+        <>
+          <span className="label">tests in the suite</span>
+          {MS_TESTS.map((t) => (
+            <button key={t.key} type="button" className="btn btn-secondary btn-small" aria-pressed={on.includes(t.key)} onClick={() => toggle(t.key)}>
+              {t.label}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 196" role="img" aria-label={`${killed.length} of ${MS_MUTANTS.length} mutants killed`}>
+        <text x={10} y={14} className="fig-small">
+          {"discount(a): 10% off if a >= 1000; each mutant changes one thing"}
+        </text>
+        {MS_MUTANTS.map((m, i) => {
+          const dead = killed.includes(m);
+          const y = 24 + i * 26;
+          return (
+            <g key={m.name}>
+              <rect x={10} y={y} width={440} height={22} className={dead ? "fig-fill" : "fig-ghost"} />
+              <text x={20} y={y + 15} className="fig-small" style={{ fill: dead ? "var(--bg)" : "var(--text)" }}>
+                {m.name}
+              </text>
+              <text x={440} y={y + 15} textAnchor="end" className="fig-small" style={{ fill: dead ? "var(--bg)" : "var(--text)", fontWeight: 600 }}>
+                {dead ? "killed" : "survives"}
+              </text>
+            </g>
+          );
+        })}
+        <text x={10} y={190} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`${inputs.length === 0 ? "line coverage 0%" : `line coverage ${coverage}%`}; mutants killed ${killed.length} of ${MS_MUTANTS.length}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -10503,6 +10577,7 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "property-runs": PropertyRuns,
   "triangle-check": TriangleCheck,
   "test-pyramid": TestPyramid,
+  "mutation-score": MutationScore,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
