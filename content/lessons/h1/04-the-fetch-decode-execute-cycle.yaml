@@ -1,0 +1,761 @@
+concept: h1.the-fetch-decode-execute-cycle
+minutes: 80
+claim: You can explain the stored-program idea, that instructions are numbers held in the same memory as data; name the parts of a simple processor, the program counter, instruction register, register file, ALU and control unit; follow the fetch, decode and execute steps of each instruction, including how a branch changes the program counter; decode an instruction by slicing its bit fields; write a small machine that runs its own stored program; and estimate running time from instruction count, cycles per instruction and clock period.
+recalls: [h1.latches-registers-and-memory]
+uses: [h1.adders-and-the-alu, h1.logic-gates, h0.binary-and-hexadecimal, h0.bitwise-operations-and-masks, s7.how-python-runs-bytecode-and-the-interpreter-loop, f0.units-prefixes-and-orders-of-magnitude]
+leads: [h1.an-instruction-set-risc-v]
+starter: |
+  # Scratch space. A program is a list of numbers; the machine reads one,
+  # moves on, and does what it says.
+  memory = [107, 606, 707, 408, 207, 500, 0, 3, 1]
+  for address, word in enumerate(memory):
+      print(address, word, "-> operation", word // 100, "address", word % 100)
+parts:
+  recall:
+    - text: |
+        [[h1.latches-registers-and-memory]] gave the machine a memory and a set of registers, and the lessons before it an ALU that computes. They do nothing until something tells them what to do, one step at a time. You met that something in software in [[s7.how-python-runs-bytecode-and-the-interpreter-loop]], a loop that fetches an instruction, works out what it means and carries it out. This lesson builds the same loop in hardware. Three quick pulls first.
+  puzzle:
+    - text: |
+        A tiny machine runs this program, which adds 10 + 9 + … + 1 into register r0:
+
+        ```text
+        0  li r0, 0       r0 = 0
+        1  li r1, 10      r1 = 10
+        2  li r2, 1       r2 = 1
+        3  add r0, r1     r0 = r0 + r1
+        4  sub r1, r2     r1 = r1 - r2
+        5  bnez r1, 3     if r1 is not 0, go back to instruction 3
+        6  halt
+        ```
+
+        **How many instructions does the machine fetch, counting the halt?**
+  intuition:
+    - text: |
+        A cook following a recipe card in a busy dhaba does the same three things over and over. Read the next line of the card. Work out what it means: chop, fry, wait, or "if the dal is not thick yet, go back to step 4". Do it. Then read the next line. The cook needs a finger on the card to keep the place, and a jump back to an earlier line is just moving the finger. A processor is that cook, the recipe is a list of numbers in memory, and the finger is a register called the **program counter**.
+
+        The figure runs the program from the puzzle on a toy machine, but with a small n you can choose. Each step is one phase: fetch, decode or execute. Watch the program counter, the instruction register, and the three registers.
+    - figure: fetch-execute
+      props: { n: 3, step: 0 }
+    - text: |
+        Every instruction goes through the same three phases, and nothing else happens: the loop is not a special feature of the machine, only an instruction that sets the program counter back to 3. Count the fetches for n = 3: three instructions of setup, three for each pass of the loop, and the halt. That count grows with n in a way you can predict, which is the puzzle.
+  derivation:
+    - text: |
+        **The stored program.** The first electronic computers were programmed by plugging cables and setting switches; changing the program took days. The idea that replaced this, written up for the EDVAC in 1945 and called the **von Neumann architecture**, is to encode instructions as numbers and keep them in the same memory as the data. A program can then be loaded in a moment, written by another program such as a compiler, sent over a network, and stored on a disk. It also means the machine cannot tell an instruction from data by looking at it: a number is an instruction only because the program counter pointed at it.
+    - question:
+        id: derivation-stored
+        type: choice
+        system: s2
+        prompt: |
+          In a stored-program computer, what makes a number in memory an instruction rather than data?
+        options:
+          - "The program counter points at it, so the processor fetches it as an instruction"
+          - "Instructions are stored in a special format that data can never take"
+          - "Instructions are always kept in read-only memory"
+          - "The compiler marks each instruction with a flag bit"
+        answer: 0
+        explanation: |
+          The same bits could be a count, a letter or an instruction. Whatever the program counter points at gets fetched and run, which is both the power of the idea and the root of many security holes.
+    - text: |
+        **The parts.** A simple processor has a **datapath**, the parts that hold and transform data, and a **control unit**, which tells them what to do. The datapath is the **program counter** (PC), a register holding the address of the next instruction; the **instruction register** (IR), which holds the instruction being run; the register file; the ALU of [[h1.adders-and-the-alu]]; and the connection to memory. The muxes between them decide where each value comes from: whether the ALU's second input is a register or a number from the instruction, whether the value written back is the ALU's result or a word loaded from memory, and whether the next PC is PC + 1 or a branch target.
+
+        **The cycle.** Each instruction goes through the same steps.
+
+        1. **Fetch.** Read memory at the address in the PC into the IR, and move the PC on to the next instruction. Real instructions are several bytes long, so the PC moves on by their size: by 4 for a 4-byte instruction.
+        2. **Decode.** The control unit reads the opcode bits and sets every control signal: which registers to read, which operation the ALU performs, the mux settings, whether memory is written.
+        3. **Execute.** The ALU computes. For a load or store, memory is read or written at the address the ALU worked out. The result is written back into the destination register at the clock edge. A branch compares and, if it is taken, writes the target into the PC instead.
+
+        Then the cycle starts again from the new PC.
+    - question:
+        id: derivation-pc
+        type: choice
+        system: s2
+        prompt: |
+          A processor whose instructions are 4 bytes long fetches the instruction at address 0x100, which is not a branch. What does the PC hold once the fetch is done?
+        options:
+          - "0x104"
+          - "0x101"
+          - "0x100"
+          - "0x200"
+        answer: 0
+        explanation: |
+          The fetch moves the PC past the instruction it read, here 4 bytes on. Doing this during the fetch means a branch can simply overwrite the PC later, and every other instruction finds the PC already pointing at the next one.
+    - text: |
+        **Decoding is wiring.** An instruction is a word whose bits are split into **fields**: an opcode saying which operation, numbers naming registers, and sometimes a constant. If the fields sit at fixed positions, decoding needs no computation at all: the wires for bits 15 to 12 simply go to the control unit and the wires for bits 11 to 8 to the register file's read port. In software that is a shift and a mask, the bit slicing of [[h0.bitwise-operations-and-masks]]. The control unit itself is a combinational circuit, in effect a lookup table from opcode to control signals, built from the gates of [[h1.logic-gates]]. Some processors with complicated instructions instead run each one as a short sequence of simpler steps from a small internal memory, a technique called **microcode**.
+    - question:
+        id: derivation-control
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of running `add r0, r1` on the toy machine in order.
+        steps:
+          - "Memory at the address in the PC is copied into the instruction register."
+          - "The PC is moved on to the next instruction."
+          - "The control unit reads the opcode and sets the ALU to add."
+          - "The register file reads r0 and r1 onto the ALU's inputs."
+          - "The ALU's sum is written into r0 at the clock edge."
+        explanation: |
+          Fetch, then decode, then execute, with the write-back last so that the reads in the same instruction see the old value of r0.
+    - text: |
+        **How long a program takes.** If a program runs N instructions, each taking on average CPI clock cycles (cycles per instruction), on a clock of period T, it takes N × CPI × T seconds. This **iron law** of processor performance names the three levers: run fewer instructions, with a better algorithm or compiler; take fewer cycles per instruction, with the pipelining coming later in this cluster; or tick faster, with shorter critical paths and better transistors. A design that does every instruction in one long clock cycle has CPI 1, but its clock must be slow enough for the slowest instruction, usually a load. Splitting the work into several short cycles lets simple instructions finish sooner.
+
+        **The loop under the loop.** Python's interpreter loop is itself a program of machine instructions running on this hardware loop. One bytecode instruction, such as adding two numbers, takes tens of machine instructions: fetching the bytecode, jumping to its handler, checking the types of both values, adding, making a result object. That is the overhead you measured as interpretation, and it is why the same loop compiled to machine code can be many times faster.
+    - question:
+        id: derivation-iron
+        type: numeric
+        system: s2
+        prompt: |
+          A program runs 2 billion instructions at an average of 1.5 cycles per instruction on a 3 GHz clock. How many seconds does it take?
+        answer: "1"
+        unit: seconds
+        explanation: |
+          2 × 10⁹ instructions × 1.5 cycles = 3 × 10⁹ cycles, and at 3 × 10⁹ cycles a second that is 1 second.
+  formal:
+    - text: |
+        **Stored program.** Instructions are numbers in the same memory as data. A word is an instruction because the PC points at it.
+
+        **Datapath and control.** PC, instruction register, register file, ALU and memory, connected through muxes; the control unit turns the opcode into control signals.
+
+        **The cycle.** Fetch: IR = memory[PC]; PC = PC + instruction size. Decode: slice the fields and set the control signals. Execute: compute, access memory if needed, write the result back; a taken branch writes its target into the PC.
+
+        **Performance.** Time = instructions × cycles per instruction × clock period.
+  drill:
+    - text: Seconds each. Keep a finger on the program counter.
+    - question:
+        id: drill-branch
+        type: choice
+        system: s1
+        prompt: |
+          What does a taken branch change?
+        options:
+          - "The program counter"
+          - "The instruction register only"
+          - "The opcode of the next instruction"
+          - "The clock period"
+        answer: 0
+        explanation: A branch writes its target into the PC, so the next fetch comes from there.
+    - question:
+        id: drill-iron
+        type: choice
+        system: s1
+        prompt: |
+          A compiler change cuts a program's instruction count by a quarter while cycles per instruction and the clock stay the same. What happens to its running time?
+        options:
+          - "It falls by a quarter"
+          - "It stays the same"
+          - "It halves"
+          - "It rises"
+        answer: 0
+        explanation: Time is instructions × CPI × clock period, so it falls in proportion to the instruction count.
+    - question:
+        id: predict-fields
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          word = 0x2013
+          print(word >> 12, (word >> 8) & 0xF, word & 0xF)
+        output: "2 0 3"
+        explanation: Each hexadecimal digit is four bits, so the opcode is the first digit, 2; the next field is 0; and the last is 3.
+    - question:
+        id: predict-steps
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          pc, acc, steps = 0, 2, 0
+          program = [("sub", 1), ("jumpz", 3), ("jump", 0), ("halt",)]
+          while program[pc][0] != "halt":
+              op = program[pc]
+              pc += 1
+              steps += 1
+              if op[0] == "sub":
+                  acc -= op[1]
+              elif op[0] == "jumpz" and acc == 0:
+                  pc = op[1]
+              elif op[0] == "jump":
+                  pc = op[1]
+          print(steps)
+        output: "5"
+        explanation: The first pass runs sub, a jumpz not taken and a jump back, 3 steps. The second runs sub, which makes acc 0, and a taken jumpz to the halt, 2 more.
+    - question:
+        id: predict-stored
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          memory = [105, 0, 0, 0, 0, 42]
+          instruction = memory[0]
+          print(instruction // 100, memory[instruction % 100])
+        output: "1 42"
+        explanation: The instruction 105 is operation 1 on address 5, and address 5 holds the data 42, in the same memory as the instruction.
+  work:
+    - text: Slower now. Each answer runs a machine one instruction at a time.
+    - question:
+        id: write-stored-program
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `run`, a machine whose program and data share one memory, and which fetches each instruction from memory as it is at that moment. The countdown program should print 3, 2 and 1, one per line, and then `ran 21 instructions`.
+        starter: |
+          def run(memory):
+              # memory is a list of numbers holding both the program and its data.
+              # An instruction's hundreds digit is the operation and its last two
+              # digits are an address:
+              #   0 halt          1 load: acc = memory[addr]   2 store: memory[addr] = acc
+              #   3 add: acc += memory[addr]                   4 sub: acc -= memory[addr]
+              #   5 jump: pc = addr                            6 jump to addr if acc is 0
+              #   7 print memory[addr]
+              # Start with pc = 0 and acc = 0. Each time round, fetch the number at pc
+              # and move pc on by one before carrying it out. Return how many
+              # instructions ran, counting the halt.
+              return 0
+
+
+          countdown = [107, 606, 707, 408, 207, 500, 0, 3, 1]
+          print("ran", run(countdown), "instructions")
+        solution: |
+          def run(memory):
+              # memory is a list of numbers holding both the program and its data.
+              # An instruction's hundreds digit is the operation and its last two
+              # digits are an address:
+              #   0 halt          1 load: acc = memory[addr]   2 store: memory[addr] = acc
+              #   3 add: acc += memory[addr]                   4 sub: acc -= memory[addr]
+              #   5 jump: pc = addr                            6 jump to addr if acc is 0
+              #   7 print memory[addr]
+              # Start with pc = 0 and acc = 0. Each time round, fetch the number at pc
+              # and move pc on by one before carrying it out. Return how many
+              # instructions ran, counting the halt.
+              pc = 0
+              acc = 0
+              count = 0
+              while True:
+                  instruction = memory[pc]
+                  pc += 1
+                  count += 1
+                  op, addr = instruction // 100, instruction % 100
+                  if op == 0:
+                      return count
+                  elif op == 1:
+                      acc = memory[addr]
+                  elif op == 2:
+                      memory[addr] = acc
+                  elif op == 3:
+                      acc += memory[addr]
+                  elif op == 4:
+                      acc -= memory[addr]
+                  elif op == 5:
+                      pc = addr
+                  elif op == 6:
+                      if acc == 0:
+                          pc = addr
+                  elif op == 7:
+                      print(memory[addr])
+
+
+          countdown = [107, 606, 707, 408, 207, 500, 0, 3, 1]
+          print("ran", run(countdown), "instructions")
+        tests: |
+          import io as _io
+          import contextlib as _ctx
+
+
+          def _go(_memory):
+              _buf = _io.StringIO()
+              with _ctx.redirect_stdout(_buf):
+                  _n = run(_memory)
+              return _n, _buf.getvalue().split()
+
+
+          _got = _go([107, 606, 707, 408, 207, 500, 0, 3, 1])
+          assert _got == (21, ["3", "2", "1"]), "The countdown should print 3, 2, 1 and run 21 instructions, not " + repr(_got)
+          _got = _go([106, 307, 208, 708, 0, 0, 40, 2, 0])
+          assert _got == (5, ["42"]), "load 40, add 2, store, print should print 42 in 5 instructions, not " + repr(_got)
+          _got = _go([709, 0, 0, 0, 0, 0, 0, 0, 0, 55])
+          assert _got == (2, ["55"]), "print should show the number stored at its address, 55, not " + repr(_got)
+          _got = _go([105, 604, 705, 0, 0, 7])
+          assert _got == (4, ["7"]), "jump if zero must not jump when acc is 7, not " + repr(_got)
+          _m = [106, 202, 0, 0, 0, 0, 709, 0, 0, 42]
+          _got = _go(_m)
+          assert _m[2] == 709, "store should write acc into memory"
+          assert _got == (4, ["42"]), "Instructions must be fetched from memory as it is now: a program that stores 709 into address 2 and then runs it should print 42 in 4 instructions, not " + repr(_got)
+          assert output.splitlines() == ["3", "2", "1", "ran 21 instructions"], "The program should print 3, 2, 1 and then ran 21 instructions"
+        wrong:
+          - |
+            def run(memory):
+                # memory is a list of numbers holding both the program and its data.
+                # An instruction's hundreds digit is the operation and its last two
+                # digits are an address:
+                #   0 halt          1 load: acc = memory[addr]   2 store: memory[addr] = acc
+                #   3 add: acc += memory[addr]                   4 sub: acc -= memory[addr]
+                #   5 jump: pc = addr                            6 jump to addr if acc is 0
+                #   7 print memory[addr]
+                # Start with pc = 0 and acc = 0. Each time round, fetch the number at pc
+                # and move pc on by one before carrying it out. Return how many
+                # instructions ran, counting the halt.
+                pc = 0
+                acc = 0
+                count = 0
+                while True:
+                    instruction = memory[pc]
+                    pc += 1
+                    count += 1
+                    op, addr = instruction // 100, instruction % 100
+                    if op == 0:
+                        return count - 1
+                    elif op == 1:
+                        acc = memory[addr]
+                    elif op == 2:
+                        memory[addr] = acc
+                    elif op == 3:
+                        acc += memory[addr]
+                    elif op == 4:
+                        acc -= memory[addr]
+                    elif op == 5:
+                        pc = addr
+                    elif op == 6:
+                        if acc == 0:
+                            pc = addr
+                    elif op == 7:
+                        print(memory[addr])
+
+
+            countdown = [107, 606, 707, 408, 207, 500, 0, 3, 1]
+            print("ran", run(countdown), "instructions")
+          - |
+            def run(memory):
+                # memory is a list of numbers holding both the program and its data.
+                # An instruction's hundreds digit is the operation and its last two
+                # digits are an address:
+                #   0 halt          1 load: acc = memory[addr]   2 store: memory[addr] = acc
+                #   3 add: acc += memory[addr]                   4 sub: acc -= memory[addr]
+                #   5 jump: pc = addr                            6 jump to addr if acc is 0
+                #   7 print memory[addr]
+                # Start with pc = 0 and acc = 0. Each time round, fetch the number at pc
+                # and move pc on by one before carrying it out. Return how many
+                # instructions ran, counting the halt.
+                pc = 0
+                acc = 0
+                count = 0
+                while True:
+                    instruction = memory[pc]
+                    pc += 1
+                    count += 1
+                    op, addr = instruction // 100, instruction % 100
+                    if op == 0:
+                        return count
+                    elif op == 1:
+                        acc = memory[addr]
+                    elif op == 2:
+                        memory[addr] = acc
+                    elif op == 3:
+                        acc += memory[addr]
+                    elif op == 4:
+                        acc -= memory[addr]
+                    elif op == 5:
+                        pc = addr
+                    elif op == 6:
+                        if acc != 0:
+                            pc = addr
+                    elif op == 7:
+                        print(memory[addr])
+
+
+            countdown = [107, 606, 707, 408, 207, 500, 0, 3, 1]
+            print("ran", run(countdown), "instructions")
+          - |
+            def run(memory):
+                # memory is a list of numbers holding both the program and its data.
+                # An instruction's hundreds digit is the operation and its last two
+                # digits are an address:
+                #   0 halt          1 load: acc = memory[addr]   2 store: memory[addr] = acc
+                #   3 add: acc += memory[addr]                   4 sub: acc -= memory[addr]
+                #   5 jump: pc = addr                            6 jump to addr if acc is 0
+                #   7 print memory[addr]
+                # Start with pc = 0 and acc = 0. Each time round, fetch the number at pc
+                # and move pc on by one before carrying it out. Return how many
+                # instructions ran, counting the halt.
+                pc = 0
+                acc = 0
+                count = 0
+                while True:
+                    instruction = memory[pc]
+                    pc += 1
+                    count += 1
+                    op, addr = instruction // 100, instruction % 100
+                    if op == 0:
+                        return count
+                    elif op == 1:
+                        acc = memory[addr]
+                    elif op == 2:
+                        memory[addr] = acc
+                    elif op == 3:
+                        acc += memory[addr]
+                    elif op == 4:
+                        acc -= memory[addr]
+                    elif op == 5:
+                        pc = addr
+                    elif op == 6:
+                        if acc == 0:
+                            pc = addr
+                    elif op == 7:
+                        print(acc)
+
+
+            countdown = [107, 606, 707, 408, 207, 500, 0, 3, 1]
+            print("ran", run(countdown), "instructions")
+        explanation: |
+          Loop for ever: fetch memory[pc], move pc on, count, split the number into operation and address, and carry it out, returning the count at a halt. Because each fetch reads memory afresh, a program can store a new instruction and then run it. Not counting the halt gives 20; jumping when acc is not zero gets the test backwards; and printing acc instead of memory[addr] happens to work for the countdown but not in general.
+    - question:
+        id: write-decode
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `decode`, which slices a 16-bit instruction into its opcode name and three 4-bit fields. The program should print the toy machine's program from the figure, one instruction per line, starting with `0 0x1000 ('li', 0, 0, 0)`.
+        starter: |
+          NAMES = ["halt", "li", "add", "sub", "bnez", "load", "store", "jump"]
+
+
+          def decode(word):
+              # A 16-bit instruction: bits 15 to 12 hold the opcode, bits 11 to 8 the
+              # register rd, bits 7 to 4 the register rs, and bits 3 to 0 a small
+              # number imm. Return (name, rd, rs, imm), where name is NAMES[opcode].
+              return ("halt", 0, 0, 0)
+
+
+          program = [0x1000, 0x1103, 0x1201, 0x2010, 0x3120, 0x4103, 0x0000]
+          for address, word in enumerate(program):
+              print(address, hex(word), decode(word))
+        solution: |
+          NAMES = ["halt", "li", "add", "sub", "bnez", "load", "store", "jump"]
+
+
+          def decode(word):
+              # A 16-bit instruction: bits 15 to 12 hold the opcode, bits 11 to 8 the
+              # register rd, bits 7 to 4 the register rs, and bits 3 to 0 a small
+              # number imm. Return (name, rd, rs, imm), where name is NAMES[opcode].
+              opcode = word >> 12
+              rd = (word >> 8) & 0xF
+              rs = (word >> 4) & 0xF
+              imm = word & 0xF
+              return (NAMES[opcode], rd, rs, imm)
+
+
+          program = [0x1000, 0x1103, 0x1201, 0x2010, 0x3120, 0x4103, 0x0000]
+          for address, word in enumerate(program):
+              print(address, hex(word), decode(word))
+        tests: |
+          for _op in range(8):
+              for _rd, _rs, _imm in [(0, 0, 0), (1, 2, 3), (15, 0, 15), (7, 9, 4), (0, 15, 0), (10, 11, 12)]:
+                  _w = (_op << 12) | (_rd << 8) | (_rs << 4) | _imm
+                  _want = (NAMES[_op], _rd, _rs, _imm)
+                  _got = tuple(decode(_w))
+                  assert _got == _want, "decode(" + hex(_w) + ") should be " + repr(_want) + ", not " + repr(_got)
+          assert output.splitlines()[3] == "3 0x2010 ('add', 0, 1, 0)", "The fourth line should show address 3 as add r0, r1"
+          assert len(output.splitlines()) == 7, "The program should print one line for each of the 7 words"
+        wrong:
+          - |
+            NAMES = ["halt", "li", "add", "sub", "bnez", "load", "store", "jump"]
+
+
+            def decode(word):
+                # A 16-bit instruction: bits 15 to 12 hold the opcode, bits 11 to 8 the
+                # register rd, bits 7 to 4 the register rs, and bits 3 to 0 a small
+                # number imm. Return (name, rd, rs, imm), where name is NAMES[opcode].
+                opcode = word >> 12
+                rd = (word >> 8) & 0xFF
+                rs = (word >> 4) & 0xF
+                imm = word & 0xF
+                return (NAMES[opcode], rd, rs, imm)
+
+
+            program = [0x1000, 0x1103, 0x1201, 0x2010, 0x3120, 0x4103, 0x0000]
+            for address, word in enumerate(program):
+                print(address, hex(word), decode(word))
+          - |
+            NAMES = ["halt", "li", "add", "sub", "bnez", "load", "store", "jump"]
+
+
+            def decode(word):
+                # A 16-bit instruction: bits 15 to 12 hold the opcode, bits 11 to 8 the
+                # register rd, bits 7 to 4 the register rs, and bits 3 to 0 a small
+                # number imm. Return (name, rd, rs, imm), where name is NAMES[opcode].
+                opcode = word >> 12
+                rd = (word >> 8) & 0xF
+                rs = word & 0xF
+                imm = (word >> 4) & 0xF
+                return (NAMES[opcode], rd, rs, imm)
+
+
+            program = [0x1000, 0x1103, 0x1201, 0x2010, 0x3120, 0x4103, 0x0000]
+            for address, word in enumerate(program):
+                print(address, hex(word), decode(word))
+          - |
+            NAMES = ["halt", "li", "add", "sub", "bnez", "load", "store", "jump"]
+
+
+            def decode(word):
+                # A 16-bit instruction: bits 15 to 12 hold the opcode, bits 11 to 8 the
+                # register rd, bits 7 to 4 the register rs, and bits 3 to 0 a small
+                # number imm. Return (name, rd, rs, imm), where name is NAMES[opcode].
+                opcode = (word >> 8) & 0x7
+                rd = (word >> 12) & 0xF
+                rs = (word >> 4) & 0xF
+                imm = word & 0xF
+                return (NAMES[opcode], rd, rs, imm)
+
+
+            program = [0x1000, 0x1103, 0x1201, 0x2010, 0x3120, 0x4103, 0x0000]
+            for address, word in enumerate(program):
+                print(address, hex(word), decode(word))
+        explanation: |
+          Shift each field down to the bottom and mask it to its width: word >> 12 for the opcode, then (word >> 8) & 0xF, (word >> 4) & 0xF and word & 0xF. A mask of 0xFF lets the opcode's bits leak into rd; swapping the shifts for rs and imm reads the fields in the wrong order; and shifting by the wrong amounts reads every field from the wrong place.
+    - question:
+        id: fix-branch-pc
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The machine multiplies 3 by 4 by repeated addition, and should print `3 x 4 = 12 in 17 instructions`. Instead it prints `3 x 4 = 3 in 14 instructions`. Find the fault and fix it.
+        starter: |
+          def run(program):
+              # program is a list of instructions, each a tuple:
+              #   ("li", rd, n)     rd = n
+              #   ("add", rd, rs)   rd = rd + rs
+              #   ("sub", rd, rs)   rd = rd - rs
+              #   ("bnez", rd, t)   if rd is not 0, continue at instruction t
+              #   ("halt",)
+              regs = [0] * 4
+              pc = 0
+              count = 0
+              while True:
+                  op = program[pc]
+                  count += 1
+                  name = op[0]
+                  if name == "halt":
+                      return regs, count
+                  if name == "li":
+                      regs[op[1]] = op[2]
+                  elif name == "add":
+                      regs[op[1]] += regs[op[2]]
+                  elif name == "sub":
+                      regs[op[1]] -= regs[op[2]]
+                  elif name == "bnez" and regs[op[1]] != 0:
+                      pc = op[2]
+                  pc += 1
+
+
+          multiply = [
+              ("li", 0, 0),
+              ("li", 1, 4),
+              ("li", 2, 1),
+              ("li", 3, 3),
+              ("add", 0, 3),
+              ("sub", 1, 2),
+              ("bnez", 1, 4),
+              ("halt",),
+          ]
+          regs, count = run(multiply)
+          print("3 x 4 =", regs[0], "in", count, "instructions")
+        solution: |
+          def run(program):
+              # program is a list of instructions, each a tuple:
+              #   ("li", rd, n)     rd = n
+              #   ("add", rd, rs)   rd = rd + rs
+              #   ("sub", rd, rs)   rd = rd - rs
+              #   ("bnez", rd, t)   if rd is not 0, continue at instruction t
+              #   ("halt",)
+              regs = [0] * 4
+              pc = 0
+              count = 0
+              while True:
+                  op = program[pc]
+                  pc += 1
+                  count += 1
+                  name = op[0]
+                  if name == "halt":
+                      return regs, count
+                  if name == "li":
+                      regs[op[1]] = op[2]
+                  elif name == "add":
+                      regs[op[1]] += regs[op[2]]
+                  elif name == "sub":
+                      regs[op[1]] -= regs[op[2]]
+                  elif name == "bnez" and regs[op[1]] != 0:
+                      pc = op[2]
+
+
+          multiply = [
+              ("li", 0, 0),
+              ("li", 1, 4),
+              ("li", 2, 1),
+              ("li", 3, 3),
+              ("add", 0, 3),
+              ("sub", 1, 2),
+              ("bnez", 1, 4),
+              ("halt",),
+          ]
+          regs, count = run(multiply)
+          print("3 x 4 =", regs[0], "in", count, "instructions")
+        tests: |
+          _regs, _count = run([("li", 0, 0), ("li", 1, 4), ("li", 2, 1), ("li", 3, 3), ("add", 0, 3), ("sub", 1, 2), ("bnez", 1, 4), ("halt",)])
+          assert _regs[0] == 12 and _count == 17, "3 x 4 should give 12 in 17 instructions, not " + str(_regs[0]) + " in " + str(_count)
+          _regs, _count = run([("li", 1, 2), ("bnez", 1, 3), ("li", 0, 99), ("halt",)])
+          assert _regs[0] == 0 and _count == 3, "A taken branch should run the instruction it names next, skipping li r0, 99: got r0 = " + str(_regs[0]) + " in " + str(_count) + " instructions"
+          _regs, _count = run([("li", 1, 0), ("bnez", 1, 3), ("li", 0, 5), ("halt",)])
+          assert _regs[0] == 5 and _count == 4, "A branch not taken should go on to the next instruction: got r0 = " + str(_regs[0]) + " in " + str(_count) + " instructions"
+          _regs, _count = run([("li", 0, 0), ("li", 1, 3), ("li", 2, 1), ("add", 0, 1), ("sub", 1, 2), ("bnez", 1, 3), ("halt",)])
+          assert _regs[0] == 6 and _count == 13, "3 + 2 + 1 should give 6 in 13 instructions"
+          assert output.strip() == "3 x 4 = 12 in 17 instructions", "The program should print 3 x 4 = 12 in 17 instructions"
+        wrong:
+          - |
+            def run(program):
+                # program is a list of instructions, each a tuple:
+                #   ("li", rd, n)     rd = n
+                #   ("add", rd, rs)   rd = rd + rs
+                #   ("sub", rd, rs)   rd = rd - rs
+                #   ("bnez", rd, t)   if rd is not 0, continue at instruction t
+                #   ("halt",)
+                regs = [0] * 4
+                pc = 0
+                count = 0
+                while True:
+                    op = program[pc]
+                    count += 1
+                    name = op[0]
+                    if name == "halt":
+                        return regs, count
+                    if name == "li":
+                        regs[op[1]] = op[2]
+                    elif name == "add":
+                        regs[op[1]] += regs[op[2]]
+                    elif name == "sub":
+                        regs[op[1]] -= regs[op[2]]
+                    elif name == "bnez" and regs[op[1]] != 0:
+                        pc = op[2] - 2
+                    pc += 1
+
+
+            multiply = [
+                ("li", 0, 0),
+                ("li", 1, 4),
+                ("li", 2, 1),
+                ("li", 3, 3),
+                ("add", 0, 3),
+                ("sub", 1, 2),
+                ("bnez", 1, 4),
+                ("halt",),
+            ]
+            regs, count = run(multiply)
+            print("3 x 4 =", regs[0], "in", count, "instructions")
+          - |
+            def run(program):
+                # program is a list of instructions, each a tuple:
+                #   ("li", rd, n)     rd = n
+                #   ("add", rd, rs)   rd = rd + rs
+                #   ("sub", rd, rs)   rd = rd - rs
+                #   ("bnez", rd, t)   if rd is not 0, continue at instruction t
+                #   ("halt",)
+                regs = [0] * 4
+                pc = 0
+                count = 0
+                while True:
+                    op = program[pc]
+                    pc += 1
+                    count += 1
+                    name = op[0]
+                    if name == "halt":
+                        return regs, count
+                    if name == "li":
+                        regs[op[1]] = op[2]
+                    elif name == "add":
+                        regs[op[1]] += regs[op[2]]
+                    elif name == "sub":
+                        regs[op[1]] -= regs[op[2]]
+                    elif name == "bnez" and regs[op[1]] == 0:
+                        pc = op[2]
+
+
+            multiply = [
+                ("li", 0, 0),
+                ("li", 1, 4),
+                ("li", 2, 1),
+                ("li", 3, 3),
+                ("add", 0, 3),
+                ("sub", 1, 2),
+                ("bnez", 1, 4),
+                ("halt",),
+            ]
+            regs, count = run(multiply)
+            print("3 x 4 =", regs[0], "in", count, "instructions")
+          - |
+            def run(program):
+                # program is a list of instructions, each a tuple:
+                #   ("li", rd, n)     rd = n
+                #   ("add", rd, rs)   rd = rd + rs
+                #   ("sub", rd, rs)   rd = rd - rs
+                #   ("bnez", rd, t)   if rd is not 0, continue at instruction t
+                #   ("halt",)
+                regs = [0] * 4
+                pc = 0
+                count = 0
+                while True:
+                    op = program[pc]
+                    pc += 1
+                    count += 1
+                    name = op[0]
+                    if name == "halt":
+                        return regs, count - 1
+                    if name == "li":
+                        regs[op[1]] = op[2]
+                    elif name == "add":
+                        regs[op[1]] += regs[op[2]]
+                    elif name == "sub":
+                        regs[op[1]] -= regs[op[2]]
+                    elif name == "bnez" and regs[op[1]] != 0:
+                        pc = op[2]
+
+
+            multiply = [
+                ("li", 0, 0),
+                ("li", 1, 4),
+                ("li", 2, 1),
+                ("li", 3, 3),
+                ("add", 0, 3),
+                ("sub", 1, 2),
+                ("bnez", 1, 4),
+                ("halt",),
+            ]
+            regs, count = run(multiply)
+            print("3 x 4 =", regs[0], "in", count, "instructions")
+        explanation: |
+          The machine moves the PC on after executing, so a taken branch sets the PC to the target and is then moved one past it, skipping the add. Moving the PC on during the fetch, before executing, lets a branch simply overwrite it, as real processors do. Jumping to two before the target reruns an instruction, branching when the register is zero ends the loop at once, and not counting the halt gives 16.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. The toy machine runs the loop that adds 10 + 9 + … + 1: three instructions of setup, a loop of add, sub and bnez, and a halt. How many instructions does it fetch, counting the halt?
+        answer: "34"
+        explanation: |
+          3 for the setup, 3 for each of the 10 passes of the loop, and 1 for the halt: 3 + 30 + 1 = 34.
+    - question:
+        id: work-nx
+        type: choice
+        system: s2
+        prompt: |
+          An attacker overflows a buffer in a web server, writing their own machine code into its data and pointing the program counter at it. Which defence stops those bytes being run?
+        options:
+          - "Marking memory that holds data as not executable, so fetching an instruction from it is refused"
+          - "Making the clock faster"
+          - "Storing the data in a register instead of memory"
+          - "Using a ripple-carry adder"
+        answer: 0
+        explanation: |
+          A stored-program machine runs whatever the PC points at. Modern processors let the operating system mark pages of memory as data only, so a fetch from them stops the program instead of running the attacker's bytes.
+  connections:
+    - text: |
+        34. Three instructions of setup, three per pass for ten passes, and the halt. The loop runs ten times because r1 counts down from 10 and the branch is taken until it reaches 0, so the count grows by 3 for every 1 added to n, exactly as in the figure.
+
+        The toy machine's instructions were made up for this lesson. Real processors follow a published **instruction set**, a precise contract between hardware and software that compilers can target and chip designers can implement in many different ways. [[h1.an-instruction-set-risc-v]] introduces RISC-V, an open instruction set used from tiny microcontrollers to servers, and you will write your first programs in its assembly language.

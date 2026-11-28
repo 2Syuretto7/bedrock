@@ -1,0 +1,780 @@
+concept: h1.hazards-and-branch-prediction
+minutes: 90
+claim: You can name the three kinds of pipeline hazard; find the read-after-write dependences in a sequence of instructions and count the stalls they cause with and without forwarding, including the load-use stall that forwarding cannot remove; build the choice a forwarding unit makes; explain why branches cost cycles and how static prediction, one-bit and two-bit predictors and branch target buffers reduce that cost; implement a two-bit predictor; and estimate the effect of stalls and mispredictions on cycles per instruction.
+recalls: [h1.pipelining]
+uses: [h1.calling-conventions-and-the-stack, h1.an-instruction-set-risc-v, h1.assembly-programming, h1.the-fetch-decode-execute-cycle, h1.latches-registers-and-memory, s1.classes-and-objects]
+leads: [h1.superscalar-and-out-of-order-execution]
+starter: |
+  # Scratch space. A 2-bit counter: two wrong guesses in a row are needed
+  # to change its mind.
+  counter = 1
+  for taken in [True, True, False, True, False, False]:
+      guess = counter >= 2
+      print("guess", guess, "actual", taken)
+      counter = min(3, counter + 1) if taken else max(0, counter - 1)
+parts:
+  recall:
+    - text: |
+        [[h1.pipelining]] overlapped five instructions at once and promised nearly one finished every cycle, as long as nothing ever had to wait. Real programs break that promise constantly: an instruction needs a result that is still in the pipeline, or the pipeline cannot know which instruction comes after a branch. This lesson deals with both. Three quick pulls first.
+  puzzle:
+    - text: |
+        A loop's closing branch is taken 9 times and then not taken once, to leave the loop, and the whole loop runs again and again. A **one-bit predictor** simply guesses that the branch will do whatever it did last time.
+
+        **Once the loop has run a few times, how many wrong guesses does the one-bit predictor make on this branch in each run of the loop?**
+  intuition:
+    - text: |
+        At a railway junction, the points must be set before the train arrives, but the signal saying which line the train needs comes late. A junction that always waited for the signal would stop every train. A junction that set the points for the usual line, and stopped and reversed a train on the rare occasions it was wrong, would keep most trains moving. The best junctions remember: if the 7:40 to Pune has taken the left line every day this month, set the points to the left.
+
+        A pipeline is in the same position at every branch. It fetches the next instruction in the cycle after the branch, but the branch is only decided in the execute stage, two cycles later. Rather than wait, it guesses, and a branch predictor makes the guess from the branch's history. The figure runs a loop's closing branch through a predictor. Compare a one-bit and a two-bit predictor.
+    - figure: branch-predictor
+      props: { bits: 2, trips: 4, step: 0 }
+    - text: |
+        The two-bit predictor is wrong once per run of the loop, at the exit. The one-bit predictor is wrong at the exit too, and then wrong again on the first branch of the next run, because the single not-taken flipped its memory. Needing two wrong guesses in a row before changing its mind lets the two-bit predictor shrug off the one odd branch at the end of each loop. Real predictors build on the same idea and guess right more than 95 times in 100.
+  derivation:
+    - text: |
+        **Three kinds of hazard.** A **structural hazard** is two instructions wanting the same hardware in the same cycle, such as one memory for both fetching instructions and loading data; it is designed away, with separate instruction and data caches. A **data hazard** is an instruction needing a value that an earlier instruction has not produced yet. A **control hazard** is the pipeline not knowing which instruction to fetch next, because a branch has not been decided.
+
+        **Data hazards.** Take `add t0, t1, t2` followed by `sub t3, t0, t4`. The sub reads t0 in its decode stage, one cycle behind the add, but the add only writes t0 in write back, three stages later. This is a **read-after-write** dependence. The simplest fix is to **stall**: hold the sub in decode, inserting empty slots called bubbles, until the add has written t0. The register file is designed so that a register written in the first half of a cycle can be read in the second half, so an instruction may decode in the same cycle as its producer's write back, three cycles after the producer decoded: adjacent instructions lose two cycles.
+    - question:
+        id: derivation-raw
+        type: choice
+        system: s2
+        prompt: |
+          Which pair of instructions, in this order, has a read-after-write dependence?
+        options:
+          - "lw t0, 0(a0) then addi t1, t0, 1"
+          - "addi t1, t0, 1 then lw t0, 0(a0)"
+          - "add t2, t3, t4 then add t5, t3, t4"
+          - "sw t0, 0(a0) then lw t1, 4(a0)"
+        answer: 0
+        explanation: |
+          The addi reads t0, which the load before it writes. In the second pair the first instruction reads t0 before the second writes it, which is harmless in order; the others share only sources or different addresses.
+    - text: |
+        **Forwarding.** The sum the sub needs exists at the end of the add's execute stage, long before write back. **Forwarding**, also called bypassing, adds muxes in front of the ALU that can take an operand straight from the pipeline registers after EX or after MEM instead of from the register file. The **forwarding unit** compares the source register numbers of the instruction entering EX with the destination numbers held in those pipeline registers, and when they match it switches the mux. If both instructions ahead wrote the same register, the newer one, nearer the ALU, must win; and register x0 is never forwarded, since it is always 0. With forwarding, back-to-back arithmetic runs without a single stall.
+
+        **The load-use hazard.** Forwarding cannot travel back in time. A load's data arrives only at the end of MEM, but an instruction right after it needs the data at the start of its EX, which is the same cycle. So a load followed immediately by a use of its result costs one stall even with forwarding. Compilers reorder instructions to put something independent in that slot, a job called **instruction scheduling**.
+    - question:
+        id: derivation-load-use
+        type: numeric
+        system: s2
+        prompt: |
+          With full forwarding, how many cycles does the pipeline stall when `lw t0, 0(a0)` is followed immediately by `add t1, t0, t2`?
+        answer: "1"
+        explanation: |
+          The loaded value exists only at the end of the load's MEM stage, one cycle after the add needs it in EX. One bubble lines them up, and forwarding from the MEM/WB pipeline register does the rest.
+    - text: |
+        **Control hazards.** In the classic pipeline a branch is decided in EX. By then the two instructions after it have been fetched and decoded. If the branch is taken, they were the wrong instructions, and the pipeline must **flush** them, throwing their work away: a **branch penalty** of two cycles. In a deep pipeline the branch is decided much later, and the penalty is 15 to 20 cycles. With roughly one instruction in five a branch, stalling on every branch would waste most of the machine.
+
+        **Prediction.** So the pipeline guesses. **Static** prediction uses a fixed rule, such as "backward branches are taken", which is right for loops. **Dynamic** prediction learns. A **branch history table** holds a small counter for each branch, found by the low bits of the branch's address, (pc >> 2) mod the table size, since instructions are 4 bytes apart. A **one-bit** entry remembers the last outcome. A **two-bit saturating counter** counts up when taken and down when not, between 0 and 3, and predicts taken at 2 or 3, so one surprise moves it only from strongly to weakly sure. The guess also needs a target: a **branch target buffer** remembers where each taken branch went, so the fetch stage can jump there in the very next cycle, and a small **return address stack** predicts where each `ret` will go by remembering the calls of [[h1.calling-conventions-and-the-stack]]. Modern predictors also look at the pattern of the last few dozen branches, which lets them learn alternating and correlated branches too.
+    - question:
+        id: derivation-predict
+        type: order
+        system: s2
+        prompt: |
+          Put the life of a predicted branch in order.
+        steps:
+          - "In fetch, the branch's address picks a counter and a target-buffer entry, and the guess is made."
+          - "The pipeline keeps fetching from the guessed address."
+          - "In execute, the branch's comparison decides the real outcome."
+          - "If the guess was wrong, the younger instructions are flushed and fetching restarts at the right address."
+          - "The branch's counter is updated with the real outcome."
+        explanation: |
+          The guess must be made at fetch, before the branch is even decoded, which is why the predictor is looked up by address alone. The counter learns only once the truth is known.
+    - text: |
+        **What it costs.** Stalls and flushes add to the cycles per instruction of the iron law. If a fifth of instructions are branches, a tenth of branches are guessed wrong, and each wrong guess costs 15 cycles, the CPI rises from 1 to 1 + 0.2 × 0.1 × 15 = 1.3: the processor runs at three quarters of its possible speed because of branches alone. That is why predictors are among the most carefully engineered parts of a chip, and why code with unpredictable branches, such as sorting decisions on random data, can run several times slower than the same code on sorted data, where the branches fall into long runs. Programmers sometimes remove such branches altogether, replacing `if x < y: m = x else: m = y` with arithmetic or a conditional-move instruction.
+
+        Guessing also has a darker side. Instructions run on a wrong guess are thrown away, but they may already have loaded data into the caches, and in 2018 the **Spectre** attacks showed that a program could trick the predictor into running such instructions on secret data and then detect the trace they left. Processors and operating systems have been patched against it, at some cost in speed, and the lesson stands: anything a machine does to go faster can leak information.
+    - question:
+        id: derivation-cpi
+        type: numeric
+        system: s2
+        prompt: |
+          In a program, 25% of instructions are branches and 8% of branches are mispredicted, each costing 10 cycles. Other instructions never stall. What is the CPI, starting from 1?
+        answer: "1.2"
+        explanation: |
+          Mispredictions add 0.25 × 0.08 × 10 = 0.2 cycles per instruction on average.
+  formal:
+    - text: |
+        **Hazards.** Structural: a resource conflict. Data: a read-after-write dependence on a value still in the pipeline. Control: the next instruction depends on an undecided branch.
+
+        **Stalls.** Without forwarding, a consumer may decode no sooner than 3 cycles after its producer decoded. With forwarding, no stall after an arithmetic producer; 1 stall when a load's result is used by the next instruction.
+
+        **Forwarding unit.** Takes a source operand from the EX/MEM or MEM/WB pipeline register when its destination matches; the newer, EX/MEM, has priority; x0 is never forwarded.
+
+        **Branch prediction.** Static rules or dynamic tables indexed by branch address. Two-bit saturating counters predict taken at 2 or 3. Branch target buffers supply the target at fetch; a misprediction flushes the younger instructions.
+
+        **Cost.** CPI = 1 + (stall cycles per instruction), for example 1 + branch fraction × misprediction rate × penalty.
+  drill:
+    - text: Seconds each. Ask when each value really exists.
+    - question:
+        id: drill-forward
+        type: choice
+        system: s1
+        prompt: |
+          Where does forwarding take an operand from?
+        options:
+          - "The pipeline registers after EX or after MEM, before the result is written back"
+          - "Main memory"
+          - "The branch target buffer"
+          - "The instruction register"
+        answer: 0
+        explanation: The result already sits in a pipeline register a cycle or two before write back, and forwarding wires it straight to the ALU.
+    - question:
+        id: drill-flush
+        type: choice
+        system: s1
+        prompt: |
+          A branch predicted not taken turns out to be taken. What happens to the instructions fetched after it?
+        options:
+          - "They are flushed, and fetching restarts at the branch target"
+          - "They finish, and their results are kept"
+          - "They wait until the branch is fetched again"
+          - "They are moved to the branch target buffer"
+        answer: 0
+        explanation: They were the wrong instructions, so their work is thrown away before it can change any register or memory.
+    - question:
+        id: predict-counter
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          counter = 1
+          for taken in [True, True, False]:
+              counter = min(3, counter + 1) if taken else max(0, counter - 1)
+          print(counter, counter >= 2)
+        output: "2 True"
+        explanation: The counter climbs from 1 to 3 and one not-taken brings it back to 2, which still predicts taken.
+    - question:
+        id: predict-cpi
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          print(1 + 0.2 * 0.05 * 20)
+        output: "1.2"
+        explanation: A fifth of instructions are branches, one in twenty is mispredicted, and each costs 20 cycles, adding 0.2 to the CPI.
+    - question:
+        id: predict-index
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          pc = 0x40C
+          print((pc >> 2) % 16)
+        output: "3"
+        explanation: 0x40C is 1036; shifting right by 2 gives 259, and 259 mod 16 is 3, so the branch uses counter 3.
+  work:
+    - text: Slower now. Each answer is a piece of the hardware that keeps a pipeline moving.
+    - question:
+        id: write-stalls
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `stalls`, which counts the cycles lost to data hazards in the five-stage pipeline, with or without forwarding. The program should print 5 stalls without forwarding and 1 with it.
+        starter: |
+          def stalls(program, forwarding):
+              # program lists instructions as (destination, sources, is_load) on the
+              # classic five-stage pipeline, where a register written back in a cycle
+              # can be read in the same cycle. If instruction i is in decode at cycle
+              # d[i], it must wait until every source's newest earlier writer p allows:
+              #   without forwarding:          d[i] >= d[p] + 3
+              #   with forwarding, from a load: d[i] >= d[p] + 2
+              #   with forwarding, otherwise:   d[i] >= d[p] + 1
+              # and never before d[i - 1] + 1. The register "zero" is never waited
+              # for. Return the total number of cycles lost to waiting.
+              return 0
+
+
+          program = [
+              ("t0", ["a0"], True),          # lw t0, 0(a0)
+              ("t1", ["t0"], False),         # addi t1, t0, 1
+              ("t2", ["t1", "t0"], False),   # add t2, t1, t0
+              ("t3", ["a1"], False),         # addi t3, a1, 4
+              ("t4", ["t2", "zero"], False), # add t4, t2, zero
+          ]
+          print("stalls without forwarding:", stalls(program, False))
+          print("stalls with forwarding:", stalls(program, True))
+        solution: |
+          def stalls(program, forwarding):
+              # program lists instructions as (destination, sources, is_load) on the
+              # classic five-stage pipeline, where a register written back in a cycle
+              # can be read in the same cycle. If instruction i is in decode at cycle
+              # d[i], it must wait until every source's newest earlier writer p allows:
+              #   without forwarding:          d[i] >= d[p] + 3
+              #   with forwarding, from a load: d[i] >= d[p] + 2
+              #   with forwarding, otherwise:   d[i] >= d[p] + 1
+              # and never before d[i - 1] + 1. The register "zero" is never waited
+              # for. Return the total number of cycles lost to waiting.
+              decode = []
+              writer = {}
+              lost = 0
+              for i, (dest, sources, is_load) in enumerate(program):
+                  cycle = decode[i - 1] + 1 if i > 0 else 0
+                  earliest = cycle
+                  for reg in sources:
+                      if reg == "zero" or reg not in writer:
+                          continue
+                      p = writer[reg]
+                      if not forwarding:
+                          gap = 3
+                      elif program[p][2]:
+                          gap = 2
+                      else:
+                          gap = 1
+                      earliest = max(earliest, decode[p] + gap)
+                  lost += earliest - cycle
+                  decode.append(earliest)
+                  writer[dest] = i
+              return lost
+
+
+          program = [
+              ("t0", ["a0"], True),          # lw t0, 0(a0)
+              ("t1", ["t0"], False),         # addi t1, t0, 1
+              ("t2", ["t1", "t0"], False),   # add t2, t1, t0
+              ("t3", ["a1"], False),         # addi t3, a1, 4
+              ("t4", ["t2", "zero"], False), # add t4, t2, zero
+          ]
+          print("stalls without forwarding:", stalls(program, False))
+          print("stalls with forwarding:", stalls(program, True))
+        tests: |
+          def _ref(_prog, _fw):
+              _d, _w, _lost = [], {}, 0
+              for _i, (_dest, _srcs, _ld) in enumerate(_prog):
+                  _c = _d[-1] + 1 if _d else 0
+                  _e = _c
+                  for _r in _srcs:
+                      if _r != "zero" and _r in _w:
+                          _p = _w[_r]
+                          _e = max(_e, _d[_p] + (3 if not _fw else 2 if _prog[_p][2] else 1))
+                  _lost += _e - _c
+                  _d.append(_e)
+                  _w[_dest] = _i
+              return _lost
+
+
+          _cases = [
+              [("t0", ["a0"], False), ("t1", ["t0"], False)],
+              [("t0", ["a0"], False), ("t5", ["a1"], False), ("t1", ["t0"], False)],
+              [("t0", ["a0"], False), ("t1", ["t0"], False), ("t2", ["t0"], False)],
+              [("t0", ["a0"], True), ("t1", ["t0"], False)],
+              [("t0", ["a0"], True), ("t9", ["a3"], False), ("t1", ["t0"], False)],
+              [("zero", ["a0"], False), ("t1", ["zero"], False)],
+              [("t0", ["a0"], False), ("t0", ["a1"], True), ("t2", ["t0"], False)],
+              [("a0", [], False), ("a1", [], False), ("a2", [], False)],
+          ]
+          for _prog in _cases:
+              for _fw in [False, True]:
+                  _want = _ref(_prog, _fw)
+                  _got = stalls(_prog, _fw)
+                  assert _got == _want, "For " + str(_prog) + (" with" if _fw else " without") + " forwarding, the cycles lost should be " + str(_want) + ", not " + str(_got)
+          assert output.splitlines() == ["stalls without forwarding: 5", "stalls with forwarding: 1"], "The program should print 5 stalls without forwarding and 1 with it"
+        wrong:
+          - |
+            def stalls(program, forwarding):
+                # program lists instructions as (destination, sources, is_load) on the
+                # classic five-stage pipeline, where a register written back in a cycle
+                # can be read in the same cycle. If instruction i is in decode at cycle
+                # d[i], it must wait until every source's newest earlier writer p allows:
+                #   without forwarding:          d[i] >= d[p] + 3
+                #   with forwarding, from a load: d[i] >= d[p] + 2
+                #   with forwarding, otherwise:   d[i] >= d[p] + 1
+                # and never before d[i - 1] + 1. The register "zero" is never waited
+                # for. Return the total number of cycles lost to waiting.
+                decode = []
+                writer = {}
+                lost = 0
+                for i, (dest, sources, is_load) in enumerate(program):
+                    cycle = decode[i - 1] + 1 if i > 0 else 0
+                    earliest = cycle
+                    for reg in sources:
+                        if reg == "zero" or reg not in writer or writer[reg] != i - 1:
+                            continue
+                        p = writer[reg]
+                        if not forwarding:
+                            gap = 3
+                        elif program[p][2]:
+                            gap = 2
+                        else:
+                            gap = 1
+                        earliest = max(earliest, decode[p] + gap)
+                    lost += earliest - cycle
+                    decode.append(earliest)
+                    writer[dest] = i
+                return lost
+
+
+            program = [
+                ("t0", ["a0"], True),          # lw t0, 0(a0)
+                ("t1", ["t0"], False),         # addi t1, t0, 1
+                ("t2", ["t1", "t0"], False),   # add t2, t1, t0
+                ("t3", ["a1"], False),         # addi t3, a1, 4
+                ("t4", ["t2", "zero"], False), # add t4, t2, zero
+            ]
+            print("stalls without forwarding:", stalls(program, False))
+            print("stalls with forwarding:", stalls(program, True))
+          - |
+            def stalls(program, forwarding):
+                # program lists instructions as (destination, sources, is_load) on the
+                # classic five-stage pipeline, where a register written back in a cycle
+                # can be read in the same cycle. If instruction i is in decode at cycle
+                # d[i], it must wait until every source's newest earlier writer p allows:
+                #   without forwarding:          d[i] >= d[p] + 3
+                #   with forwarding, from a load: d[i] >= d[p] + 2
+                #   with forwarding, otherwise:   d[i] >= d[p] + 1
+                # and never before d[i - 1] + 1. The register "zero" is never waited
+                # for. Return the total number of cycles lost to waiting.
+                decode = []
+                writer = {}
+                lost = 0
+                for i, (dest, sources, is_load) in enumerate(program):
+                    cycle = decode[i - 1] + 1 if i > 0 else 0
+                    earliest = cycle
+                    for reg in sources:
+                        if reg == "zero" or reg not in writer:
+                            continue
+                        p = writer[reg]
+                        if not forwarding:
+                            gap = 3
+                        else:
+                            gap = 1
+                        earliest = max(earliest, decode[p] + gap)
+                    lost += earliest - cycle
+                    decode.append(earliest)
+                    writer[dest] = i
+                return lost
+
+
+            program = [
+                ("t0", ["a0"], True),          # lw t0, 0(a0)
+                ("t1", ["t0"], False),         # addi t1, t0, 1
+                ("t2", ["t1", "t0"], False),   # add t2, t1, t0
+                ("t3", ["a1"], False),         # addi t3, a1, 4
+                ("t4", ["t2", "zero"], False), # add t4, t2, zero
+            ]
+            print("stalls without forwarding:", stalls(program, False))
+            print("stalls with forwarding:", stalls(program, True))
+          - |
+            def stalls(program, forwarding):
+                # program lists instructions as (destination, sources, is_load) on the
+                # classic five-stage pipeline, where a register written back in a cycle
+                # can be read in the same cycle. If instruction i is in decode at cycle
+                # d[i], it must wait until every source's newest earlier writer p allows:
+                #   without forwarding:          d[i] >= d[p] + 3
+                #   with forwarding, from a load: d[i] >= d[p] + 2
+                #   with forwarding, otherwise:   d[i] >= d[p] + 1
+                # and never before d[i - 1] + 1. The register "zero" is never waited
+                # for. Return the total number of cycles lost to waiting.
+                writer = {}
+                lost = 0
+                for i, (dest, sources, is_load) in enumerate(program):
+                    wait = 0
+                    for reg in sources:
+                        if reg == "zero" or reg not in writer:
+                            continue
+                        p = writer[reg]
+                        if not forwarding:
+                            gap = 3
+                        elif program[p][2]:
+                            gap = 2
+                        else:
+                            gap = 1
+                        wait = max(wait, gap - (i - p))
+                    lost += wait
+                    writer[dest] = i
+                return lost
+
+
+            program = [
+                ("t0", ["a0"], True),          # lw t0, 0(a0)
+                ("t1", ["t0"], False),         # addi t1, t0, 1
+                ("t2", ["t1", "t0"], False),   # add t2, t1, t0
+                ("t3", ["a1"], False),         # addi t3, a1, 4
+                ("t4", ["t2", "zero"], False), # add t4, t2, zero
+            ]
+            print("stalls without forwarding:", stalls(program, False))
+            print("stalls with forwarding:", stalls(program, True))
+        explanation: |
+          Walk the program keeping each instruction's decode cycle and the newest writer of each register. An instruction decodes a cycle after the one before, unless a source's writer forces it later; the difference is the cycles lost. Checking only the instruction just before misses dependences two apart; treating loads like arithmetic forgets the load-use stall; and working out each wait from the distance in the program ignores that earlier stalls have already pushed instructions apart.
+    - question:
+        id: write-two-bit
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `predict` and `update` for a table of two-bit saturating counters. The program should print that the loop branch is guessed right 89 times in 100, and the alternating branch never.
+        starter: |
+          class TwoBitPredictor:
+              # A table of 2-bit saturating counters, 0 to 3, each starting at 1. A
+              # branch at address pc uses counter number (pc >> 2) % size, since
+              # instructions are 4 bytes apart. Predict taken when the counter is 2
+              # or 3. After the branch resolves, count up if it was taken and down if
+              # not, but never above 3 or below 0.
+
+              def __init__(self, size):
+                  self.counters = [1] * size
+
+              def predict(self, pc):
+                  return False
+
+              def update(self, pc, taken):
+                  pass
+
+
+          def correct_guesses(predictor, pc, outcomes):
+              correct = 0
+              for taken in outcomes:
+                  if predictor.predict(pc) == taken:
+                      correct += 1
+                  predictor.update(pc, taken)
+              return correct
+
+
+          p = TwoBitPredictor(16)
+          loop = ([True] * 9 + [False]) * 10
+          print("loop branch:", correct_guesses(p, 0x400, loop), "of", len(loop))
+          alternating = [True, False] * 50
+          print("alternating branch:", correct_guesses(p, 0x404, alternating), "of", len(alternating))
+        solution: |
+          class TwoBitPredictor:
+              # A table of 2-bit saturating counters, 0 to 3, each starting at 1. A
+              # branch at address pc uses counter number (pc >> 2) % size, since
+              # instructions are 4 bytes apart. Predict taken when the counter is 2
+              # or 3. After the branch resolves, count up if it was taken and down if
+              # not, but never above 3 or below 0.
+
+              def __init__(self, size):
+                  self.counters = [1] * size
+
+              def predict(self, pc):
+                  return self.counters[(pc >> 2) % len(self.counters)] >= 2
+
+              def update(self, pc, taken):
+                  i = (pc >> 2) % len(self.counters)
+                  if taken:
+                      self.counters[i] = min(3, self.counters[i] + 1)
+                  else:
+                      self.counters[i] = max(0, self.counters[i] - 1)
+
+
+          def correct_guesses(predictor, pc, outcomes):
+              correct = 0
+              for taken in outcomes:
+                  if predictor.predict(pc) == taken:
+                      correct += 1
+                  predictor.update(pc, taken)
+              return correct
+
+
+          p = TwoBitPredictor(16)
+          loop = ([True] * 9 + [False]) * 10
+          print("loop branch:", correct_guesses(p, 0x400, loop), "of", len(loop))
+          alternating = [True, False] * 50
+          print("alternating branch:", correct_guesses(p, 0x404, alternating), "of", len(alternating))
+        tests: |
+          def _ref(_outcomes, _start=1):
+              _c, _ok = _start, 0
+              for _t in _outcomes:
+                  _ok += (_c >= 2) == _t
+                  _c = min(3, _c + 1) if _t else max(0, _c - 1)
+              return _ok
+
+
+          for _outs in [[True] * 10 + [False] * 3 + [True] * 3, [False] * 5 + [True] * 5, [True, True, False, True, True, False], [True] * 20 + [False, False, True]]:
+              _got = correct_guesses(TwoBitPredictor(8), 0x1000, _outs)
+              assert _got == _ref(_outs), "On the outcomes " + str(["T" if _x else "N" for _x in _outs]) + " the predictor should guess " + str(_ref(_outs)) + " right, not " + str(_got)
+          _p = TwoBitPredictor(4)
+          for _ in range(3):
+              _p.update(0x400, True)
+          assert _p.predict(0x400) and not _p.predict(0x404), "With 4 counters, branches at 0x400 and 0x404 should use different counters"
+          assert _p.predict(0x410), "With 4 counters, branches at 0x400 and 0x410 share counter 0, (0x410 >> 2) % 4"
+          _p = TwoBitPredictor(2)
+          for _ in range(5):
+              _p.update(0, True)
+          _p.update(0, False)
+          assert _p.predict(0), "One not-taken after many taken should leave a 2-bit counter predicting taken"
+          _p.update(0, False)
+          assert not _p.predict(0), "Two not-takens after many taken should flip the prediction, since the counter stops at 3"
+          assert output.splitlines() == ["loop branch: 89 of 100", "alternating branch: 0 of 100"], "The program should print 89 of 100 and 0 of 100"
+        wrong:
+          - |
+            class TwoBitPredictor:
+                # A table of 2-bit saturating counters, 0 to 3, each starting at 1. A
+                # branch at address pc uses counter number (pc >> 2) % size, since
+                # instructions are 4 bytes apart. Predict taken when the counter is 2
+                # or 3. After the branch resolves, count up if it was taken and down if
+                # not, but never above 3 or below 0.
+
+                def __init__(self, size):
+                    self.counters = [1] * size
+
+                def predict(self, pc):
+                    return self.counters[(pc >> 2) % len(self.counters)] >= 2
+
+                def update(self, pc, taken):
+                    i = (pc >> 2) % len(self.counters)
+                    if taken:
+                        self.counters[i] = self.counters[i] + 1
+                    else:
+                        self.counters[i] = max(0, self.counters[i] - 1)
+
+
+            def correct_guesses(predictor, pc, outcomes):
+                correct = 0
+                for taken in outcomes:
+                    if predictor.predict(pc) == taken:
+                        correct += 1
+                    predictor.update(pc, taken)
+                return correct
+
+
+            p = TwoBitPredictor(16)
+            loop = ([True] * 9 + [False]) * 10
+            print("loop branch:", correct_guesses(p, 0x400, loop), "of", len(loop))
+            alternating = [True, False] * 50
+            print("alternating branch:", correct_guesses(p, 0x404, alternating), "of", len(alternating))
+          - |
+            class TwoBitPredictor:
+                # A table of 2-bit saturating counters, 0 to 3, each starting at 1. A
+                # branch at address pc uses counter number (pc >> 2) % size, since
+                # instructions are 4 bytes apart. Predict taken when the counter is 2
+                # or 3. After the branch resolves, count up if it was taken and down if
+                # not, but never above 3 or below 0.
+
+                def __init__(self, size):
+                    self.counters = [1] * size
+
+                def predict(self, pc):
+                    return self.counters[pc % len(self.counters)] >= 2
+
+                def update(self, pc, taken):
+                    i = pc % len(self.counters)
+                    if taken:
+                        self.counters[i] = min(3, self.counters[i] + 1)
+                    else:
+                        self.counters[i] = max(0, self.counters[i] - 1)
+
+
+            def correct_guesses(predictor, pc, outcomes):
+                correct = 0
+                for taken in outcomes:
+                    if predictor.predict(pc) == taken:
+                        correct += 1
+                    predictor.update(pc, taken)
+                return correct
+
+
+            p = TwoBitPredictor(16)
+            loop = ([True] * 9 + [False]) * 10
+            print("loop branch:", correct_guesses(p, 0x400, loop), "of", len(loop))
+            alternating = [True, False] * 50
+            print("alternating branch:", correct_guesses(p, 0x404, alternating), "of", len(alternating))
+          - |
+            class TwoBitPredictor:
+                # A table of 2-bit saturating counters, 0 to 3, each starting at 1. A
+                # branch at address pc uses counter number (pc >> 2) % size, since
+                # instructions are 4 bytes apart. Predict taken when the counter is 2
+                # or 3. After the branch resolves, count up if it was taken and down if
+                # not, but never above 3 or below 0.
+
+                def __init__(self, size):
+                    self.counters = [0] * size
+
+                def predict(self, pc):
+                    return self.counters[(pc >> 2) % len(self.counters)] >= 2
+
+                def update(self, pc, taken):
+                    i = (pc >> 2) % len(self.counters)
+                    if taken:
+                        self.counters[i] = min(3, self.counters[i] + 1)
+                    else:
+                        self.counters[i] = max(0, self.counters[i] - 1)
+
+
+            def correct_guesses(predictor, pc, outcomes):
+                correct = 0
+                for taken in outcomes:
+                    if predictor.predict(pc) == taken:
+                        correct += 1
+                    predictor.update(pc, taken)
+                return correct
+
+
+            p = TwoBitPredictor(16)
+            loop = ([True] * 9 + [False]) * 10
+            print("loop branch:", correct_guesses(p, 0x400, loop), "of", len(loop))
+            alternating = [True, False] * 50
+            print("alternating branch:", correct_guesses(p, 0x404, alternating), "of", len(alternating))
+        explanation: |
+          Find the counter by (pc >> 2) mod the table size, predict taken at 2 or more, and move the counter up or down, clamped to 0 and 3. Without the clamp a long run of takens builds up a count that takes many not-takens to undo; indexing by pc without the shift makes neighbouring branches share counters; and starting at 0 makes every counter need two takens before it guesses taken.
+    - question:
+        id: fix-forwarding
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          Two instructions ahead of an add both write t0, and the add must get the newer value, 11. The program should print `t0 for the add: 11` and then `t1 for the add: 5`. Instead it gives the add t0 = 10. Find the fault and fix it.
+        starter: |
+          def operand(reg, regfile, ex_mem, mem_wb):
+              # The forwarding unit: choose the value of source register reg for an
+              # instruction entering the execute stage. ex_mem describes the
+              # instruction one ahead of it and mem_wb the one two ahead, each as
+              # (destination register, result), or None. A result not yet written
+              # back must be used instead of the register file, and when both
+              # instructions write reg, the newer one, in ex_mem, wins. The register
+              # "zero" is always 0.
+              if reg == "zero":
+                  return 0
+              if mem_wb is not None and mem_wb[0] == reg:
+                  return mem_wb[1]
+              if ex_mem is not None and ex_mem[0] == reg:
+                  return ex_mem[1]
+              return regfile[reg]
+
+
+          regfile = {"t0": 0, "t1": 5}
+          # addi t0, zero, 10    is two ahead, in MEM/WB, with result 10
+          # addi t0, t0, 1       is one ahead, in EX/MEM, with result 11
+          # add t2, t0, t1       is entering execute
+          print("t0 for the add:", operand("t0", regfile, ("t0", 11), ("t0", 10)))
+          print("t1 for the add:", operand("t1", regfile, ("t0", 11), ("t0", 10)))
+        solution: |
+          def operand(reg, regfile, ex_mem, mem_wb):
+              # The forwarding unit: choose the value of source register reg for an
+              # instruction entering the execute stage. ex_mem describes the
+              # instruction one ahead of it and mem_wb the one two ahead, each as
+              # (destination register, result), or None. A result not yet written
+              # back must be used instead of the register file, and when both
+              # instructions write reg, the newer one, in ex_mem, wins. The register
+              # "zero" is always 0.
+              if reg == "zero":
+                  return 0
+              if ex_mem is not None and ex_mem[0] == reg:
+                  return ex_mem[1]
+              if mem_wb is not None and mem_wb[0] == reg:
+                  return mem_wb[1]
+              return regfile[reg]
+
+
+          regfile = {"t0": 0, "t1": 5}
+          # addi t0, zero, 10    is two ahead, in MEM/WB, with result 10
+          # addi t0, t0, 1       is one ahead, in EX/MEM, with result 11
+          # add t2, t0, t1       is entering execute
+          print("t0 for the add:", operand("t0", regfile, ("t0", 11), ("t0", 10)))
+          print("t1 for the add:", operand("t1", regfile, ("t0", 11), ("t0", 10)))
+        tests: |
+          _rf = {"t0": 1, "t1": 2, "t2": 3, "zero": 0}
+          for _args, _want in [
+              (("t0", _rf, None, None), 1),
+              (("t0", _rf, ("t0", 50), None), 50),
+              (("t0", _rf, None, ("t0", 60)), 60),
+              (("t0", _rf, ("t0", 70), ("t0", 80)), 70),
+              (("t1", _rf, ("t0", 70), ("t0", 80)), 2),
+              (("t2", _rf, ("t1", 9), ("t2", 33)), 33),
+              (("zero", _rf, ("zero", 7), ("zero", 8)), 0),
+          ]:
+              _got = operand(*_args)
+              assert _got == _want, "operand(" + repr(_args[0]) + ", regfile, " + repr(_args[2]) + ", " + repr(_args[3]) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.splitlines() == ["t0 for the add: 11", "t1 for the add: 5"], "The program should give the add t0 = 11 and t1 = 5"
+        wrong:
+          - |
+            def operand(reg, regfile, ex_mem, mem_wb):
+                # The forwarding unit: choose the value of source register reg for an
+                # instruction entering the execute stage. ex_mem describes the
+                # instruction one ahead of it and mem_wb the one two ahead, each as
+                # (destination register, result), or None. A result not yet written
+                # back must be used instead of the register file, and when both
+                # instructions write reg, the newer one, in ex_mem, wins. The register
+                # "zero" is always 0.
+                if ex_mem is not None and ex_mem[0] == reg:
+                    return ex_mem[1]
+                if mem_wb is not None and mem_wb[0] == reg:
+                    return mem_wb[1]
+                return regfile[reg]
+
+
+            regfile = {"t0": 0, "t1": 5}
+            # addi t0, zero, 10    is two ahead, in MEM/WB, with result 10
+            # addi t0, t0, 1       is one ahead, in EX/MEM, with result 11
+            # add t2, t0, t1       is entering execute
+            print("t0 for the add:", operand("t0", regfile, ("t0", 11), ("t0", 10)))
+            print("t1 for the add:", operand("t1", regfile, ("t0", 11), ("t0", 10)))
+          - |
+            def operand(reg, regfile, ex_mem, mem_wb):
+                # The forwarding unit: choose the value of source register reg for an
+                # instruction entering the execute stage. ex_mem describes the
+                # instruction one ahead of it and mem_wb the one two ahead, each as
+                # (destination register, result), or None. A result not yet written
+                # back must be used instead of the register file, and when both
+                # instructions write reg, the newer one, in ex_mem, wins. The register
+                # "zero" is always 0.
+                if reg == "zero":
+                    return 0
+                if ex_mem is not None and ex_mem[0] == reg:
+                    return ex_mem[1]
+                return regfile[reg]
+
+
+            regfile = {"t0": 0, "t1": 5}
+            # addi t0, zero, 10    is two ahead, in MEM/WB, with result 10
+            # addi t0, t0, 1       is one ahead, in EX/MEM, with result 11
+            # add t2, t0, t1       is entering execute
+            print("t0 for the add:", operand("t0", regfile, ("t0", 11), ("t0", 10)))
+            print("t1 for the add:", operand("t1", regfile, ("t0", 11), ("t0", 10)))
+          - |
+            def operand(reg, regfile, ex_mem, mem_wb):
+                # The forwarding unit: choose the value of source register reg for an
+                # instruction entering the execute stage. ex_mem describes the
+                # instruction one ahead of it and mem_wb the one two ahead, each as
+                # (destination register, result), or None. A result not yet written
+                # back must be used instead of the register file, and when both
+                # instructions write reg, the newer one, in ex_mem, wins. The register
+                # "zero" is always 0.
+                if reg == "zero":
+                    return 0
+                if reg in regfile:
+                    return regfile[reg]
+                if ex_mem is not None and ex_mem[0] == reg:
+                    return ex_mem[1]
+                if mem_wb is not None and mem_wb[0] == reg:
+                    return mem_wb[1]
+                return regfile[reg]
+
+
+            regfile = {"t0": 0, "t1": 5}
+            # addi t0, zero, 10    is two ahead, in MEM/WB, with result 10
+            # addi t0, t0, 1       is one ahead, in EX/MEM, with result 11
+            # add t2, t0, t1       is entering execute
+            print("t0 for the add:", operand("t0", regfile, ("t0", 11), ("t0", 10)))
+            print("t1 for the add:", operand("t1", regfile, ("t0", 11), ("t0", 10)))
+        explanation: |
+          The unit checks MEM/WB first, so the older result wins. Checking EX/MEM, the instruction just ahead, before MEM/WB gives the newest value. Dropping the check for the zero register forwards a value into x0; forwarding only from EX/MEM misses results two instructions ahead; and reading the register file first never forwards at all.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. A loop branch is taken 9 times and then not taken once, over and over. Once the loop has run a few times, how many wrong guesses does a one-bit predictor make in each run of the loop?
+        answer: "2"
+        explanation: |
+          It guesses taken at the exit, which is wrong, and that flips its bit to not taken. At the start of the next run it guesses not taken, wrong again. A two-bit predictor is wrong only at the exit.
+    - question:
+        id: work-schedule
+        type: choice
+        system: s2
+        prompt: |
+          A compiler sees `lw t0, 0(a0)`, then `add t1, t0, t2`, then `addi a1, a1, 4`, which does not use t0 or t1. What reordering removes the stall?
+        options:
+          - "Move the addi between the load and the add"
+          - "Move the add before the load"
+          - "Replace the load with two loads"
+          - "Nothing can remove a load-use stall"
+        answer: 0
+        explanation: |
+          With an independent instruction in between, the load's data is ready by the time the add reaches EX, and forwarding delivers it without a bubble. Moving the add first would use t0 before it is loaded.
+  connections:
+    - text: |
+        2. The exit makes a one-bit predictor wrong twice: once when the loop ends, and once when the next run begins, because that single not-taken flipped its one bit. The two-bit counter, needing two surprises to change its mind, is wrong only at the exit, 1 in 10. Branches with patterns, such as one taken every other time, need predictors that remember the recent history of branches, which is what modern chips do.
+
+        Forwarding and prediction keep one instruction flowing per cycle. To do better than one, a processor must start several instructions every cycle, and look past instructions that are waiting to find ones that are ready. [[h1.superscalar-and-out-of-order-execution]] shows how a modern core does that while still appearing to run the program one instruction at a time.

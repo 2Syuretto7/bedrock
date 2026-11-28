@@ -1,0 +1,573 @@
+concept: h1.pipelining
+minutes: 80
+claim: You can tell latency from throughput; name the five stages of the classic RISC pipeline and what the pipeline registers between them hold; work out a pipeline's clock period from its slowest stage and register overhead, and the cycles n instructions take; compute the speedup over an unpipelined design and say why it falls short of the number of stages; balance a chain of logic into stages; simulate a pipeline in which every stage moves at once; and explain the limits on making pipelines deeper.
+recalls: [h1.calling-conventions-and-the-stack]
+uses: [h1.the-fetch-decode-execute-cycle, h1.latches-registers-and-memory, h1.logic-gates, h1.an-instruction-set-risc-v, s1.recursion, f0.units-prefixes-and-orders-of-magnitude]
+leads: [h1.hazards-and-branch-prediction]
+starter: |
+  # Scratch space. Each row is one instruction; each column one clock cycle.
+  stages = "FDXMW"
+  n = 4
+  for i in range(n):
+      print("." * i + stages + "." * (n - 1 - i))
+  print("cycles:", len(stages) + n - 1)
+parts:
+  recall:
+    - text: |
+        [[h1.calling-conventions-and-the-stack]] finished what the machine does: it runs functions that call each other, each instruction fetched, decoded and executed in turn. The rest of the cluster asks how to make it fast. The first and largest step is to stop doing one instruction at a time. Three quick pulls first.
+  puzzle:
+    - text: |
+        A processor has a five-stage pipeline: fetch, decode, execute, memory and write back, one clock cycle each. A new instruction can enter the pipeline every cycle, and nothing ever has to wait.
+
+        **How many cycles does it take to run 100 instructions, from the first fetch to the last write back?**
+  intuition:
+    - text: |
+        At a busy dosa counter, one cook pours batter on the tawa, the next adds the filling, the third folds and serves. A dosa still takes three steps from batter to plate, but the counter does not wait for one dosa to be served before pouring the next. Once the line is full, a finished dosa comes off every step-time, three times as many an hour as one cook doing everything. The time for each dosa, its **latency**, has not improved; the rate at which dosas come off the end, the **throughput**, has.
+
+        A processor can do the same with instructions, since fetching one, decoding another and executing a third use different hardware. The figure draws instructions down the side and clock cycles along the top. Compare the two modes and change the number of instructions.
+    - figure: pipeline-chart
+      props: { n: 4, pipelined: true }
+    - text: |
+        Read the chart down a column and you see one cycle: five instructions at once, each in a different stage. Read it along a row and you see one instruction, still taking five cycles. With pipelining the total grows by one cycle per extra instruction instead of five, and for a long program the machine finishes almost one instruction every cycle.
+  derivation:
+    - text: |
+        **The classic pipeline.** The fetch-decode-execute cycle of [[h1.the-fetch-decode-execute-cycle]] splits naturally into five stages for an instruction set like the one in [[h1.an-instruction-set-risc-v]]:
+
+        1. **IF**, instruction fetch: read the instruction at the PC and add 4 to the PC.
+        2. **ID**, instruction decode: decode the fields and read the source registers.
+        3. **EX**, execute: the ALU computes a result, an address or a branch comparison.
+        4. **MEM**, memory: loads read and stores write data memory; other instructions pass through.
+        5. **WB**, write back: the result is written into the destination register.
+
+        Between each pair of stages sits a **pipeline register**, a row of the flip-flops of [[h1.latches-registers-and-memory]], which at every clock edge captures everything the next stage needs about its instruction: the values read, the destination register's number, the control signals decoded in ID. Each stage works only from the pipeline register in front of it, so five instructions can be in flight without getting mixed up. All the pipeline registers capture at the same edge, which is what moves every instruction forward one stage at once.
+    - question:
+        id: derivation-stages
+        type: order
+        system: s2
+        prompt: |
+          Put the five stages of the classic RISC pipeline in the order an instruction passes through them.
+        steps:
+          - "Instruction fetch"
+          - "Instruction decode and register read"
+          - "Execute in the ALU"
+          - "Memory access"
+          - "Write back to the register file"
+        explanation: |
+          The register read must come before the ALU needs the values, loads must read memory after the ALU has computed the address, and the result is written last.
+    - text: |
+        **Timing.** With k stages, the clock period must cover the slowest stage plus the overhead of the pipeline register after it, its clock-to-Q delay and setup time. The first instruction takes k cycles to come out; after that one more finishes every cycle. So n instructions take **k + n − 1** cycles, and for large n the time per instruction approaches one cycle. Without pipelining, each instruction takes the sum of all the stage delays. In the ideal case of k equal stages and no overhead, pipelining is k times faster. Real pipelines fall short for two reasons: the stages are never perfectly balanced, so the clock is set by the slowest; and each pipeline register adds its overhead to every cycle. A third reason, instructions that must wait for one another, is the subject of the next lesson.
+    - question:
+        id: derivation-cycle
+        type: numeric
+        system: s2
+        prompt: |
+          A pipeline's five stages take 200, 150, 250, 300 and 150 picoseconds, and each pipeline register adds 20 picoseconds. What is the shortest clock period?
+        answer: "320"
+        unit: picoseconds
+        explanation: |
+          The clock must allow for the slowest stage, 300 ps, plus the register overhead, 20 ps. The faster stages simply sit idle for part of each cycle.
+    - question:
+        id: derivation-latency
+        type: choice
+        system: s2
+        prompt: |
+          Compared with the unpipelined design, what does pipelining do to the time one instruction takes from fetch to write back?
+        options:
+          - "It stays the same or grows a little, since every stage now takes a full cycle plus register overhead"
+          - "It shrinks by a factor equal to the number of stages"
+          - "It shrinks to one cycle"
+          - "It doubles"
+        answer: 0
+        explanation: |
+          Pipelining improves throughput, not latency. Each instruction still visits every stage, and each stage now takes the slowest stage's time plus overhead, so its own latency can only grow.
+    - text: |
+        **Balancing.** Since the slowest stage sets the clock, designers move logic between stages to even them out. Given a chain of logic blocks with known delays, the best way to cut it into k stages is the one whose slowest stage is fastest, and it can be found by trying every place the first stage could end and solving the rest the same way, a recursion of the kind in [[s1.recursion]]. When a single block is too slow to share a stage, such as a large cache read, it is itself split over two or more stages.
+
+        **Deeper pipelines.** If five stages make a machine faster, why not fifty? Each extra stage shortens the logic per cycle, but the register overhead stays, so it becomes a larger share of the cycle; at some point adding stages adds almost nothing. Worse, as the next lesson shows, the cost of a wrong guess about a branch grows with the number of stages that must be thrown away. Intel's Pentium 4 of the early 2000s went to 31 stages chasing clock speed, ran hot, and was abandoned for designs of 14 to 20 stages, which is roughly where fast processors have stayed. The **iron law** from the fetch-decode-execute lesson says why: the goal is the product of instruction count, cycles per instruction and cycle time, not the clock rate alone.
+    - question:
+        id: derivation-speedup
+        type: numeric
+        system: s2
+        prompt: |
+          An unpipelined processor takes 1000 picoseconds per instruction. It is split into 5 perfectly equal stages of 200 picoseconds, with no register overhead and nothing ever waiting. For a very long program, how many times faster is the pipelined version?
+        answer: "5"
+        explanation: |
+          One instruction now finishes every 200 ps instead of every 1000 ps. That ideal factor, equal to the number of stages, is the best pipelining can do.
+    - text: |
+        **Pipelines everywhere.** The idea is far older than processors and turns up wherever the same work is done many times. Mumbai's dabbawalas move lunch boxes from homes to offices in a relay: one person collects from a neighbourhood, another carries the boxes on the train, a third delivers them to a building. No box travels faster than it would with one carrier, yet hundreds of thousands arrive every day. A car factory's assembly line, a bank's cheque-clearing process and a shell command such as `cat log.txt | grep ERROR | sort` are pipelines too, each stage working on one item while the next stage works on the item before.
+
+        Inside a processor the same pattern repeats at every scale. The floating-point multiplier is itself pipelined over several cycles, so a new multiplication can start every cycle even though each takes four. A graphics card pipelines whole frames: one stage transforms the corners of triangles while another colours the pixels of the triangles before them. Memory systems pipeline requests so that a second load can be on its way before the first has returned. Whenever you see a throughput far higher than one over the latency, look for a pipeline.
+  formal:
+    - text: |
+        **Latency and throughput.** Latency is the time one instruction takes; throughput is instructions finished per unit of time. Pipelining raises throughput and does not reduce latency.
+
+        **Classic pipeline.** IF, ID, EX, MEM, WB, separated by pipeline registers that capture at every clock edge.
+
+        **Timing.** Clock period = slowest stage + register overhead. n instructions in k stages take k + n − 1 cycles. Ideal speedup over an unpipelined design is k; imbalance, overhead and stalls reduce it.
+
+        **Depth.** More stages shorten the cycle with diminishing returns, since register overhead is fixed and mispredicted branches cost more.
+  drill:
+    - text: Seconds each. Count along the rows and down the columns.
+    - question:
+        id: drill-throughput
+        type: choice
+        system: s1
+        prompt: |
+          What does pipelining improve?
+        options:
+          - "Throughput: instructions finished per second"
+          - "The latency of each instruction"
+          - "The number of instructions in the program"
+          - "The size of each instruction"
+        answer: 0
+        explanation: Many instructions overlap, so more finish per second, while each still takes all of its stages.
+    - question:
+        id: drill-slowest
+        type: choice
+        system: s1
+        prompt: |
+          A pipeline's stages take 100, 100, 400 and 100 picoseconds. Which change speeds up the clock most?
+        options:
+          - "Splitting the 400 ps stage into two of 200 ps"
+          - "Speeding up the first stage to 50 ps"
+          - "Merging the last two stages"
+          - "Adding a sixth stage of 100 ps at the end"
+        answer: 0
+        explanation: The clock is set by the slowest stage, so only shortening that one helps.
+    - question:
+        id: predict-cycles
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          n, k = 4, 5
+          print(k + n - 1, n * k)
+        output: "8 20"
+        explanation: Four instructions in a five-stage pipeline take 8 cycles; one at a time they would take 20.
+    - question:
+        id: predict-period
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          stages = [200, 150, 250, 300, 150]
+          print(max(stages) + 20, sum(stages))
+        output: "320 1050"
+        explanation: The pipelined cycle is the slowest stage plus 20 ps of register overhead; the unpipelined instruction takes the sum of all stages.
+    - question:
+        id: predict-chart
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          for i in range(3):
+              print("." * i + "FDXMW")
+        output: |
+          FDXMW
+          .FDXMW
+          ..FDXMW
+        explanation: Each instruction starts one cycle after the one before, so its row is shifted one place to the right.
+  work:
+    - text: Slower now. Each answer times or balances a pipeline, or simulates one.
+    - question:
+        id: write-pipeline-time
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `unpipelined_time` and `pipelined_time`. For 1000 instructions through stages of 200, 150, 250, 300 and 150 picoseconds with 20 picoseconds of register overhead, the program should print a cycle of 320 ps and then a speedup of 3.27.
+        starter: |
+          def unpipelined_time(n, stage_ps):
+              # Without pipelining, each instruction passes through every stage
+              # before the next one starts. Return the total time for n instructions,
+              # in picoseconds.
+              return 0
+
+
+          def pipelined_time(n, stage_ps, register_ps):
+              # With pipelining, every stage takes one clock cycle, which must be long
+              # enough for the slowest stage plus the pipeline register after it. The
+              # first instruction takes one cycle per stage; after that one more
+              # finishes every cycle. Return (cycle time, total time for n).
+              return 0, 0
+
+
+          stages = [200, 150, 250, 300, 150]
+          n = 1000
+          cycle, total = pipelined_time(n, stages, 20)
+          print("cycle", cycle, "ps")
+          print("without pipelining", unpipelined_time(n, stages), "ps")
+          print("with pipelining", total, "ps")
+          if total > 0:
+              print("speedup", round(unpipelined_time(n, stages) / total, 2))
+        solution: |
+          def unpipelined_time(n, stage_ps):
+              # Without pipelining, each instruction passes through every stage
+              # before the next one starts. Return the total time for n instructions,
+              # in picoseconds.
+              return n * sum(stage_ps)
+
+
+          def pipelined_time(n, stage_ps, register_ps):
+              # With pipelining, every stage takes one clock cycle, which must be long
+              # enough for the slowest stage plus the pipeline register after it. The
+              # first instruction takes one cycle per stage; after that one more
+              # finishes every cycle. Return (cycle time, total time for n).
+              cycle = max(stage_ps) + register_ps
+              return cycle, (len(stage_ps) + n - 1) * cycle
+
+
+          stages = [200, 150, 250, 300, 150]
+          n = 1000
+          cycle, total = pipelined_time(n, stages, 20)
+          print("cycle", cycle, "ps")
+          print("without pipelining", unpipelined_time(n, stages), "ps")
+          print("with pipelining", total, "ps")
+          if total > 0:
+              print("speedup", round(unpipelined_time(n, stages) / total, 2))
+        tests: |
+          assert unpipelined_time(3, [100, 200]) == 900, "3 instructions through stages of 100 and 200 ps take 3 x 300 = 900 ps unpipelined"
+          for _n, _st, _r, _want in [(1, [100, 100, 100], 10, (110, 330)), (10, [100, 100, 100], 10, (110, 1320)), (4, [50, 300, 80], 20, (320, 1920)), (1000, [200, 150, 250, 300, 150], 20, (320, 321280)), (2, [500], 0, (500, 1000))]:
+              _got = tuple(pipelined_time(_n, _st, _r))
+              assert _got == _want, "pipelined_time(" + str(_n) + ", " + str(_st) + ", " + str(_r) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.splitlines() == ["cycle 320 ps", "without pipelining 1050000 ps", "with pipelining 321280 ps", "speedup 3.27"], "The program should print a cycle of 320 ps and a speedup of 3.27"
+        wrong:
+          - |
+            def unpipelined_time(n, stage_ps):
+                # Without pipelining, each instruction passes through every stage
+                # before the next one starts. Return the total time for n instructions,
+                # in picoseconds.
+                return n * sum(stage_ps)
+
+
+            def pipelined_time(n, stage_ps, register_ps):
+                # With pipelining, every stage takes one clock cycle, which must be long
+                # enough for the slowest stage plus the pipeline register after it. The
+                # first instruction takes one cycle per stage; after that one more
+                # finishes every cycle. Return (cycle time, total time for n).
+                cycle = sum(stage_ps) // len(stage_ps) + register_ps
+                return cycle, (len(stage_ps) + n - 1) * cycle
+
+
+            stages = [200, 150, 250, 300, 150]
+            n = 1000
+            cycle, total = pipelined_time(n, stages, 20)
+            print("cycle", cycle, "ps")
+            print("without pipelining", unpipelined_time(n, stages), "ps")
+            print("with pipelining", total, "ps")
+            if total > 0:
+                print("speedup", round(unpipelined_time(n, stages) / total, 2))
+          - |
+            def unpipelined_time(n, stage_ps):
+                # Without pipelining, each instruction passes through every stage
+                # before the next one starts. Return the total time for n instructions,
+                # in picoseconds.
+                return n * sum(stage_ps)
+
+
+            def pipelined_time(n, stage_ps, register_ps):
+                # With pipelining, every stage takes one clock cycle, which must be long
+                # enough for the slowest stage plus the pipeline register after it. The
+                # first instruction takes one cycle per stage; after that one more
+                # finishes every cycle. Return (cycle time, total time for n).
+                cycle = max(stage_ps)
+                return cycle, (len(stage_ps) + n - 1) * cycle
+
+
+            stages = [200, 150, 250, 300, 150]
+            n = 1000
+            cycle, total = pipelined_time(n, stages, 20)
+            print("cycle", cycle, "ps")
+            print("without pipelining", unpipelined_time(n, stages), "ps")
+            print("with pipelining", total, "ps")
+            if total > 0:
+                print("speedup", round(unpipelined_time(n, stages) / total, 2))
+          - |
+            def unpipelined_time(n, stage_ps):
+                # Without pipelining, each instruction passes through every stage
+                # before the next one starts. Return the total time for n instructions,
+                # in picoseconds.
+                return n * sum(stage_ps)
+
+
+            def pipelined_time(n, stage_ps, register_ps):
+                # With pipelining, every stage takes one clock cycle, which must be long
+                # enough for the slowest stage plus the pipeline register after it. The
+                # first instruction takes one cycle per stage; after that one more
+                # finishes every cycle. Return (cycle time, total time for n).
+                cycle = max(stage_ps) + register_ps
+                return cycle, n * cycle
+
+
+            stages = [200, 150, 250, 300, 150]
+            n = 1000
+            cycle, total = pipelined_time(n, stages, 20)
+            print("cycle", cycle, "ps")
+            print("without pipelining", unpipelined_time(n, stages), "ps")
+            print("with pipelining", total, "ps")
+            if total > 0:
+                print("speedup", round(unpipelined_time(n, stages) / total, 2))
+        explanation: |
+          Unpipelined, every instruction takes the sum of the stages. Pipelined, the cycle is the slowest stage plus the register overhead, and n instructions take k + n − 1 cycles. Using the average stage instead of the slowest pretends the pipeline is balanced; leaving out the overhead flatters it; and n × cycle forgets the cycles it takes to fill the pipeline.
+    - question:
+        id: write-balance
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `best_split`, which cuts a chain of logic blocks into k stages so that the slowest stage is as fast as possible. The program should print the slowest stage for 1 to 4 stages: 580, 300, 210 and 170 ps.
+        starter: |
+          def best_split(delays, k):
+              # delays lists the delays of a chain of logic blocks, in order. Cut the
+              # chain into k stages of consecutive blocks, each stage at least one
+              # block, so that the slowest stage is as fast as possible, and return
+              # that slowest stage's delay. Try every place the first stage could end.
+              return 0
+
+
+          blocks = [50, 120, 80, 30, 90, 60, 40, 110]
+          for k in range(1, 5):
+              print(k, "stages: slowest stage", best_split(blocks, k), "ps")
+        solution: |
+          def best_split(delays, k):
+              # delays lists the delays of a chain of logic blocks, in order. Cut the
+              # chain into k stages of consecutive blocks, each stage at least one
+              # block, so that the slowest stage is as fast as possible, and return
+              # that slowest stage's delay. Try every place the first stage could end.
+              if k == 1:
+                  return sum(delays)
+              best = None
+              for end in range(1, len(delays) - k + 2):
+                  slowest = max(sum(delays[:end]), best_split(delays[end:], k - 1))
+                  if best is None or slowest < best:
+                      best = slowest
+              return best
+
+
+          blocks = [50, 120, 80, 30, 90, 60, 40, 110]
+          for k in range(1, 5):
+              print(k, "stages: slowest stage", best_split(blocks, k), "ps")
+        tests: |
+          def _brute(_d, _k):
+              if _k == 1:
+                  return sum(_d)
+              return min(max(sum(_d[:_e]), _brute(_d[_e:], _k - 1)) for _e in range(1, len(_d) - _k + 2))
+
+
+          for _d, _k in [([5], 1), ([3, 4], 2), ([10, 1, 1, 1], 2), ([1, 1, 1, 10], 2), ([7, 2, 5, 10, 8], 2), ([7, 2, 5, 10, 8], 3), ([1, 2, 3, 4, 5, 6, 7, 8, 9], 3), ([9, 9, 1, 1, 1, 9], 4), ([4, 4, 4, 4], 4), ([60, 10, 10, 10, 10, 60], 3)]:
+              _want = _brute(_d, _k)
+              _got = best_split(_d, _k)
+              assert _got == _want, "best_split(" + str(_d) + ", " + str(_k) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.splitlines() == ["1 stages: slowest stage 580 ps", "2 stages: slowest stage 300 ps", "3 stages: slowest stage 210 ps", "4 stages: slowest stage 170 ps"], "The program should print 580, 300, 210 and 170 ps"
+        wrong:
+          - |
+            def best_split(delays, k):
+                # delays lists the delays of a chain of logic blocks, in order. Cut the
+                # chain into k stages of consecutive blocks, each stage at least one
+                # block, so that the slowest stage is as fast as possible, and return
+                # that slowest stage's delay. Try every place the first stage could end.
+                if k == 1:
+                    return sum(delays)
+                best = None
+                for end in range(1, len(delays) - k + 2):
+                    slowest = sum(delays[:end]) + best_split(delays[end:], k - 1)
+                    if best is None or slowest < best:
+                        best = slowest
+                return best
+
+
+            blocks = [50, 120, 80, 30, 90, 60, 40, 110]
+            for k in range(1, 5):
+                print(k, "stages: slowest stage", best_split(blocks, k), "ps")
+          - |
+            def best_split(delays, k):
+                # delays lists the delays of a chain of logic blocks, in order. Cut the
+                # chain into k stages of consecutive blocks, each stage at least one
+                # block, so that the slowest stage is as fast as possible, and return
+                # that slowest stage's delay. Try every place the first stage could end.
+                return max(max(delays), sum(delays) // k)
+
+
+            blocks = [50, 120, 80, 30, 90, 60, 40, 110]
+            for k in range(1, 5):
+                print(k, "stages: slowest stage", best_split(blocks, k), "ps")
+          - |
+            def best_split(delays, k):
+                # delays lists the delays of a chain of logic blocks, in order. Cut the
+                # chain into k stages of consecutive blocks, each stage at least one
+                # block, so that the slowest stage is as fast as possible, and return
+                # that slowest stage's delay. Try every place the first stage could end.
+                if k == 1:
+                    return sum(delays)
+                best = None
+                for end in range(1, len(delays) - k + 1):
+                    slowest = max(sum(delays[:end]), best_split(delays[end:], k - 1))
+                    if best is None or slowest < best:
+                        best = slowest
+                return best
+
+
+            blocks = [50, 120, 80, 30, 90, 60, 40, 110]
+            for k in range(1, 5):
+                print(k, "stages: slowest stage", best_split(blocks, k), "ps")
+        explanation: |
+          With one stage, the answer is the sum of all blocks. Otherwise try each end for the first stage, leaving at least one block for each remaining stage, and take the best of the larger of the first stage and the best split of the rest. Adding the stages instead of taking the slowest computes total delay, not the clock; the average of the blocks is a lower bound that real cuts rarely reach; and stopping the range one early misses the last possible cut, which for two blocks is the only one.
+    - question:
+        id: fix-dosa-pipeline
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The simulated dosa counter has three stages, so the four orders should finish at ticks 3, 4, 5 and 6, and the program should print `{'masala': 3, 'plain': 4, 'onion': 5, 'ghee roast': 6}`. Instead every order finishes after 2 ticks, whatever the number of stages. Find the fault and fix it.
+        starter: |
+          def run_pipeline(orders, stages):
+              # A pipeline, like a dosa counter where one cook pours the batter, one
+              # adds the filling and one folds and serves. At every tick each order
+              # moves on one stage, all at the same moment, and the next waiting
+              # order enters stage 0. An order is finished at the tick it spends in
+              # the last stage. Return a dict giving the tick each order finishes.
+              slots = [None] * stages
+              waiting = list(orders)
+              finished = {}
+              tick = 0
+              while waiting or any(slot is not None for slot in slots):
+                  tick += 1
+                  for i in range(1, stages):
+                      slots[i] = slots[i - 1]
+                  slots[0] = waiting.pop(0) if waiting else None
+                  if slots[-1] is not None:
+                      finished[slots[-1]] = tick
+                      slots[-1] = None
+              return finished
+
+
+          print(run_pipeline(["masala", "plain", "onion", "ghee roast"], 3))
+        solution: |
+          def run_pipeline(orders, stages):
+              # A pipeline, like a dosa counter where one cook pours the batter, one
+              # adds the filling and one folds and serves. At every tick each order
+              # moves on one stage, all at the same moment, and the next waiting
+              # order enters stage 0. An order is finished at the tick it spends in
+              # the last stage. Return a dict giving the tick each order finishes.
+              slots = [None] * stages
+              waiting = list(orders)
+              finished = {}
+              tick = 0
+              while waiting or any(slot is not None for slot in slots):
+                  tick += 1
+                  for i in range(stages - 1, 0, -1):
+                      slots[i] = slots[i - 1]
+                  slots[0] = waiting.pop(0) if waiting else None
+                  if slots[-1] is not None:
+                      finished[slots[-1]] = tick
+                      slots[-1] = None
+              return finished
+
+
+          print(run_pipeline(["masala", "plain", "onion", "ghee roast"], 3))
+        tests: |
+          for _orders, _k in [(["a"], 1), (["a", "b"], 1), (["a"], 4), (["a", "b", "c"], 2), (["p", "q", "r", "s", "t"], 5), (["x", "y"], 3), ([], 3)]:
+              _want = {_o: _k + _i for _i, _o in enumerate(_orders)}
+              _got = run_pipeline(_orders, _k)
+              assert _got == _want, "With " + str(len(_orders)) + " orders and " + str(_k) + " stages, they should finish at " + str(_want) + ", not " + str(_got)
+          assert output.strip() == "{'masala': 3, 'plain': 4, 'onion': 5, 'ghee roast': 6}", "The program should print the four dosas finishing at ticks 3, 4, 5 and 6"
+        wrong:
+          - |
+            def run_pipeline(orders, stages):
+                # A pipeline, like a dosa counter where one cook pours the batter, one
+                # adds the filling and one folds and serves. At every tick each order
+                # moves on one stage, all at the same moment, and the next waiting
+                # order enters stage 0. An order is finished at the tick it spends in
+                # the last stage. Return a dict giving the tick each order finishes.
+                slots = [None] * stages
+                waiting = list(orders)
+                finished = {}
+                tick = 0
+                while waiting or any(slot is not None for slot in slots):
+                    tick += 1
+                    for i in range(stages - 1, 1, -1):
+                        slots[i] = slots[i - 1]
+                    slots[0] = waiting.pop(0) if waiting else None
+                    if slots[-1] is not None:
+                        finished[slots[-1]] = tick
+                        slots[-1] = None
+                return finished
+
+
+            print(run_pipeline(["masala", "plain", "onion", "ghee roast"], 3))
+          - |
+            def run_pipeline(orders, stages):
+                # A pipeline, like a dosa counter where one cook pours the batter, one
+                # adds the filling and one folds and serves. At every tick each order
+                # moves on one stage, all at the same moment, and the next waiting
+                # order enters stage 0. An order is finished at the tick it spends in
+                # the last stage. Return a dict giving the tick each order finishes.
+                slots = [None] * stages
+                waiting = list(orders)
+                finished = {}
+                tick = 0
+                while waiting or any(slot is not None for slot in slots):
+                    tick += 1
+                    if slots[-1] is not None:
+                        finished[slots[-1]] = tick
+                        slots[-1] = None
+                    for i in range(stages - 1, 0, -1):
+                        slots[i] = slots[i - 1]
+                    slots[0] = waiting.pop(0) if waiting else None
+                return finished
+
+
+            print(run_pipeline(["masala", "plain", "onion", "ghee roast"], 3))
+          - |
+            def run_pipeline(orders, stages):
+                # A pipeline, like a dosa counter where one cook pours the batter, one
+                # adds the filling and one folds and serves. At every tick each order
+                # moves on one stage, all at the same moment, and the next waiting
+                # order enters stage 0. An order is finished at the tick it spends in
+                # the last stage. Return a dict giving the tick each order finishes.
+                slots = [None] * stages
+                waiting = list(orders)
+                finished = {}
+                tick = 0
+                while waiting or any(slot is not None for slot in slots):
+                    for i in range(stages - 1, 0, -1):
+                        slots[i] = slots[i - 1]
+                    slots[0] = waiting.pop(0) if waiting else None
+                    if slots[-1] is not None:
+                        finished[slots[-1]] = tick
+                        slots[-1] = None
+                    tick += 1
+                return finished
+
+
+            print(run_pipeline(["masala", "plain", "onion", "ghee roast"], 3))
+        explanation: |
+          Moving the orders from the front of the line backwards copies stage 0's order into stage 1, then that same order into stage 2, and so on, so it shoots through every stage in one tick. Hardware pipeline registers all capture at once from their old values; a simulation gets the same effect by moving orders starting from the last stage. Stopping before stage 1 loses every order, recording before moving finishes each one a tick late, and counting ticks after recording finishes each a tick early.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. A five-stage pipeline never has to wait. How many cycles does it take to run 100 instructions, from the first fetch to the last write back?
+        answer: "104"
+        explanation: |
+          The first instruction takes 5 cycles, and each of the other 99 finishes one cycle after the one before: 5 + 99 = 104.
+    - question:
+        id: work-deep
+        type: choice
+        system: s2
+        prompt: |
+          A team proposes splitting a 15-stage pipeline into 60 stages to quadruple the clock rate. What is the strongest objection?
+        options:
+          - "Register overhead does not shrink, so it becomes a large part of each cycle, and every wrongly guessed branch throws away far more work"
+          - "Pipelines cannot have more stages than the instruction set has formats"
+          - "A deeper pipeline increases the number of instructions in the program"
+          - "Instructions would take fewer cycles each, which breaks the iron law"
+        answer: 0
+        explanation: |
+          Cutting the logic into quarters does not cut the fixed overhead per stage, so the clock rises far less than four times, and hazards, the next lesson's subject, get more expensive with every stage.
+  connections:
+    - text: |
+        104. The first instruction needs all five cycles to come out, and every later one comes out a cycle after the one before, so 100 instructions take 5 + 99 cycles, close to one per cycle. Without pipelining they would take 500.
+
+        That calculation assumed nothing ever waits. But instructions depend on each other: an add may need the result of the instruction just before it, which has not been written back yet, and the pipeline fetches instructions after a branch before it knows which way the branch goes. [[h1.hazards-and-branch-prediction]] deals with both, by forwarding results early, stalling when it must, and guessing branches remarkably well.

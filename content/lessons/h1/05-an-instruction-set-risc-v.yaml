@@ -1,0 +1,499 @@
+concept: h1.an-instruction-set-risc-v
+minutes: 90
+claim: You can say what an instruction set architecture promises and how RISC differs from CISC; name RISC-V's 32 registers and their conventional roles, including the zero register; use its arithmetic, logical, shift, comparison, load, store, branch and jump instructions; explain why an immediate holds only 12 bits and build larger constants with lui; encode an instruction into its 32 bits by format; and write and run short programs in RISC-V assembly using real instructions only.
+recalls: [h1.the-fetch-decode-execute-cycle]
+uses: [h1.latches-registers-and-memory, h1.adders-and-the-alu, h0.binary-and-hexadecimal, h0.twos-complement-and-overflow, h0.bitwise-operations-and-masks, h0.endianness-and-byte-order, h0.alignment-and-the-size-of-things]
+leads: [h1.assembly-programming]
+language: asm
+starter: |
+  # Scratch space, in RISC-V assembly. Run prints the output and then the
+  # registers the program changed. Service 1 (a7 = 1, then ecall) prints a0.
+  main:
+      addi t0, zero, 40
+      addi t1, zero, 2
+      add a0, t0, t1
+      addi a7, zero, 1
+      ecall
+parts:
+  recall:
+    - text: |
+        [[h1.the-fetch-decode-execute-cycle]] built a machine that fetches numbers from memory and runs them as instructions, using a made-up set of five instructions. Real processors follow a published instruction set that thousands of programs and compilers rely on. This lesson learns one, RISC-V, well enough to write programs in it. Three quick pulls first.
+  puzzle:
+    - text: |
+        Every RISC-V instruction is exactly 32 bits long. The instruction `addi` adds a constant written inside the instruction itself to a register, so `addi t0, t0, 5` adds 5 to t0. But the instruction also has to hold its opcode and the numbers of two registers, which leaves only 12 bits for the constant, stored in two's complement.
+
+        **What is the largest constant that a single addi can add?**
+  intuition:
+    - text: |
+        An Indian railway ticket packs a great deal into a fixed form: train number, date, class, coach, berth. Every booking clerk and every ticket checker in the country reads the same boxes in the same places, so a ticket printed in Chennai is understood in Delhi. The form is the contract; the clerks, the printers and the reservation computers behind it can change without anyone noticing.
+
+        An **instruction set architecture** is that form for programs. It fixes what instructions exist, what each one does, which registers there are, and how every instruction is packed into bits, so that a program compiled once runs on every processor that implements it, from a 50-rupee microcontroller to a server chip. The figure shows how RISC-V packs a few instructions. Pick each one and see which bits hold what.
+    - figure: rv-encoding
+      props: { instr: add }
+    - text: |
+        The opcode is always in the lowest 7 bits, and the register numbers, when an instruction has them, are always in the same places. So the processor can start reading registers before it has even worked out what the instruction is, which is a large part of what makes a simple instruction set fast. The price is that a constant has to fit in whatever bits are left over, which is the puzzle.
+  derivation:
+    - text: |
+        **RISC and CISC.** Two philosophies of instruction set compete. **CISC**, complex instruction set computing, of which Intel's x86 is the great survivor, offers many powerful instructions of varying lengths, from 1 to 15 bytes, some of which read memory, compute and write memory in one go. **RISC**, reduced instruction set computing, offers fewer, simpler instructions of a fixed length that each do one thing, and only loads and stores touch memory, a **load-store architecture**. RISC instructions are easier to decode and to pipeline; modern x86 chips in fact translate their instructions into RISC-like micro-operations inside. ARM, in almost every phone, is RISC. **RISC-V**, begun at Berkeley in 2010, is a RISC instruction set that anyone may implement without a licence, built as a small base, RV32I for 32-bit integers, plus optional extensions such as M for multiplication and division.
+
+        **Registers.** RISC-V has 32 registers of 32 bits, x0 to x31, plus the PC. Register **x0 always reads 0** and ignores writes, which turns out to be useful everywhere. The others are interchangeable to the hardware, but software agrees on roles and names: **a0 to a7** for function arguments and results, **t0 to t6** for temporary values, **s0 to s11** for values that must survive a function call, **sp** for the stack pointer and **ra** for the return address. Assembly may use either name: x10 and a0 are the same register.
+    - question:
+        id: derivation-zero
+        type: choice
+        system: s2
+        prompt: |
+          RISC-V has no instruction to copy one register to another. Which instruction copies t1 into t0?
+        options:
+          - "add t0, t1, zero"
+          - "add t0, t0, t1"
+          - "sub t0, t1, t1"
+          - "and t0, t1, zero"
+        answer: 0
+        explanation: |
+          Adding the zero register leaves t1's value unchanged, and the result goes into t0. Register x0 lets one add instruction serve as a copy, a negation (sub from zero) and much else.
+    - text: |
+        **Arithmetic and logic.** Register-register instructions take two source registers and a destination: `add t0, t1, t2` sets t0 = t1 + t2, and there are `sub`, `and`, `or`, `xor`, shifts `sll`, `srl` and `sra` by an amount held in a register, and comparisons `slt` and `sltu`, which set the destination to 1 if the first source is less than the second, signed or unsigned. **Immediate** versions take a constant instead of the second register: `addi`, `andi`, `ori`, `xori`, `slti`, `sltiu`, and shifts `slli`, `srli`, `srai` by a fixed amount. There is no `subi`: add a negative constant instead. Overflow is not reported; the 32-bit result simply wraps around, as in [[h0.twos-complement-and-overflow]].
+
+        **Two kinds of right shift.** `srli` shifts in zeros from the left, which halves an unsigned number. `srai` copies the sign bit into the vacated places, which halves a signed number, rounding down. Shifting −20 right by one place logically turns its leading 1s into a 0 followed by 1s, a huge positive number; arithmetically it gives −10.
+
+        **Large constants.** An I-type immediate is 12 bits, sign-extended to 32, so `addi` can add from −2048 to 2047. For anything bigger, `lui` (load upper immediate) puts a 20-bit constant into the top 20 bits of a register and zeros the rest, and an `addi` then fills in the low 12 bits. Two instructions build any 32-bit constant.
+    - question:
+        id: derivation-lui
+        type: numeric
+        system: s2
+        prompt: |
+          A program runs `lui t0, 1` and then `addi t0, t0, 5`. What number does t0 hold?
+        answer: "4101"
+        explanation: |
+          lui puts 1 into bits 12 and up, which is 1 × 2¹² = 4096, and addi adds 5.
+    - text: |
+        **Memory.** Memory is a long row of bytes, each with a 32-bit address. RISC-V is little-endian, storing the low byte of a word at the lowest address, as in [[h0.endianness-and-byte-order]]. A load names a base register and a 12-bit offset: `lw t0, 8(a0)` loads the 4-byte word at address a0 + 8 into t0. `lh` and `lb` load 2 bytes and 1 byte, sign-extending them; `lhu` and `lbu` load them zero-extended. `sw t0, 8(a0)` stores a word, and `sh` and `sb` store 2 bytes and 1 byte. Words should sit at addresses that are multiples of 4, the alignment of [[h0.alignment-and-the-size-of-things]]; the machine in this course refuses a misaligned word, as many real ones do.
+
+        In assembly you will write data in a `.data` section and give it labels, and code in a `.text` section. In the machine used here, data starts at address 0x10010000. The assembler also accepts `lw t0, x`, a load from the label x, which it turns into two real instructions that work out x's address first.
+
+        **Branches and jumps.** A branch compares two registers and, if the test holds, moves the PC by an offset: `beq` and `bne` test equality, `blt` and `bge` signed order, `bltu` and `bgeu` unsigned order. You write a label as the target and the assembler works out the offset. `jal rd, label` jumps to the label and saves the address of the next instruction in rd, and `jalr rd, offset(rs)` jumps to the address in a register; these are the basis of function calls, two lessons on. Finally, `ecall` asks the environment for a service. In this course's machine, a7 chooses the service: 1 prints a0 as a signed number, 11 prints it as a character, 4 prints the text at the address in a0, and 10 ends the program.
+    - question:
+        id: derivation-unsigned
+        type: choice
+        system: s2
+        prompt: |
+          t0 holds −1 and t1 holds 1. Which branch is taken?
+        options:
+          - "blt t0, t1, target, because −1 < 1 as signed numbers"
+          - "bltu t0, t1, target, because −1 < 1 as unsigned numbers"
+          - "bge t0, t1, target"
+          - "beq t0, t1, target"
+        answer: 0
+        explanation: |
+          As a signed number −1 is less than 1, so blt is taken. Its bit pattern is all 1s, which unsigned is 4,294,967,295, so bltu is not taken and bgeu would be.
+    - text: |
+        **Encoding.** Every instruction is one 32-bit word in one of six formats, named by what they hold. **R-type** has three registers: opcode in bits 6 to 0, rd in 11 to 7, funct3 in 14 to 12, rs1 in 19 to 15, rs2 in 24 to 20, and funct7 in 31 to 25, where funct3 and funct7 refine the opcode, so `add` and `sub` differ by one bit of funct7. **I-type** replaces rs2 and funct7 with a 12-bit immediate, and covers addi, loads and jalr. **S-type** stores have two source registers and no destination, so their immediate is split around them. **B-type** branches are S-type with the offset's bits rearranged, and **U-type** and **J-type** hold a 20-bit immediate for lui and jal. In every format the registers stay where they are and the immediate's sign bit is always bit 31, so the hardware can read registers and start sign-extending before it knows the format, a design choice the figure makes visible.
+
+        Encoding by hand is the shift-and-OR you already know: `add x5, x6, x7` is (0 << 25) | (7 << 20) | (6 << 15) | (0 << 12) | (5 << 7) | 0b0110011, which is 0x007302b3.
+    - question:
+        id: derivation-format
+        type: choice
+        system: s2
+        prompt: |
+          Why does RISC-V keep rs1 and rs2 in the same bit positions in every format that has them?
+        options:
+          - "So the register file can be read while the instruction is still being decoded"
+          - "So that every instruction has exactly two source registers"
+          - "So that immediates can be longer"
+          - "Because the bits must be in alphabetical order"
+        answer: 0
+        explanation: |
+          If the register numbers could move, the processor would have to decode the format before it knew which registers to read. Fixed positions let decoding and register reading overlap.
+  formal:
+    - text: |
+        **Registers.** x0 to x31, 32 bits each; x0 is always 0. Conventional names: zero, ra, sp, gp, tp, t0–t6, s0–s11, a0–a7.
+
+        **Instructions of RV32I.** Register-register: add, sub, and, or, xor, sll, srl, sra, slt, sltu. Immediate: addi, andi, ori, xori, slti, sltiu, slli, srli, srai, with a 12-bit signed immediate. Upper immediate: lui rd, imm sets rd = imm × 2¹². Loads: lw, lh, lhu, lb, lbu rd, offset(rs1). Stores: sw, sh, sb rs2, offset(rs1). Branches: beq, bne, blt, bge, bltu, bgeu rs1, rs2, label. Jumps: jal rd, label and jalr rd, offset(rs1). ecall requests a service chosen by a7.
+
+        **Formats.** R, I, S, B, U and J; opcode in bits 6–0, rd in 11–7, funct3 in 14–12, rs1 in 19–15, rs2 in 24–20; the immediate's sign is bit 31.
+  drill:
+    - text: Seconds each. Read each instruction as what it does to a register.
+    - question:
+        id: drill-srai
+        type: choice
+        system: s1
+        prompt: |
+          Which instruction halves the signed number in t0, rounding down?
+        options:
+          - "srai t0, t0, 1"
+          - "srli t0, t0, 1"
+          - "slli t0, t0, 1"
+          - "sra t0, t0, zero"
+        answer: 0
+        explanation: An arithmetic shift copies the sign bit in from the left, so a negative number stays negative.
+    - question:
+        id: drill-loadstore
+        type: choice
+        system: s1
+        prompt: |
+          In a load-store architecture such as RISC-V, which instructions may read or write memory?
+        options:
+          - "Only loads and stores"
+          - "Any arithmetic instruction"
+          - "Only branches"
+          - "Only ecall"
+        answer: 0
+        explanation: Arithmetic works on registers only, so data must be loaded into a register before it can be used and stored afterwards.
+    - question:
+        id: predict-add
+        type: predict
+        system: s1
+        language: asm
+        prompt: What does this print?
+        code: |
+          main:
+              addi t0, zero, 5
+              addi t1, zero, -3
+              add a0, t0, t1
+              addi a7, zero, 1
+              ecall
+        output: "2"
+        explanation: t0 = 5 and t1 = −3, so a0 = 2, which service 1 prints.
+    - question:
+        id: predict-sltu
+        type: predict
+        system: s1
+        language: asm
+        prompt: What does this print?
+        code: |
+          main:
+              addi t0, zero, -1
+              addi t1, zero, 1
+              sltu a0, t0, t1
+              addi a7, zero, 1
+              ecall
+        output: "0"
+        explanation: Compared unsigned, −1 is the largest number there is, so it is not less than 1 and sltu gives 0.
+    - question:
+        id: predict-fields
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          word = 0x02A00293
+          print(word & 0x7F, (word >> 7) & 0x1F, word >> 20)
+        output: "19 5 42"
+        explanation: This is addi x5, x0, 42. The opcode 0b0010011 is 19, rd is 5, and the top 12 bits hold the immediate 42.
+  work:
+    - text: Slower now. The first and third answers are in assembly; the second builds instructions in Python.
+    - question:
+        id: write-max
+        type: code
+        mode: write
+        system: s2
+        language: asm
+        prompt: |
+          Using real RISC-V instructions only, put the larger of the two signed numbers at x and y into a0, so that the program prints it. With the numbers given it should print 12.
+        starter: |
+          # Print the larger of the two signed numbers stored at x and y.
+          .data
+          x: .word -7
+          y: .word 12
+
+          .text
+          main:
+              lw t0, x
+              lw t1, y
+              # Put the larger of t0 and t1 into a0.
+
+              addi a7, zero, 1        # service 1: print a0 as a number
+              ecall
+        solution: |
+          # Print the larger of the two signed numbers stored at x and y.
+          .data
+          x: .word -7
+          y: .word 12
+
+          .text
+          main:
+              lw t0, x
+              lw t1, y
+              # Put the larger of t0 and t1 into a0.
+              add a0, t0, zero
+              bge t0, t1, done
+              add a0, t1, zero
+          done:
+              addi a7, zero, 1        # service 1: print a0 as a number
+              ecall
+        tests: |
+          for _x, _y in [(-7, 12), (12, -7), (5, 5), (-3, -9), (-9, -3), (0, -1), (2147483647, -2147483648), (100, 2000)]:
+              _r = run(words={"x": [_x], "y": [_y]})
+              assert _r.output.strip() == str(max(_x, _y)), "With x = " + str(_x) + " and y = " + str(_y) + " the program should print " + str(max(_x, _y)) + ", not " + _r.output.strip()
+          assert output.strip() == "12", "The program should print 12"
+        wrong:
+          - |
+            # Print the larger of the two signed numbers stored at x and y.
+            .data
+            x: .word -7
+            y: .word 12
+
+            .text
+            main:
+                lw t0, x
+                lw t1, y
+                # Put the larger of t0 and t1 into a0.
+                add a0, t0, zero
+                bgeu t0, t1, done
+                add a0, t1, zero
+            done:
+                addi a7, zero, 1        # service 1: print a0 as a number
+                ecall
+          - |
+            # Print the larger of the two signed numbers stored at x and y.
+            .data
+            x: .word -7
+            y: .word 12
+
+            .text
+            main:
+                lw t0, x
+                lw t1, y
+                # Put the larger of t0 and t1 into a0.
+                add a0, t0, zero
+                blt t0, t1, done
+                add a0, t1, zero
+            done:
+                addi a7, zero, 1        # service 1: print a0 as a number
+                ecall
+          - |
+            # Print the larger of the two signed numbers stored at x and y.
+            .data
+            x: .word -7
+            y: .word 12
+
+            .text
+            main:
+                lw t0, x
+                lw t1, y
+                # Put the larger of t0 and t1 into a0.
+                bge t0, t1, done
+                add a0, t1, zero
+            done:
+                addi a7, zero, 1        # service 1: print a0 as a number
+                ecall
+        explanation: |
+          Copy t0 into a0 first, then branch past a second copy when t0 ≥ t1, so a0 is replaced by t1 only when t1 is larger. bgeu compares unsigned, so −7 looks enormous; blt gets the test backwards and keeps the smaller; and leaving out the first copy prints 0 whenever t0 is the larger.
+    - question:
+        id: write-encode
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `encode_r` and `encode_i`, which pack R-type and I-type instructions into 32-bit words. The program should print the encodings of add, sub and two addi instructions, `0x7302b3`, `0x407302b3`, `0x2a00293` and `0xfff28293`, one per line; hex drops leading zeros.
+        starter: |
+          def encode_r(funct7, rs2, rs1, funct3, rd, opcode):
+              # Pack an R-type instruction into one 32-bit number: funct7 in bits 31
+              # to 25, rs2 in 24 to 20, rs1 in 19 to 15, funct3 in 14 to 12, rd in
+              # 11 to 7 and opcode in 6 to 0.
+              return 0
+
+
+          def encode_i(imm, rs1, funct3, rd, opcode):
+              # I-type: a 12-bit immediate in bits 31 to 20, then rs1, funct3, rd and
+              # opcode where R-type keeps them. A negative immediate is stored in
+              # two's complement, so keep only its low 12 bits.
+              return 0
+
+
+          print(hex(encode_r(0, 7, 6, 0, 5, 0b0110011)))
+          print(hex(encode_r(0b0100000, 7, 6, 0, 5, 0b0110011)))
+          print(hex(encode_i(42, 0, 0, 5, 0b0010011)))
+          print(hex(encode_i(-1, 5, 0, 5, 0b0010011)))
+        solution: |
+          def encode_r(funct7, rs2, rs1, funct3, rd, opcode):
+              # Pack an R-type instruction into one 32-bit number: funct7 in bits 31
+              # to 25, rs2 in 24 to 20, rs1 in 19 to 15, funct3 in 14 to 12, rd in
+              # 11 to 7 and opcode in 6 to 0.
+              return (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+
+
+          def encode_i(imm, rs1, funct3, rd, opcode):
+              # I-type: a 12-bit immediate in bits 31 to 20, then rs1, funct3, rd and
+              # opcode where R-type keeps them. A negative immediate is stored in
+              # two's complement, so keep only its low 12 bits.
+              return ((imm & 0xFFF) << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+
+
+          print(hex(encode_r(0, 7, 6, 0, 5, 0b0110011)))
+          print(hex(encode_r(0b0100000, 7, 6, 0, 5, 0b0110011)))
+          print(hex(encode_i(42, 0, 0, 5, 0b0010011)))
+          print(hex(encode_i(-1, 5, 0, 5, 0b0010011)))
+        tests: |
+          _cases_r = [((0, 7, 6, 0, 5, 0x33), 0x007302B3), ((0x20, 7, 6, 0, 5, 0x33), 0x407302B3), ((0, 12, 11, 4, 10, 0x33), 0x00C5C533), ((0, 31, 31, 7, 31, 0x33), 0x01FFFFB3), ((1, 3, 2, 4, 1, 0x33), 0x023140B3)]
+          for _args, _want in _cases_r:
+              _got = encode_r(*_args)
+              assert _got == _want, "encode_r" + str(_args) + " should be " + hex(_want) + ", not " + str(_got if not isinstance(_got, int) else hex(_got))
+          _cases_i = [((42, 0, 0, 5, 0x13), 0x02A00293), ((-1, 5, 0, 5, 0x13), 0xFFF28293), ((8, 10, 2, 5, 0x03), 0x00852283), ((-2048, 1, 0, 1, 0x13), 0x80008093), ((2047, 2, 0, 2, 0x13), 0x7FF10113), ((-20, 2, 0, 2, 0x13), 0xFEC10113)]
+          for _args, _want in _cases_i:
+              _got = encode_i(*_args)
+              assert _got == _want, "encode_i" + str(_args) + " should be " + hex(_want) + ", not " + str(_got if not isinstance(_got, int) else hex(_got))
+          assert output.splitlines() == ["0x7302b3", "0x407302b3", "0x2a00293", "0xfff28293"], "The program should print 0x7302b3, 0x407302b3, 0x2a00293 and 0xfff28293"
+        wrong:
+          - |
+            def encode_r(funct7, rs2, rs1, funct3, rd, opcode):
+                # Pack an R-type instruction into one 32-bit number: funct7 in bits 31
+                # to 25, rs2 in 24 to 20, rs1 in 19 to 15, funct3 in 14 to 12, rd in
+                # 11 to 7 and opcode in 6 to 0.
+                return (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+
+
+            def encode_i(imm, rs1, funct3, rd, opcode):
+                # I-type: a 12-bit immediate in bits 31 to 20, then rs1, funct3, rd and
+                # opcode where R-type keeps them. A negative immediate is stored in
+                # two's complement, so keep only its low 12 bits.
+                return (imm << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+
+
+            print(hex(encode_r(0, 7, 6, 0, 5, 0b0110011)))
+            print(hex(encode_r(0b0100000, 7, 6, 0, 5, 0b0110011)))
+            print(hex(encode_i(42, 0, 0, 5, 0b0010011)))
+            print(hex(encode_i(-1, 5, 0, 5, 0b0010011)))
+          - |
+            def encode_r(funct7, rs2, rs1, funct3, rd, opcode):
+                # Pack an R-type instruction into one 32-bit number: funct7 in bits 31
+                # to 25, rs2 in 24 to 20, rs1 in 19 to 15, funct3 in 14 to 12, rd in
+                # 11 to 7 and opcode in 6 to 0.
+                return (funct7 << 25) | (rs1 << 20) | (rs2 << 15) | (funct3 << 12) | (rd << 7) | opcode
+
+
+            def encode_i(imm, rs1, funct3, rd, opcode):
+                # I-type: a 12-bit immediate in bits 31 to 20, then rs1, funct3, rd and
+                # opcode where R-type keeps them. A negative immediate is stored in
+                # two's complement, so keep only its low 12 bits.
+                return ((imm & 0xFFF) << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+
+
+            print(hex(encode_r(0, 7, 6, 0, 5, 0b0110011)))
+            print(hex(encode_r(0b0100000, 7, 6, 0, 5, 0b0110011)))
+            print(hex(encode_i(42, 0, 0, 5, 0b0010011)))
+            print(hex(encode_i(-1, 5, 0, 5, 0b0010011)))
+          - |
+            def encode_r(funct7, rs2, rs1, funct3, rd, opcode):
+                # Pack an R-type instruction into one 32-bit number: funct7 in bits 31
+                # to 25, rs2 in 24 to 20, rs1 in 19 to 15, funct3 in 14 to 12, rd in
+                # 11 to 7 and opcode in 6 to 0.
+                return (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+
+
+            def encode_i(imm, rs1, funct3, rd, opcode):
+                # I-type: a 12-bit immediate in bits 31 to 20, then rs1, funct3, rd and
+                # opcode where R-type keeps them. A negative immediate is stored in
+                # two's complement, so keep only its low 12 bits.
+                return ((imm & 0x7FF) << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+
+
+            print(hex(encode_r(0, 7, 6, 0, 5, 0b0110011)))
+            print(hex(encode_r(0b0100000, 7, 6, 0, 5, 0b0110011)))
+            print(hex(encode_i(42, 0, 0, 5, 0b0010011)))
+            print(hex(encode_i(-1, 5, 0, 5, 0b0010011)))
+        explanation: |
+          Shift each field to its lowest bit and combine with OR. For I-type, mask the immediate with 0xFFF first, which turns −1 into its 12-bit two's-complement pattern 0xFFF. Without the mask a negative immediate makes the whole number negative; swapping rs1 and rs2 encodes a different instruction; and a mask of 0x7FF loses the sign bit.
+    - question:
+        id: fix-halve
+        type: code
+        mode: find-bug
+        system: s2
+        language: asm
+        prompt: |
+          The program should halve the signed number at delta, rounding down, and print `-10` for −20. Instead it prints `2147483638`. Find the fault and fix it.
+        starter: |
+          # Halve the signed change in temperature at delta, rounding down, and
+          # print it.
+          .data
+          delta: .word -20
+
+          .text
+          main:
+              lw t0, delta
+              srli a0, t0, 1
+              addi a7, zero, 1
+              ecall
+        solution: |
+          # Halve the signed change in temperature at delta, rounding down, and
+          # print it.
+          .data
+          delta: .word -20
+
+          .text
+          main:
+              lw t0, delta
+              srai a0, t0, 1
+              addi a7, zero, 1
+              ecall
+        tests: |
+          for _v in [-20, -7, -1, 0, 1, 9, 1000, -2147483648, 2147483647]:
+              _r = run(words={"delta": [_v]})
+              assert _r.output.strip() == str(_v >> 1), "With delta = " + str(_v) + " the program should print " + str(_v >> 1) + ", not " + _r.output.strip()
+          assert output.strip() == "-10", "The program should print -10"
+        wrong:
+          - |
+            # Halve the signed change in temperature at delta, rounding down, and
+            # print it.
+            .data
+            delta: .word -20
+
+            .text
+            main:
+                lw t0, delta
+                srai a0, t0, 2
+                addi a7, zero, 1
+                ecall
+          - |
+            # Halve the signed change in temperature at delta, rounding down, and
+            # print it.
+            .data
+            delta: .word -20
+
+            .text
+            main:
+                lw t0, delta
+                slli a0, t0, 1
+                addi a7, zero, 1
+                ecall
+          - |
+            # Halve the signed change in temperature at delta, rounding down, and
+            # print it.
+            .data
+            delta: .word -20
+
+            .text
+            main:
+                lw t0, delta
+                addi a0, zero, -10
+                addi a7, zero, 1
+                ecall
+        explanation: |
+          srli shifts a 0 into the sign bit, so −20 becomes a huge positive number. srai copies the sign bit instead, halving signed numbers and rounding down, so −7 becomes −4. Shifting by 2 quarters the number, shifting left doubles it, and loading −10 directly is right for −20 only.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. addi holds its constant in 12 bits of two's complement. What is the largest constant one addi can add?
+        answer: "2047"
+        explanation: |
+          12 bits of two's complement run from −2¹¹ = −2048 to 2¹¹ − 1 = 2047.
+    - question:
+        id: work-big-constant
+        type: choice
+        system: s2
+        prompt: |
+          A program needs to add 5000 to t0. Which works?
+        options:
+          - "Build 5000 in t1 with lui and addi, then add t0, t0, t1"
+          - "addi t0, t0, 5000"
+          - "slli t0, t0, 5000"
+          - "lw t0, 5000(t0)"
+        answer: 0
+        explanation: |
+          5000 does not fit in 12 bits, so it must be built in a register first: lui t1, 1 gives 4096, and addi t1, t1, 904 makes 5000. The load would read memory at t0 + 5000 instead of adding.
+  connections:
+    - text: |
+        2047. Twelve bits of two's complement give −2048 to 2047, which covers most constants real programs use, loop steps, offsets into a structure, small counts, and lui handles the rest. That is the RISC bargain: keep every instruction the same simple shape and use two instructions for the rare case.
+
+        Writing only real instructions is tiring: copying a register is `add t0, t1, zero`, and loading a constant may take two lines. [[h1.assembly-programming]] lets the assembler help, with shorthand instructions such as li and mv, labelled data and strings, multiplication and division, and uses them to write loops over arrays and strings.

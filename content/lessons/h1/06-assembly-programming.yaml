@@ -1,0 +1,639 @@
+concept: h1.assembly-programming
+minutes: 90
+claim: You can say what an assembler does with labels, directives and pseudo-instructions, and expand li, la, mv, j and beqz into real instructions; lay out data with .word, .byte, .asciz and .space; translate if, else, while and for into branches and jumps; walk an array by pointer or by index and a string to its zero byte; multiply, divide and take remainders with the M extension; print with system calls; and write, run and debug loops in RISC-V assembly.
+recalls: [h1.an-instruction-set-risc-v]
+uses: [h1.the-fetch-decode-execute-cycle, h0.characters-unicode-and-utf-8, h0.twos-complement-and-overflow, h0.alignment-and-the-size-of-things, s0.loops, s0.booleans-and-conditionals, s7.tokenising]
+leads: [h1.calling-conventions-and-the-stack]
+language: asm
+starter: |
+  # Scratch space. Pseudo-instructions such as li and mv are allowed now.
+  .data
+  greeting: .asciz "Namaste\n"
+
+  .text
+  main:
+      la a0, greeting
+      li a7, 4            # service 4: print the text at a0
+      ecall
+      li t0, 6
+      li t1, 7
+      mul a0, t0, t1
+      li a7, 1            # service 1: print a0
+      ecall
+parts:
+  recall:
+    - text: |
+        [[h1.an-instruction-set-risc-v]] wrote programs from real instructions only, which made even copying a register or loading a constant a small puzzle. Real assembly programmers lean on the assembler, which offers shorthand and does the address arithmetic for them. This lesson uses that help to write proper loops over arrays and strings. Three quick pulls first.
+  puzzle:
+    - text: |
+        The assembler accepts `li t0, 100000`, which loads the constant 100000 into t0, as if it were one instruction. But there is no real instruction called li: the assembler replaces it with real ones. An addi can only hold constants from −2048 to 2047.
+
+        **How many real instructions does `li t0, 100000` become?**
+  intuition:
+    - text: |
+        A stenographer in a courtroom writes in shorthand, a squiggle for "the honourable court" and another for "objection overruled", and types it out in full later. The shorthand saves effort without changing a word of what was said. An assembler does the same for a programmer: `mv t0, t1` is shorthand for `addi t0, t1, 0`, and a label such as `loop` is shorthand for an address that the assembler works out, so that nobody has to count bytes.
+
+        The figure runs a short loop that adds up three prices from an array in memory. Step through it and watch t0 walk along the array 4 bytes at a time while t1 counts down and a0 collects the total.
+    - figure: asm-trace
+      props: { step: 0 }
+    - text: |
+        The loop has the shape of every loop in assembly: a test at the top that branches out when the work is done, the body, the updates to the pointer and the counter, and an unconditional jump back to the test. A Python `for` loop does exactly this underneath, and the compiler that turns C into machine code writes loops in this shape too.
+  derivation:
+    - text: |
+        **What the assembler does.** An assembler reads assembly text much as the tokeniser of [[s7.tokenising]] reads Python, and makes two passes over it. The first pass works out the address of every label, counting how many bytes each instruction and each piece of data takes. The second pass encodes each instruction, now that every label's address is known; a branch to a later label needs that address, which is why one pass is not enough. **Directives**, the words starting with a dot, are instructions to the assembler rather than to the processor: `.text` and `.data` choose the section, `.word 5, 6` lays down 32-bit words, `.half` and `.byte` smaller ones, `.asciz "hi"` the bytes of a string followed by a zero byte, `.space 40` 40 zero bytes, and `.align 2` pads to a multiple of 4 bytes.
+
+        **Pseudo-instructions** are the assembler's shorthand, each standing for one or two real instructions:
+
+        | You write | The assembler makes |
+        | --- | --- |
+        | `li t0, 5` | `addi t0, zero, 5`, or `lui` then `addi` for a large constant |
+        | `la t0, label` | `auipc` then `addi`, which compute the label's address from the PC |
+        | `mv t0, t1` | `addi t0, t1, 0` |
+        | `not t0, t1` and `neg t0, t1` | `xori t0, t1, -1` and `sub t0, zero, t1` |
+        | `j label` | `jal zero, label` |
+        | `beqz t0, label` and `bnez t0, label` | `beq t0, zero, label` and `bne t0, zero, label` |
+        | `bgt t0, t1, label` and `ble t0, t1, label` | `blt t1, t0, label` and `bge t1, t0, label` |
+
+        The Run button reports how many real instructions ran, so a pseudo-instruction that expands to two counts as two.
+    - question:
+        id: derivation-mv
+        type: choice
+        system: s2
+        prompt: |
+          Which real instruction does the assembler make from `bgt t0, t1, done`?
+        options:
+          - "blt t1, t0, done"
+          - "bge t0, t1, done"
+          - "blt t0, t1, done"
+          - "bltu t1, t0, done"
+        answer: 0
+        explanation: |
+          t0 > t1 says the same as t1 < t0, so swapping the registers turns the missing bgt into a blt.
+    - text: |
+        **Control flow.** Assembly has no if, else or while, only branches and jumps, so each construct becomes a pattern. An **if** branches *past* its body on the opposite of its condition: `if a < b:` becomes `bge a, b, skip`, then the body, then `skip:`. An **if-else** adds a jump over the else part at the end of the if part. A **while** loop puts its test at the top, branching out when the condition fails, and ends its body with a jump back to the test. A **for** loop over a range is a while loop with a counter. Reading compiled code is mostly recognising these shapes, the same ones as the conditions and loops of [[s0.booleans-and-conditionals]] and [[s0.loops]].
+    - question:
+        id: derivation-if-else
+        type: order
+        system: s2
+        prompt: |
+          Put the assembly for `if a < b: c = a, else: c = b` in order, with a, b and c in t0, t1 and t2.
+        steps:
+          - "bge t0, t1, else"
+          - "mv t2, t0"
+          - "j end"
+          - "else: mv t2, t1"
+          - "end:"
+        explanation: |
+          The branch takes the opposite of the condition to the else part. The if part ends with a jump over the else part, so only one of the two copies runs.
+    - text: |
+        **Arrays.** An array of words is consecutive words in memory, so element i is at the base address plus 4 × i. A loop can **walk a pointer**, adding 4 to it each time, as the figure does; or it can keep an index and compute the address afresh with `slli t1, t0, 2` (multiply by 4) and `add`. Walking is fewer instructions per element, which is why compilers often turn index loops into pointer loops. An array of bytes steps by 1 and uses `lb` or `lbu`; an array of halfwords steps by 2.
+
+        **Strings.** A string here is a row of bytes, one per character in ASCII and in the UTF-8 of [[h0.characters-unicode-and-utf-8]], ended by a zero byte, the convention of the C language. There is no stored length: a loop finds the end by loading bytes with `lbu` until it meets the 0. Getting the terminator wrong, by forgetting to write it or by writing past the end of the space set aside, is the source of a long history of bugs and security holes.
+    - question:
+        id: derivation-offset
+        type: numeric
+        system: s2
+        prompt: |
+          An array of 4-byte words starts at the label `scores`. How many bytes past `scores` is element 7, counting the first element as element 0?
+        answer: "28"
+        unit: bytes
+        explanation: |
+          Element i is 4 × i bytes from the start, and 4 × 7 = 28.
+    - text: |
+        **Multiplication and division.** The M extension adds `mul` (the low 32 bits of a product), `mulh` and `mulhu` (the high 32 bits, signed and unsigned, so that a 64-bit product can be had in two instructions), `div` and `divu`, and `rem` and `remu`. Signed division rounds toward zero, so −7 / 2 is −3 and the remainder is −1, unlike Python's `//` and `%`, which round down. Division by zero does not stop the program: RISC-V defines the quotient as −1 (all ones) and the remainder as the dividend, and leaves it to software to check. Multiplying or dividing by a power of two is better done with a shift, `slli` or `srai`, which is one cycle instead of several; compilers do this for you.
+
+        **Input and output.** A program cannot reach the screen itself; it asks the environment with `ecall`. In this course's machine, a7 = 1 prints a0 as a signed number, 11 prints it as a character, 4 prints the zero-terminated string at the address in a0, 34 prints it in hexadecimal, and 10 ends the program. On a real computer these requests go to the operating system, which is the subject of the next cluster.
+    - question:
+        id: derivation-div
+        type: choice
+        system: s2
+        prompt: |
+          A RISC-V program runs `div a0, t0, t1` with t1 = 0. What happens?
+        options:
+          - "a0 becomes −1 and the program carries on, so the program must check for zero itself"
+          - "The processor stops the program with a division error"
+          - "a0 becomes 0"
+          - "a0 keeps its old value"
+        answer: 0
+        explanation: |
+          RISC-V defines division by zero to give all ones, which is −1, without trapping. That keeps the hardware simple and makes checking the divisor the program's job.
+  formal:
+    - text: |
+        **Assembler.** Two passes: first label addresses, then encodings. Directives (.text, .data, .word, .half, .byte, .asciz, .space, .align) lay out sections and data. Pseudo-instructions (li, la, mv, not, neg, j, beqz, bnez, bgt, ble and others) expand into one or two real instructions.
+
+        **Control flow.** if: branch past the body on the opposite condition. if-else: add a jump over the else part. while: test at the top, jump back at the bottom.
+
+        **Data.** Element i of an array of k-byte items is at base + k × i. Strings are bytes ending in a zero byte.
+
+        **M extension.** mul, mulh, mulhu, div, divu, rem, remu. Signed division rounds toward zero; division by zero gives −1 and a remainder equal to the dividend.
+
+        **System calls.** ecall with a service number in a7: 1 print integer, 11 print character, 4 print string, 34 print hexadecimal, 10 exit.
+  drill:
+    - text: Seconds each. Expand the shorthand and follow the branches.
+    - question:
+        id: drill-li
+        type: choice
+        system: s1
+        prompt: |
+          What does the assembler make of `mv a0, t3`?
+        options:
+          - "addi a0, t3, 0"
+          - "lw a0, 0(t3)"
+          - "add t3, a0, zero"
+          - "jal a0, t3"
+        answer: 0
+        explanation: Adding 0 copies t3 into a0. The destination register always comes first.
+    - question:
+        id: drill-end
+        type: choice
+        system: s1
+        prompt: |
+          A loop walks along a string with lbu. How does it know it has reached the end?
+        options:
+          - "It loads a zero byte"
+          - "It reads the length stored before the string"
+          - "The load fails"
+          - "The address reaches a multiple of 4"
+        answer: 0
+        explanation: Strings here end with a zero byte and store no length, so the loop stops when lbu gives 0.
+    - question:
+        id: predict-strings
+        type: predict
+        system: s1
+        language: asm
+        prompt: What does this print?
+        code: |
+          .data
+          msg: .asciz "Hi"
+
+          .text
+          main:
+              la a0, msg
+              li a7, 4
+              ecall
+              li a0, 33
+              li a7, 11
+              ecall
+        output: "Hi!"
+        explanation: Service 4 prints the string Hi, and service 11 prints character 33, which is the exclamation mark.
+    - question:
+        id: predict-divide
+        type: predict
+        system: s1
+        language: asm
+        prompt: What does this print?
+        code: |
+          main:
+              li t0, 17
+              li t1, 5
+              div a0, t0, t1
+              li a7, 1
+              ecall
+              li a0, 32
+              li a7, 11
+              ecall
+              rem a0, t0, t1
+              li a7, 1
+              ecall
+        output: "3 2"
+        explanation: 17 divided by 5 is 3 remainder 2, with a space, character 32, between them.
+    - question:
+        id: predict-loop
+        type: predict
+        system: s1
+        language: asm
+        prompt: What does this print?
+        code: |
+          main:
+              li t0, 0
+              li t1, 4
+          loop:
+              add t0, t0, t1
+              addi t1, t1, -1
+              bnez t1, loop
+              mv a0, t0
+              li a7, 1
+              ecall
+        output: "10"
+        explanation: The loop adds 4, 3, 2 and 1 and stops when t1 reaches 0, so t0 is 10.
+  work:
+    - text: Slower now. All three answers are in assembly.
+    - question:
+        id: write-array-sum
+        type: code
+        mode: write
+        system: s2
+        language: asm
+        prompt: |
+          Write the loop that adds up the n prices in the array, so that the program prints their total. With the prices given it should print 560.
+        starter: |
+          # Print the total of the n prices in the array at prices.
+          .data
+          n:      .word 5
+          prices: .word 120, 45, 300, 15, 80
+
+          .text
+          main:
+              la t0, prices       # t0: address of the next price
+              lw t1, n            # t1: how many prices are left
+              li a0, 0            # a0: the running total
+              # Add up the prices here.
+
+              li a7, 1
+              ecall
+        solution: |
+          # Print the total of the n prices in the array at prices.
+          .data
+          n:      .word 5
+          prices: .word 120, 45, 300, 15, 80
+
+          .text
+          main:
+              la t0, prices       # t0: address of the next price
+              lw t1, n            # t1: how many prices are left
+              li a0, 0            # a0: the running total
+              # Add up the prices here.
+          loop:
+              beqz t1, done
+              lw t2, 0(t0)
+              add a0, a0, t2
+              addi t0, t0, 4
+              addi t1, t1, -1
+              j loop
+          done:
+              li a7, 1
+              ecall
+        tests: |
+          for _vals in [[1, 2, 3, 4, 5], [7], [], [1000, -250, 30], [300, 300, 300, 300], [-5, -6]]:
+              _r = run(words={"n": [len(_vals)], "prices": _vals + [0] * (5 - len(_vals))})
+              assert _r.output.strip() == str(sum(_vals)), "With the prices " + str(_vals) + " the program should print " + str(sum(_vals)) + ", not " + _r.output.strip()
+          _r = run(words={"n": [2], "prices": [10, 20, 999, 999, 999]})
+          assert _r.output.strip() == "30", "Only the first n prices should be added: with n = 2 and prices 10, 20, 999, ... print 30, not " + _r.output.strip()
+          assert output.strip() == "560", "The program should print 560"
+        wrong:
+          - |
+            # Print the total of the n prices in the array at prices.
+            .data
+            n:      .word 5
+            prices: .word 120, 45, 300, 15, 80
+
+            .text
+            main:
+                la t0, prices       # t0: address of the next price
+                lw t1, n            # t1: how many prices are left
+                li a0, 0            # a0: the running total
+                # Add up the prices here.
+            loop:
+                beqz t1, done
+                lw t2, 0(t0)
+                add a0, a0, t2
+                addi t0, t0, 1
+                addi t1, t1, -1
+                j loop
+            done:
+                li a7, 1
+                ecall
+          - |
+            # Print the total of the n prices in the array at prices.
+            .data
+            n:      .word 5
+            prices: .word 120, 45, 300, 15, 80
+
+            .text
+            main:
+                la t0, prices       # t0: address of the next price
+                lw t1, n            # t1: how many prices are left
+                li a0, 0            # a0: the running total
+                # Add up the prices here.
+            loop:
+                beqz t1, done
+                lw t2, 4(t0)
+                add a0, a0, t2
+                addi t0, t0, 4
+                addi t1, t1, -1
+                j loop
+            done:
+                li a7, 1
+                ecall
+          - |
+            # Print the total of the n prices in the array at prices.
+            .data
+            n:      .word 5
+            prices: .word 120, 45, 300, 15, 80
+
+            .text
+            main:
+                la t0, prices       # t0: address of the next price
+                lw t1, n            # t1: how many prices are left
+                li a0, 0            # a0: the running total
+                # Add up the prices here.
+            loop:
+                beqz t1, done
+                lb t2, 0(t0)
+                add a0, a0, t2
+                addi t0, t0, 4
+                addi t1, t1, -1
+                j loop
+            done:
+                li a7, 1
+                ecall
+        explanation: |
+          Test the counter at the top, load the word t0 points at, add it, move t0 on by 4 bytes, count down, and jump back. Moving the pointer by 1 asks for a word at an address that is not a multiple of 4; loading from 4(t0) skips the first price and reads one past the end; and lb loads a single byte, so 300 becomes 44.
+    - question:
+        id: write-capitals
+        type: code
+        mode: write
+        system: s2
+        language: asm
+        prompt: |
+          Write the loop that turns every lowercase letter of the text into a capital, in memory, leaving every other character alone. The program should print `NAMASTE, MUMBAI 2026`.
+        starter: |
+          # Turn every lowercase letter of the text at message into a capital, in
+          # place, and print the result. Capitals are 32 below their lowercase
+          # letters in ASCII: 'a' is 97 and 'A' is 65. The text ends at a 0 byte.
+          .data
+          message: .asciz "namaste, mumbai 2026"
+
+          .text
+          main:
+              la t0, message
+              # Change the letters here.
+
+              la a0, message
+              li a7, 4            # service 4: print the text at a0
+              ecall
+        solution: |
+          # Turn every lowercase letter of the text at message into a capital, in
+          # place, and print the result. Capitals are 32 below their lowercase
+          # letters in ASCII: 'a' is 97 and 'A' is 65. The text ends at a 0 byte.
+          .data
+          message: .asciz "namaste, mumbai 2026"
+
+          .text
+          main:
+              la t0, message
+              # Change the letters here.
+              li t2, 97           # 'a'
+              li t3, 122          # 'z'
+          loop:
+              lbu t1, 0(t0)
+              beqz t1, done
+              blt t1, t2, next
+              bgt t1, t3, next
+              addi t1, t1, -32
+              sb t1, 0(t0)
+          next:
+              addi t0, t0, 1
+              j loop
+          done:
+              la a0, message
+              li a7, 4            # service 4: print the text at a0
+              ecall
+        tests: |
+          def _pack(_text):
+              _b = _text.encode() + bytes(4 - len(_text) % 4)
+              return [int.from_bytes(_b[_i:_i + 4], "little") for _i in range(0, len(_b), 4)]
+
+
+          for _t in ["hello", "Bedrock", "chai at 4pm, {ok}~", "ZZZ", "", "a`b{z"]:
+              _r = run(words={"message": _pack(_t)})
+              _want = "".join(chr(ord(_c) - 32) if "a" <= _c <= "z" else _c for _c in _t)
+              assert _r.output == _want, "The text " + repr(_t) + " should print as " + repr(_want) + ", not " + repr(_r.output)
+          assert string("message") == "NAMASTE, MUMBAI 2026", "The letters should be changed in memory, not only printed"
+          assert output == "NAMASTE, MUMBAI 2026", "The program should print NAMASTE, MUMBAI 2026"
+        wrong:
+          - |
+            # Turn every lowercase letter of the text at message into a capital, in
+            # place, and print the result. Capitals are 32 below their lowercase
+            # letters in ASCII: 'a' is 97 and 'A' is 65. The text ends at a 0 byte.
+            .data
+            message: .asciz "namaste, mumbai 2026"
+
+            .text
+            main:
+                la t0, message
+                # Change the letters here.
+                li t2, 97           # 'a'
+                li t3, 122          # 'z'
+            loop:
+                lbu t1, 0(t0)
+                beqz t1, done
+                blt t1, t2, next
+                addi t1, t1, -32
+                sb t1, 0(t0)
+            next:
+                addi t0, t0, 1
+                j loop
+            done:
+                la a0, message
+                li a7, 4            # service 4: print the text at a0
+                ecall
+          - |
+            # Turn every lowercase letter of the text at message into a capital, in
+            # place, and print the result. Capitals are 32 below their lowercase
+            # letters in ASCII: 'a' is 97 and 'A' is 65. The text ends at a 0 byte.
+            .data
+            message: .asciz "namaste, mumbai 2026"
+
+            .text
+            main:
+                la t0, message
+                # Change the letters here.
+                li t2, 97           # 'a'
+                li t3, 122          # 'z'
+            loop:
+                lbu t1, 0(t0)
+                beqz t1, done
+                blt t1, t2, next
+                bgt t1, t3, next
+                addi t1, t1, 32
+                sb t1, 0(t0)
+            next:
+                addi t0, t0, 1
+                j loop
+            done:
+                la a0, message
+                li a7, 4            # service 4: print the text at a0
+                ecall
+          - |
+            # Turn every lowercase letter of the text at message into a capital, in
+            # place, and print the result. Capitals are 32 below their lowercase
+            # letters in ASCII: 'a' is 97 and 'A' is 65. The text ends at a 0 byte.
+            .data
+            message: .asciz "namaste, mumbai 2026"
+
+            .text
+            main:
+                la t0, message
+                # Change the letters here.
+                li t2, 97           # 'a'
+                li t3, 122          # 'z'
+            loop:
+                lbu t1, 0(t0)
+                beqz t1, done
+                blt t1, t2, next
+                bgt t1, t3, next
+                addi t1, t1, -32
+            next:
+                addi t0, t0, 1
+                j loop
+            done:
+                la a0, message
+                li a7, 4            # service 4: print the text at a0
+                ecall
+        explanation: |
+          Load each byte with lbu and stop at 0. If it lies between 97 and 122, the letters a to z, subtract 32 and store it back with sb; then move on one byte. Checking only the lower bound also changes characters above z, such as the braces; adding 32 moves the wrong way; and forgetting the sb changes nothing in memory.
+    - question:
+        id: fix-lowest
+        type: code
+        mode: find-bug
+        system: s2
+        language: asm
+        prompt: |
+          The program should print the lowest temperature of the week, −12. Instead it prints `0`. Find the fault and fix it.
+        starter: |
+          # Print the lowest of the n temperatures recorded in Leh this week.
+          .data
+          n:     .word 7
+          temps: .word 3, -12, 5, -4, 0, 7, -1
+
+          .text
+          main:
+              la t0, temps
+              lw t1, n
+              lw a0, 0(t0)        # lowest so far: the first reading
+          loop:
+              addi t1, t1, -1
+              beqz t1, done
+              addi t0, t0, 4
+              lw t2, 0(t0)
+              bgeu t2, a0, loop   # not lower than the lowest so far: next reading
+              mv a0, t2
+              j loop
+          done:
+              li a7, 1
+              ecall
+        solution: |
+          # Print the lowest of the n temperatures recorded in Leh this week.
+          .data
+          n:     .word 7
+          temps: .word 3, -12, 5, -4, 0, 7, -1
+
+          .text
+          main:
+              la t0, temps
+              lw t1, n
+              lw a0, 0(t0)        # lowest so far: the first reading
+          loop:
+              addi t1, t1, -1
+              beqz t1, done
+              addi t0, t0, 4
+              lw t2, 0(t0)
+              bge t2, a0, loop   # not lower than the lowest so far: next reading
+              mv a0, t2
+              j loop
+          done:
+              li a7, 1
+              ecall
+        tests: |
+          for _vals in [[3, -12, 5, -4, 0, 7, -1], [8, 9, 10], [5], [-3, -3, -8, 2], [40, 35, 31, 30, 28, 29, 33], [-1, 1]]:
+              _r = run(words={"n": [len(_vals)], "temps": _vals + [0] * (7 - len(_vals))})
+              assert _r.output.strip() == str(min(_vals)), "With the readings " + str(_vals) + " the program should print " + str(min(_vals)) + ", not " + _r.output.strip()
+          assert output.strip() == "-12", "The program should print -12"
+        wrong:
+          - |
+            # Print the lowest of the n temperatures recorded in Leh this week.
+            .data
+            n:     .word 7
+            temps: .word 3, -12, 5, -4, 0, 7, -1
+
+            .text
+            main:
+                la t0, temps
+                lw t1, n
+                lw a0, 0(t0)        # lowest so far: the first reading
+            loop:
+                addi t1, t1, -1
+                beqz t1, done
+                addi t0, t0, 4
+                lw t2, 0(t0)
+                blt t2, a0, loop   # not lower than the lowest so far: next reading
+                mv a0, t2
+                j loop
+            done:
+                li a7, 1
+                ecall
+          - |
+            # Print the lowest of the n temperatures recorded in Leh this week.
+            .data
+            n:     .word 7
+            temps: .word 3, -12, 5, -4, 0, 7, -1
+
+            .text
+            main:
+                la t0, temps
+                lw t1, n
+                li a0, 0            # lowest so far
+            loop:
+                addi t1, t1, -1
+                beqz t1, done
+                addi t0, t0, 4
+                lw t2, 0(t0)
+                bge t2, a0, loop   # not lower than the lowest so far: next reading
+                mv a0, t2
+                j loop
+            done:
+                li a7, 1
+                ecall
+          - |
+            # Print the lowest of the n temperatures recorded in Leh this week.
+            .data
+            n:     .word 7
+            temps: .word 3, -12, 5, -4, 0, 7, -1
+
+            .text
+            main:
+                la t0, temps
+                lw t1, n
+                lw a0, 0(t0)        # lowest so far: the first reading
+            loop:
+                beqz t1, done
+                addi t1, t1, -1
+                addi t0, t0, 4
+                lw t2, 0(t0)
+                bge t2, a0, loop   # not lower than the lowest so far: next reading
+                mv a0, t2
+                j loop
+            done:
+                li a7, 1
+                ecall
+        explanation: |
+          bgeu compares unsigned, so every negative reading looks enormous and 0 wins. The signed bge is right for temperatures. Reversing the test finds the highest reading; starting the lowest-so-far at 0 instead of the first reading gives 0 for a week that never went below freezing; and moving the count down after the test reads one word past the array.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. addi holds constants from −2048 to 2047. How many real instructions does the assembler make from `li t0, 100000`?
+        answer: "2"
+        explanation: |
+          100000 is too big for addi, so the assembler uses lui for the upper 20 bits and addi for the lower 12. Any 32-bit constant fits in those two.
+    - question:
+        id: work-shift
+        type: choice
+        system: s2
+        prompt: |
+          A compiler turns `x * 8` into `slli t0, t0, 3` instead of a mul. Why?
+        options:
+          - "Shifting left by 3 multiplies by 2³ = 8 and takes one fast instruction, while a multiply may take several cycles"
+          - "mul cannot multiply by 8"
+          - "slli also checks for overflow"
+          - "mul works only on unsigned numbers"
+        answer: 0
+        explanation: |
+          A left shift by k multiplies by 2ᵏ, and a shift is among the cheapest instructions there is, so compilers replace multiplications by powers of two with shifts.
+  connections:
+    - text: |
+        2. The constant needs more than 12 bits, so the assembler emits `lui t0, 24` to put 24 × 4096 = 98,304 into t0, and `addi t0, t0, 1696` to make 100,000. A constant that fits in 12 bits takes a single addi.
+
+        Every program so far has been one straight piece of code. Real programs are made of functions that call each other, pass arguments and return results, and a function must be able to call another without either one wrecking the other's registers. [[h1.calling-conventions-and-the-stack]] sets out the rules that make that work, and the stack that holds what a function needs to keep.
