@@ -1,0 +1,910 @@
+concept: h2.the-tlb-and-address-translation
+minutes: 75
+claim: You can explain why walking a multi-level page table on every access would be ruinously slow; describe the translation lookaside buffer as a small cache of recent translations and build one with LRU replacement; work out the effective time of a memory access from the TLB hit rate; compute a TLB's reach and say how huge pages extend it; predict which access patterns hit and which miss, and reorder a loop to fix a bad one; explain what happens to the TLB on a context switch and how address-space identifiers avoid flushing it; and say why changing a mapping on a multi-core machine needs a TLB shootdown.
+recalls: [h2.virtual-memory-and-page-tables]
+uses: [h2.processes-and-system-calls, h2.scheduling, h1.latches-registers-and-memory, h1.pipelining, h0.bitwise-operations-and-masks, s1.classes-and-objects, s2.hash-tables, f0.powers-of-two]
+leads: [h2.interrupts-and-i-o]
+starter: |
+  # Scratch space. Count how many different pages a list of addresses
+  # touches: each new page is a likely TLB miss.
+  addresses = [0x10000000 + 4 * i for i in range(5000)]
+  pages = {a >> 12 for a in addresses}
+  print(len(addresses), "accesses touch", len(pages), "pages")
+parts:
+  recall:
+    - text: |
+        [[h2.virtual-memory-and-page-tables]] gave every process its own address space, translated through a tree of page tables. That tree lives in memory. On x86-64 a translation reads four entries, one per level, before the real load can even start, and a memory read that misses the caches costs around 100 ns, hundreds of cycles. If every load and store paid that, virtual memory would make computers several times slower. They are not, and this lesson is why. Three quick pulls first.
+  puzzle:
+    - text: |
+        A processor's data TLB holds 64 translations, and pages are 4 KiB. A program sums an array over and over in a tight loop.
+
+        **What is the largest array, in KiB, that the loop can sweep again and again with no TLB misses once the first sweep has warmed it up?**
+  intuition:
+    - text: |
+        A courier in Chennai delivers to the same few hundred offices every week. The first time, each address means a trip to the head office to look up which building and floor it really is. A sensible courier keeps a small notebook of the addresses used most lately, and checks it first; most days, every delivery is in the notebook. Only a new address, or one not visited for a long time, needs the slow trip, and then it goes into the notebook, crossing out the one used longest ago.
+
+        The notebook is the **translation lookaside buffer** (TLB): a small, very fast cache inside the processor that remembers recent translations from page number to frame number. The figure runs three access patterns through a TLB of only 4 entries. Watch which accesses hit, which miss, and what each miss costs.
+    - figure: tlb
+      props: { pattern: sequential, step: 0 }
+    - text: |
+        Walking through an array touches each page many times in a row, so only the first touch of each page misses. Touching one int per page, across more pages than the TLB holds, misses every time, because each page is evicted before it comes round again. A few hot pages that fit all hit after the first round. The TLB only needs to cover the pages a program is using right now, which is the idea behind the puzzle.
+  derivation:
+    - text: |
+        **The cost of a walk.** With a four-level page table, translating one address reads the root entry, which gives the next table, whose entry gives the next, down to the leaf entry with the frame number. Each read depends on the one before, so they cannot overlap. If none of them is in a cache, that is four trips to memory before the access the program actually asked for.
+    - question:
+        id: derivation-walk
+        type: numeric
+        system: s2
+        prompt: |
+          A machine has four-level page tables and no TLB, and every memory read takes 100 ns. How long, in ns, does one load from memory take, counting the walk?
+        answer: "500"
+        unit: ns
+        explanation: |
+          Four reads for the walk, one per level, and then the load itself: 5 × 100 = 500 ns, five times the cost of the load alone.
+    - text: |
+        **The TLB.** The fix is a cache of translations. Each TLB entry holds a virtual page number, its frame number, and the permission bits from the page table entry. On every access the MMU looks the page number up in the TLB, in parallel across all entries, within a cycle or so. On a **hit**, it has the frame at once. On a **miss**, a hardware **page walker** reads the tables, fills a TLB entry, and the access goes ahead; on a few designs, such as classic MIPS, a miss traps to the kernel, which walks the table in software. A typical core has a level-1 data TLB of about 64 entries, a separate one for instructions, and a shared second-level TLB of one to two thousand, and it also caches the upper levels of the page table so that a walk rarely needs all four reads.
+
+        **Effective access time.** If a fraction h of accesses hit, and a hit costs t_TLB plus one memory access t_mem while a miss also pays a walk of w memory reads:
+
+        time per access = t_TLB + t_mem + (1 − h) · w · t_mem.
+
+        Programs typically hit more than 99% of the time, so translation costs a few per cent instead of a factor of five.
+    - question:
+        id: derivation-eat
+        type: numeric
+        system: s2
+        prompt: |
+          A TLB lookup takes 1 ns, a memory read 100 ns, and a miss needs a four-read walk. If 99% of accesses hit, what is the average time per access, in ns?
+        answer: "105"
+        unit: ns
+        explanation: |
+          Every access pays 1 + 100 = 101 ns, and the 1% that miss pay 4 × 100 = 400 ns more, which averages 4 ns: 105 ns, only 5% above the 100 ns of the access itself.
+    - text: |
+        **Reach and huge pages.** A TLB's **reach** is how much memory it can map at once: entries × page size. A 64-entry TLB with 4 KiB pages reaches 256 KiB, smaller than many working sets. A database or a machine-learning job sweeping gigabytes will miss constantly. The fix is bigger pages. x86-64 also offers **huge pages** of 2 MiB and 1 GiB, made by stopping the page-table walk one or two levels early, so that the remaining address bits all become offset. One TLB entry for a 2 MiB page covers what 512 small ones did. The cost is coarser memory management: a process that needs a few kilobytes more gets 2 MiB, and the kernel must find 2 MiB of free, contiguous, aligned physical memory.
+    - question:
+        id: derivation-reach
+        type: numeric
+        system: s2
+        prompt: |
+          A TLB has 32 entries for 2 MiB huge pages. How many MiB can it map at once?
+        answer: "64"
+        unit: MiB
+        explanation: |
+          Reach is entries × page size: 32 × 2 MiB = 64 MiB, the same as 16,384 entries of 4 KiB pages would need.
+    - text: |
+        **Access patterns.** Because a TLB caches whole pages, what matters is how many distinct pages a program touches in a short span. Walking an array in address order uses each page for 1,024 four-byte ints before moving on. Walking down a column of a large two-dimensional array stored row by row jumps a whole row each step, so if a row is 4 KiB or more, every element is on a new page. Swapping the two loops of such a computation can change its TLB misses by a factor of a thousand, along with its cache misses, which the memory hierarchy cluster takes up.
+
+        **Context switches.** A TLB entry says "page 0x10 is frame 0x2A", but that is true only in one address space. When the kernel switches processes, the old entries become wrong. The simple fix is to **flush** the whole TLB on every switch, which makes the new process start cold and pay a burst of misses. Modern processors instead tag each entry with an **address-space identifier** (ASID; x86 calls it PCID), and only entries whose tag matches the running process count as hits. Entries of other processes stay, so a process that runs again soon finds its translations waiting.
+    - question:
+        id: derivation-asid
+        type: choice
+        system: s2
+        prompt: |
+          A processor's TLB entries carry no address-space identifier, and the kernel forgets to flush the TLB on a context switch. What can go wrong?
+        options:
+          - "The new process can use the old process's translations and read or write the old process's memory"
+          - "Nothing: the TLB is checked against the page table on every hit"
+          - "The new process gets more TLB misses than usual"
+          - "The processor raises a page fault on every access"
+        answer: 0
+        explanation: |
+          A TLB hit is trusted without consulting the page table, that is the point of it. A stale entry from another address space sends the access to that process's frame, breaking isolation completely.
+    - text: |
+        **Shootdowns.** Each core has its own TLB. When the kernel changes or removes a mapping, for example when a program frees memory or a page is swapped out, any core that might hold the old translation must forget it. The kernel updates the page table, then sends an **inter-processor interrupt** to each such core, which invalidates the entry and acknowledges; only then can the frame be reused. This **TLB shootdown** costs microseconds and interrupts other work, so kernels batch them and track which cores have run each address space. It is one reason why unmapping memory is slower on big machines than it looks.
+    - question:
+        id: derivation-shootdown
+        type: choice
+        system: s2
+        prompt: |
+          A process with threads on four cores frees a large buffer, and the kernel reuses its frames for another process. Why must the kernel interrupt the other three cores first?
+        options:
+          - "Their TLBs may still map the buffer's pages to those frames, and a stale hit would reach the other process's data"
+          - "To flush their instruction pipelines"
+          - "To move the threads to one core"
+          - "Because freeing memory is a privileged instruction on every core"
+        answer: 0
+        explanation: |
+          Changing the page table does not touch other cores' TLBs. Until each invalidates its copy, a thread there could still reach the old frames, which by then belong to someone else.
+  formal:
+    - text: |
+        **TLB.** A small, fast cache from virtual page number (tagged with an ASID) to frame number and permission bits, checked on every access. Hit: about a cycle. Miss: a page-table walk, by hardware or the kernel, then the entry is filled.
+
+        **Effective access time.** t_TLB + t_mem + (1 − h) · walk cost.
+
+        **Reach.** Entries × page size. Huge pages (2 MiB, 1 GiB) multiply it.
+
+        **Context switch.** Flush the TLB, or tag entries with address-space identifiers so they can stay.
+
+        **Shootdown.** Changing a mapping requires invalidating it in every core's TLB that may hold it, by inter-processor interrupts, before the frame is reused.
+  drill:
+    - text: Seconds each. Count the pages, not the bytes.
+    - question:
+        id: drill-hit
+        type: choice
+        system: s1
+        prompt: |
+          On a TLB hit, how many page-table entries does the MMU read from memory?
+        options:
+          - "None"
+          - "One, the leaf entry"
+          - "One per level"
+          - "It depends on the page size"
+        answer: 0
+        explanation: The TLB entry already holds the frame number and permission bits, so the page table is not read at all.
+    - question:
+        id: drill-huge
+        type: choice
+        system: s1
+        prompt: |
+          A program's TLB misses fall sharply after the kernel backs its heap with 2 MiB pages. Why?
+        options:
+          - "Each TLB entry now covers 512 times as much memory, so the heap needs far fewer entries"
+          - "Huge pages make memory reads faster"
+          - "The TLB grew to hold more entries"
+          - "Huge pages are never evicted from the TLB"
+        answer: 0
+        explanation: Same number of entries, bigger pages, so the TLB's reach grows by the ratio of page sizes.
+    - question:
+        id: predict-reach
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          entries = 1536
+          page_kib = 4
+          print(entries * page_kib // 1024, "MiB")
+        output: "6 MiB"
+        explanation: 1,536 entries of 4 KiB each cover 6,144 KiB, which is 6 MiB.
+    - question:
+        id: predict-eat
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          hit = 0.98
+          print(round(hit * 101 + (1 - hit) * 501, 1))
+        output: "109.0"
+        explanation: Hits take 101 ns and misses 501 ns, so the average is 0.98 × 101 + 0.02 × 501 = 98.98 + 10.02.
+    - question:
+        id: predict-pages
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          addrs = [0x1000 * i + 8 for i in range(5)] + [0x10 * i for i in range(5)]
+          print(len({a >> 12 for a in addrs}))
+        output: "5"
+        explanation: The first five addresses lie on pages 0 to 4, one each; the next five are all on page 0, which is already counted.
+  work:
+    - text: Slower now. Each answer is a piece of the MMU, or a program that is kind to it.
+    - question:
+        id: write-tlb
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `lookup` and `insert` for a TLB with least-recently-used replacement. The program should print `3 misses walking an array`, `10 misses cycling through 5 pages` and `5 misses with one hot page`.
+        starter: |
+          class TLB:
+              # A small cache of translations, from virtual page number to frame
+              # number, holding at most `entries` of them. self.map is kept in order of
+              # use, least recently used first. A lookup that hits counts as a use;
+              # inserting into a full TLB evicts the least recently used translation.
+              def __init__(self, entries):
+                  self.entries = entries
+                  self.map = {}
+
+              def lookup(self, vpn):
+                  # Return the frame for vpn, or None on a miss.
+                  return None
+
+              def insert(self, vpn, frame):
+                  pass
+
+
+          def run(pages, entries):
+              tlb = TLB(entries)
+              misses = 0
+              for vpn in pages:
+                  if tlb.lookup(vpn) is None:
+                      misses += 1
+                      tlb.insert(vpn, 100 + vpn)  # the frame found by walking the page table
+              return misses
+
+
+          print(run([0, 0, 0, 1, 1, 1, 2, 2], 4), "misses walking an array")
+          print(run([0, 1, 2, 3, 4, 0, 1, 2, 3, 4], 4), "misses cycling through 5 pages")
+          print(run([0, 1, 2, 0, 3, 0, 4, 0], 3), "misses with one hot page")
+        solution: |
+          class TLB:
+              # A small cache of translations, from virtual page number to frame
+              # number, holding at most `entries` of them. self.map is kept in order of
+              # use, least recently used first. A lookup that hits counts as a use;
+              # inserting into a full TLB evicts the least recently used translation.
+              def __init__(self, entries):
+                  self.entries = entries
+                  self.map = {}
+
+              def lookup(self, vpn):
+                  if vpn not in self.map:
+                      return None
+                  frame = self.map.pop(vpn)
+                  self.map[vpn] = frame
+                  return frame
+
+              def insert(self, vpn, frame):
+                  if vpn in self.map:
+                      self.map.pop(vpn)
+                  elif len(self.map) == self.entries:
+                      del self.map[next(iter(self.map))]
+                  self.map[vpn] = frame
+
+
+          def run(pages, entries):
+              tlb = TLB(entries)
+              misses = 0
+              for vpn in pages:
+                  if tlb.lookup(vpn) is None:
+                      misses += 1
+                      tlb.insert(vpn, 100 + vpn)  # the frame found by walking the page table
+              return misses
+
+
+          print(run([0, 0, 0, 1, 1, 1, 2, 2], 4), "misses walking an array")
+          print(run([0, 1, 2, 3, 4, 0, 1, 2, 3, 4], 4), "misses cycling through 5 pages")
+          print(run([0, 1, 2, 0, 3, 0, 4, 0], 3), "misses with one hot page")
+        tests: |
+          _t = TLB(2)
+          assert _t.lookup(7) is None, "an empty TLB misses"
+          _t.insert(7, 70)
+          assert _t.lookup(7) == 70, "after inserting 7 -> 70, looking up 7 should give 70"
+          _t.insert(5, 0)
+          assert _t.lookup(5) == 0, "frame 0 is a real frame: a lookup that finds it should return 0, not treat it as a miss"
+          _t = TLB(2)
+          _t.insert(1, 10)
+          _t.insert(2, 20)
+          _t.lookup(1)
+          _t.insert(3, 30)
+          assert _t.lookup(2) is None, "after 1 was used again, 2 is the least recently used, so inserting 3 into a full TLB should evict 2"
+          assert _t.lookup(1) == 10 and _t.lookup(3) == 30, "1 and 3 should still be in the TLB"
+          _t = TLB(3)
+          for _v in [1, 2, 3, 4]:
+              _t.insert(_v, _v * 10)
+          assert len(_t.map) == 3, "a TLB of 3 entries must never hold more than 3 translations"
+          assert run([0, 1, 2, 0, 3, 0, 4, 0], 3) == 5, "with 3 entries, a page used every other access stays in the TLB: 5 misses, not " + repr(run([0, 1, 2, 0, 3, 0, 4, 0], 3))
+          assert output.splitlines() == ["3 misses walking an array", "10 misses cycling through 5 pages", "5 misses with one hot page"], "The program should print 3, 10 and 5 misses"
+        wrong:
+          - |
+            class TLB:
+                # A small cache of translations, from virtual page number to frame
+                # number, holding at most `entries` of them. self.map is kept in order of
+                # use, least recently used first. A lookup that hits counts as a use;
+                # inserting into a full TLB evicts the least recently used translation.
+                def __init__(self, entries):
+                    self.entries = entries
+                    self.map = {}
+
+                def lookup(self, vpn):
+                    if vpn not in self.map:
+                        return None
+                    return self.map[vpn]
+
+                def insert(self, vpn, frame):
+                    if vpn in self.map:
+                        self.map.pop(vpn)
+                    elif len(self.map) == self.entries:
+                        del self.map[next(iter(self.map))]
+                    self.map[vpn] = frame
+
+
+            def run(pages, entries):
+                tlb = TLB(entries)
+                misses = 0
+                for vpn in pages:
+                    if tlb.lookup(vpn) is None:
+                        misses += 1
+                        tlb.insert(vpn, 100 + vpn)  # the frame found by walking the page table
+                return misses
+
+
+            print(run([0, 0, 0, 1, 1, 1, 2, 2], 4), "misses walking an array")
+            print(run([0, 1, 2, 3, 4, 0, 1, 2, 3, 4], 4), "misses cycling through 5 pages")
+            print(run([0, 1, 2, 0, 3, 0, 4, 0], 3), "misses with one hot page")
+          - |
+            class TLB:
+                # A small cache of translations, from virtual page number to frame
+                # number, holding at most `entries` of them. self.map is kept in order of
+                # use, least recently used first. A lookup that hits counts as a use;
+                # inserting into a full TLB evicts the least recently used translation.
+                def __init__(self, entries):
+                    self.entries = entries
+                    self.map = {}
+
+                def lookup(self, vpn):
+                    if vpn not in self.map:
+                        return None
+                    frame = self.map.pop(vpn)
+                    self.map[vpn] = frame
+                    return frame
+
+                def insert(self, vpn, frame):
+                    if vpn in self.map:
+                        self.map.pop(vpn)
+                    elif len(self.map) == self.entries:
+                        del self.map[list(self.map)[-1]]
+                    self.map[vpn] = frame
+
+
+            def run(pages, entries):
+                tlb = TLB(entries)
+                misses = 0
+                for vpn in pages:
+                    if tlb.lookup(vpn) is None:
+                        misses += 1
+                        tlb.insert(vpn, 100 + vpn)  # the frame found by walking the page table
+                return misses
+
+
+            print(run([0, 0, 0, 1, 1, 1, 2, 2], 4), "misses walking an array")
+            print(run([0, 1, 2, 3, 4, 0, 1, 2, 3, 4], 4), "misses cycling through 5 pages")
+            print(run([0, 1, 2, 0, 3, 0, 4, 0], 3), "misses with one hot page")
+          - |
+            class TLB:
+                # A small cache of translations, from virtual page number to frame
+                # number, holding at most `entries` of them. self.map is kept in order of
+                # use, least recently used first. A lookup that hits counts as a use;
+                # inserting into a full TLB evicts the least recently used translation.
+                def __init__(self, entries):
+                    self.entries = entries
+                    self.map = {}
+
+                def lookup(self, vpn):
+                    if not self.map.get(vpn):
+                        return None
+                    frame = self.map.pop(vpn)
+                    self.map[vpn] = frame
+                    return frame
+
+                def insert(self, vpn, frame):
+                    if vpn in self.map:
+                        self.map.pop(vpn)
+                    elif len(self.map) == self.entries:
+                        del self.map[next(iter(self.map))]
+                    self.map[vpn] = frame
+
+
+            def run(pages, entries):
+                tlb = TLB(entries)
+                misses = 0
+                for vpn in pages:
+                    if tlb.lookup(vpn) is None:
+                        misses += 1
+                        tlb.insert(vpn, 100 + vpn)  # the frame found by walking the page table
+                return misses
+
+
+            print(run([0, 0, 0, 1, 1, 1, 2, 2], 4), "misses walking an array")
+            print(run([0, 1, 2, 3, 4, 0, 1, 2, 3, 4], 4), "misses cycling through 5 pages")
+            print(run([0, 1, 2, 0, 3, 0, 4, 0], 3), "misses with one hot page")
+        explanation: |
+          A Python dictionary keeps keys in insertion order, so popping a key and putting it back moves it to the most recent end, and `next(iter(self.map))` is the least recently used. Returning the frame without moving it gives FIFO; evicting the last key throws out the page just used; and testing the frame for truth treats frame 0 as a miss, a classic bug wherever 0 is a valid value.
+    - question:
+        id: write-loop-order
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `addresses`, which lists the address of every element of a 64 × 1024 array of ints in row order or in column order. The program should print `row 64` and `column 65536`: the same sum, with a thousand times as many TLB misses.
+        starter: |
+          class TLB:
+              # A small cache of translations, from virtual page number to frame
+              # number, holding at most `entries` of them. self.map is kept in order of
+              # use, least recently used first. A lookup that hits counts as a use;
+              # inserting into a full TLB evicts the least recently used translation.
+              def __init__(self, entries):
+                  self.entries = entries
+                  self.map = {}
+
+              def lookup(self, vpn):
+                  if vpn not in self.map:
+                      return None
+                  frame = self.map.pop(vpn)
+                  self.map[vpn] = frame
+                  return frame
+
+              def insert(self, vpn, frame):
+                  if vpn in self.map:
+                      self.map.pop(vpn)
+                  elif len(self.map) == self.entries:
+                      del self.map[next(iter(self.map))]
+                  self.map[vpn] = frame
+
+
+          ROWS = 64
+          COLS = 1024  # a row of 1024 four-byte ints fills exactly one 4 KiB page
+          BASE = 0x10000000
+
+
+          def addresses(order):
+              # The address of every element of a ROWS x COLS array of 4-byte ints,
+              # stored row after row from BASE, so a[r][c] is at
+              # BASE + (r * COLS + c) * 4. Return them in the order a loop visits them:
+              # "row" goes along each row in turn, a[0][0], a[0][1], ..., and "column"
+              # goes down each column in turn, a[0][0], a[1][0], ....
+              return []
+
+
+          def misses(addrs, entries):
+              tlb = TLB(entries)
+              count = 0
+              for a in addrs:
+                  vpn = a >> 12
+                  if tlb.lookup(vpn) is None:
+                      count += 1
+                      tlb.insert(vpn, vpn)
+              return count
+
+
+          for order in ["row", "column"]:
+              print(order, misses(addresses(order), 32))
+        solution: |
+          class TLB:
+              # A small cache of translations, from virtual page number to frame
+              # number, holding at most `entries` of them. self.map is kept in order of
+              # use, least recently used first. A lookup that hits counts as a use;
+              # inserting into a full TLB evicts the least recently used translation.
+              def __init__(self, entries):
+                  self.entries = entries
+                  self.map = {}
+
+              def lookup(self, vpn):
+                  if vpn not in self.map:
+                      return None
+                  frame = self.map.pop(vpn)
+                  self.map[vpn] = frame
+                  return frame
+
+              def insert(self, vpn, frame):
+                  if vpn in self.map:
+                      self.map.pop(vpn)
+                  elif len(self.map) == self.entries:
+                      del self.map[next(iter(self.map))]
+                  self.map[vpn] = frame
+
+
+          ROWS = 64
+          COLS = 1024  # a row of 1024 four-byte ints fills exactly one 4 KiB page
+          BASE = 0x10000000
+
+
+          def addresses(order):
+              result = []
+              if order == "row":
+                  for r in range(ROWS):
+                      for c in range(COLS):
+                          result.append(BASE + (r * COLS + c) * 4)
+              else:
+                  for c in range(COLS):
+                      for r in range(ROWS):
+                          result.append(BASE + (r * COLS + c) * 4)
+              return result
+
+
+          def misses(addrs, entries):
+              tlb = TLB(entries)
+              count = 0
+              for a in addrs:
+                  vpn = a >> 12
+                  if tlb.lookup(vpn) is None:
+                      count += 1
+                      tlb.insert(vpn, vpn)
+              return count
+
+
+          for order in ["row", "column"]:
+              print(order, misses(addresses(order), 32))
+        tests: |
+          _row = addresses("row")
+          _col = addresses("column")
+          assert len(_row) == 64 * 1024 and len(_col) == 64 * 1024, "each order should visit all 65,536 elements once"
+          assert _row[:3] == [0x10000000, 0x10000004, 0x10000008], "along a row, ints are 4 bytes apart, starting at BASE"
+          assert _row[1024] == 0x10001000, "the second row starts 4096 bytes after the first"
+          assert _col[:3] == [0x10000000, 0x10001000, 0x10002000], "down a column, a[1][0] is a whole row, 4096 bytes, after a[0][0]"
+          assert _col[64] == 0x10000004, "after the 64 elements of column 0 comes a[0][1], at BASE + 4"
+          assert sorted(_row) == sorted(_col), "both orders visit the same addresses"
+          assert misses(_row, 32) == 64, "going along rows misses once per page, 64 times"
+          assert misses(_col, 32) == 65536, "going down columns touches 64 pages in turn, more than 32 entries hold, so every access misses"
+          assert output.splitlines() == ["row 64", "column 65536"], "The program should print row 64 and column 65536"
+        wrong:
+          - |
+            class TLB:
+                # A small cache of translations, from virtual page number to frame
+                # number, holding at most `entries` of them. self.map is kept in order of
+                # use, least recently used first. A lookup that hits counts as a use;
+                # inserting into a full TLB evicts the least recently used translation.
+                def __init__(self, entries):
+                    self.entries = entries
+                    self.map = {}
+
+                def lookup(self, vpn):
+                    if vpn not in self.map:
+                        return None
+                    frame = self.map.pop(vpn)
+                    self.map[vpn] = frame
+                    return frame
+
+                def insert(self, vpn, frame):
+                    if vpn in self.map:
+                        self.map.pop(vpn)
+                    elif len(self.map) == self.entries:
+                        del self.map[next(iter(self.map))]
+                    self.map[vpn] = frame
+
+
+            ROWS = 64
+            COLS = 1024  # a row of 1024 four-byte ints fills exactly one 4 KiB page
+            BASE = 0x10000000
+
+
+            def addresses(order):
+                result = []
+                if order == "row":
+                    for r in range(ROWS):
+                        for c in range(COLS):
+                            result.append(BASE + (r * COLS + c) * 4)
+                else:
+                    for c in range(COLS):
+                        for r in range(ROWS):
+                            result.append(BASE + (c * ROWS + r) * 4)
+                return result
+
+
+            def misses(addrs, entries):
+                tlb = TLB(entries)
+                count = 0
+                for a in addrs:
+                    vpn = a >> 12
+                    if tlb.lookup(vpn) is None:
+                        count += 1
+                        tlb.insert(vpn, vpn)
+                return count
+
+
+            for order in ["row", "column"]:
+                print(order, misses(addresses(order), 32))
+          - |
+            class TLB:
+                # A small cache of translations, from virtual page number to frame
+                # number, holding at most `entries` of them. self.map is kept in order of
+                # use, least recently used first. A lookup that hits counts as a use;
+                # inserting into a full TLB evicts the least recently used translation.
+                def __init__(self, entries):
+                    self.entries = entries
+                    self.map = {}
+
+                def lookup(self, vpn):
+                    if vpn not in self.map:
+                        return None
+                    frame = self.map.pop(vpn)
+                    self.map[vpn] = frame
+                    return frame
+
+                def insert(self, vpn, frame):
+                    if vpn in self.map:
+                        self.map.pop(vpn)
+                    elif len(self.map) == self.entries:
+                        del self.map[next(iter(self.map))]
+                    self.map[vpn] = frame
+
+
+            ROWS = 64
+            COLS = 1024  # a row of 1024 four-byte ints fills exactly one 4 KiB page
+            BASE = 0x10000000
+
+
+            def addresses(order):
+                result = []
+                if order == "row":
+                    for r in range(ROWS):
+                        for c in range(COLS):
+                            result.append(BASE + r * COLS + c)
+                else:
+                    for c in range(COLS):
+                        for r in range(ROWS):
+                            result.append(BASE + r * COLS + c)
+                return result
+
+
+            def misses(addrs, entries):
+                tlb = TLB(entries)
+                count = 0
+                for a in addrs:
+                    vpn = a >> 12
+                    if tlb.lookup(vpn) is None:
+                        count += 1
+                        tlb.insert(vpn, vpn)
+                return count
+
+
+            for order in ["row", "column"]:
+                print(order, misses(addresses(order), 32))
+          - |
+            class TLB:
+                # A small cache of translations, from virtual page number to frame
+                # number, holding at most `entries` of them. self.map is kept in order of
+                # use, least recently used first. A lookup that hits counts as a use;
+                # inserting into a full TLB evicts the least recently used translation.
+                def __init__(self, entries):
+                    self.entries = entries
+                    self.map = {}
+
+                def lookup(self, vpn):
+                    if vpn not in self.map:
+                        return None
+                    frame = self.map.pop(vpn)
+                    self.map[vpn] = frame
+                    return frame
+
+                def insert(self, vpn, frame):
+                    if vpn in self.map:
+                        self.map.pop(vpn)
+                    elif len(self.map) == self.entries:
+                        del self.map[next(iter(self.map))]
+                    self.map[vpn] = frame
+
+
+            ROWS = 64
+            COLS = 1024  # a row of 1024 four-byte ints fills exactly one 4 KiB page
+            BASE = 0x10000000
+
+
+            def addresses(order):
+                result = []
+                if order == "row":
+                    for r in range(ROWS):
+                        for c in range(COLS):
+                            result.append((r * COLS + c) * 4)
+                else:
+                    for c in range(COLS):
+                        for r in range(ROWS):
+                            result.append((r * COLS + c) * 4)
+                return result
+
+
+            def misses(addrs, entries):
+                tlb = TLB(entries)
+                count = 0
+                for a in addrs:
+                    vpn = a >> 12
+                    if tlb.lookup(vpn) is None:
+                        count += 1
+                        tlb.insert(vpn, vpn)
+                return count
+
+
+            for order in ["row", "column"]:
+                print(order, misses(addresses(order), 32))
+        explanation: |
+          The address of a[r][c] is always BASE + (r × COLS + c) × 4; only the order of the two loops changes. Down a column, each step is a whole 4 KiB row, so each access lands on a new page, and 64 pages in turn overflow a 32-entry TLB. Swapping r and COLS in the formula computes the wrong element and hides the effect; leaving out the 4 treats ints as bytes; and leaving out BASE puts the array at address 0.
+    - question:
+        id: fix-asid
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          After a context switch, process 2 reads process 1's password. The program should print `1 A's password`, `2 B's shopping list`, `1 A's password` and `2 page-table walks`. Find the fault and fix it, without flushing the TLB on every switch.
+        starter: |
+          # Two processes, each with its own page table. Both use virtual page 0x10.
+          tables = {1: {0x10: 0x2A, 0x11: 0x2B}, 2: {0x10: 0x3B}}
+          memory = {0x2A: "A's password", 0x2B: "A's photos", 0x3B: "B's shopping list"}
+
+
+          class Core:
+              # One processor core with a TLB. The TLB should keep translations
+              # across context switches, so that a process that runs again soon finds
+              # its pages still there, but a process must never use another's.
+              def __init__(self):
+                  self.tlb = {}
+                  self.asid = None  # which address space is running
+                  self.walks = 0    # page-table walks, each several slow memory reads
+
+              def switch_to(self, asid):
+                  self.asid = asid
+
+              def read(self, vaddr):
+                  vpn = vaddr >> 12
+                  if vpn in self.tlb:
+                      frame = self.tlb[vpn]
+                  else:
+                      self.walks += 1
+                      frame = tables[self.asid][vpn]
+                      self.tlb[vpn] = frame
+                  return memory[frame]
+
+
+          core = Core()
+          for asid in [1, 2, 1]:
+              core.switch_to(asid)
+              print(asid, core.read(0x10008))
+          print(core.walks, "page-table walks")
+        solution: |
+          # Two processes, each with its own page table. Both use virtual page 0x10.
+          tables = {1: {0x10: 0x2A, 0x11: 0x2B}, 2: {0x10: 0x3B}}
+          memory = {0x2A: "A's password", 0x2B: "A's photos", 0x3B: "B's shopping list"}
+
+
+          class Core:
+              # One processor core with a TLB. The TLB should keep translations
+              # across context switches, so that a process that runs again soon finds
+              # its pages still there, but a process must never use another's.
+              def __init__(self):
+                  self.tlb = {}
+                  self.asid = None  # which address space is running
+                  self.walks = 0    # page-table walks, each several slow memory reads
+
+              def switch_to(self, asid):
+                  self.asid = asid
+
+              def read(self, vaddr):
+                  vpn = vaddr >> 12
+                  key = (self.asid, vpn)
+                  if key in self.tlb:
+                      frame = self.tlb[key]
+                  else:
+                      self.walks += 1
+                      frame = tables[self.asid][vpn]
+                      self.tlb[key] = frame
+                  return memory[frame]
+
+
+          core = Core()
+          for asid in [1, 2, 1]:
+              core.switch_to(asid)
+              print(asid, core.read(0x10008))
+          print(core.walks, "page-table walks")
+        tests: |
+          _c = Core()
+          _c.switch_to(1)
+          assert _c.read(0x10000) == "A's password", "process 1's page 0x10 holds A's password"
+          _c.switch_to(2)
+          assert _c.read(0x10FFF) == "B's shopping list", "after a switch, process 2 must see its own page 0x10, not process 1's translation"
+          _c.switch_to(1)
+          assert _c.read(0x10010) == "A's password", "back in process 1, page 0x10 is A's again"
+          assert _c.read(0x11000) == "A's photos", "process 1's page 0x11 is a different page, with A's photos"
+          assert _c.walks == 3, "only three walks are needed: 0x10 for each process and 0x11 for process 1; process 1's translation of 0x10 should survive the switches, but there were " + repr(_c.walks)
+          assert output.splitlines() == ["1 A's password", "2 B's shopping list", "1 A's password", "2 page-table walks"], "The program should print each process's own data and then 2 page-table walks"
+        wrong:
+          - |
+            # Two processes, each with its own page table. Both use virtual page 0x10.
+            tables = {1: {0x10: 0x2A, 0x11: 0x2B}, 2: {0x10: 0x3B}}
+            memory = {0x2A: "A's password", 0x2B: "A's photos", 0x3B: "B's shopping list"}
+
+
+            class Core:
+                # One processor core with a TLB. The TLB should keep translations
+                # across context switches, so that a process that runs again soon finds
+                # its pages still there, but a process must never use another's.
+                def __init__(self):
+                    self.tlb = {}
+                    self.asid = None  # which address space is running
+                    self.walks = 0    # page-table walks, each several slow memory reads
+
+                def switch_to(self, asid):
+                    self.asid = asid
+                    self.tlb = {}
+
+                def read(self, vaddr):
+                    vpn = vaddr >> 12
+                    if vpn in self.tlb:
+                        frame = self.tlb[vpn]
+                    else:
+                        self.walks += 1
+                        frame = tables[self.asid][vpn]
+                        self.tlb[vpn] = frame
+                    return memory[frame]
+
+
+            core = Core()
+            for asid in [1, 2, 1]:
+                core.switch_to(asid)
+                print(asid, core.read(0x10008))
+            print(core.walks, "page-table walks")
+          - |
+            # Two processes, each with its own page table. Both use virtual page 0x10.
+            tables = {1: {0x10: 0x2A, 0x11: 0x2B}, 2: {0x10: 0x3B}}
+            memory = {0x2A: "A's password", 0x2B: "A's photos", 0x3B: "B's shopping list"}
+
+
+            class Core:
+                # One processor core with a TLB. The TLB should keep translations
+                # across context switches, so that a process that runs again soon finds
+                # its pages still there, but a process must never use another's.
+                def __init__(self):
+                    self.tlb = {}
+                    self.asid = None  # which address space is running
+                    self.walks = 0    # page-table walks, each several slow memory reads
+
+                def switch_to(self, asid):
+                    self.asid = asid
+
+                def read(self, vaddr):
+                    vpn = vaddr >> 12
+                    if vpn in self.tlb:
+                        frame = self.tlb[vpn]
+                    else:
+                        self.walks += 1
+                        frame = tables[self.asid][vpn]
+                        self.tlb[(self.asid, vpn)] = frame
+                    return memory[frame]
+
+
+            core = Core()
+            for asid in [1, 2, 1]:
+                core.switch_to(asid)
+                print(asid, core.read(0x10008))
+            print(core.walks, "page-table walks")
+          - |
+            # Two processes, each with its own page table. Both use virtual page 0x10.
+            tables = {1: {0x10: 0x2A, 0x11: 0x2B}, 2: {0x10: 0x3B}}
+            memory = {0x2A: "A's password", 0x2B: "A's photos", 0x3B: "B's shopping list"}
+
+
+            class Core:
+                # One processor core with a TLB. The TLB should keep translations
+                # across context switches, so that a process that runs again soon finds
+                # its pages still there, but a process must never use another's.
+                def __init__(self):
+                    self.tlb = {}
+                    self.asid = None  # which address space is running
+                    self.walks = 0    # page-table walks, each several slow memory reads
+
+                def switch_to(self, asid):
+                    self.asid = asid
+
+                def read(self, vaddr):
+                    vpn = vaddr >> 12
+                    if self.asid in self.tlb:
+                        frame = self.tlb[self.asid]
+                    else:
+                        self.walks += 1
+                        frame = tables[self.asid][vpn]
+                        self.tlb[self.asid] = frame
+                    return memory[frame]
+
+
+            core = Core()
+            for asid in [1, 2, 1]:
+                core.switch_to(asid)
+                print(asid, core.read(0x10008))
+            print(core.walks, "page-table walks")
+        explanation: |
+          The TLB is keyed by page number alone, so a translation made for process 1 is used by process 2. Keying it by (asid, page number) does what an address-space identifier does in hardware: each process's entries are kept apart, and process 1 finds its entry again after the switch. Flushing on every switch is correct but throws that entry away; storing under the tagged key but looking up the bare one never hits; and keying by asid alone confuses a process's different pages.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. A TLB holds 64 translations for 4 KiB pages. What is the largest array, in KiB, that a loop can sweep repeatedly with no TLB misses after the first sweep?
+        answer: "256"
+        unit: KiB
+        explanation: |
+          The TLB can hold translations for 64 pages at once, which cover 64 × 4 = 256 KiB. An array that fits stays mapped; one page more and, with LRU replacement, each sweep evicts every page just before it is needed again.
+    - question:
+        id: work-db
+        type: choice
+        system: s2
+        prompt: |
+          A database server scans a 40 GiB in-memory table and spends a fifth of its time on page-table walks. What is the most direct fix?
+        options:
+          - "Back the table with huge pages, so far fewer TLB entries cover it"
+          - "Add more processor cores"
+          - "Flush the TLB more often"
+          - "Use a faster disk"
+        answer: 0
+        explanation: |
+          The walks come from TLB misses, and with 4 KiB pages 40 GiB needs ten million translations. With 1 GiB pages it needs 40, and with 2 MiB pages 20,480, which a second-level TLB nearly holds.
+  connections:
+    - text: |
+        256 KiB. Sixty-four entries of 4 KiB each cover 256 KiB, the TLB's reach. Any array up to that size stays mapped from one sweep to the next; with even one more page, LRU replacement evicts each page just before the loop comes back for it, and every new page misses. That cliff is why huge pages and loop order matter so much for big data.
+
+        Translation, faults and context switches all depend on the processor being interrupted and handing control to the kernel. So far that has been the timer and the program's own mistakes. [[h2.interrupts-and-i-o]] turns to the devices: disks, network cards and keyboards that finish their work on their own schedule and need the processor's attention when they do.

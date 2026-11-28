@@ -11402,6 +11402,891 @@ function OooIssue(props: Props) {
   );
 }
 
+type MsLane = "user" | "kernel" | "hardware";
+const MS_EVENTS: Record<string, { label: string; moral: string; steps: [MsLane, string][] }> = {
+  write: {
+    label: "write a line",
+    moral: "The program crossed into the kernel once and came back once, and never touched the terminal itself.",
+    steps: [
+      ["user", "ecall with a7 = 64, the number of write"],
+      ["kernel", "trap: registers saved, kernel mode on"],
+      ["kernel", "sys_write checks the buffer is user memory"],
+      ["hardware", "the terminal is handed the 6 bytes"],
+      ["kernel", "the result, 6, goes into the saved a0"],
+      ["user", "sret: user mode, just after the ecall"],
+    ],
+  },
+  fault: {
+    label: "load from address 0",
+    moral: "The program never asked for the kernel: its own bad load took it there, and it did not come back.",
+    steps: [
+      ["user", "lw t0, 0(zero): a load from address 0"],
+      ["kernel", "page fault: registers saved, kernel mode on"],
+      ["kernel", "nothing is mapped at 0, so: SIGSEGV"],
+      ["kernel", "no handler for it, so the process ends"],
+      ["user", "the shell wakes and reports the crash"],
+    ],
+  },
+  privileged: {
+    label: "turn off the timer",
+    moral: "Only kernel mode may touch the timer, so the attempt itself is the program's last instruction.",
+    steps: [
+      ["user", "csrw: try to switch the timer off"],
+      ["kernel", "illegal instruction: kernel mode on"],
+      ["kernel", "SIGILL, no handler: the process ends"],
+      ["user", "another program runs"],
+    ],
+  },
+  timer: {
+    label: "timer fires",
+    moral: "The loop made no system call and did nothing wrong, yet the kernel took the processor back.",
+    steps: [
+      ["user", "a loop runs, making no system calls"],
+      ["hardware", "the timer fires: 4 ms are up"],
+      ["kernel", "interrupt: the loop's registers saved"],
+      ["kernel", "the scheduler picks the music player"],
+      ["user", "the music player runs; the loop waits"],
+    ],
+  },
+};
+const MS_LANES: MsLane[] = ["user", "kernel", "hardware"];
+
+/** The three ways into the kernel: a system call, an exception and an interrupt, drawn as a path across user mode, kernel mode and the hardware. */
+function ModeSwitch(props: Props) {
+  const keys = Object.keys(MS_EVENTS);
+  const [event, setEvent] = useState(keys.includes(String(props.event)) ? String(props.event) : "write");
+  const ev = MS_EVENTS[event];
+  const last = ev.steps.length - 1;
+  const [rawStep, setStep] = useState(clamp(num(props.step, 0), 0, 5));
+  const step = Math.min(rawStep, last);
+  const laneY = (l: MsLane) => 46 + MS_LANES.indexOf(l) * 58;
+  const x = (i: number) => 120 + i * (320 / last);
+  const entries = ev.steps.filter(([l], i) => l === "kernel" && i > 0 && ev.steps[i - 1][0] !== "kernel").length;
+  const summary =
+    `Step ${step + 1} of ${last + 1}, in ${ev.steps[step][0] === "hardware" ? "the hardware" : `${ev.steps[step][0]} mode`}: ${ev.steps[step][1]}. ` +
+    (step === last ? `${ev.moral} Entries into the kernel: ${entries}.` : "");
+  return (
+    <Frame
+      title={`Into the kernel and out: ${ev.label}`}
+      summary={summary}
+      controls={
+        <>
+          {keys.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={event === k} onClick={() => { setEvent(k); setStep(0); }}>
+              {MS_EVENTS[k].label}
+            </button>
+          ))}
+          <Stepper label="step" value={step + 1} onChange={(v) => setStep(v - 1)} min={1} max={last + 1} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 224" role="img" aria-label={`${ev.label}, step ${step + 1} of ${last + 1}`}>
+        {MS_LANES.map((l) => (
+          <g key={l}>
+            <rect x={96} y={laneY(l) - 22} width={360} height={44} rx={8} className="fig-fill" style={{ opacity: l === "user" ? 0.35 : l === "kernel" ? 0.7 : 0.5 }} />
+            <text x={8} y={laneY(l) + 4} className="fig-small" style={{ fill: "var(--text)" }}>{l === "hardware" ? "hardware" : `${l} mode`}</text>
+          </g>
+        ))}
+        {ev.steps.slice(1).map(([l], i) => (
+          <line key={i} x1={x(i)} y1={laneY(ev.steps[i][0])} x2={x(i + 1)} y2={laneY(l)} className={i < step ? "fig-accent-line" : "fig-line"} style={{ strokeWidth: i < step ? 2.5 : 1.5 }} />
+        ))}
+        {ev.steps.map(([l], i) => (
+          <g key={i}>
+            <circle cx={x(i)} cy={laneY(l)} r={13} className={i === step ? "fig-accent" : "fig-fill"} style={i === step ? undefined : { stroke: "var(--line)" }} />
+            <text x={x(i)} y={laneY(l) + 4} textAnchor="middle" style={{ fill: i === step ? "var(--bg)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>
+              {i + 1}
+            </text>
+          </g>
+        ))}
+        <text x={8} y={214} className="fig-small" style={{ fill: "var(--text)" }}>{`${step + 1}. ${ev.steps[step][1]}`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+type FtProc = { pid: number; parent: number | null; born: number; kids: number[] };
+
+function forkTree(n: number, all: boolean): FtProc[] {
+  const procs: FtProc[] = [{ pid: 100, parent: null, born: 0, kids: [] }];
+  const inLoop = new Set([100]);
+  let next = 101;
+  for (let r = 1; r <= n; r++) {
+    const forking = procs.filter((p) => inLoop.has(p.pid) && p.born < r);
+    for (const p of forking) {
+      const child: FtProc = { pid: next++, parent: p.pid, born: r, kids: [] };
+      p.kids.push(child.pid);
+      procs.push(child);
+      if (all) inLoop.add(child.pid);
+    }
+  }
+  return procs;
+}
+
+/** Processes made by calling fork in a loop: every process forks each time round, or only the parent does while each child leaves the loop. */
+function ForkTree(props: Props) {
+  const [n, setN] = useState(clamp(num(props.n, 3), 1, 4));
+  const [all, setAll] = useState(props.mode !== "parent");
+  const last = n + 1;
+  const [rawStep, setStep] = useState(clamp(num(props.step, 0), 0, 5));
+  const step = Math.min(rawStep, last);
+  const procs = forkTree(n, all);
+  const byPid = new Map(procs.map((p) => [p.pid, p]));
+  const alive = procs.filter((p) => p.born <= Math.min(step, n));
+  const leaves = (p: FtProc): number => (p.kids.length ? p.kids.map((k) => leaves(byPid.get(k)!)).reduce((a, b) => a + b, 0) : 1);
+  const pos = new Map<number, { x: number; y: number }>();
+  const total = leaves(procs[0]);
+  const place = (p: FtProc, left: number, depth: number) => {
+    const w = (leaves(p) / total) * 440;
+    pos.set(p.pid, { x: 10 + left + w / 2, y: 28 + depth * 44 });
+    let at = left;
+    for (const k of p.kids) {
+      const c = byPid.get(k)!;
+      place(c, at, depth + 1);
+      at += (leaves(c) / total) * 440;
+    }
+  };
+  place(procs[0], 0, 0);
+  const count = alive.length;
+  const forkingNow = step >= 1 && step <= n ? procs.filter((p) => p.born < step && (all || p.pid === 100)).length : 0;
+  let summary: string;
+  if (step === 0) summary = `Step 1 of ${last + 1}. Before the loop there is 1 process, pid 100.`;
+  else if (step <= n)
+    summary = all
+      ? `Step ${step + 1} of ${last + 1}. Time round ${step}: each of the ${plural(forkingNow, "process", "processes")} in the loop calls fork, and each call makes one child that carries on from the same point, with fork returning 0 in the child. There ${count === 1 ? "is" : "are"} now ${plural(count, "process", "processes")}.`
+      : `Step ${step + 1} of ${last + 1}. Time round ${step}: only pid 100 is still in the loop. Its new child, pid ${100 + step}, sees fork return 0 and breaks out. There are now ${plural(count, "process", "processes")}.`;
+  else
+    summary = `Step ${step + 1} of ${last + 1}. The loop is over, and each of the ${plural(count, "process", "processes")} prints hi, so hi appears ${count} times: ${all ? `2 to the power ${n}` : `${n} + 1`}.`;
+  const r = procs.length > 8 ? 11 : 13;
+  return (
+    <Frame
+      title={all ? `fork() in a loop of ${n}` : `fork() in a loop of ${n}, children break out`}
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={all} onClick={() => setAll(true)}>
+            every process forks
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!all} onClick={() => setAll(false)}>
+            children break out
+          </button>
+          <Stepper label="loop length" value={n} onChange={(v) => { setN(v); setStep(0); }} min={1} max={4} />
+          <Stepper label="step" value={step + 1} onChange={(v) => setStep(v - 1)} min={1} max={last + 1} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 260" role="img" aria-label={`${count} processes after step ${step + 1}`}>
+        {procs.filter((p) => p.parent !== null).map((p) => {
+          const a = pos.get(p.parent!)!;
+          const b = pos.get(p.pid)!;
+          return <line key={p.pid} x1={a.x} y1={a.y} x2={b.x} y2={b.y} className={p.born === step ? "fig-accent-line" : "fig-line"} style={{ opacity: p.born <= step ? 1 : 0.15, strokeWidth: p.born === step ? 2.5 : 1.5 }} />;
+        })}
+        {procs.map((p) => {
+          const at = pos.get(p.pid)!;
+          const shown = p.born <= step;
+          return (
+            <g key={p.pid} style={{ opacity: shown ? 1 : 0.15 }}>
+              <circle cx={at.x} cy={at.y} r={r} className={p.born === step && step > 0 && step <= n ? "fig-accent" : "fig-fill"} style={{ stroke: "var(--line)" }} />
+              {shown ? (
+                <text x={at.x} y={at.y + 3.5} textAnchor="middle" style={{ fill: p.born === step && step > 0 && step <= n ? "var(--bg)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: r > 12 ? 10 : 8.5, fontWeight: 600 }}>
+                  {p.pid}
+                </text>
+              ) : null}
+              {step === last ? (
+                <text x={at.x} y={at.y + r + 12} textAnchor="middle" className="fig-small" style={{ fill: "var(--focus)", fontWeight: 600 }}>
+                  hi
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+        <text x={10} y={252} className="fig-small">{`${plural(count, "process", "processes")}${step === last ? `, ${count} lines of hi` : ""}`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+const SG_JOBS = [
+  { name: "A", arrival: 0, length: 8 },
+  { name: "B", arrival: 1, length: 4 },
+  { name: "C", arrival: 2, length: 9 },
+  { name: "D", arrival: 3, length: 5 },
+];
+const SG_NAMES: Record<string, string> = { fcfs: "first come, first served", sjf: "shortest job first", srtf: "shortest remaining time first", rr: "round robin" };
+
+function sgSchedule(policy: string, quantum: number) {
+  const segs: { job: number; start: number; end: number }[] = [];
+  const left = SG_JOBS.map((j) => j.length);
+  const add = (job: number, start: number, end: number) => {
+    const prev = segs[segs.length - 1];
+    if (prev && prev.job === job && prev.end === start) prev.end = end;
+    else segs.push({ job, start, end });
+  };
+  let time = 0;
+  if (policy === "rr") {
+    const queue: number[] = [];
+    let next = 0;
+    const admit = () => {
+      while (next < SG_JOBS.length && SG_JOBS[next].arrival <= time) queue.push(next++);
+    };
+    while (next < SG_JOBS.length || queue.length) {
+      admit();
+      if (!queue.length) {
+        time = SG_JOBS[next].arrival;
+        continue;
+      }
+      const j = queue.shift()!;
+      const run = Math.min(quantum, left[j]);
+      add(j, time, time + run);
+      time += run;
+      left[j] -= run;
+      admit();
+      if (left[j] > 0) queue.push(j);
+    }
+  } else {
+    while (left.some((l) => l > 0)) {
+      const ready = SG_JOBS.map((j, i) => i).filter((i) => SG_JOBS[i].arrival <= time && left[i] > 0);
+      if (!ready.length) {
+        time += 1;
+        continue;
+      }
+      const running = segs.length && segs[segs.length - 1].end === time && left[segs[segs.length - 1].job] > 0 ? segs[segs.length - 1].job : -1;
+      let j: number;
+      if (policy === "fcfs") j = running >= 0 ? running : ready[0];
+      else if (policy === "sjf") j = running >= 0 ? running : ready.reduce((a, b) => (SG_JOBS[b].length < SG_JOBS[a].length ? b : a));
+      else j = ready.reduce((a, b) => (left[b] < left[a] ? b : a));
+      add(j, time, time + 1);
+      left[j] -= 1;
+      time += 1;
+    }
+  }
+  const finish = SG_JOBS.map((_, i) => Math.max(...segs.filter((s) => s.job === i).map((s) => s.end)));
+  const first = SG_JOBS.map((_, i) => Math.min(...segs.filter((s) => s.job === i).map((s) => s.start)));
+  return { segs, finish, first };
+}
+
+/** Four jobs on one processor under four scheduling policies, as a Gantt chart with waiting and response times. */
+function SchedulerGantt(props: Props) {
+  const policies = ["fcfs", "sjf", "srtf", "rr"];
+  const [policy, setPolicy] = useState(policies.includes(String(props.policy)) ? String(props.policy) : "fcfs");
+  const [quantum, setQuantum] = useState(clamp(num(props.quantum, 3), 1, 6));
+  const { segs, finish, first } = sgSchedule(policy, quantum);
+  const waits = SG_JOBS.map((j, i) => finish[i] - j.arrival - j.length);
+  const responses = SG_JOBS.map((j, i) => first[i] - j.arrival);
+  const avg = (xs: number[]) => {
+    const v = xs.reduce((a, b) => a + b, 0) / xs.length;
+    return Number.isInteger(v) ? String(v) : v.toFixed(2);
+  };
+  const end = Math.max(...finish);
+  const left = 34;
+  const unit = (450 - left) / end;
+  const switches = segs.length - 1;
+  const order = segs.map((s) => `${SG_JOBS[s.job].name} ${s.start}–${s.end}`).join(", ");
+  const summary =
+    `${SG_NAMES[policy][0].toUpperCase()}${SG_NAMES[policy].slice(1)}${policy === "rr" ? ` with a quantum of ${quantum} ms` : ""}: ${order}. ` +
+    `Waiting times ${SG_JOBS.map((j, i) => `${j.name} ${waits[i]}`).join(", ")}, average ${avg(waits)} ms; average response ${avg(responses)} ms; ${plural(switches, "switch", "switches")} between jobs.`;
+  return (
+    <Frame
+      title={`Scheduling four jobs: ${SG_NAMES[policy]}`}
+      summary={summary}
+      controls={
+        <>
+          {policies.map((p) => (
+            <button key={p} type="button" className="btn btn-secondary btn-small" aria-pressed={policy === p} onClick={() => setPolicy(p)}>
+              {SG_NAMES[p]}
+            </button>
+          ))}
+          {policy === "rr" ? <Stepper label="quantum" value={quantum} onChange={setQuantum} min={1} max={6} /> : null}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 200" role="img" aria-label={`${SG_NAMES[policy]}: average waiting time ${avg(waits)} ms`}>
+        {SG_JOBS.map((j, i) => (
+          <g key={j.name}>
+            <text x={8} y={36 + i * 34} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>{j.name}</text>
+            <line x1={left + j.arrival * unit} y1={20 + i * 34} x2={left + j.arrival * unit} y2={46 + i * 34} className="fig-accent-line" style={{ strokeWidth: 2 }} />
+            <rect x={left + j.arrival * unit} y={24 + i * 34} width={(finish[i] - j.arrival) * unit} height={18} rx={3} className="fig-fill" style={{ opacity: 0.35 }} />
+          </g>
+        ))}
+        {segs.map((s, k) => (
+          <rect key={k} x={left + s.start * unit} y={24 + s.job * 34} width={(s.end - s.start) * unit - 1} height={18} rx={3} className="fig-accent" />
+        ))}
+        {Array.from({ length: end + 1 }, (_, t) => t).filter((t) => t % 2 === 0 || t === end).map((t) => (
+          <text key={t} x={left + t * unit} y={170} textAnchor="middle" className="fig-small">{t}</text>
+        ))}
+        <line x1={left} y1={158} x2={left + end * unit} y2={158} className="fig-line" />
+        <text x={8} y={192} className="fig-small">{`ms · bright: running · dark: waiting · tick: arrival`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+const PT_ROWS: { frame: number | null; onDisk?: boolean; rights: string; note: string }[] = [
+  { frame: null, rights: "---", note: "unmapped: null" },
+  { frame: 5, rights: "r-x", note: "code" },
+  { frame: 3, rights: "rw-", note: "data" },
+  { frame: 6, rights: "rw-", note: "heap" },
+  { frame: null, onDisk: true, rights: "rw-", note: "heap, swapped out" },
+  { frame: null, rights: "---", note: "unmapped" },
+  { frame: null, rights: "---", note: "unmapped" },
+  { frame: 1, rights: "rw-", note: "stack" },
+];
+const PT_ACCESSES: Record<string, { label: string; vaddr: number; write: boolean }> = {
+  code: { label: "read 0x1a2c", vaddr: 0x1a2c, write: false },
+  data: { label: "write 0x2010", vaddr: 0x2010, write: true },
+  "write-code": { label: "write 0x1004", vaddr: 0x1004, write: true },
+  swapped: { label: "read 0x4100", vaddr: 0x4100, write: false },
+  null: { label: "read 0x0000", vaddr: 0x0000, write: false },
+};
+
+/** Translating a virtual address through one process's page table: page number and offset, present and permission bits, and the faults. */
+function PageTable(props: Props) {
+  const keys = Object.keys(PT_ACCESSES);
+  const [key, setKey] = useState(keys.includes(String(props.access)) ? String(props.access) : "code");
+  const acc = PT_ACCESSES[key];
+  const page = acc.vaddr >> 12;
+  const offset = acc.vaddr & 0xfff;
+  const row = PT_ROWS[page];
+  const hex = (n: number) => `0x${n.toString(16)}`;
+  let frame: number | null = null;
+  let outcome: string;
+  if (row.onDisk) {
+    frame = 2;
+    outcome = `Page ${page} has an entry but is not present: it was swapped out to disk. The hardware raises a page fault; the kernel reads the page from disk into free frame 2, marks the entry present, and runs the load again, which now gives ${hex((2 << 12) | offset)}. The program never notices, except that this load took milliseconds.`;
+  } else if (row.frame === null) {
+    outcome = `Page ${page} is not mapped at all, so the hardware raises a page fault and the kernel finds nothing to load. It sends the process SIGSEGV, a segmentation fault, which ends it.`;
+  } else if (acc.write && !row.rights.includes("w")) {
+    outcome = `Page ${page} is in frame ${row.frame}, but its entry says ${row.rights}: readable and executable, not writable. The write raises a protection fault, and the kernel ends the process with SIGSEGV. Code cannot be overwritten by accident or by an attacker.`;
+  } else {
+    frame = row.frame;
+    outcome = `Page ${page} is present in frame ${row.frame} and ${acc.write ? "writable" : "readable"}, so the physical address is frame ${row.frame} followed by the same offset: ${hex((row.frame << 12) | offset)}.`;
+  }
+  const summary = `${acc.label}: the top 3 bits give page ${page} and the low 12 bits the offset ${hex(offset)}. ${outcome}`;
+  const owner = (f: number) => {
+    const i = PT_ROWS.findIndex((r) => r.frame === f);
+    if (i >= 0) return `page ${i}`;
+    if (f === 2) return row.onDisk ? "page 4, loaded" : "free";
+    return "another process";
+  };
+  const rowY = (i: number) => 58 + i * 20;
+  return (
+    <Frame
+      title={`Translating ${acc.label.split(" ")[1]}`}
+      summary={summary}
+      controls={keys.map((k) => (
+        <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={key === k} onClick={() => setKey(k)}>
+          {PT_ACCESSES[k].label}
+        </button>
+      ))}
+    >
+      <svg viewBox="0 0 460 232" role="img" aria-label={`${acc.label}: page ${page}, offset ${hex(offset)}`}>
+        <text x={10} y={18} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>
+          {`${acc.label.split(" ")[1]} = page ${page} · offset ${hex(offset)}`}
+        </text>
+        <text x={10} y={44} className="fig-small">page table</text>
+        <text x={340} y={44} className="fig-small">physical memory</text>
+        {PT_ROWS.map((r, i) => (
+          <g key={i}>
+            <rect x={10} y={rowY(i) - 13} width={300} height={18} rx={3} className={i === page ? "fig-accent" : "fig-fill"} style={{ opacity: i === page ? 0.35 : 0.5 }} />
+            <text x={18} y={rowY(i)} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+              {[String(i), r.rights, r.frame !== null ? `frame ${r.frame}` : r.onDisk ? "on disk" : "none"].join(" · ")}
+            </text>
+            <text x={162} y={rowY(i)} className="fig-small">{r.note}</text>
+          </g>
+        ))}
+        {Array.from({ length: 8 }, (_, f) => (
+          <g key={f}>
+            <rect x={340} y={rowY(f) - 13} width={110} height={18} rx={3} className={f === frame ? "fig-accent" : "fig-fill"} style={{ opacity: f === frame ? 0.45 : 0.5 }} />
+            <text x={346} y={rowY(f)} className="fig-small" style={{ fill: "var(--text)" }}>{`${f}: ${owner(f)}`}</text>
+          </g>
+        ))}
+        {frame !== null ? <line x1={312} y1={rowY(page) - 4} x2={338} y2={rowY(frame) - 4} className="fig-accent-line" style={{ strokeWidth: 2.5 }} /> : null}
+        <text x={10} y={226} className="fig-small" style={{ fill: frame === null ? "var(--focus)" : "var(--text)" }}>
+          {frame === null ? "page fault: the process is ended" : `physical address ${hex((frame << 12) | offset)}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const TLB_PATTERNS: Record<string, { label: string; addrs: number[] }> = {
+  sequential: { label: "walk an array", addrs: Array.from({ length: 12 }, (_, i) => i * 0x400) },
+  stride: { label: "one int per page", addrs: Array.from({ length: 12 }, (_, i) => (i % 6) * 0x1000 + 0x10) },
+  loop: { label: "three hot pages", addrs: Array.from({ length: 12 }, (_, i) => (i % 3) * 0x1000 + 0x200 + (i >> 2) * 8) },
+};
+const TLB_FRAMES = [7, 2, 9, 4, 12, 1];
+
+/** A four-entry TLB with LRU replacement in front of a four-level page table, on three access patterns. */
+function TlbCache(props: Props) {
+  const keys = Object.keys(TLB_PATTERNS);
+  const [key, setKey] = useState(keys.includes(String(props.pattern)) ? String(props.pattern) : "sequential");
+  const pat = TLB_PATTERNS[key];
+  const last = pat.addrs.length - 1;
+  const [rawStep, setStep] = useState(clamp(num(props.step, 0), 0, 11));
+  const step = Math.min(rawStep, last);
+  const tlb: number[] = [];
+  const hit: boolean[] = [];
+  const evicted: (number | null)[] = [];
+  let snapshot: number[] = [];
+  pat.addrs.forEach((a, i) => {
+    const vpn = a >> 12;
+    const at = tlb.indexOf(vpn);
+    hit.push(at >= 0);
+    evicted.push(at < 0 && tlb.length === 4 ? tlb[0] : null);
+    if (at >= 0) tlb.splice(at, 1);
+    else if (tlb.length === 4) tlb.shift();
+    tlb.push(vpn);
+    if (i === step) snapshot = [...tlb];
+  });
+  const vpn = pat.addrs[step] >> 12;
+  const hits = hit.slice(0, step + 1).filter(Boolean).length;
+  const misses = step + 1 - hits;
+  const hex = (n: number) => `0x${n.toString(16).padStart(4, "0")}`;
+  const summary =
+    `Access ${step + 1} of ${last + 1}: address ${hex(pat.addrs[step])}, page ${vpn}. ` +
+    (hit[step]
+      ? `A TLB hit: frame ${TLB_FRAMES[vpn]} comes back in about a cycle, with no page-table walk. `
+      : `A TLB miss: the hardware walks the four-level page table, four extra memory reads, finds frame ${TLB_FRAMES[vpn]}, and puts the translation in the TLB${evicted[step] !== null ? `, evicting page ${evicted[step]}, the least recently used` : ""}. `) +
+    `So far ${plural(hits, "hit")} and ${plural(misses, "miss", "misses")}, ${4 * misses} extra memory reads.`;
+  const cell = 34;
+  return (
+    <Frame
+      title={`A 4-entry TLB: ${pat.label}`}
+      summary={summary}
+      controls={
+        <>
+          {keys.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={key === k} onClick={() => { setKey(k); setStep(0); }}>
+              {TLB_PATTERNS[k].label}
+            </button>
+          ))}
+          <Stepper label="access" value={step + 1} onChange={(v) => setStep(v - 1)} min={1} max={last + 1} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 200" role="img" aria-label={`Access ${step + 1}: ${hits} hits, ${misses} misses`}>
+        <text x={10} y={18} className="fig-small">page of each access</text>
+        {pat.addrs.map((a, i) => (
+          <g key={i} style={{ opacity: i <= step ? 1 : 0.25 }}>
+            <rect x={10 + i * (cell + 3)} y={26} width={cell} height={26} rx={4} className={i === step ? "fig-accent" : "fig-fill"} style={i === step ? { opacity: 0.4 } : undefined} />
+            <text x={10 + i * (cell + 3) + cell / 2} y={44} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>{a >> 12}</text>
+            <text x={10 + i * (cell + 3) + cell / 2} y={68} textAnchor="middle" className="fig-small" style={{ fill: hit[i] ? "var(--text)" : "var(--focus)", fontWeight: hit[i] ? 400 : 700 }}>
+              {i <= step ? (hit[i] ? "hit" : "miss") : ""}
+            </text>
+          </g>
+        ))}
+        <text x={10} y={96} className="fig-small">TLB, least recently used first</text>
+        {Array.from({ length: 4 }, (_, i) => {
+          const v = snapshot[i];
+          return (
+            <g key={i}>
+              <rect x={10 + i * 112} y={104} width={104} height={30} rx={6} className={v === vpn ? "fig-accent" : "fig-fill"} style={v === vpn ? { opacity: 0.4 } : undefined} />
+              <text x={62 + i * 112} y={124} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                {v === undefined ? "empty" : `page ${v} → ${TLB_FRAMES[v]}`}
+              </text>
+            </g>
+          );
+        })}
+        <text x={10} y={160} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>
+          {`${hits} ${hits === 1 ? "hit" : "hits"} · ${misses} ${misses === 1 ? "miss" : "misses"} · ${4 * misses} walk reads`}
+        </text>
+        <text x={10} y={186} className="fig-small">{"pages 4 KiB · frames from the page table"}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+type IoSeg = { row: "cpu" | "dev"; start: number; len: number; kind: "io" | "spin" | "free" | "busy"; label: string };
+const IO_NAMES: Record<string, string> = { polling: "polling", interrupt: "an interrupt per word", dma: "DMA" };
+
+function ioSegments(mode: string, n: number) {
+  const segs: IoSeg[] = [];
+  let t = 0;
+  const DEV = 4;
+  segs.push({ row: "cpu", start: 0, len: 1, kind: "io", label: "start" });
+  t = 1;
+  if (mode === "dma") {
+    segs.push({ row: "dev", start: t, len: DEV * n, kind: "busy", label: `${n} words into memory` });
+    segs.push({ row: "cpu", start: t, len: DEV * n, kind: "free", label: "other work" });
+    t += DEV * n;
+    segs.push({ row: "cpu", start: t, len: 1, kind: "io", label: "irq" });
+    t += 1;
+  } else {
+    for (let i = 0; i < n; i++) {
+      segs.push({ row: "dev", start: t, len: DEV, kind: "busy", label: `w${i + 1}` });
+      segs.push({ row: "cpu", start: t, len: DEV, kind: mode === "polling" ? "spin" : "free", label: mode === "polling" ? "poll" : "other" });
+      t += DEV;
+      segs.push({ row: "cpu", start: t, len: 1, kind: "io", label: mode === "polling" ? "copy" : "irq" });
+      t += 1;
+    }
+  }
+  return { segs, total: t };
+}
+
+/** Reading a block from a device three ways: the processor polling, an interrupt per word, and direct memory access with one interrupt at the end. */
+function IoTimeline(props: Props) {
+  const modes = ["polling", "interrupt", "dma"];
+  const [mode, setMode] = useState(modes.includes(String(props.mode)) ? String(props.mode) : "polling");
+  const [n, setN] = useState(clamp(num(props.words, 4), 1, 8));
+  const { segs, total } = ioSegments(mode, n);
+  const cpu = segs.filter((s) => s.row === "cpu");
+  const ioTime = cpu.filter((s) => s.kind === "io" || s.kind === "spin").reduce((a, s) => a + s.len, 0);
+  const spin = cpu.filter((s) => s.kind === "spin").reduce((a, s) => a + s.len, 0);
+  const free = cpu.filter((s) => s.kind === "free").reduce((a, s) => a + s.len, 0);
+  const irqs = cpu.filter((s) => s.label === "irq").length;
+  const summary =
+    `Reading ${plural(n, "word")} with ${IO_NAMES[mode]} takes ${total} time units, and the device needs 4 per word. ` +
+    (mode === "polling"
+      ? `The processor spends all ${total} on the transfer, ${spin} of them spinning on the status register, and can do nothing else.`
+      : mode === "interrupt"
+        ? `The processor spends ${ioTime} units on it, starting the read and handling ${plural(irqs, "interrupt")}, one per word, and has ${free} units free for other programs.`
+        : `The device copies every word into memory itself. The processor spends ${ioTime} units, starting the transfer and handling ${plural(irqs, "interrupt")} at the end, and has ${free} units free.`);
+  const left = 78;
+  const unit = (450 - left) / 41;
+  const rowY = { cpu: 52, dev: 112 };
+  const cls = (k: IoSeg["kind"]) => (k === "io" ? "fig-accent" : k === "spin" ? "fig-accent" : k === "busy" ? "fig-fill" : "fig-ghost");
+  return (
+    <Frame
+      title={`Reading from a device: ${IO_NAMES[mode]}`}
+      summary={summary}
+      controls={
+        <>
+          {modes.map((m) => (
+            <button key={m} type="button" className="btn btn-secondary btn-small" aria-pressed={mode === m} onClick={() => setMode(m)}>
+              {IO_NAMES[m]}
+            </button>
+          ))}
+          <Stepper label="words" value={n} onChange={setN} min={1} max={8} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 200" role="img" aria-label={`${IO_NAMES[mode]}: ${ioTime} of ${total} units on I/O`}>
+        <text x={8} y={rowY.cpu + 17} className="fig-small" style={{ fill: "var(--text)" }}>processor</text>
+        <text x={8} y={rowY.dev + 17} className="fig-small" style={{ fill: "var(--text)" }}>device</text>
+        {segs.map((s, i) => (
+          <g key={i}>
+            <rect
+              x={left + s.start * unit}
+              y={rowY[s.row]}
+              width={Math.max(1, s.len * unit - 1)}
+              height={26}
+              rx={3}
+              className={cls(s.kind)}
+              style={s.kind === "spin" ? { opacity: 0.35 } : s.kind === "free" ? { opacity: 0.6 } : undefined}
+            />
+            {s.len * unit > 24 ? (
+              <text x={left + (s.start + s.len / 2) * unit} y={rowY[s.row] + 17} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+                {s.label}
+              </text>
+            ) : null}
+          </g>
+        ))}
+        <line x1={left} y1={152} x2={left + total * unit} y2={152} className="fig-line" />
+        <text x={left} y={168} className="fig-small">0</text>
+        <text x={left + total * unit} y={168} textAnchor="end" className="fig-small">{total}</text>
+        <text x={8} y={192} className="fig-small">{`on I/O ${ioTime} · free ${free} · interrupts ${irqs}`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+const IB_SIZES: Record<string, { label: string; kib: number }> = {
+  "10k": { label: "10 KiB", kib: 10 },
+  "48k": { label: "48 KiB", kib: 48 },
+  "100k": { label: "100 KiB", kib: 100 },
+  "4m": { label: "4 MiB", kib: 4096 },
+  "1g": { label: "1 GiB", kib: 1048576 },
+};
+
+/** An inode's block pointers: twelve direct, then single and double indirect blocks, for files of growing size. */
+function InodeBlocks(props: Props) {
+  const keys = Object.keys(IB_SIZES);
+  const [key, setKey] = useState(keys.includes(String(props.size)) ? String(props.size) : "10k");
+  const { label, kib } = IB_SIZES[key];
+  const blocks = Math.ceil(kib / 4);
+  const direct = Math.min(12, blocks);
+  const single = Math.min(1024, Math.max(0, blocks - 12));
+  const dbl = Math.max(0, blocks - 12 - 1024);
+  const dblTables = Math.ceil(dbl / 1024);
+  const meta = (single ? 1 : 0) + (dbl ? 1 + dblTables : 0);
+  const lastReads = dbl ? 3 : single ? 2 : 1;
+  const fmt = (n: number) => n.toLocaleString("en-IN");
+  const summary =
+    `A file of ${label} fills ${fmt(blocks)} data ${blocks === 1 ? "block" : "blocks"} of 4 KiB. ` +
+    `${direct === blocks ? `All ${plural(direct, "is", "are")} listed directly in the inode.` : `The inode lists the first 12 directly; `}` +
+    (single ? `the single indirect block lists ${fmt(single)} more` : "") +
+    (dbl ? `, and the double indirect block points to ${plural(dblTables, "block")} of pointers listing the last ${fmt(dbl)}` : "") +
+    (single ? `. That is ${plural(meta, "extra block", "extra blocks")} of pointers. ` : " ") +
+    `Reading the file's last byte, with the inode already in memory, takes ${plural(lastReads, "disk read")}.`;
+  const cells = Array.from({ length: 12 }, (_, i) => i < direct);
+  return (
+    <Frame
+      title={`Where a ${label} file's blocks are listed`}
+      summary={summary}
+      controls={keys.map((k) => (
+        <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={key === k} onClick={() => setKey(k)}>
+          {IB_SIZES[k].label}
+        </button>
+      ))}
+    >
+      <svg viewBox="0 0 460 220" role="img" aria-label={`${label}: ${fmt(blocks)} data blocks, ${meta} pointer blocks`}>
+        <rect x={10} y={10} width={150} height={200} rx={8} className="fig-fill" style={{ opacity: 0.5 }} />
+        <text x={20} y={30} style={{ fill: "var(--text)", fontSize: 12, fontWeight: 600 }}>inode</text>
+        <text x={20} y={46} className="fig-small">{`size ${label}`}</text>
+        {cells.map((used, i) => (
+          <rect key={i} x={20 + (i % 6) * 22} y={58 + Math.floor(i / 6) * 22} width={18} height={18} rx={3} className={used ? "fig-accent" : "fig-ghost"} style={used ? { opacity: 0.7 } : undefined} />
+        ))}
+        <text x={20} y={118} className="fig-small">12 direct</text>
+        {[
+          { name: "single", y: 136, used: single > 0 },
+          { name: "double", y: 162, used: dbl > 0 },
+          { name: "triple", y: 188, used: false },
+        ].map((p) => (
+          <g key={p.name}>
+            <rect x={20} y={p.y - 12} width={18} height={18} rx={3} className={p.used ? "fig-accent" : "fig-ghost"} style={p.used ? { opacity: 0.7 } : undefined} />
+            <text x={44} y={p.y + 2} className="fig-small">{p.name}</text>
+            {p.used ? <line x1={160} y1={p.y - 3} x2={196} y2={p.y - 3} className="fig-accent-line" style={{ strokeWidth: 2 }} /> : null}
+          </g>
+        ))}
+        <text x={200} y={30} className="fig-small" style={{ fill: "var(--text)" }}>{`data blocks: ${fmt(blocks)}`}</text>
+        <rect x={200} y={40} width={250} height={14} rx={3} className="fig-fill" style={{ opacity: 0.5 }} />
+        <rect x={200} y={40} width={Math.max(2, (250 * direct) / blocks)} height={14} rx={3} className="fig-accent" />
+        <text x={200} y={70} className="fig-small">{`direct ${fmt(direct)}`}</text>
+        {single ? (
+          <g>
+            <rect x={200} y={124} width={250} height={22} rx={4} className="fig-fill" style={{ opacity: 0.5 }} />
+            <text x={208} y={139} className="fig-small" style={{ fill: "var(--text)" }}>{`1 pointer block → ${fmt(single)} data blocks`}</text>
+          </g>
+        ) : null}
+        {dbl ? (
+          <g>
+            <rect x={200} y={150} width={250} height={22} rx={4} className="fig-fill" style={{ opacity: 0.5 }} />
+            <text x={208} y={165} className="fig-small" style={{ fill: "var(--text)" }}>{`1 + ${fmt(dblTables)} pointer blocks → ${fmt(dbl)}`}</text>
+          </g>
+        ) : null}
+        <text x={200} y={192} className="fig-small">{`last byte: ${plural(lastReads, "disk read")}`}</text>
+        <text x={200} y={208} className="fig-small">4 KiB blocks, 1,024 pointers each</text>
+      </svg>
+    </Frame>
+  );
+}
+
+const TM_NAMES: Record<string, string> = { "one-to-one": "1:1 kernel threads", "many-to-one": "N:1 user-level threads", "many-to-many": "M:N runtime" };
+
+/** Six threads of one process on four cores under three threading models, with and without one thread blocked in a system call. */
+function ThreadModels(props: Props) {
+  const models = ["one-to-one", "many-to-one", "many-to-many"];
+  const [model, setModel] = useState(models.includes(String(props.model)) ? String(props.model) : "one-to-one");
+  const [blocked, setBlocked] = useState(props.blocked === true);
+  const users = [1, 2, 3, 4, 5, 6];
+  // kernel thread for each user thread (index into kernels), and which kernel threads are on cores
+  let kernels: number[];
+  let userToKernel: (number | null)[];
+  let onCore: number[];
+  let note: string;
+  if (model === "one-to-one") {
+    kernels = [1, 2, 3, 4, 5, 6];
+    userToKernel = users.map((u) => u - 1);
+    onCore = blocked ? [1, 2, 3, 4] : [0, 1, 2, 3];
+    note = blocked
+      ? "T1 is blocked in read, so the kernel puts its kernel thread to sleep and runs four of the other five on the four cores; T6 waits its turn."
+      : "Each thread is a kernel thread, so the kernel schedules them directly: four run, one per core, and two wait their turn.";
+  } else if (model === "many-to-one") {
+    kernels = [1];
+    userToKernel = users.map(() => 0);
+    onCore = blocked ? [] : [0];
+    note = blocked
+      ? "T1 called read. The kernel sees only one thread, the process's, and puts it to sleep, so none of the six can run until the read finishes, and every core is idle for this process."
+      : "The library switches the six threads on one kernel thread, cheaply and without system calls, but they can only ever use one core.";
+  } else {
+    kernels = blocked ? [1, 2, 3, 4, 5] : [1, 2, 3, 4];
+    userToKernel = blocked ? [0, 4, 1, 2, 3, null] : [0, 1, 2, 3, null, null];
+    onCore = blocked ? [1, 2, 3, 4] : [0, 1, 2, 3];
+    note = blocked
+      ? "T1 is blocked in read on its kernel thread. The runtime notices, starts another kernel thread and moves the waiting work onto it, so four threads still run."
+      : "The runtime multiplexes six threads onto four kernel threads, one per core; threads waiting for their turn cost only a little memory.";
+  }
+  const running = onCore.map((k) => userToKernel.indexOf(k)).filter((u) => u >= 0 && !(blocked && u === 0));
+  const summary = `${TM_NAMES[model]}${blocked ? ", with T1 blocked in a read" : ""}: ${plural(running.length, "thread")} running on 4 cores. ${note}`;
+  const ux = (i: number) => 40 + i * 76;
+  const kx = (j: number) => (kernels.length === 1 ? 230 : 40 + (j * 380) / (kernels.length - 1));
+  const cx = (c: number) => 70 + c * 106;
+  return (
+    <Frame
+      title={`Threads on cores: ${TM_NAMES[model]}`}
+      summary={summary}
+      controls={
+        <>
+          {models.map((m) => (
+            <button key={m} type="button" className="btn btn-secondary btn-small" aria-pressed={model === m} onClick={() => setModel(m)}>
+              {TM_NAMES[m]}
+            </button>
+          ))}
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={blocked} onClick={() => setBlocked(!blocked)}>
+            T1 blocks in read
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 220" role="img" aria-label={`${TM_NAMES[model]}: ${running.length} threads running`}>
+        <text x={4} y={14} className="fig-small">threads</text>
+        <text x={4} y={96} className="fig-small">kernel threads</text>
+        <text x={4} y={156} className="fig-small">cores</text>
+        {users.map((u, i) => {
+          const k = userToKernel[i];
+          const isRunning = running.includes(i);
+          const asleep = blocked && i === 0;
+          return (
+            <g key={u}>
+              {k !== null ? <line x1={ux(i)} y1={46} x2={kx(k)} y2={104} className={isRunning ? "fig-accent-line" : "fig-line"} style={{ strokeWidth: isRunning ? 2 : 1, opacity: isRunning ? 1 : 0.5 }} /> : null}
+              <rect x={ux(i) - 26} y={22} width={52} height={24} rx={6} className={isRunning ? "fig-accent" : "fig-fill"} style={{ opacity: asleep ? 0.35 : isRunning ? 0.6 : 0.8 }} />
+              <text x={ux(i)} y={38} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600 }}>{asleep ? "T1 zz" : `T${u}`}</text>
+            </g>
+          );
+        })}
+        {kernels.map((k, j) => {
+          const core = onCore.indexOf(j);
+          return (
+            <g key={k}>
+              {core >= 0 ? <line x1={kx(j)} y1={126} x2={cx(core)} y2={162} className="fig-accent-line" style={{ strokeWidth: 2 }} /> : null}
+              <rect x={kx(j) - 20} y={104} width={40} height={22} rx={5} className="fig-fill" style={{ stroke: "var(--line)" }} />
+              <text x={kx(j)} y={119} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 10 }}>{`K${k}`}</text>
+            </g>
+          );
+        })}
+        {[0, 1, 2, 3].map((c) => {
+          const busy = onCore[c] !== undefined;
+          return (
+            <g key={c}>
+              <rect x={cx(c) - 36} y={162} width={72} height={26} rx={6} className={busy ? "fig-accent" : "fig-ghost"} style={busy ? { opacity: 0.45 } : undefined} />
+              <text x={cx(c)} y={179} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>{busy ? `core ${c}` : `core ${c} idle`}</text>
+            </g>
+          );
+        })}
+        <text x={4} y={210} className="fig-small">{`${running.length} running · ${kernels.length} kernel ${kernels.length === 1 ? "thread" : "threads"}`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+type PlState = "new" | "ready" | "running" | "blocked" | "zombie" | "gone";
+const PL_POS: Record<PlState, { x: number; y: number }> = {
+  new: { x: 50, y: 50 },
+  ready: { x: 170, y: 50 },
+  running: { x: 300, y: 50 },
+  blocked: { x: 235, y: 140 },
+  zombie: { x: 410, y: 50 },
+  gone: { x: 410, y: 140 },
+};
+const PL_COMMON: [PlState, string][] = [
+  ["new", "The shell forks: the child, pid 4242, exists but has not run yet."],
+  ["ready", "The child is ready, waiting for a core."],
+  ["running", "The scheduler runs it, and it execs the backup program."],
+  ["blocked", "It calls read on the disk and blocks until the data arrives."],
+  ["ready", "The disk interrupt wakes it: ready again."],
+  ["running", "It runs again, copying files."],
+];
+const PL_ENDINGS: Record<string, { label: string; steps: [PlState, string][]; status: string }> = {
+  exit: {
+    label: "finishes",
+    status: "exit status 0, so $? is 0",
+    steps: [
+      ["zombie", "It calls exit(0). Its memory and files are freed, but its entry stays, holding the status: a zombie."],
+      ["gone", "The shell's wait returns pid 4242 and status 0, and the entry is removed: reaped."],
+    ],
+  },
+  term: {
+    label: "gets SIGTERM",
+    status: "exit status 0 after cleaning up, so $? is 0",
+    steps: [
+      ["running", "kill 4242 sends SIGTERM. On its next return to user mode the kernel runs its handler, which sets a flag."],
+      ["zombie", "The program sees the flag, finishes the file it was copying, and calls exit(0): a zombie."],
+      ["gone", "The shell's wait collects status 0, and the entry is removed."],
+    ],
+  },
+  kill: {
+    label: "gets SIGKILL",
+    status: "killed by signal 9, so $? is 128 + 9 = 137",
+    steps: [
+      ["zombie", "kill -9 sends SIGKILL, which no handler can catch. The kernel ends it at once, mid-file: a zombie."],
+      ["gone", "The shell's wait reports killed by signal 9, and the entry is removed."],
+    ],
+  },
+  orphan: {
+    label: "outlives its parent",
+    status: "exit status 0, collected by init",
+    steps: [
+      ["running", "The shell exits first. The child is orphaned and adopted by init, pid 1."],
+      ["zombie", "It calls exit(0) and becomes a zombie, now init's child."],
+      ["gone", "init, which waits for any child in a loop, reaps it."],
+    ],
+  },
+};
+
+/** The life of a process as a state diagram: created, ready, running, blocked, zombie and reaped, with four ways for it to end. */
+function ProcessLife(props: Props) {
+  const keys = Object.keys(PL_ENDINGS);
+  const [ending, setEnding] = useState(keys.includes(String(props.ending)) ? String(props.ending) : "exit");
+  const steps = [...PL_COMMON, ...PL_ENDINGS[ending].steps];
+  const last = steps.length - 1;
+  const [rawStep, setStep] = useState(clamp(num(props.step, 0), 0, 12));
+  const step = Math.min(rawStep, last);
+  const [state, note] = steps[step];
+  const summary = `Step ${step + 1} of ${last + 1}, ${state === "gone" ? "reaped" : state}: ${note}${step === last ? ` In the end: ${PL_ENDINGS[ending].status}.` : ""}`;
+  const edges: [PlState, PlState][] = [
+    ["new", "ready"],
+    ["ready", "running"],
+    ["running", "ready"],
+    ["running", "blocked"],
+    ["blocked", "ready"],
+    ["running", "zombie"],
+    ["zombie", "gone"],
+  ];
+  const prev = step > 0 ? steps[step - 1][0] : null;
+  return (
+    <Frame
+      title={`The life of a process that ${PL_ENDINGS[ending].label}`}
+      summary={summary}
+      controls={
+        <>
+          {keys.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={ending === k} onClick={() => { setEnding(k); setStep(0); }}>
+              {PL_ENDINGS[k].label}
+            </button>
+          ))}
+          <Stepper label="step" value={step + 1} onChange={(v) => setStep(v - 1)} min={1} max={last + 1} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 200" role="img" aria-label={`Step ${step + 1}: ${state}`}>
+        {edges.map(([a, b]) => {
+          const p = PL_POS[a];
+          const q = PL_POS[b];
+          const active = prev === a && state === b;
+          const bend = a === "running" && b === "ready" ? -18 : 0;
+          return (
+            <path
+              key={`${a}-${b}`}
+              d={`M ${p.x} ${p.y + bend * 0.2} Q ${(p.x + q.x) / 2} ${(p.y + q.y) / 2 + bend} ${q.x} ${q.y + bend * 0.2}`}
+              fill="none"
+              className={active ? "fig-accent-line" : "fig-line"}
+              style={{ strokeWidth: active ? 3 : 1.5 }}
+            />
+          );
+        })}
+        {(Object.keys(PL_POS) as PlState[]).map((s) => (
+          <g key={s}>
+            <rect x={PL_POS[s].x - 40} y={PL_POS[s].y - 15} width={80} height={30} rx={15} className={s === state ? "fig-accent" : "fig-fill"} style={{ stroke: "var(--line)" }} />
+            <text x={PL_POS[s].x} y={PL_POS[s].y + 4} textAnchor="middle" style={{ fill: s === state ? "var(--bg)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600 }}>
+              {s === "gone" ? "reaped" : s}
+            </text>
+          </g>
+        ))}
+        <text x={10} y={190} className="fig-small">{step === last ? PL_ENDINGS[ending].status : "pid 4242, child of the shell"}</text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -12778,6 +13663,15 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "pipeline-chart": PipelineChart,
   "branch-predictor": BranchPredictor,
   "ooo-issue": OooIssue,
+  "mode-switch": ModeSwitch,
+  "fork-tree": ForkTree,
+  "scheduler-gantt": SchedulerGantt,
+  "page-table": PageTable,
+  "tlb": TlbCache,
+  "io-timeline": IoTimeline,
+  "inode-blocks": InodeBlocks,
+  "thread-models": ThreadModels,
+  "process-life": ProcessLife,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
