@@ -1,0 +1,739 @@
+concept: h2.threads-in-the-kernel
+minutes: 80
+claim: You can say what a thread is, a flow of control with its own registers and stack inside a process whose memory and open files it shares; explain why programs use threads, to overlap waiting with work and to use several cores; build Linux's clone, which makes both threads and processes by choosing what to share; compare kernel threads, user-level threads and M:N runtimes, and predict what happens to the others when one thread blocks; estimate what thread stacks cost in address space and in memory; keep per-thread data apart with thread-local storage; and see why two threads updating one variable can lose an update.
+recalls: [h2.files-and-file-systems]
+uses: [h2.processes-and-system-calls, h2.scheduling, h2.virtual-memory-and-page-tables, h2.the-tlb-and-address-translation, h2.interrupts-and-i-o, s1.generators-and-context-managers, s7.scope-closures-and-higher-order-functions, s2.stacks-and-queues, s0.dictionaries-and-sets]
+leads: [h2.signals-and-the-life-of-a-process]
+starter: |
+  # Scratch space. Two threads share one memory but each has its own
+  # registers. Here the shared dictionary is one object, named twice.
+  memory = {"orders": 0}
+  thread_a = {"sp": 0x7000, "memory": memory}
+  thread_b = {"sp": 0x6000, "memory": memory}
+  thread_a["memory"]["orders"] += 1
+  print(thread_b["memory"]["orders"], thread_a["sp"] == thread_b["sp"])
+parts:
+  recall:
+    - text: |
+        [[h2.files-and-file-systems]] ended with the kernel juggling many operations at once: one waiting for a disk block, another looking up a name. Programs want the same thing. A web server should not stop serving everyone while one request waits for the database, and a video encoder should use all eight cores, not one. Starting eight processes would work, but they could not share memory without effort. Threads are the answer, and the kernel has to know about them. Three quick pulls first.
+  puzzle:
+    - text: |
+        A program on a 4-core laptop runs 8 threads using an old user-level thread library: the library switches between the threads itself, and the kernel sees the program as a single thread. One of the 8 calls `read` on a slow network drive and waits half a second.
+
+        **How many of the other 7 threads can run during that half second?**
+  intuition:
+    - text: |
+        A restaurant kitchen in Lucknow has one set of shelves, one fridge and one order board, shared by everyone. Each cook has their own chopping board, their own knife and their own half-finished dish in front of them, and keeps their place in their own recipe. If one cook has to wait for the tandoor, the others carry on. The kitchen is the process; each cook is a **thread**.
+
+        Now imagine the kitchen manager handles staff without telling the building's management, which thinks the kitchen has a single worker. When that "one worker" waits for a delivery, the building turns off the kitchen's lights. The figure shows six threads of one process on four cores under three arrangements, and what happens when one thread blocks in a system call.
+    - figure: thread-models
+      props: { model: one-to-one, blocked: false }
+    - text: |
+        When the kernel knows about every thread, one thread blocking costs nothing to the others. When it knows about only one, any blocking system call stops them all, and they can never use more than one core. Modern runtimes such as Go's put many cheap threads on a few kernel threads and work around blocking calls. The puzzle's old library is the middle case.
+  derivation:
+    - text: |
+        **What a thread is.** A process so far had one flow of control: one program counter, one stack. A **thread** is a flow of control, and a process can have many. Each thread has its own **registers**, including the program counter and stack pointer, and its own **stack** for its function calls and local variables. All the threads of a process share everything else: the code, the global variables, the heap, the open files, the current directory. A pointer that one thread creates works in every other thread, because they share one address space and one page table.
+
+        **Why bother.** Threads let a program **overlap waiting with work**: while one thread waits for a disk or a network reply, the others compute. They let it **use several cores** at once on one problem. And they let a server be written plainly, one thread per request, each reading like a simple sequential program. Compared with separate processes, threads are cheaper to create, and switching between two threads of one process does not change the page table, so the TLB stays warm.
+    - question:
+        id: derivation-share
+        type: choice
+        system: s2
+        prompt: |
+          Which of these does each thread of a process have to itself?
+        options:
+          - "Its stack and its registers"
+          - "Its heap"
+          - "Its global variables"
+          - "Its table of open files"
+        answer: 0
+        explanation: |
+          A thread is a separate flow of control, so it needs its own program counter, stack pointer and stack. Everything else in the process, heap, globals and files, is shared.
+    - text: |
+        **Threads in Linux.** Linux does not have separate machinery for threads. Every flow of control is a **task**, with its own task ID, scheduled by the same scheduler. The system call `clone` creates a task and takes flags saying what the new task shares with its creator: the address space, the open file table, the signal handlers, and so on. Share nothing and you get a new process, which is what `fork` does; share the address space, the files and the rest, and you get a thread. All the threads of one process carry the same **thread group ID**, which is what `getpid` returns, while each has its own task ID. Other kernels, such as Windows, keep separate process and thread objects, but the result is the same.
+
+        **Kernel threads, 1:1.** In this model, used by Linux, Windows and macOS for ordinary threads, each thread the program creates is a kernel task. The kernel schedules them on all cores, and a thread that blocks in a system call blocks alone. The costs are that creating a thread and switching between threads both go through the kernel, a few microseconds each, and each thread needs a kernel stack and a full user stack.
+    - question:
+        id: derivation-clone
+        type: choice
+        system: s2
+        prompt: |
+          A Linux task is created by clone sharing the creator's address space and open files. Which of these will be true of it?
+        options:
+          - "getpid in it returns the same number as in its creator, but its task ID differs"
+          - "It has its own copy of the heap"
+          - "It shares its creator's stack"
+          - "It cannot run on a different core from its creator"
+        answer: 0
+        explanation: |
+          Sharing the address space makes it a thread of the same process, so it has the same process ID (thread group ID) and its own task ID. It gets its own stack and can run on any core.
+    - text: |
+        **User-level threads, N:1.** A library can implement threads entirely in user space: it keeps a stack and saved registers for each thread and switches between them with an ordinary function, no system call, in tens of nanoseconds. The kernel sees one thread. The catch is the puzzle: when any of them makes a blocking system call, the kernel puts that one thread to sleep, and every user-level thread with it; and with one kernel thread, the process can only ever use one core. Early Java "green threads" and many older libraries worked like this.
+
+        **M:N runtimes.** Go's goroutines, Erlang's processes and Java's virtual threads take the middle road: the runtime runs many cheap user-level threads on a few kernel threads, usually one per core. Switching between user-level threads is cheap, the cores are all used, and when a thread is about to block in a system call, the runtime hands that thread's kernel thread over to the call and starts or wakes another to carry on with the rest. Programs can then run hundreds of thousands of threads.
+    - question:
+        id: derivation-mn
+        type: choice
+        system: s2
+        prompt: |
+          A Go server has 100,000 goroutines on an 8-core machine. Roughly how many kernel threads does it need for computing?
+        options:
+          - "About 8, one per core, plus a few for goroutines blocked in system calls"
+          - "100,000, one per goroutine"
+          - "Exactly 1"
+          - "800, a hundred per core"
+        answer: 0
+        explanation: |
+          The runtime multiplexes goroutines onto about one kernel thread per core, adding threads only while some are stuck in blocking calls. That is what makes so many goroutines affordable.
+    - text: |
+        **The cost of stacks.** Each kernel-backed thread gets a user stack, by default 8 MiB on Linux, reserved in the address space with an unmapped **guard page** below it, so that a stack overflow faults instead of silently overwriting the next thread's stack. Thanks to demand paging, only the pages a thread actually touches take physical memory, often a few tens of KiB. The address space is plentiful on 64-bit machines, but tens of thousands of threads, each also with a kernel stack and a task structure, still cost real memory and make scheduling heavier, which is why M:N runtimes start their threads with stacks of a few KiB that grow as needed.
+    - question:
+        id: derivation-stacks
+        type: numeric
+        system: s2
+        prompt: |
+          A server runs 1,024 kernel threads, each with an 8 MiB stack reserved, but each thread only ever touches 16 KiB of its stack. How many MiB of physical memory do the stacks actually use?
+        answer: "16"
+        unit: MiB
+        explanation: |
+          Only touched pages are backed by frames: 1,024 × 16 KiB = 16,384 KiB, which is 16 MiB, against 8 GiB of address space reserved.
+    - text: |
+        **Per-thread data.** Because threads share global variables, a global that holds "the current request" or "the last error" is wrong as soon as two threads use it. Each thread needs its own copy: **thread-local storage**. C's `errno` is thread-local for exactly this reason, and Python offers `threading.local`. Under the hood, the kernel or runtime keeps a per-thread pointer, in a register such as x86's `fs` or RISC-V's `tp`, to a block of that thread's own variables.
+
+        **The danger ahead.** Sharing memory is the point of threads and also their hazard. The statement `hits += 1` is three instructions: load, add, store. If the kernel switches threads between the load and the store, or two cores run them at the same moment, two threads can both load the same old value and both store old + 1, and one increment vanishes. Nothing crashes; the count is simply wrong, sometimes. Preventing this, with locks and other tools, is the subject of the concurrency cluster. One more caveat: CPython has a **global interpreter lock** that lets only one thread run Python bytecode at a time, so pure-Python threads overlap waiting but do not compute on several cores; free-threaded builds of Python are removing that lock.
+    - question:
+        id: derivation-race
+        type: choice
+        system: s2
+        prompt: |
+          Two threads each run `hits += 1` once, starting from hits = 0, with no lock. Which final values are possible?
+        options:
+          - "1 or 2"
+          - "Only 2"
+          - "0, 1 or 2"
+          - "Only 1"
+        answer: 0
+        explanation: |
+          If one thread finishes its load, add and store before the other loads, the result is 2. If both load 0 before either stores, both store 1. It can never be 0, since at least one store of a value of at least 1 happens last.
+  formal:
+    - text: |
+        **Thread.** A flow of control: own registers and stack; shares the process's code, globals, heap, files and address space.
+
+        **clone.** Linux creates tasks by clone, choosing what to share. Share nothing: a process (fork). Share the address space and files: a thread, with the same thread group ID (pid) and its own task ID.
+
+        **Models.** 1:1 kernel threads: blocking is per thread, all cores used, switches cost a system call. N:1 user-level threads: cheap switches, but one blocking call stops all and only one core is used. M:N: many user-level threads on about one kernel thread per core, with the runtime working around blocking calls.
+
+        **Stacks.** Reserved per thread with a guard page; only touched pages use memory.
+
+        **Shared data.** Thread-local storage for per-thread state; unsynchronised updates to shared variables can be lost.
+  drill:
+    - text: Seconds each. Ask what each thread shares.
+    - question:
+        id: drill-switch
+        type: choice
+        system: s1
+        prompt: |
+          Why is switching between two threads of the same process cheaper than switching between two processes?
+        options:
+          - "The page table stays the same, so the TLB and caches keep their contents"
+          - "Threads have no registers to save"
+          - "Threads never enter the kernel"
+          - "Threads share one stack"
+        answer: 0
+        explanation: Both threads use one address space, so no page table switch is needed and the translations already cached stay useful.
+    - question:
+        id: drill-errno
+        type: choice
+        system: s1
+        prompt: |
+          Two threads make failing system calls at almost the same moment and each then reads the error code. Why must the error code be thread-local?
+        options:
+          - "Otherwise one thread could read the error the other thread's call left behind"
+          - "Because global variables cannot be written by threads"
+          - "Because system calls run on the thread's stack"
+          - "It need not be; one global is fine"
+        answer: 0
+        explanation: A shared variable would be overwritten by whichever call finished last, so each thread could see the wrong error.
+    - question:
+        id: predict-shared
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          memory = {"total": 0}
+          thread_a = {"regs": {"sp": 0x7000}, "memory": memory}
+          thread_b = {"regs": {"sp": 0x6000}, "memory": memory}
+          thread_a["memory"]["total"] += 3
+          thread_b["memory"]["total"] += 4
+          print(memory["total"], hex(thread_b["regs"]["sp"]))
+        output: "7 0x6000"
+        explanation: Both threads add to the one shared memory, so the total is 7, but each keeps its own stack pointer.
+    - question:
+        id: predict-reserved
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          threads = 1024
+          stack_mib = 8
+          print(threads * stack_mib // 1024, "GiB reserved")
+        output: "8 GiB reserved"
+        explanation: 1,024 stacks of 8 MiB reserve 8,192 MiB of address space, which is 8 GiB.
+    - question:
+        id: predict-lost-update
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          hits = 0
+          a = hits
+          b = hits
+          hits = a + 1
+          hits = b + 1
+          print(hits)
+        output: "1"
+        explanation: This is the bad interleaving written out by hand. Both threads load 0 before either stores, so both store 1 and one increment is lost.
+  work:
+    - text: Slower now. Each answer is part of how a kernel or runtime handles threads.
+    - question:
+        id: write-clone
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `clone`, which makes a thread or a process from a parent task depending on what it shares. The program should print `main sees counter 5 and files [0, 1, 3]`, `worker 101 100 child 102 102` and `main sp 0x7ff0`.
+        starter: |
+          last_id = [100]
+
+
+          def clone(parent, share_memory, share_files):
+              # Make a new task from parent, as Linux's clone system call does. A task
+              # is a dictionary with a "tid" (its own id), a "pid" (the process it
+              # belongs to), "regs", "memory" and "files". The new task gets the next
+              # id and its own copy of the registers. With share_memory it uses the
+              # very same memory dictionary as the parent, as a thread does, and
+              # belongs to the parent's process; without it, it gets a copy and is a
+              # process of its own, whose pid is its new id. share_files decides the
+              # same for the table of open files.
+              return dict(parent)
+
+
+          main = {"tid": 100, "pid": 100, "regs": {"pc": 0x400, "sp": 0x7FF0}, "memory": {"counter": 0}, "files": {0: "keyboard", 1: "screen"}}
+          worker = clone(main, True, True)   # a thread
+          child = clone(main, False, False)  # a process, as fork makes
+          worker["memory"]["counter"] += 5
+          child["memory"]["counter"] += 7
+          worker["files"][3] = "log.txt"
+          worker["regs"]["sp"] = 0x6FF0
+          print("main sees counter", main["memory"]["counter"], "and files", sorted(main["files"]))
+          print("worker", worker["tid"], worker["pid"], "child", child["tid"], child["pid"])
+          print("main sp", hex(main["regs"]["sp"]))
+        solution: |
+          last_id = [100]
+
+
+          def clone(parent, share_memory, share_files):
+              # Make a new task from parent, as Linux's clone system call does. A task
+              # is a dictionary with a "tid" (its own id), a "pid" (the process it
+              # belongs to), "regs", "memory" and "files". The new task gets the next
+              # id and its own copy of the registers. With share_memory it uses the
+              # very same memory dictionary as the parent, as a thread does, and
+              # belongs to the parent's process; without it, it gets a copy and is a
+              # process of its own, whose pid is its new id. share_files decides the
+              # same for the table of open files.
+              last_id[0] += 1
+              tid = last_id[0]
+              return {
+                  "tid": tid,
+                  "pid": parent["pid"] if share_memory else tid,
+                  "regs": dict(parent["regs"]),
+                  "memory": parent["memory"] if share_memory else dict(parent["memory"]),
+                  "files": parent["files"] if share_files else dict(parent["files"]),
+              }
+
+
+          main = {"tid": 100, "pid": 100, "regs": {"pc": 0x400, "sp": 0x7FF0}, "memory": {"counter": 0}, "files": {0: "keyboard", 1: "screen"}}
+          worker = clone(main, True, True)   # a thread
+          child = clone(main, False, False)  # a process, as fork makes
+          worker["memory"]["counter"] += 5
+          child["memory"]["counter"] += 7
+          worker["files"][3] = "log.txt"
+          worker["regs"]["sp"] = 0x6FF0
+          print("main sees counter", main["memory"]["counter"], "and files", sorted(main["files"]))
+          print("worker", worker["tid"], worker["pid"], "child", child["tid"], child["pid"])
+          print("main sp", hex(main["regs"]["sp"]))
+        tests: |
+          _m = {"tid": 7, "pid": 7, "regs": {"pc": 1, "sp": 2}, "memory": {"x": 1}, "files": {0: "in"}}
+          _t = clone(_m, True, True)
+          assert _t["memory"] is _m["memory"], "a thread must use the very same memory as its parent, not a copy"
+          assert _t["files"] is _m["files"], "with share_files the open file table is shared"
+          assert _t["regs"] is not _m["regs"] and _t["regs"] == _m["regs"], "every task gets its own copy of the registers, starting equal to the parent's"
+          assert _t["pid"] == 7 and _t["tid"] != 7, "a thread has its own tid but belongs to its parent's process, pid 7"
+          _p = clone(_m, False, False)
+          assert _p["memory"] is not _m["memory"] and _p["memory"] == _m["memory"], "a new process gets a copy of the memory"
+          assert _p["pid"] == _p["tid"] and _p["tid"] not in (7, _t["tid"]), "a new process's pid is its own new id"
+          _h = clone(_m, True, False)
+          assert _h["memory"] is _m["memory"] and _h["files"] is not _m["files"], "share_memory and share_files are separate choices: this task shares memory but has its own copy of the file table"
+          assert output.splitlines() == ["main sees counter 5 and files [0, 1, 3]", "worker 101 100 child 102 102", "main sp 0x7ff0"], "The program should print counter 5 with files [0, 1, 3], then worker 101 100 child 102 102, then main sp 0x7ff0"
+        wrong:
+          - |
+            last_id = [100]
+
+
+            def clone(parent, share_memory, share_files):
+                # Make a new task from parent, as Linux's clone system call does. A task
+                # is a dictionary with a "tid" (its own id), a "pid" (the process it
+                # belongs to), "regs", "memory" and "files". The new task gets the next
+                # id and its own copy of the registers. With share_memory it uses the
+                # very same memory dictionary as the parent, as a thread does, and
+                # belongs to the parent's process; without it, it gets a copy and is a
+                # process of its own, whose pid is its new id. share_files decides the
+                # same for the table of open files.
+                last_id[0] += 1
+                tid = last_id[0]
+                return {
+                    "tid": tid,
+                    "pid": parent["pid"] if share_memory else tid,
+                    "regs": parent["regs"],
+                    "memory": parent["memory"] if share_memory else dict(parent["memory"]),
+                    "files": parent["files"] if share_files else dict(parent["files"]),
+                }
+
+
+            main = {"tid": 100, "pid": 100, "regs": {"pc": 0x400, "sp": 0x7FF0}, "memory": {"counter": 0}, "files": {0: "keyboard", 1: "screen"}}
+            worker = clone(main, True, True)   # a thread
+            child = clone(main, False, False)  # a process, as fork makes
+            worker["memory"]["counter"] += 5
+            child["memory"]["counter"] += 7
+            worker["files"][3] = "log.txt"
+            worker["regs"]["sp"] = 0x6FF0
+            print("main sees counter", main["memory"]["counter"], "and files", sorted(main["files"]))
+            print("worker", worker["tid"], worker["pid"], "child", child["tid"], child["pid"])
+            print("main sp", hex(main["regs"]["sp"]))
+          - |
+            last_id = [100]
+
+
+            def clone(parent, share_memory, share_files):
+                # Make a new task from parent, as Linux's clone system call does. A task
+                # is a dictionary with a "tid" (its own id), a "pid" (the process it
+                # belongs to), "regs", "memory" and "files". The new task gets the next
+                # id and its own copy of the registers. With share_memory it uses the
+                # very same memory dictionary as the parent, as a thread does, and
+                # belongs to the parent's process; without it, it gets a copy and is a
+                # process of its own, whose pid is its new id. share_files decides the
+                # same for the table of open files.
+                last_id[0] += 1
+                tid = last_id[0]
+                return {
+                    "tid": tid,
+                    "pid": tid,
+                    "regs": dict(parent["regs"]),
+                    "memory": parent["memory"] if share_memory else dict(parent["memory"]),
+                    "files": parent["files"] if share_files else dict(parent["files"]),
+                }
+
+
+            main = {"tid": 100, "pid": 100, "regs": {"pc": 0x400, "sp": 0x7FF0}, "memory": {"counter": 0}, "files": {0: "keyboard", 1: "screen"}}
+            worker = clone(main, True, True)   # a thread
+            child = clone(main, False, False)  # a process, as fork makes
+            worker["memory"]["counter"] += 5
+            child["memory"]["counter"] += 7
+            worker["files"][3] = "log.txt"
+            worker["regs"]["sp"] = 0x6FF0
+            print("main sees counter", main["memory"]["counter"], "and files", sorted(main["files"]))
+            print("worker", worker["tid"], worker["pid"], "child", child["tid"], child["pid"])
+            print("main sp", hex(main["regs"]["sp"]))
+          - |
+            last_id = [100]
+
+
+            def clone(parent, share_memory, share_files):
+                # Make a new task from parent, as Linux's clone system call does. A task
+                # is a dictionary with a "tid" (its own id), a "pid" (the process it
+                # belongs to), "regs", "memory" and "files". The new task gets the next
+                # id and its own copy of the registers. With share_memory it uses the
+                # very same memory dictionary as the parent, as a thread does, and
+                # belongs to the parent's process; without it, it gets a copy and is a
+                # process of its own, whose pid is its new id. share_files decides the
+                # same for the table of open files.
+                last_id[0] += 1
+                tid = last_id[0]
+                return {
+                    "tid": tid,
+                    "pid": parent["pid"] if share_memory else tid,
+                    "regs": dict(parent["regs"]),
+                    "memory": parent["memory"] if share_memory else dict(parent["memory"]),
+                    "files": parent["files"] if share_memory else dict(parent["files"]),
+                }
+
+
+            main = {"tid": 100, "pid": 100, "regs": {"pc": 0x400, "sp": 0x7FF0}, "memory": {"counter": 0}, "files": {0: "keyboard", 1: "screen"}}
+            worker = clone(main, True, True)   # a thread
+            child = clone(main, False, False)  # a process, as fork makes
+            worker["memory"]["counter"] += 5
+            child["memory"]["counter"] += 7
+            worker["files"][3] = "log.txt"
+            worker["regs"]["sp"] = 0x6FF0
+            print("main sees counter", main["memory"]["counter"], "and files", sorted(main["files"]))
+            print("worker", worker["tid"], worker["pid"], "child", child["tid"], child["pid"])
+            print("main sp", hex(main["regs"]["sp"]))
+        explanation: |
+          Build a new dictionary: a new id; the parent's pid if memory is shared, else the new id; always a copy of the registers; and for memory and files, the parent's own dictionary when shared, a copy when not. Sharing the registers lets the worker move main's stack pointer; giving a thread a pid of its own makes it look like a separate process; and letting share_memory decide the files too ignores the second flag, which real programs use, for example to give a thread its own file table.
+    - question:
+        id: write-thread-models
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `elapsed`, which runs threads of computing and I/O on one core under user-level (N:1) or kernel (1:1) threading and returns when the last one finishes. The program should print `user-level threads: 27 ms` and `kernel threads: 15 ms`.
+        starter: |
+          from collections import deque
+
+
+          def elapsed(threads, model):
+              # threads is a list of threads, each a list of steps ("cpu", ms) or
+              # ("io", ms), run on one core. Ready threads wait in a queue in order.
+              # The thread at the front runs its steps in turn until it finishes or
+              # blocks; nothing preempts it. A "cpu" step takes ms of the core's time.
+              # On an "io" step the two models differ:
+              #   "N:1"  user-level threads: the kernel sees only one thread, so the
+              #          whole process waits ms and then the same thread carries on.
+              #   "1:1"  kernel threads: only this thread blocks. It leaves the core,
+              #          and when its I/O is done it joins the back of the ready queue,
+              #          with the rest of its steps. Whenever a thread stops running,
+              #          first queue every thread whose I/O has finished by then,
+              #          earliest first; if nothing is ready, the core idles until the
+              #          next I/O finishes.
+              # Return the time at which the last thread finishes.
+              return 0
+
+
+          threads = [[("cpu", 2), ("io", 10), ("cpu", 2)], [("cpu", 8)], [("cpu", 1), ("io", 3), ("cpu", 1)]]
+          print("user-level threads:", elapsed(threads, "N:1"), "ms")
+          print("kernel threads:", elapsed(threads, "1:1"), "ms")
+        solution: |
+          from collections import deque
+
+
+          def elapsed(threads, model):
+              steps = [deque(t) for t in threads]
+              ready = deque(range(len(threads)))
+              blocked = []
+              now = 0
+              while ready or blocked:
+                  if not ready:
+                      blocked.sort()
+                      wake, i = blocked.pop(0)
+                      now = max(now, wake)
+                      ready.append(i)
+                      continue
+                  i = ready.popleft()
+                  while steps[i]:
+                      kind, ms = steps[i].popleft()
+                      if kind == "cpu" or model == "N:1":
+                          now += ms
+                      else:
+                          blocked.append((now + ms, i))
+                          break
+                  blocked.sort()
+                  while blocked and blocked[0][0] <= now:
+                      ready.append(blocked.pop(0)[1])
+              return now
+
+
+          threads = [[("cpu", 2), ("io", 10), ("cpu", 2)], [("cpu", 8)], [("cpu", 1), ("io", 3), ("cpu", 1)]]
+          print("user-level threads:", elapsed(threads, "N:1"), "ms")
+          print("kernel threads:", elapsed(threads, "1:1"), "ms")
+        tests: |
+          _t = [[("cpu", 2), ("io", 10), ("cpu", 2)], [("cpu", 8)], [("cpu", 1), ("io", 3), ("cpu", 1)]]
+          assert elapsed(_t, "N:1") == 27, "with user-level threads every I/O stalls the whole process, so the times simply add up to 27 ms, not " + repr(elapsed(_t, "N:1"))
+          assert elapsed(_t, "1:1") == 15, "with kernel threads the others run while one waits for I/O: 15 ms, not " + repr(elapsed(_t, "1:1"))
+          assert elapsed([[("cpu", 4)]], "1:1") == 4 and elapsed([[("cpu", 4)]], "N:1") == 4, "a single thread that only computes takes the same time either way"
+          assert elapsed([[("io", 5)], [("cpu", 2)]], "1:1") == 5, "while the first thread waits 5 ms, the second computes; the core is then idle until the I/O ends at 5"
+          _t = [[("cpu", 1), ("io", 2), ("cpu", 1)], [("cpu", 1), ("io", 20), ("cpu", 1)]]
+          assert elapsed(_t, "1:1") == 23, "when the core is idle it should wake whichever I/O finishes first: the first thread at 3 finishes at 4, and the second wakes at 22 and finishes at 23, not " + repr(elapsed(_t, "1:1"))
+          assert elapsed([[("io", 3), ("io", 4)], [("io", 5)]], "1:1") == 7, "three waits overlap with kernel threads: 3 then 4 for one thread, 5 for the other, all done at 7"
+          assert output.splitlines() == ["user-level threads: 27 ms", "kernel threads: 15 ms"], "The program should print user-level threads: 27 ms and kernel threads: 15 ms"
+        wrong:
+          - |
+            from collections import deque
+
+
+            def elapsed(threads, model):
+                steps = [deque(t) for t in threads]
+                ready = deque(range(len(threads)))
+                blocked = []
+                now = 0
+                while ready or blocked:
+                    if not ready:
+                        blocked.sort()
+                        wake, i = blocked.pop(0)
+                        now = max(now, wake)
+                        ready.append(i)
+                        continue
+                    i = ready.popleft()
+                    while steps[i]:
+                        kind, ms = steps[i].popleft()
+                        if kind == "cpu" or model == "1:1":
+                            now += ms
+                        else:
+                            blocked.append((now + ms, i))
+                            break
+                    blocked.sort()
+                    while blocked and blocked[0][0] <= now:
+                        ready.append(blocked.pop(0)[1])
+                return now
+
+
+            threads = [[("cpu", 2), ("io", 10), ("cpu", 2)], [("cpu", 8)], [("cpu", 1), ("io", 3), ("cpu", 1)]]
+            print("user-level threads:", elapsed(threads, "N:1"), "ms")
+            print("kernel threads:", elapsed(threads, "1:1"), "ms")
+          - |
+            from collections import deque
+
+
+            def elapsed(threads, model):
+                steps = [deque(t) for t in threads]
+                ready = deque(range(len(threads)))
+                blocked = []
+                now = 0
+                while ready or blocked:
+                    if not ready:
+                        blocked.sort()
+                        wake, i = blocked.pop(0)
+                        now = wake + now
+                        ready.append(i)
+                        continue
+                    i = ready.popleft()
+                    while steps[i]:
+                        kind, ms = steps[i].popleft()
+                        if kind == "cpu" or model == "N:1":
+                            now += ms
+                        else:
+                            blocked.append((now + ms, i))
+                            break
+                    blocked.sort()
+                    while blocked and blocked[0][0] <= now:
+                        ready.append(blocked.pop(0)[1])
+                return now
+
+
+            threads = [[("cpu", 2), ("io", 10), ("cpu", 2)], [("cpu", 8)], [("cpu", 1), ("io", 3), ("cpu", 1)]]
+            print("user-level threads:", elapsed(threads, "N:1"), "ms")
+            print("kernel threads:", elapsed(threads, "1:1"), "ms")
+          - |
+            from collections import deque
+
+
+            def elapsed(threads, model):
+                steps = [deque(t) for t in threads]
+                ready = deque(range(len(threads)))
+                blocked = []
+                now = 0
+                while ready or blocked:
+                    if not ready:
+                        blocked.sort()
+                        wake, i = blocked.pop()
+                        now = max(now, wake)
+                        ready.append(i)
+                        continue
+                    i = ready.popleft()
+                    while steps[i]:
+                        kind, ms = steps[i].popleft()
+                        if kind == "cpu" or model == "N:1":
+                            now += ms
+                        else:
+                            blocked.append((now + ms, i))
+                            break
+                    blocked.sort()
+                    while blocked and blocked[0][0] <= now:
+                        ready.append(blocked.pop(0)[1])
+                return now
+
+
+            threads = [[("cpu", 2), ("io", 10), ("cpu", 2)], [("cpu", 8)], [("cpu", 1), ("io", 3), ("cpu", 1)]]
+            print("user-level threads:", elapsed(threads, "N:1"), "ms")
+            print("kernel threads:", elapsed(threads, "1:1"), "ms")
+        explanation: |
+          Keep a ready queue and a list of (wake time, thread). Run the front thread's steps: cpu steps, and under N:1 io steps too, add to the clock; under 1:1 an io step parks the thread until now + ms. After each run, queue the threads whose I/O is done; if none are ready, jump the clock to the earliest wake. Swapping the models' rules swaps the answers; adding the wake time to the clock instead of jumping to it double-counts time; and waking the latest I/O first leaves the core idle when an earlier one has finished.
+    - question:
+        id: fix-thread-local
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A web server greets each user by name, but under load users are greeted as someone else. The program should print `[(1, 'hello asha'), (2, 'hello ravi')]`. Find the fault and fix it.
+        starter: |
+          current_user = None  # which user the request being handled is for
+
+
+          def handle(tid, user, replies):
+              # One thread handling one web request. While it waits for the database
+              # the kernel runs other threads of the same process, which share all of
+              # its global variables.
+              global current_user
+              current_user = user
+              yield  # waiting for the database; other threads run now
+              replies.append((tid, "hello " + current_user))
+
+
+          def run(requests):
+              replies = []
+              threads = [handle(tid, user, replies) for tid, user in requests]
+              while threads:
+                  for t in list(threads):
+                      try:
+                          next(t)
+                      except StopIteration:
+                          threads.remove(t)
+              return replies
+
+
+          print(run([(1, "asha"), (2, "ravi")]))
+        solution: |
+          current_user = {}  # which user each thread's request is for, by thread id
+
+
+          def handle(tid, user, replies):
+              # One thread handling one web request. While it waits for the database
+              # the kernel runs other threads of the same process, which share all of
+              # its global variables.
+              current_user[tid] = user
+              yield  # waiting for the database; other threads run now
+              replies.append((tid, "hello " + current_user[tid]))
+
+
+          def run(requests):
+              replies = []
+              threads = [handle(tid, user, replies) for tid, user in requests]
+              while threads:
+                  for t in list(threads):
+                      try:
+                          next(t)
+                      except StopIteration:
+                          threads.remove(t)
+              return replies
+
+
+          print(run([(1, "asha"), (2, "ravi")]))
+        tests: |
+          _r = run([(1, "asha"), (2, "ravi"), (3, "meena")])
+          assert sorted(_r) == [(1, "hello asha"), (2, "hello ravi"), (3, "hello meena")], "each thread must greet its own user even when the others run in between, but the replies were " + repr(sorted(_r))
+          _r = run([(7, "kabir")])
+          assert _r == [(7, "hello kabir")], "a single request should greet its user"
+          _r = run([(4, "x"), (5, "y")])
+          assert sorted(_r) == [(4, "hello x"), (5, "hello y")], "running more requests later must still keep each thread's user apart, but the replies were " + repr(sorted(_r))
+          assert output.splitlines() == ["[(1, 'hello asha'), (2, 'hello ravi')]"], "The program should print [(1, 'hello asha'), (2, 'hello ravi')]"
+        wrong:
+          - |
+            current_user = {}  # which user each thread's request is for, by thread id
+
+
+            def handle(tid, user, replies):
+                # One thread handling one web request. While it waits for the database
+                # the kernel runs other threads of the same process, which share all of
+                # its global variables.
+                current_user["user"] = user
+                yield  # waiting for the database; other threads run now
+                replies.append((tid, "hello " + current_user["user"]))
+
+
+            def run(requests):
+                replies = []
+                threads = [handle(tid, user, replies) for tid, user in requests]
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+                return replies
+
+
+            print(run([(1, "asha"), (2, "ravi")]))
+          - |
+            current_user = None  # which user the request being handled is for
+
+
+            def handle(tid, user, replies):
+                # One thread handling one web request. While it waits for the database
+                # the kernel runs other threads of the same process, which share all of
+                # its global variables.
+                global current_user
+                current_user = user
+                yield  # waiting for the database; other threads run now
+                me = current_user
+                replies.append((tid, "hello " + me))
+
+
+            def run(requests):
+                replies = []
+                threads = [handle(tid, user, replies) for tid, user in requests]
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+                return replies
+
+
+            print(run([(1, "asha"), (2, "ravi")]))
+          - |
+            current_user = {}  # which user each thread's request is for, by thread id
+
+
+            def handle(tid, user, replies):
+                # One thread handling one web request. While it waits for the database
+                # the kernel runs other threads of the same process, which share all of
+                # its global variables.
+                global current_user
+                current_user = {tid: user}
+                yield  # waiting for the database; other threads run now
+                replies.append((tid, "hello " + current_user[tid]))
+
+
+            def run(requests):
+                replies = []
+                threads = [handle(tid, user, replies) for tid, user in requests]
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+                return replies
+
+
+            print(run([(1, "asha"), (2, "ravi")]))
+        explanation: |
+          current_user is a global, shared by every thread, so the last thread to set it wins and the others read its value after their wait. Keeping one entry per thread, keyed by thread id, is thread-local storage. A dictionary with one fixed key is still one shared slot; copying the global into a local after the wait copies the wrong value; and rebinding the global to a fresh dictionary in each thread throws away the other threads' entries.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. A program runs 8 threads with a user-level (N:1) thread library on 4 cores, and one thread blocks in read for half a second. How many of the other 7 can run meanwhile?
+        answer: "0"
+        explanation: |
+          The kernel sees one thread, and the read put it to sleep. The library never gets the processor back to switch to another thread, so all 8 wait.
+    - question:
+        id: work-server
+        type: choice
+        system: s2
+        prompt: |
+          A team must handle 200,000 mostly idle chat connections on one server. Which design fits best?
+        options:
+          - "An M:N runtime or an event loop, so each connection costs a few KiB rather than a kernel thread"
+          - "One kernel thread per connection, each with the default 8 MiB stack"
+          - "One process per connection"
+          - "A single thread that reads each connection in turn with blocking calls"
+        answer: 0
+        explanation: |
+          200,000 kernel threads would mean 200,000 kernel stacks and scheduler entries; processes are heavier still; and blocking reads in turn would stall on the first quiet connection. Cheap user-level threads, or the event loops of the concurrency cluster, handle this many idle connections comfortably.
+  connections:
+    - text: |
+        None of them: 0. The library switches threads in user space, but the kernel sees a single thread, and the read has put it to sleep. Until the read returns, the library itself never runs, so it cannot switch to another thread, and the process uses no core at all. With kernel threads, four of the seven would run at once on the four cores; with an M:N runtime, the same.
+
+        Threads and processes come and go, and the kernel sometimes has to tell a process something urgently: that a child has exited, that the user pressed Ctrl+C, that it touched memory it should not. [[h2.signals-and-the-life-of-a-process]] follows a process from birth to the moment its parent collects its exit status, and the signals that can interrupt it on the way.

@@ -1,0 +1,820 @@
+concept: h2.interrupts-and-i-o
+minutes: 80
+claim: You can describe how the processor talks to a device through its controller's registers, by memory-mapped or port I/O; compare polling with interrupts and say when each wins; follow an interrupt from the device through the interrupt controller to a handler and back; build an interrupt controller with priorities and masking out of bit masks; explain why handlers are split into a short top half and deferred work; explain direct memory access and the descriptor rings through which network cards and disks share memory with their drivers; and explain interrupt livelock and the fixes, interrupt coalescing and switching to polling under load.
+recalls: [h2.the-tlb-and-address-translation]
+uses: [h2.what-an-operating-system-does, h2.processes-and-system-calls, h2.virtual-memory-and-page-tables, h0.bitwise-operations-and-masks, h0.unsigned-integers-and-fixed-widths, s2.stacks-and-queues, s1.classes-and-objects, f3.modular-arithmetic]
+leads: [h2.files-and-file-systems]
+starter: |
+  # Scratch space. A device's status register packs flags into bits; the
+  # driver tests each with a mask.
+  status = 0b10100001
+  for name, bit in [("ready", 0), ("busy", 5), ("error", 6), ("interrupt pending", 7)]:
+      print(name, (status >> bit) & 1)
+parts:
+  recall:
+    - text: |
+        [[h2.the-tlb-and-address-translation]] made translation fast by caching it, and showed one core interrupting another to keep the caches honest. Interrupts have come up in every lesson of this cluster: the timer that lets the kernel take the processor back, the faults that pull it into the kernel. Now for the devices. A disk, a network card and a keyboard all work at their own pace, from microseconds to seconds, and the processor must neither miss them nor waste its time waiting for them. Three quick pulls first.
+  puzzle:
+    - text: |
+        A server's network card receives 1,000,000 small packets a second and raises an interrupt for each one. Handling an interrupt, saving state, talking to the card, queueing the packet and returning, costs 2 microseconds of processor time.
+
+        **What percentage of one core would the interrupts alone need?**
+  intuition:
+    - text: |
+        You are waiting for a parcel at home in Hyderabad. You could stand at the window, checking the road every few seconds, and do nothing else all afternoon; that is **polling**. You could get on with your work and let the delivery man ring the bell; that is an **interrupt**. Or, for a big delivery of fifty boxes, you could tell the courier where the storeroom is and let them carry everything in themselves, and ring once when it is all done; that is **direct memory access**.
+
+        The figure reads a block of words from a slow device in each of the three ways. The device takes 4 time units per word whatever happens. What changes is what the processor is doing meanwhile.
+    - figure: io-timeline
+      props: { mode: polling, words: 4 }
+    - text: |
+        Polling burns the processor for the whole transfer. Interrupts free it between words, but pay a small handling cost for every word. DMA frees it almost entirely and pays one interrupt for the whole block. Notice, though, that the interrupt cost is per event: with enough events, the handling alone can swallow the processor, which is what the puzzle asks about.
+  derivation:
+    - text: |
+        **Talking to a device.** A device is run by a **controller**, a small circuit, often with its own processor, that exposes a few **registers**: a status register whose bits say ready, busy or error; a command register; and data registers. On RISC-V and ARM, and for most modern devices on x86, these registers appear at physical addresses, **memory-mapped I/O**: the driver reads and writes them with ordinary loads and stores, and the kernel maps those addresses only into its own address space, so user programs cannot touch them. Older x86 devices use **port I/O**, separate `in` and `out` instructions, which are privileged. Either way, the code that knows one particular device's registers is its **device driver**, and the rest of the kernel talks to drivers through common interfaces: block devices, network devices, character devices.
+    - question:
+        id: derivation-mmio
+        type: choice
+        system: s2
+        prompt: |
+          A network card's registers are memory-mapped. What stops an ordinary program from writing to its command register?
+        options:
+          - "The kernel does not map the card's addresses into the program's page tables, so the store faults"
+          - "Memory-mapped registers can only be read, never written"
+          - "The card checks which program sent the store"
+          - "Nothing; programs must be trusted not to"
+        answer: 0
+        explanation: |
+          Memory-mapped I/O uses the same translation as everything else. The device's physical addresses appear only in the kernel's mappings, so a user program's store to them is unmapped and raises a page fault.
+    - text: |
+        **Polling.** The simplest driver writes a command and then loops, reading the status register until the ready bit is set. That is fine when the wait is a few hundred nanoseconds, shorter than the cost of an interrupt, and very fast storage drivers do poll. But for a disk that takes milliseconds, or a keyboard that might wait for hours, a polling loop wastes all that processor time.
+    - question:
+        id: derivation-polls
+        type: numeric
+        system: s2
+        prompt: |
+          A driver polls a disk's status register once a microsecond, and the disk takes 5 ms to finish a request. How many times does the driver read the status register for one request?
+        answer: "5000"
+        explanation: |
+          5 ms is 5,000 microseconds, one read each: 5,000 reads, of which only the last finds the disk ready.
+    - text: |
+        **Interrupts.** Instead, the device raises a signal on an **interrupt line** when it needs attention. An **interrupt controller** collects the lines from all devices, ranks them by priority, and signals the processor. At the end of the current instruction, the processor saves the program counter, switches to kernel mode and jumps to the handler, just as for the traps of the first lesson. The handler finds which line fired, **acknowledges** it so the device stops signalling, does the minimum of work, and returns. While a high-priority interrupt is being handled, lower ones are **masked**: held pending, not lost, until the handler finishes or the kernel unmasks them.
+
+        **Top and bottom halves.** A handler runs with some interrupts masked and has interrupted whatever was running, so it must be quick. Kernels split the work. The **top half**, the handler itself, reads what the device has, queues it, and re-arms the device, in a few microseconds. The **bottom half**, run soon after with interrupts enabled, does the slow part: processing a network packet through the protocol stack, or waking the process that was blocked waiting for a disk read.
+    - question:
+        id: derivation-irq-order
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of handling a keyboard interrupt in order.
+        steps:
+          - "A key is pressed, and the keyboard controller raises its interrupt line."
+          - "The interrupt controller signals the processor, which finishes its current instruction."
+          - "The processor saves the program counter, enters kernel mode and jumps to the handler."
+          - "The handler reads the key code, acknowledges the interrupt and queues the key."
+          - "The handler returns, and later the waiting terminal process is woken with the key."
+        explanation: |
+          The device signals, the processor reaches a clean point, the hardware enters the kernel, the top half does the minimum, and the slower work of waking the reader happens afterwards.
+    - text: |
+        **Direct memory access.** Copying a 4 KiB disk block one word at a time through a data register would mean hundreds of loads, or hundreds of interrupts. With **DMA**, the driver gives the device a physical address and a length, and the device's controller copies the data to or from memory itself, over the memory bus, interrupting once when the whole transfer is done. The processor is free meanwhile. Because the device uses physical addresses and does not see page tables, the kernel must **pin** the pages so they are not moved or swapped during the transfer; many machines also put an **IOMMU** between devices and memory, a page table for devices, so a faulty or malicious device cannot write anywhere it likes.
+
+        **Rings.** Fast devices exchange whole queues of requests with the driver through **descriptor rings**: circular arrays in memory, each slot pointing at a buffer. A network card writes each arriving packet into the next free buffer and advances its head index; the driver consumes from its tail index and hands empty buffers back. Neither side waits for the other unless the ring is full or empty. NVMe drives use pairs of such rings, submission and completion queues, often one pair per core.
+    - question:
+        id: derivation-dma
+        type: choice
+        system: s2
+        prompt: |
+          A driver reads a 64 KiB block from an SSD by DMA. Which statement is true?
+        options:
+          - "The processor is free during the copy and handles one interrupt when the transfer completes"
+          - "The processor copies the data word by word from the drive's data register"
+          - "The drive raises an interrupt for every word it copies"
+          - "DMA works only for blocks smaller than one page"
+        answer: 0
+        explanation: |
+          The controller moves the data itself and signals completion once. The processor only sets up the transfer and handles that one interrupt.
+    - text: |
+        **When interrupts are too many.** Each interrupt costs about a microsecond or two. A keyboard raises a handful a second; a 100-gigabit network card can receive millions of packets a second. If every packet interrupts, the machine can reach **receive livelock**: it spends all its time taking interrupts and queueing packets, and none processing them, so throughput falls to nothing just as load peaks. Two fixes are standard. **Interrupt coalescing**: the card waits until several packets have arrived, or a short timer expires, and interrupts once for the lot, trading a few microseconds of latency for far fewer interrupts. And **switching to polling under load**, as Linux's NAPI does: on the first interrupt the driver masks the card's interrupts and polls the ring for a budget of packets at a time, unmasking only when the ring runs dry. Under light load you get interrupts and low latency; under heavy load, polling and no interrupt overhead at all.
+    - question:
+        id: derivation-livelock
+        type: choice
+        system: s2
+        prompt: |
+          A router's throughput collapses at peak traffic while its processor shows 100% busy in interrupt handlers. Which change addresses the cause?
+        options:
+          - "Masking the card's interrupts under load and polling its ring in batches"
+          - "Raising an interrupt for every packet sooner"
+          - "Giving the network interrupt the highest priority"
+          - "Adding a larger disk"
+        answer: 0
+        explanation: |
+          The processor is drowning in per-packet interrupt overhead. Polling the ring in batches under load removes that overhead, so the time goes on processing packets; this is exactly what NAPI does.
+  formal:
+    - text: |
+        **Device access.** Controllers expose status, command and data registers, reached by memory-mapped I/O or privileged port I/O. Drivers hide each device behind a common interface.
+
+        **Polling** spends the processor waiting; good only for very short waits. **Interrupts** free it, at a cost per event: the device raises a line, the interrupt controller ranks and masks lines, the processor traps to the handler.
+
+        **Top and bottom halves.** A short handler acknowledges and queues; deferred work does the rest with interrupts enabled.
+
+        **DMA.** The device copies to or from pinned memory itself and interrupts once per transfer. Descriptor rings let device and driver exchange many requests without waiting.
+
+        **Livelock.** Too many interrupts leave no time for work; fixes are coalescing and polling under load.
+  drill:
+    - text: Seconds each. Ask who is waiting for whom.
+    - question:
+        id: drill-mask
+        type: choice
+        system: s1
+        prompt: |
+          The disk's interrupt line is masked when the disk finishes a read. What happens to that interrupt?
+        options:
+          - "It stays pending and is delivered when the line is unmasked"
+          - "It is lost"
+          - "The disk retries the read"
+          - "The processor polls the disk instead"
+        answer: 0
+        explanation: Masking delays an interrupt; the controller keeps it pending until the kernel is ready.
+    - question:
+        id: drill-poll-wins
+        type: choice
+        system: s1
+        prompt: |
+          When does polling beat interrupts?
+        options:
+          - "When the device will be ready in less time than it takes to handle an interrupt"
+          - "When the device takes milliseconds"
+          - "When events are rare, such as key presses"
+          - "Never"
+        answer: 0
+        explanation: An interrupt costs a microsecond or two; waiting a few hundred nanoseconds in a loop is cheaper than that.
+    - question:
+        id: predict-status
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          status = 0b10100001
+          READY = 1 << 0
+          ERROR = 1 << 6
+          print(status & READY != 0, status & ERROR != 0)
+        output: "True False"
+        explanation: Bit 0 is set and bit 6 is clear; in Python `&` binds more tightly than `!=`, so each test masks first and then compares.
+    - question:
+        id: predict-irq-load
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          rate = 50000
+          cost_us = 4
+          print(rate * cost_us / 1000000 * 100, "%")
+        output: "20.0 %"
+        explanation: 50,000 interrupts of 4 microseconds each take 200,000 microseconds a second, a fifth of the processor.
+    - question:
+        id: predict-dma-count
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          words = 4096 // 8
+          print(words, "interrupts, or 1 with DMA")
+        output: "512 interrupts, or 1 with DMA"
+        explanation: A 4 KiB block is 512 eight-byte words; an interrupt per word means 512, while DMA interrupts once at the end.
+  work:
+    - text: Slower now. Each answer is part of a kernel's interrupt and I/O machinery.
+    - question:
+        id: write-interrupt-controller
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write the interrupt controller: raising, masking and unmasking lines, and claiming the highest-priority line that is ready, all with bit masks. The program should print `0 5 None` and then `2 None`.
+        starter: |
+          class InterruptController:
+              # Eight interrupt lines, 0 to 7; a lower number has a higher priority.
+              # pending and masked are bit masks: bit n set means line n is waiting to
+              # be handled, or is masked (held back) for now. A masked line that is
+              # raised stays pending, and is handled once it is unmasked.
+              def __init__(self):
+                  self.pending = 0
+                  self.masked = 0
+
+              def raise_line(self, n):
+                  pass
+
+              def mask(self, n):
+                  pass
+
+              def unmask(self, n):
+                  pass
+
+              def claim(self):
+                  # Return the highest-priority line that is pending and not masked,
+                  # clearing its pending bit, or None if there is none.
+                  return None
+
+
+          TIMER, DISK, NET, KEYBOARD = 0, 2, 3, 5
+          pic = InterruptController()
+          pic.raise_line(KEYBOARD)
+          pic.raise_line(DISK)
+          pic.mask(DISK)  # the disk driver is busy, so hold its interrupts back
+          pic.raise_line(TIMER)
+          print(pic.claim(), pic.claim(), pic.claim())
+          pic.unmask(DISK)
+          print(pic.claim(), pic.claim())
+        solution: |
+          class InterruptController:
+              # Eight interrupt lines, 0 to 7; a lower number has a higher priority.
+              # pending and masked are bit masks: bit n set means line n is waiting to
+              # be handled, or is masked (held back) for now. A masked line that is
+              # raised stays pending, and is handled once it is unmasked.
+              def __init__(self):
+                  self.pending = 0
+                  self.masked = 0
+
+              def raise_line(self, n):
+                  self.pending |= 1 << n
+
+              def mask(self, n):
+                  self.masked |= 1 << n
+
+              def unmask(self, n):
+                  self.masked &= ~(1 << n)
+
+              def claim(self):
+                  ready = self.pending & ~self.masked
+                  if ready == 0:
+                      return None
+                  n = (ready & -ready).bit_length() - 1
+                  self.pending &= ~(1 << n)
+                  return n
+
+
+          TIMER, DISK, NET, KEYBOARD = 0, 2, 3, 5
+          pic = InterruptController()
+          pic.raise_line(KEYBOARD)
+          pic.raise_line(DISK)
+          pic.mask(DISK)  # the disk driver is busy, so hold its interrupts back
+          pic.raise_line(TIMER)
+          print(pic.claim(), pic.claim(), pic.claim())
+          pic.unmask(DISK)
+          print(pic.claim(), pic.claim())
+        tests: |
+          _p = InterruptController()
+          assert _p.claim() is None, "with nothing pending, claim returns None"
+          _p.raise_line(6)
+          _p.raise_line(1)
+          _p.raise_line(4)
+          assert [_p.claim(), _p.claim(), _p.claim(), _p.claim()] == [1, 4, 6, None], "lines are handled in order of priority, lowest number first"
+          _p = InterruptController()
+          _p.mask(3)
+          _p.raise_line(3)
+          assert _p.claim() is None, "a masked line must not be handed out"
+          _p.unmask(3)
+          assert _p.claim() == 3, "a line raised while masked must still be pending once unmasked: masking delays an interrupt, it does not lose it"
+          _p = InterruptController()
+          _p.unmask(2)
+          _p.raise_line(2)
+          assert _p.claim() == 2, "unmasking a line that was never masked must leave it unmasked"
+          _p = InterruptController()
+          _p.raise_line(7)
+          _p.raise_line(7)
+          assert (_p.claim(), _p.claim()) == (7, None), "raising a pending line again does not queue a second interrupt"
+          _p = InterruptController()
+          _p.raise_line(0)
+          _p.raise_line(5)
+          _p.mask(0)
+          assert _p.claim() == 5 and _p.pending == 1, "claiming line 5 clears only bit 5, leaving masked line 0 pending"
+          assert output.splitlines() == ["0 5 None", "2 None"], "The program should print 0 5 None and then 2 None"
+        wrong:
+          - |
+            class InterruptController:
+                # Eight interrupt lines, 0 to 7; a lower number has a higher priority.
+                # pending and masked are bit masks: bit n set means line n is waiting to
+                # be handled, or is masked (held back) for now. A masked line that is
+                # raised stays pending, and is handled once it is unmasked.
+                def __init__(self):
+                    self.pending = 0
+                    self.masked = 0
+
+                def raise_line(self, n):
+                    self.pending |= 1 << n
+
+                def mask(self, n):
+                    self.masked |= 1 << n
+                    self.pending &= ~(1 << n)
+
+                def unmask(self, n):
+                    self.masked &= ~(1 << n)
+
+                def claim(self):
+                    ready = self.pending & ~self.masked
+                    if ready == 0:
+                        return None
+                    n = (ready & -ready).bit_length() - 1
+                    self.pending &= ~(1 << n)
+                    return n
+
+
+            TIMER, DISK, NET, KEYBOARD = 0, 2, 3, 5
+            pic = InterruptController()
+            pic.raise_line(KEYBOARD)
+            pic.raise_line(DISK)
+            pic.mask(DISK)  # the disk driver is busy, so hold its interrupts back
+            pic.raise_line(TIMER)
+            print(pic.claim(), pic.claim(), pic.claim())
+            pic.unmask(DISK)
+            print(pic.claim(), pic.claim())
+          - |
+            class InterruptController:
+                # Eight interrupt lines, 0 to 7; a lower number has a higher priority.
+                # pending and masked are bit masks: bit n set means line n is waiting to
+                # be handled, or is masked (held back) for now. A masked line that is
+                # raised stays pending, and is handled once it is unmasked.
+                def __init__(self):
+                    self.pending = 0
+                    self.masked = 0
+
+                def raise_line(self, n):
+                    self.pending |= 1 << n
+
+                def mask(self, n):
+                    self.masked |= 1 << n
+
+                def unmask(self, n):
+                    self.masked &= ~(1 << n)
+
+                def claim(self):
+                    ready = self.pending & ~self.masked
+                    if ready == 0:
+                        return None
+                    n = ready.bit_length() - 1
+                    self.pending &= ~(1 << n)
+                    return n
+
+
+            TIMER, DISK, NET, KEYBOARD = 0, 2, 3, 5
+            pic = InterruptController()
+            pic.raise_line(KEYBOARD)
+            pic.raise_line(DISK)
+            pic.mask(DISK)  # the disk driver is busy, so hold its interrupts back
+            pic.raise_line(TIMER)
+            print(pic.claim(), pic.claim(), pic.claim())
+            pic.unmask(DISK)
+            print(pic.claim(), pic.claim())
+          - |
+            class InterruptController:
+                # Eight interrupt lines, 0 to 7; a lower number has a higher priority.
+                # pending and masked are bit masks: bit n set means line n is waiting to
+                # be handled, or is masked (held back) for now. A masked line that is
+                # raised stays pending, and is handled once it is unmasked.
+                def __init__(self):
+                    self.pending = 0
+                    self.masked = 0
+
+                def raise_line(self, n):
+                    self.pending |= 1 << n
+
+                def mask(self, n):
+                    self.masked |= 1 << n
+
+                def unmask(self, n):
+                    self.masked ^= 1 << n
+
+                def claim(self):
+                    ready = self.pending & ~self.masked
+                    if ready == 0:
+                        return None
+                    n = (ready & -ready).bit_length() - 1
+                    self.pending &= ~(1 << n)
+                    return n
+
+
+            TIMER, DISK, NET, KEYBOARD = 0, 2, 3, 5
+            pic = InterruptController()
+            pic.raise_line(KEYBOARD)
+            pic.raise_line(DISK)
+            pic.mask(DISK)  # the disk driver is busy, so hold its interrupts back
+            pic.raise_line(TIMER)
+            print(pic.claim(), pic.claim(), pic.claim())
+            pic.unmask(DISK)
+            print(pic.claim(), pic.claim())
+        explanation: |
+          Set a bit with |= 1 << n and clear it with &= ~(1 << n). The lines ready to claim are pending & ~masked, and the lowest set bit of a number x is x & -x, whose bit_length minus 1 is its position. Clearing the pending bit when masking loses interrupts; taking the highest set bit serves the lowest priority first; and toggling with ^= masks a line that was never masked.
+    - question:
+        id: write-coalesce
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `coalesce`, which counts the interrupts a network card raises when it waits for a batch of packets or a timeout, and the longest any packet waited. The program should print `(12, 0) interrupting for every packet` and `(5, 20) in batches of up to 4`.
+        starter: |
+          def coalesce(arrivals, batch, timeout):
+              # arrivals is a sorted list of times, in microseconds, at which packets
+              # reach the network card. Rather than interrupt for every packet, the
+              # card interrupts as soon as `batch` packets are waiting, or `timeout`
+              # microseconds after the first waiting packet arrived, whichever comes
+              # first; each interrupt hands over every waiting packet. A packet that
+              # arrives at the very moment the timer fires goes with that interrupt.
+              # Return (number of interrupts, the longest any packet waited for one).
+              return 0, 0
+
+
+          times = list(range(10)) + [100, 500]  # a burst of ten packets, then two stragglers
+          print(coalesce(times, 1, 20), "interrupting for every packet")
+          print(coalesce(times, 4, 20), "in batches of up to 4")
+        solution: |
+          def coalesce(arrivals, batch, timeout):
+              interrupts = 0
+              longest = 0
+              first = None
+              count = 0
+              for t in arrivals:
+                  if first is not None and t > first + timeout:
+                      interrupts += 1
+                      longest = max(longest, timeout)
+                      first = None
+                      count = 0
+                  if first is None:
+                      first = t
+                  count += 1
+                  if count == batch:
+                      interrupts += 1
+                      longest = max(longest, t - first)
+                      first = None
+                      count = 0
+              if first is not None:
+                  interrupts += 1
+                  longest = max(longest, timeout)
+              return interrupts, longest
+
+
+          times = list(range(10)) + [100, 500]  # a burst of ten packets, then two stragglers
+          print(coalesce(times, 1, 20), "interrupting for every packet")
+          print(coalesce(times, 4, 20), "in batches of up to 4")
+        tests: |
+          assert coalesce([5], 4, 20) == (1, 20), "a lone packet waits for the timer: 1 interrupt after 20 microseconds"
+          assert coalesce([0, 1, 2, 3], 4, 20) == (1, 3), "four packets fill a batch of 4 at time 3, so 1 interrupt, and the first packet waited 3 microseconds"
+          assert coalesce([0, 15, 30, 45], 10, 20) == (2, 20), "the timer runs from the first waiting packet: it fires at 20 for the packets at 0 and 15, and again at 50 for 30 and 45"
+          assert coalesce([0, 20], 10, 20) == (1, 20), "a packet that arrives just as the timer fires goes with that interrupt"
+          assert coalesce([0, 30, 31, 32, 33], 4, 20) == (2, 20), "after the timer fires for the packet at 0, the count starts again: 30 to 33 make a new batch of 4"
+          assert coalesce([], 4, 20) == (0, 0), "no packets, no interrupts"
+          assert coalesce(list(range(10)) + [100, 500], 4, 20) == (5, 20), "the example should give 5 interrupts, the longest wait 20"
+          assert output.splitlines() == ["(12, 0) interrupting for every packet", "(5, 20) in batches of up to 4"], "The program should print (12, 0) and then (5, 20)"
+        wrong:
+          - |
+            def coalesce(arrivals, batch, timeout):
+                interrupts = 0
+                longest = 0
+                first = None
+                count = 0
+                for t in arrivals:
+                    if first is None:
+                        first = t
+                    count += 1
+                    if count == batch:
+                        interrupts += 1
+                        longest = max(longest, t - first)
+                        first = None
+                        count = 0
+                if first is not None:
+                    interrupts += 1
+                    longest = max(longest, arrivals[-1] - first)
+                return interrupts, longest
+
+
+            times = list(range(10)) + [100, 500]  # a burst of ten packets, then two stragglers
+            print(coalesce(times, 1, 20), "interrupting for every packet")
+            print(coalesce(times, 4, 20), "in batches of up to 4")
+          - |
+            def coalesce(arrivals, batch, timeout):
+                interrupts = 0
+                longest = 0
+                first = None
+                last = None
+                count = 0
+                for t in arrivals:
+                    if first is not None and t > last + timeout:
+                        interrupts += 1
+                        longest = max(longest, timeout)
+                        first = None
+                        count = 0
+                    if first is None:
+                        first = t
+                    last = t
+                    count += 1
+                    if count == batch:
+                        interrupts += 1
+                        longest = max(longest, t - first)
+                        first = None
+                        count = 0
+                if first is not None:
+                    interrupts += 1
+                    longest = max(longest, timeout)
+                return interrupts, longest
+
+
+            times = list(range(10)) + [100, 500]  # a burst of ten packets, then two stragglers
+            print(coalesce(times, 1, 20), "interrupting for every packet")
+            print(coalesce(times, 4, 20), "in batches of up to 4")
+          - |
+            def coalesce(arrivals, batch, timeout):
+                interrupts = 0
+                longest = 0
+                first = None
+                count = 0
+                for t in arrivals:
+                    if first is not None and t > first + timeout:
+                        interrupts += 1
+                        longest = max(longest, timeout)
+                        first = None
+                    if first is None:
+                        first = t
+                    count += 1
+                    if count == batch:
+                        interrupts += 1
+                        longest = max(longest, t - first)
+                        first = None
+                        count = 0
+                if first is not None:
+                    interrupts += 1
+                    longest = max(longest, timeout)
+                return interrupts, longest
+
+
+            times = list(range(10)) + [100, 500]  # a burst of ten packets, then two stragglers
+            print(coalesce(times, 1, 20), "interrupting for every packet")
+            print(coalesce(times, 4, 20), "in batches of up to 4")
+        explanation: |
+          Track when the first waiting packet arrived and how many are waiting. Before adding a packet, check whether the timer would already have fired; after adding it, check whether the batch is full; at the end, the timer handles whatever is left. Forgetting the timer lets a straggler wait for ever; starting the timer from the latest packet lets a steady trickle postpone the interrupt indefinitely; and not resetting the count after the timer fires makes the next batch interrupt early.
+    - question:
+        id: fix-rx-ring
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A network driver's receive ring loses and scrambles packets when the card fills it. The program should print `['p1', 'p2', 'p3'] dropped 2` and then `p6 p7 None`. Find the fault and fix it.
+        starter: |
+          class RxRing:
+              # The network card copies each packet, by DMA, into a ring of `size`
+              # slots in memory, and the driver takes them out. head is the slot the
+              # card writes next and tail the slot the driver reads next. One slot is
+              # always left unused, so that head == tail means the ring is empty and a
+              # full ring holds size - 1 packets. When the ring is full the card drops
+              # the new packet and counts it.
+              def __init__(self, size):
+                  self.slots = [None] * size
+                  self.size = size
+                  self.head = 0
+                  self.tail = 0
+                  self.dropped = 0
+
+              def card_put(self, packet):
+                  if self.head == self.tail - 1:
+                      self.dropped += 1
+                      return
+                  self.slots[self.head] = packet
+                  self.head = (self.head + 1) % self.size
+
+              def driver_take(self):
+                  if self.head == self.tail:
+                      return None
+                  packet = self.slots[self.tail]
+                  self.tail = (self.tail + 1) % self.size
+                  return packet
+
+
+          ring = RxRing(4)
+          for p in ["p1", "p2", "p3", "p4", "p5"]:
+              ring.card_put(p)
+          got = []
+          packet = ring.driver_take()
+          while packet is not None:
+              got.append(packet)
+              packet = ring.driver_take()
+          print(got, "dropped", ring.dropped)
+          ring.card_put("p6")
+          ring.card_put("p7")
+          print(ring.driver_take(), ring.driver_take(), ring.driver_take())
+        solution: |
+          class RxRing:
+              # The network card copies each packet, by DMA, into a ring of `size`
+              # slots in memory, and the driver takes them out. head is the slot the
+              # card writes next and tail the slot the driver reads next. One slot is
+              # always left unused, so that head == tail means the ring is empty and a
+              # full ring holds size - 1 packets. When the ring is full the card drops
+              # the new packet and counts it.
+              def __init__(self, size):
+                  self.slots = [None] * size
+                  self.size = size
+                  self.head = 0
+                  self.tail = 0
+                  self.dropped = 0
+
+              def card_put(self, packet):
+                  if (self.head + 1) % self.size == self.tail:
+                      self.dropped += 1
+                      return
+                  self.slots[self.head] = packet
+                  self.head = (self.head + 1) % self.size
+
+              def driver_take(self):
+                  if self.head == self.tail:
+                      return None
+                  packet = self.slots[self.tail]
+                  self.tail = (self.tail + 1) % self.size
+                  return packet
+
+
+          ring = RxRing(4)
+          for p in ["p1", "p2", "p3", "p4", "p5"]:
+              ring.card_put(p)
+          got = []
+          packet = ring.driver_take()
+          while packet is not None:
+              got.append(packet)
+              packet = ring.driver_take()
+          print(got, "dropped", ring.dropped)
+          ring.card_put("p6")
+          ring.card_put("p7")
+          print(ring.driver_take(), ring.driver_take(), ring.driver_take())
+        tests: |
+          _r = RxRing(4)
+          for _p in "abc":
+              _r.card_put(_p)
+          assert _r.dropped == 0, "a ring of 4 slots holds 3 packets without dropping any"
+          _r.card_put("d")
+          assert _r.dropped == 1, "the fourth packet finds the ring full and is dropped"
+          assert [_r.driver_take() for _ in range(4)] == ["a", "b", "c", None], "the driver should get a, b, c in order and then find the ring empty"
+          for _round in range(5):
+              _r.card_put("x" + str(_round))
+              _r.card_put("y" + str(_round))
+              _got = [_r.driver_take(), _r.driver_take(), _r.driver_take()]
+              assert _got == ["x" + str(_round), "y" + str(_round), None], "the ring must keep working as head and tail wrap round past the last slot, but got " + repr(_got)
+          assert _r.dropped == 1, "no packets should be dropped while the driver keeps up"
+          _r = RxRing(2)
+          _r.card_put("only")
+          _r.card_put("extra")
+          assert (_r.driver_take(), _r.driver_take(), _r.dropped) == ("only", None, 1), "a ring of 2 slots holds one packet; when full the new packet is dropped, not the old one"
+          assert output.splitlines() == ["['p1', 'p2', 'p3'] dropped 2", "p6 p7 None"], "The program should print ['p1', 'p2', 'p3'] dropped 2 and then p6 p7 None"
+        wrong:
+          - |
+            class RxRing:
+                # The network card copies each packet, by DMA, into a ring of `size`
+                # slots in memory, and the driver takes them out. head is the slot the
+                # card writes next and tail the slot the driver reads next. One slot is
+                # always left unused, so that head == tail means the ring is empty and a
+                # full ring holds size - 1 packets. When the ring is full the card drops
+                # the new packet and counts it.
+                def __init__(self, size):
+                    self.slots = [None] * size
+                    self.size = size
+                    self.head = 0
+                    self.tail = 0
+                    self.dropped = 0
+
+                def card_put(self, packet):
+                    if self.head == self.tail:
+                        self.dropped += 1
+                        return
+                    self.slots[self.head] = packet
+                    self.head = (self.head + 1) % self.size
+
+                def driver_take(self):
+                    if self.head == self.tail:
+                        return None
+                    packet = self.slots[self.tail]
+                    self.tail = (self.tail + 1) % self.size
+                    return packet
+
+
+            ring = RxRing(4)
+            for p in ["p1", "p2", "p3", "p4", "p5"]:
+                ring.card_put(p)
+            got = []
+            packet = ring.driver_take()
+            while packet is not None:
+                got.append(packet)
+                packet = ring.driver_take()
+            print(got, "dropped", ring.dropped)
+            ring.card_put("p6")
+            ring.card_put("p7")
+            print(ring.driver_take(), ring.driver_take(), ring.driver_take())
+          - |
+            class RxRing:
+                # The network card copies each packet, by DMA, into a ring of `size`
+                # slots in memory, and the driver takes them out. head is the slot the
+                # card writes next and tail the slot the driver reads next. One slot is
+                # always left unused, so that head == tail means the ring is empty and a
+                # full ring holds size - 1 packets. When the ring is full the card drops
+                # the new packet and counts it.
+                def __init__(self, size):
+                    self.slots = [None] * size
+                    self.size = size
+                    self.head = 0
+                    self.tail = 0
+                    self.dropped = 0
+
+                def card_put(self, packet):
+                    if (self.head + 1) % self.size == self.tail:
+                        self.dropped += 1
+                        return
+                    self.slots[self.head] = packet
+                    self.head = (self.head + 1) % self.size
+
+                def driver_take(self):
+                    if self.head == self.tail:
+                        return None
+                    packet = self.slots[self.tail]
+                    self.tail = self.tail + 1
+                    return packet
+
+
+            ring = RxRing(4)
+            for p in ["p1", "p2", "p3", "p4", "p5"]:
+                ring.card_put(p)
+            got = []
+            packet = ring.driver_take()
+            while packet is not None:
+                got.append(packet)
+                packet = ring.driver_take()
+            print(got, "dropped", ring.dropped)
+            ring.card_put("p6")
+            ring.card_put("p7")
+            print(ring.driver_take(), ring.driver_take(), ring.driver_take())
+          - |
+            class RxRing:
+                # The network card copies each packet, by DMA, into a ring of `size`
+                # slots in memory, and the driver takes them out. head is the slot the
+                # card writes next and tail the slot the driver reads next. One slot is
+                # always left unused, so that head == tail means the ring is empty and a
+                # full ring holds size - 1 packets. When the ring is full the card drops
+                # the new packet and counts it.
+                def __init__(self, size):
+                    self.slots = [None] * size
+                    self.size = size
+                    self.head = 0
+                    self.tail = 0
+                    self.dropped = 0
+
+                def card_put(self, packet):
+                    if (self.head + 1) % self.size == self.tail:
+                        self.tail = (self.tail + 1) % self.size
+                        self.dropped += 1
+                        self.dropped += 1
+                        return
+                    self.slots[self.head] = packet
+                    self.head = (self.head + 1) % self.size
+
+                def driver_take(self):
+                    if self.head == self.tail:
+                        return None
+                    packet = self.slots[self.tail]
+                    self.tail = (self.tail + 1) % self.size
+                    return packet
+
+
+            ring = RxRing(4)
+            for p in ["p1", "p2", "p3", "p4", "p5"]:
+                ring.card_put(p)
+            got = []
+            packet = ring.driver_take()
+            while packet is not None:
+                got.append(packet)
+                packet = ring.driver_take()
+            print(got, "dropped", ring.dropped)
+            ring.card_put("p6")
+            ring.card_put("p7")
+            print(ring.driver_take(), ring.driver_take(), ring.driver_take())
+        explanation: |
+          The ring is full when advancing head would make it equal tail, which must be computed modulo the size: (head + 1) % size == tail. The test head == tail - 1 misses the case where tail is 0 and head is the last slot, so the card wraps onto unread packets and the ring then looks empty. Treating head == tail as full refuses every packet, advancing tail without wrapping runs off the end of the list, and evicting the oldest packet loses data the driver has not seen.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. A network card raises 1,000,000 interrupts a second, each costing 2 microseconds of processor time. What percentage of one core would the interrupts alone need?
+        answer: "200"
+        unit: "%"
+        explanation: |
+          1,000,000 × 2 microseconds = 2,000,000 microseconds of work each second, twice what one core has. The core cannot keep up, which is receive livelock.
+    - question:
+        id: work-nvme
+        type: choice
+        system: s2
+        prompt: |
+          An NVMe drive finishes a read in 10 microseconds, and handling an interrupt costs about 2. For a database doing millions of small reads, which design keeps latency lowest?
+        options:
+          - "Poll the completion queue for a short while after submitting, since the answer will come almost at once"
+          - "Sleep and wait for an interrupt, as for a hard disk"
+          - "Copy each block through a data register, word by word"
+          - "Raise the interrupt's priority"
+        answer: 0
+        explanation: |
+          When the device is nearly as fast as an interrupt, the interrupt and the context switch become a large part of each read. Spinning briefly on the completion ring avoids both; Linux offers exactly this for fast drives.
+  connections:
+    - text: |
+        200%. A million interrupts at 2 microseconds each is two seconds of handling per second, twice what one core can do, so the core would spend all its time in handlers and still fall behind. In practice the card coalesces interrupts, interrupting once per batch, and the driver switches to polling its receive ring under load, which brings the cost down to a small fraction.
+
+        With interrupts and DMA, the kernel can talk to a disk efficiently, but a disk only stores numbered blocks. [[h2.files-and-file-systems]] shows how the kernel turns those blocks into named files and directories that survive crashes, and why opening one file can take several disk reads.

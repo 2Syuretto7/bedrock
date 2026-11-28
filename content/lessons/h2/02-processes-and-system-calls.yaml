@@ -1,0 +1,968 @@
+concept: h2.processes-and-system-calls
+minutes: 80
+claim: You can say what a process is, a running program with its own address space, registers and open files, and what the kernel keeps about it in a process control block; name the states a process moves through; explain a context switch as saving one process's registers and loading another's; create processes the Unix way with fork, exec, wait and exit, and predict how many processes a program of forks makes; say why a shell runs cd itself but every other command in a child; use file descriptors and know that a new one is the lowest free number; and cut the cost of system calls by buffering.
+recalls: [h2.what-an-operating-system-does]
+uses: [h1.calling-conventions-and-the-stack, h1.latches-registers-and-memory, s1.classes-and-objects, s0.dictionaries-and-sets, s0.lists-and-tuples, s0.strings, f1.exponents-and-exponential-growth]
+leads: [h2.scheduling]
+starter: |
+  # Scratch space. fork gives the parent the child's pid and the child 0, so
+  # one call returns twice and the two copies can go different ways.
+  for who, returned in [("parent", 4242), ("child", 0)]:
+      if returned == 0:
+          print(who, "runs the new program")
+      else:
+          print(who, "waits for process", returned)
+parts:
+  recall:
+    - text: |
+        [[h2.what-an-operating-system-does]] showed the kernel taking control on every system call, exception and timer interrupt, and handing the processor back afterwards. But handing it back to what? The kernel needs a name and a record for each running program, so it can stop one, remember exactly where it was, and later carry it on as if nothing had happened. That record, and the program it describes, is a process. Three quick pulls first.
+  puzzle:
+    - text: |
+        On Unix, `fork()` makes a copy of the process that calls it, and both copies carry on from the line after the call. A student runs this program, written in C, once:
+
+        ```c
+        for (int i = 0; i < 3; i++)
+            fork();
+        printf("hi\n");
+        ```
+
+        **How many times is "hi" printed?**
+  intuition:
+    - text: |
+        Picture a cook in a Kolkata sweet shop halfway through a recipe for rasgulla, at step 4 of 9, with a pot on the stove. The owner says: make a second cook, identical to you in every way, standing at a second stove with an identical pot, also at step 4. Both cooks remember the recipe and where they are in it. From now on each carries on separately, and each can be told to clone again. The only way either can tell which one is the original is what the owner whispered at the moment of cloning: to the new one, "you are the copy", and to the original, the copy's name.
+
+        That is `fork`. The figure runs a loop that calls it n times. Watch how many processes exist after each time round, and what changes if every child leaves the loop at once.
+    - figure: fork-tree
+      props: { n: 3, mode: all, step: 0 }
+    - text: |
+        Every process that is still in the loop forks once per round, so the number of processes doubles each round. When the children leave the loop instead, only the original keeps forking and the growth is a straight line. The puzzle is the doubling case.
+  derivation:
+    - text: |
+        **What a process is.** A program is a file of instructions sitting on a disk. A **process** is one running instance of it, and the same program can run as many processes at once, like three terminal windows each running a shell. Each process has:
+
+        - its own **address space**: the program's code, its global data, a heap that grows as it allocates, and a stack, all at addresses that mean something only inside this process;
+        - its own **registers**, including the program counter and stack pointer, which are really in the processor only while it runs;
+        - kernel resources, such as **open files**, its current directory, and the user it runs as.
+
+        The kernel keeps the rest in a **process control block** (PCB): the process ID or **pid**, the parent's pid, the state, the saved registers, the page tables that define the address space, and the table of open files. On Linux this is a `task_struct` of several kilobytes.
+    - question:
+        id: derivation-own
+        type: choice
+        system: s2
+        prompt: |
+          Two copies of the same text editor are running. Which of these do they share?
+        options:
+          - "Nothing that either can change: each has its own address space, registers and open files"
+          - "Their stacks"
+          - "Their heaps, so an edit in one appears in the other"
+          - "Their program counters"
+        answer: 0
+        explanation: |
+          Each process is isolated. The kernel may quietly share the read-only code pages between them to save memory, but neither can see or change anything of the other's.
+    - text: |
+        **States and switches.** A process is **running** on a processor, **ready** to run and waiting its turn, or **blocked** waiting for something such as a disk read or a key press. A new process starts ready; a timer interrupt sends a running process back to ready; a slow system call blocks it, and the interrupt that signals the end of the wait makes it ready again. When it exits it becomes a **zombie**, of which more in the last lesson of this cluster.
+
+        Moving the processor from one process to another is a **context switch**. In the kernel, on some trap, the switch code saves every register of the old process into its PCB, chooses the next process, loads that one's saved registers and page tables, and returns from the trap into it. The returning instruction does not care that it is returning into a different program. A switch takes a few microseconds, and much of the real cost comes afterwards, as the new process finds the caches and the address translation hardware full of the old one's data.
+    - question:
+        id: derivation-states
+        type: choice
+        system: s2
+        prompt: |
+          A running process calls `read` on a network socket that has no data yet. What happens to it?
+        options:
+          - "It becomes blocked, and the kernel runs another process until data arrives"
+          - "It stays running, checking the socket in a loop"
+          - "It becomes ready, and runs again on the next timer tick"
+          - "It is ended, since the read failed"
+        answer: 0
+        explanation: |
+          Running the process again before the data arrives would be wasted work, so the kernel parks it as blocked. The network card's interrupt, when the packet arrives, makes it ready again.
+    - text: |
+        **Making processes.** Unix creates processes with two system calls instead of one. `fork()` makes a near-exact copy of the caller: same code, same data, same open files, same place in the program. It returns twice, once in each copy: in the parent it returns the child's pid, and in the child it returns 0. Then the child usually calls `exec`, which throws away its program and loads a new one into the same process, keeping the pid and the open files. The parent calls `wait`, which blocks until a child calls `exit(status)` and then hands over the child's **exit status**, 0 for success and anything else for a kind of failure.
+
+        A **shell** is a loop over exactly these calls: read a line, fork, in the child exec the program named, in the parent wait, and print the next prompt. The split between fork and exec looks wasteful but is useful: between the two, the child can rearrange its own open files or directory before the new program starts, which is how a shell sends a command's output into a file. Copying a whole address space for an exec that discards it would be slow, so the kernel shares the parent's memory with the child and copies a page only when one of them writes to it, **copy-on-write**, which you will meet with page tables.
+    - question:
+        id: derivation-shell
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of a shell running `ls -l` in order.
+        steps:
+          - "The shell reads the line and calls fork."
+          - "In the child, fork returns 0, and the child calls exec to load ls."
+          - "In the parent, fork returns the child's pid, and the shell calls wait."
+          - "ls lists the directory and calls exit with status 0."
+          - "wait returns the child's status, and the shell prints its next prompt."
+        explanation: |
+          The parent's wait can start before or after ls runs; either way it returns only once the child has exited.
+    - text: |
+        **Why cd is different.** Each process has its own current directory, and a child starts with a copy of its parent's. If the shell ran `cd` in a child, the child's directory would change, the child would exit, and the shell's own directory would be just as before. So the shell runs `cd` itself, as a **built-in**. The same goes for `exit` and for setting the shell's variables.
+
+        **File descriptors.** A process refers to its open files, pipes and sockets by small integers called **file descriptors**, indexes into a table the kernel keeps in its PCB. By convention 0 is standard input, 1 standard output and 2 standard error. `open` returns the **lowest unused number**, and `close` frees it; `read(fd, buf, n)` and `write(fd, buf, n)` work on any of them alike. The table is copied by fork and kept by exec, which is how a shell sets up a child's standard output before the new program starts.
+
+        **What a system call costs.** Each call is a trip into the kernel and back: a mode switch, saving and restoring registers, checking arguments, and often disturbing the caches. On a modern machine that is between about a hundred nanoseconds and a microsecond, which is hundreds of ordinary instructions. Writing a file one byte per call is therefore very slow. Libraries **buffer**: Python's `print` and C's `printf` collect output in memory and make one `write` when the buffer fills, when a line ends on a terminal, or when the file is closed.
+    - question:
+        id: derivation-buffer
+        type: numeric
+        system: s2
+        prompt: |
+          A program writes a 1 MiB file (1,048,576 bytes) through a buffer of 4 KiB (4,096 bytes). How many write system calls does it make?
+        answer: "256"
+        explanation: |
+          Each call carries a full buffer of 4,096 bytes, and 1,048,576 / 4,096 = 256. Without the buffer, one byte per call, it would be 1,048,576 calls, four thousand times as many.
+  formal:
+    - text: |
+        **Process.** A running program: its address space, registers and kernel resources. The kernel's record is the **PCB**: pid, parent, state, saved registers, page tables, open files.
+
+        **States.** Ready, running, blocked, and finally zombie until the parent collects the exit status.
+
+        **Context switch.** Save the old process's registers into its PCB, load the next one's, return from the trap into it.
+
+        **Unix calls.** `fork` copies the caller and returns the child's pid to the parent and 0 to the child; `exec` replaces the program in the same process; `exit(status)` ends it; `wait` blocks until a child exits and returns its status.
+
+        **File descriptors.** Small integers indexing the process's table of open files; 0, 1 and 2 are standard input, output and error; `open` returns the lowest free one. Buffering trades a little memory for far fewer system calls.
+  drill:
+    - text: Seconds each. Follow which copy is which.
+    - question:
+        id: drill-exec
+        type: choice
+        system: s1
+        prompt: |
+          A process calls exec to run a different program. Which of these does it keep?
+        options:
+          - "Its pid and its open file descriptors"
+          - "Its heap"
+          - "Its stack"
+          - "Its program counter"
+        answer: 0
+        explanation: exec replaces the program, its memory and its registers, but it is still the same process, with the same pid and open files.
+    - question:
+        id: drill-blocked
+        type: choice
+        system: s1
+        prompt: |
+          A blocked process's disk read finishes. Which state does it move to?
+        options:
+          - "Ready"
+          - "Running, at once"
+          - "Zombie"
+          - "It stays blocked until the timer fires"
+        answer: 0
+        explanation: It can run again, but the processor may be busy, so it joins the ready processes and waits its turn.
+    - question:
+        id: predict-fork-return
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          returned = {"parent": 4242, "child": 0}
+          for who in ["parent", "child"]:
+              if returned[who] == 0:
+                  print(who, "execs ls")
+              else:
+                  print(who, "waits for", returned[who])
+        output: |
+          parent waits for 4242
+          child execs ls
+        explanation: fork returns the child's pid in the parent and 0 in the child, which is how each copy knows its part.
+    - question:
+        id: predict-lowest-fd
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          table = {0: "keyboard", 1: "screen", 2: "screen", 3: "notes.txt", 4: "sales.csv"}
+          del table[3]
+          fd = 0
+          while fd in table:
+              fd += 1
+          table[fd] = "log.txt"
+          print(fd)
+        output: "3"
+        explanation: Closing 3 frees it, and the next open is given the lowest free number, which is 3 again.
+    - question:
+        id: predict-calls
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          size = 4096
+          data = 10000
+          print((data + size - 1) // size)
+        output: "3"
+        explanation: Two full buffers carry 8,192 bytes, and a third, partly full one carries the last 1,808, so 3 calls; this is division rounded up.
+  work:
+    - text: Slower now. Each answer is a piece of the kernel or the shell.
+    - question:
+        id: write-context-switch
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `switch`, the kernel's context switch: save the processor's registers into the old process's PCB and load the new one's. Each process must carry on exactly where it stopped. The program should print `A 4 0x1010 ready` and `B 5 0x2014 running`.
+        starter: |
+          class PCB:
+              # The kernel's record of one process: its number, its state, and its
+              # registers as they were when it last stopped running.
+              def __init__(self, pid, entry):
+                  self.pid = pid
+                  self.state = "ready"
+                  self.regs = {"pc": entry, "sp": 0x7FFF0000, "a0": 0}
+
+
+          def step(cpu):
+              # One instruction of the program both processes run: count up in a0.
+              cpu["a0"] += 1
+              cpu["pc"] += 4
+
+
+          def switch(cpu, old, new):
+              # cpu is the processor's register file, a dictionary the caller keeps
+              # using, so change its values in place. Save the registers into old's
+              # PCB, if there is an old process, and mark old "ready". Then load new's
+              # saved registers into the processor and mark new "running". Each PCB
+              # must keep its own copy of the registers, untouched while other
+              # processes run.
+              pass
+
+
+          a = PCB(1, 0x1000)
+          b = PCB(2, 0x2000)
+          cpu = {"pc": 0, "sp": 0, "a0": 0}
+          switch(cpu, None, a)
+          for _ in range(3):
+              step(cpu)
+          switch(cpu, a, b)
+          for _ in range(5):
+              step(cpu)
+          switch(cpu, b, a)
+          step(cpu)
+          switch(cpu, a, b)
+          print("A", a.regs["a0"], hex(a.regs["pc"]), a.state)
+          print("B", b.regs["a0"], hex(b.regs["pc"]), b.state)
+        solution: |
+          class PCB:
+              # The kernel's record of one process: its number, its state, and its
+              # registers as they were when it last stopped running.
+              def __init__(self, pid, entry):
+                  self.pid = pid
+                  self.state = "ready"
+                  self.regs = {"pc": entry, "sp": 0x7FFF0000, "a0": 0}
+
+
+          def step(cpu):
+              # One instruction of the program both processes run: count up in a0.
+              cpu["a0"] += 1
+              cpu["pc"] += 4
+
+
+          def switch(cpu, old, new):
+              if old is not None:
+                  old.regs = dict(cpu)
+                  old.state = "ready"
+              for name in new.regs:
+                  cpu[name] = new.regs[name]
+              new.state = "running"
+
+
+          a = PCB(1, 0x1000)
+          b = PCB(2, 0x2000)
+          cpu = {"pc": 0, "sp": 0, "a0": 0}
+          switch(cpu, None, a)
+          for _ in range(3):
+              step(cpu)
+          switch(cpu, a, b)
+          for _ in range(5):
+              step(cpu)
+          switch(cpu, b, a)
+          step(cpu)
+          switch(cpu, a, b)
+          print("A", a.regs["a0"], hex(a.regs["pc"]), a.state)
+          print("B", b.regs["a0"], hex(b.regs["pc"]), b.state)
+        tests: |
+          _a = PCB(1, 0x1000)
+          _b = PCB(2, 0x2000)
+          _cpu = {"pc": 0, "sp": 0, "a0": 0}
+          switch(_cpu, None, _a)
+          assert _cpu == {"pc": 0x1000, "sp": 0x7FFF0000, "a0": 0}, "switching to A should load A's saved registers into the processor, not leave " + repr(_cpu)
+          assert _a.state == "running", "the process switched to should be marked running, not " + repr(_a.state)
+          for _ in range(2):
+              step(_cpu)
+          switch(_cpu, _a, _b)
+          assert _a.regs["a0"] == 2 and _a.regs["pc"] == 0x1008, "A's PCB should hold the registers it had when it stopped, a0 = 2 and pc = 0x1008"
+          assert _a.state == "ready", "the process switched away from should be marked ready, not " + repr(_a.state)
+          assert _b.state == "running", "B should be running"
+          _cpu["a0"] = 99
+          _cpu["pc"] = 0x9999
+          assert _a.regs["a0"] == 2 and _a.regs["pc"] == 0x1008, "A's saved registers changed while B ran: the PCB must keep its own copy, not the processor's dictionary itself"
+          switch(_cpu, _b, _a)
+          assert _cpu["a0"] == 2 and _cpu["pc"] == 0x1008, "switching back to A should restore exactly what A had, a0 = 2 and pc = 0x1008, not " + repr(_cpu)
+          assert _b.regs["a0"] == 99, "B's PCB should hold what B left in the registers"
+          assert output.splitlines() == ["A 4 0x1010 ready", "B 5 0x2014 running"], "The program should print A 4 0x1010 ready and B 5 0x2014 running"
+        wrong:
+          - |
+            class PCB:
+                # The kernel's record of one process: its number, its state, and its
+                # registers as they were when it last stopped running.
+                def __init__(self, pid, entry):
+                    self.pid = pid
+                    self.state = "ready"
+                    self.regs = {"pc": entry, "sp": 0x7FFF0000, "a0": 0}
+
+
+            def step(cpu):
+                # One instruction of the program both processes run: count up in a0.
+                cpu["a0"] += 1
+                cpu["pc"] += 4
+
+
+            def switch(cpu, old, new):
+                if old is not None:
+                    old.regs = cpu
+                    old.state = "ready"
+                for name in new.regs:
+                    cpu[name] = new.regs[name]
+                new.state = "running"
+
+
+            a = PCB(1, 0x1000)
+            b = PCB(2, 0x2000)
+            cpu = {"pc": 0, "sp": 0, "a0": 0}
+            switch(cpu, None, a)
+            for _ in range(3):
+                step(cpu)
+            switch(cpu, a, b)
+            for _ in range(5):
+                step(cpu)
+            switch(cpu, b, a)
+            step(cpu)
+            switch(cpu, a, b)
+            print("A", a.regs["a0"], hex(a.regs["pc"]), a.state)
+            print("B", b.regs["a0"], hex(b.regs["pc"]), b.state)
+          - |
+            class PCB:
+                # The kernel's record of one process: its number, its state, and its
+                # registers as they were when it last stopped running.
+                def __init__(self, pid, entry):
+                    self.pid = pid
+                    self.state = "ready"
+                    self.regs = {"pc": entry, "sp": 0x7FFF0000, "a0": 0}
+
+
+            def step(cpu):
+                # One instruction of the program both processes run: count up in a0.
+                cpu["a0"] += 1
+                cpu["pc"] += 4
+
+
+            def switch(cpu, old, new):
+                if old is not None:
+                    old.state = "ready"
+                for name in new.regs:
+                    cpu[name] = new.regs[name]
+                new.state = "running"
+
+
+            a = PCB(1, 0x1000)
+            b = PCB(2, 0x2000)
+            cpu = {"pc": 0, "sp": 0, "a0": 0}
+            switch(cpu, None, a)
+            for _ in range(3):
+                step(cpu)
+            switch(cpu, a, b)
+            for _ in range(5):
+                step(cpu)
+            switch(cpu, b, a)
+            step(cpu)
+            switch(cpu, a, b)
+            print("A", a.regs["a0"], hex(a.regs["pc"]), a.state)
+            print("B", b.regs["a0"], hex(b.regs["pc"]), b.state)
+          - |
+            class PCB:
+                # The kernel's record of one process: its number, its state, and its
+                # registers as they were when it last stopped running.
+                def __init__(self, pid, entry):
+                    self.pid = pid
+                    self.state = "ready"
+                    self.regs = {"pc": entry, "sp": 0x7FFF0000, "a0": 0}
+
+
+            def step(cpu):
+                # One instruction of the program both processes run: count up in a0.
+                cpu["a0"] += 1
+                cpu["pc"] += 4
+
+
+            def switch(cpu, old, new):
+                if old is not None:
+                    old.regs = dict(cpu)
+                for name in new.regs:
+                    cpu[name] = new.regs[name]
+
+
+            a = PCB(1, 0x1000)
+            b = PCB(2, 0x2000)
+            cpu = {"pc": 0, "sp": 0, "a0": 0}
+            switch(cpu, None, a)
+            for _ in range(3):
+                step(cpu)
+            switch(cpu, a, b)
+            for _ in range(5):
+                step(cpu)
+            switch(cpu, b, a)
+            step(cpu)
+            switch(cpu, a, b)
+            print("A", a.regs["a0"], hex(a.regs["pc"]), a.state)
+            print("B", b.regs["a0"], hex(b.regs["pc"]), b.state)
+        explanation: |
+          Save a copy, `dict(cpu)`, into the old PCB, and copy the new PCB's values into the processor one by one, setting both states. Storing the processor's own dictionary in the PCB means the saved registers keep changing as other processes run, so A wakes up with B's count. Forgetting to save at all brings A back to where it first started, and forgetting the states leaves the kernel unable to tell which process is on the processor.
+    - question:
+        id: write-shell
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write the body of `shell`: for each command, fork a child and run the program in it, collecting its exit status; report unknown commands with status 127; and run `cd` in the shell itself. The program should print `/home/meera`, `/tmp`, `ls: command not found`, `done`, and then `[0, 0, 0, 127, 0]`.
+        starter: |
+          def pwd(proc, args):
+              print(proc["cwd"])
+              return 0
+
+
+          def echo(proc, args):
+              print(" ".join(args))
+              return 0
+
+
+          def cd(proc, args):
+              proc["cwd"] = args[0]
+              return 0
+
+
+          # The programs on disk that exec can load, by name.
+          PROGRAMS = {"pwd": pwd, "echo": echo, "cd": cd}
+          last_pid = [100]
+
+
+          def fork(proc):
+              # The child is a copy of its parent, with a new pid.
+              last_pid[0] += 1
+              child = dict(proc)
+              child["pid"] = last_pid[0]
+              child["ppid"] = proc["pid"]
+              return child
+
+
+          def shell(lines):
+              me = {"pid": 1, "ppid": 0, "cwd": "/home/meera"}
+              statuses = []
+              for line in lines:
+                  words = line.split()
+                  name, args = words[0], words[1:]
+                  # For each line, fork a child and exec the program in it, passing the
+                  # child's process record: look the name up in PROGRAMS and run it.
+                  # The shell then waits, and the program's return value is the
+                  # child's exit status. A name not in PROGRAMS prints
+                  # "NAME: command not found" and gives status 127. But cd must change
+                  # the directory of the shell itself, so the shell runs it with no
+                  # fork, as a built-in, with status 0.
+                  statuses.append(0)
+              return statuses
+
+
+          print(shell(["pwd", "cd /tmp", "pwd", "ls", "echo done"]))
+        solution: |
+          def pwd(proc, args):
+              print(proc["cwd"])
+              return 0
+
+
+          def echo(proc, args):
+              print(" ".join(args))
+              return 0
+
+
+          def cd(proc, args):
+              proc["cwd"] = args[0]
+              return 0
+
+
+          # The programs on disk that exec can load, by name.
+          PROGRAMS = {"pwd": pwd, "echo": echo, "cd": cd}
+          last_pid = [100]
+
+
+          def fork(proc):
+              # The child is a copy of its parent, with a new pid.
+              last_pid[0] += 1
+              child = dict(proc)
+              child["pid"] = last_pid[0]
+              child["ppid"] = proc["pid"]
+              return child
+
+
+          def shell(lines):
+              me = {"pid": 1, "ppid": 0, "cwd": "/home/meera"}
+              statuses = []
+              for line in lines:
+                  words = line.split()
+                  name, args = words[0], words[1:]
+                  if name == "cd":
+                      cd(me, args)
+                      statuses.append(0)
+                      continue
+                  child = fork(me)
+                  program = PROGRAMS.get(name)
+                  if program is None:
+                      print(name + ": command not found")
+                      status = 127
+                  else:
+                      status = program(child, args)
+                  statuses.append(status)
+              return statuses
+
+
+          print(shell(["pwd", "cd /tmp", "pwd", "ls", "echo done"]))
+        tests: |
+          import io as _io
+          import contextlib as _ctx
+
+
+          def _go(_lines):
+              _buf = _io.StringIO()
+              with _ctx.redirect_stdout(_buf):
+                  _st = shell(_lines)
+              return _st, _buf.getvalue().splitlines()
+
+
+          _st, _out = _go(["cd /srv/www", "pwd"])
+          assert _out == ["/srv/www"], "cd must change the shell's own directory, so the next pwd, which inherits it, prints /srv/www; it printed " + repr(_out)
+          assert _st == [0, 0], "cd and pwd both succeed, status 0"
+
+
+          def wander(proc, args):
+              proc["cwd"] = "/nowhere"
+              return 3
+
+
+          PROGRAMS["wander"] = wander
+          _st, _out = _go(["wander", "pwd"])
+          assert _out == ["/home/meera"], "a program must run in a forked child: when wander changes its own directory, the shell's should not change, but pwd then printed " + repr(_out)
+          assert _st == [3, 0], "the status the shell collects is the program's return value, here 3 then 0, not " + repr(_st)
+
+
+          def whoami(proc, args):
+              print(proc["pid"], proc["ppid"])
+              return 0
+
+
+          PROGRAMS["whoami"] = whoami
+          _st, _out = _go(["whoami", "whoami"])
+          _p1, _p2 = [_l.split() for _l in _out]
+          assert _p1[1] == "1" and _p2[1] == "1", "each program should run in a child whose parent is the shell, pid 1"
+          assert _p1[0] != _p2[0] and _p1[0] != "1", "each command should get a new child process with its own pid"
+          _st, _out = _go(["make"])
+          assert _out == ["make: command not found"] and _st == [127], "an unknown program should print make: command not found and give status 127, not " + repr(_st)
+          assert output.splitlines() == ["/home/meera", "/tmp", "ls: command not found", "done", "[0, 0, 0, 127, 0]"], "The program should print /home/meera, /tmp, ls: command not found, done and [0, 0, 0, 127, 0]"
+        wrong:
+          - |
+            def pwd(proc, args):
+                print(proc["cwd"])
+                return 0
+
+
+            def echo(proc, args):
+                print(" ".join(args))
+                return 0
+
+
+            def cd(proc, args):
+                proc["cwd"] = args[0]
+                return 0
+
+
+            # The programs on disk that exec can load, by name.
+            PROGRAMS = {"pwd": pwd, "echo": echo, "cd": cd}
+            last_pid = [100]
+
+
+            def fork(proc):
+                # The child is a copy of its parent, with a new pid.
+                last_pid[0] += 1
+                child = dict(proc)
+                child["pid"] = last_pid[0]
+                child["ppid"] = proc["pid"]
+                return child
+
+
+            def shell(lines):
+                me = {"pid": 1, "ppid": 0, "cwd": "/home/meera"}
+                statuses = []
+                for line in lines:
+                    words = line.split()
+                    name, args = words[0], words[1:]
+                    child = fork(me)
+                    program = PROGRAMS.get(name)
+                    if program is None:
+                        print(name + ": command not found")
+                        status = 127
+                    else:
+                        status = program(child, args)
+                    statuses.append(status)
+                return statuses
+
+
+            print(shell(["pwd", "cd /tmp", "pwd", "ls", "echo done"]))
+          - |
+            def pwd(proc, args):
+                print(proc["cwd"])
+                return 0
+
+
+            def echo(proc, args):
+                print(" ".join(args))
+                return 0
+
+
+            def cd(proc, args):
+                proc["cwd"] = args[0]
+                return 0
+
+
+            # The programs on disk that exec can load, by name.
+            PROGRAMS = {"pwd": pwd, "echo": echo, "cd": cd}
+            last_pid = [100]
+
+
+            def fork(proc):
+                # The child is a copy of its parent, with a new pid.
+                last_pid[0] += 1
+                child = dict(proc)
+                child["pid"] = last_pid[0]
+                child["ppid"] = proc["pid"]
+                return child
+
+
+            def shell(lines):
+                me = {"pid": 1, "ppid": 0, "cwd": "/home/meera"}
+                statuses = []
+                for line in lines:
+                    words = line.split()
+                    name, args = words[0], words[1:]
+                    if name == "cd":
+                        cd(me, args)
+                        statuses.append(0)
+                        continue
+                    child = fork(me)
+                    program = PROGRAMS.get(name)
+                    if program is None:
+                        print(name + ": command not found")
+                        status = 127
+                    else:
+                        status = program(me, args)
+                    statuses.append(status)
+                return statuses
+
+
+            print(shell(["pwd", "cd /tmp", "pwd", "ls", "echo done"]))
+          - |
+            def pwd(proc, args):
+                print(proc["cwd"])
+                return 0
+
+
+            def echo(proc, args):
+                print(" ".join(args))
+                return 0
+
+
+            def cd(proc, args):
+                proc["cwd"] = args[0]
+                return 0
+
+
+            # The programs on disk that exec can load, by name.
+            PROGRAMS = {"pwd": pwd, "echo": echo, "cd": cd}
+            last_pid = [100]
+
+
+            def fork(proc):
+                # The child is a copy of its parent, with a new pid.
+                last_pid[0] += 1
+                child = dict(proc)
+                child["pid"] = last_pid[0]
+                child["ppid"] = proc["pid"]
+                return child
+
+
+            def shell(lines):
+                me = {"pid": 1, "ppid": 0, "cwd": "/home/meera"}
+                statuses = []
+                for line in lines:
+                    words = line.split()
+                    name, args = words[0], words[1:]
+                    if name == "cd":
+                        cd(me, args)
+                        statuses.append(0)
+                        continue
+                    child = fork(me)
+                    program = PROGRAMS.get(name)
+                    if program is None:
+                        print(name + ": command not found")
+                        status = 1
+                    else:
+                        status = program(child, args)
+                    statuses.append(status)
+                return statuses
+
+
+            print(shell(["pwd", "cd /tmp", "pwd", "ls", "echo done"]))
+        explanation: |
+          Handle cd first, on the shell's own record, then for anything else fork, look the program up, and run it on the child. Running cd in a child changes only the child, so the next pwd shows the old directory; running programs on the shell's own record lets any program change the shell; and 127 is the status shells use for a command that was not found, which scripts check for.
+    - question:
+        id: fix-buffered-writer
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `Writer` batches small writes into fewer system calls. Writing ten lines and closing should print `4 system calls` and `10 lines reached the file`, but the last line never arrives. Find the fault and fix it.
+        starter: |
+          calls = []
+
+
+          def sys_write(data):
+              # Each call into the kernel costs about a microsecond, however little
+              # it carries.
+              calls.append(data)
+
+
+          class Writer:
+              # Collects small writes in a buffer and hands them to the kernel in
+              # batches of at least size characters. close must hand over whatever
+              # is left, without making an empty call.
+              def __init__(self, size):
+                  self.size = size
+                  self.buffer = ""
+
+              def write(self, text):
+                  self.buffer += text
+                  if len(self.buffer) >= self.size:
+                      self.flush()
+
+              def flush(self):
+                  sys_write(self.buffer)
+                  self.buffer = ""
+
+              def close(self):
+                  if len(self.buffer) >= self.size:
+                      self.flush()
+
+
+          w = Writer(16)
+          for i in range(10):
+              w.write(f"line {i}\n")
+          w.close()
+          print(len(calls), "system calls")
+          print("".join(calls).count("\n"), "lines reached the file")
+        solution: |
+          calls = []
+
+
+          def sys_write(data):
+              # Each call into the kernel costs about a microsecond, however little
+              # it carries.
+              calls.append(data)
+
+
+          class Writer:
+              # Collects small writes in a buffer and hands them to the kernel in
+              # batches of at least size characters. close must hand over whatever
+              # is left, without making an empty call.
+              def __init__(self, size):
+                  self.size = size
+                  self.buffer = ""
+
+              def write(self, text):
+                  self.buffer += text
+                  if len(self.buffer) >= self.size:
+                      self.flush()
+
+              def flush(self):
+                  sys_write(self.buffer)
+                  self.buffer = ""
+
+              def close(self):
+                  if self.buffer:
+                      self.flush()
+
+
+          w = Writer(16)
+          for i in range(10):
+              w.write(f"line {i}\n")
+          w.close()
+          print(len(calls), "system calls")
+          print("".join(calls).count("\n"), "lines reached the file")
+        tests: |
+          calls.clear()
+          _w = Writer(16)
+          for _i in range(9):
+              _w.write(f"line {_i}\n")
+          _w.close()
+          assert len(calls) == 3, "nine 7-character lines with a 16-character buffer go to the kernel in 3 calls of 3 lines each, and close has nothing left to send, but there were " + repr(len(calls)) + " calls"
+          assert "" not in calls, "close must not make an empty system call"
+          calls.clear()
+          _w = Writer(100)
+          _w.write("chai\n")
+          _w.write("samosa\n")
+          _w.close()
+          assert calls == ["chai\nsamosa\n"], "two short writes should reach the kernel together, in one call at close, not " + repr(calls)
+          calls.clear()
+          _w = Writer(4)
+          _w.write("abcdef")
+          _w.write("g")
+          _w.close()
+          assert calls == ["abcdef", "g"], "a write that fills the buffer goes at once and the rest at close, not " + repr(calls)
+          assert output.splitlines() == ["4 system calls", "10 lines reached the file"], "The program should print 4 system calls and 10 lines reached the file"
+        wrong:
+          - |
+            calls = []
+
+
+            def sys_write(data):
+                # Each call into the kernel costs about a microsecond, however little
+                # it carries.
+                calls.append(data)
+
+
+            class Writer:
+                # Collects small writes in a buffer and hands them to the kernel in
+                # batches of at least size characters. close must hand over whatever
+                # is left, without making an empty call.
+                def __init__(self, size):
+                    self.size = size
+                    self.buffer = ""
+
+                def write(self, text):
+                    self.buffer += text
+                    if len(self.buffer) >= self.size:
+                        self.flush()
+
+                def flush(self):
+                    sys_write(self.buffer)
+                    self.buffer = ""
+
+                def close(self):
+                    self.flush()
+
+
+            w = Writer(16)
+            for i in range(10):
+                w.write(f"line {i}\n")
+            w.close()
+            print(len(calls), "system calls")
+            print("".join(calls).count("\n"), "lines reached the file")
+          - |
+            calls = []
+
+
+            def sys_write(data):
+                # Each call into the kernel costs about a microsecond, however little
+                # it carries.
+                calls.append(data)
+
+
+            class Writer:
+                # Collects small writes in a buffer and hands them to the kernel in
+                # batches of at least size characters. close must hand over whatever
+                # is left, without making an empty call.
+                def __init__(self, size):
+                    self.size = size
+                    self.buffer = ""
+
+                def write(self, text):
+                    self.buffer += text
+                    self.flush()
+
+                def flush(self):
+                    sys_write(self.buffer)
+                    self.buffer = ""
+
+                def close(self):
+                    if self.buffer:
+                        self.flush()
+
+
+            w = Writer(16)
+            for i in range(10):
+                w.write(f"line {i}\n")
+            w.close()
+            print(len(calls), "system calls")
+            print("".join(calls).count("\n"), "lines reached the file")
+          - |
+            calls = []
+
+
+            def sys_write(data):
+                # Each call into the kernel costs about a microsecond, however little
+                # it carries.
+                calls.append(data)
+
+
+            class Writer:
+                # Collects small writes in a buffer and hands them to the kernel in
+                # batches of at least size characters. close must hand over whatever
+                # is left, without making an empty call.
+                def __init__(self, size):
+                    self.size = size
+                    self.buffer = ""
+
+                def write(self, text):
+                    self.buffer += text
+                    if len(self.buffer) >= self.size:
+                        self.flush()
+
+                def flush(self):
+                    sys_write(self.buffer)
+                    self.buffer = ""
+
+                def close(self):
+                    if self.buffer:
+                        self.buffer = ""
+
+
+            w = Writer(16)
+            for i in range(10):
+                w.write(f"line {i}\n")
+            w.close()
+            print(len(calls), "system calls")
+            print("".join(calls).count("\n"), "lines reached the file")
+        explanation: |
+          close sends what is left only when the buffer is full, but by then write would already have sent it; close must send anything that remains. Flushing unconditionally makes an empty system call when the buffer happens to be empty, flushing on every write throws away the point of the buffer, and emptying the buffer at close without writing it loses the data quietly. The same mistake in real programs is why output can vanish when a program crashes before its buffers are flushed.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. A program calls `fork()` once in each of 3 times round a loop and then prints "hi". How many times is "hi" printed?
+        answer: "8"
+        explanation: |
+          Every process in the loop forks once per round, so the count doubles three times, 1, 2, 4, 8, and each of the 8 processes prints once.
+    - question:
+        id: work-fork-bomb
+        type: choice
+        system: s2
+        prompt: |
+          A program forks in an endless loop, in the parent and every child, until the machine stops responding. What limit lets an administrator stop this from hurting other users?
+        options:
+          - "A cap on the number of processes each user may have, which makes fork fail beyond it"
+          - "A faster processor"
+          - "A larger stack for each process"
+          - "Buffering the program's output"
+        answer: 0
+        explanation: |
+          The doubling of the puzzle has no end here, and the process table fills in a fraction of a second. Linux lets the administrator cap processes per user, so fork returns an error instead and other users' programs still get the processor.
+  connections:
+    - text: |
+        8. In each round every process still in the loop forks, so the number of processes doubles: 1, 2, 4, 8. All 8 leave the loop and print. With n rounds it is 2 to the power n, which is why a careless fork in a loop is dangerous; with `if (fork() == 0) break;` only the original keeps forking and you get n + 1.
+
+        A busy machine has hundreds of processes, and most of the time several of them are ready to run at once. Which one runs next, and for how long, decides whether a video stutters, a compile finishes overnight, or a server answers in time. [[h2.scheduling]] treats that choice as an algorithm problem, with a priority queue at its heart.

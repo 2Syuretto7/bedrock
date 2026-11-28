@@ -1,0 +1,782 @@
+concept: h2.virtual-memory-and-page-tables
+minutes: 85
+claim: You can explain why each process gets its own virtual address space and what that buys, isolation, relocation and memory larger than the machine's; split a virtual address into a page number and an offset and translate it through a page table to a physical address; read the present, writable, user and dirty bits of a page table entry; tell the three kinds of page fault apart, unmapped, not present and protection, and say what the kernel does with each; work out how big a flat page table is and why multi-level tables are used instead; explain demand paging, sharing and copy-on-write; and count faults under FIFO and LRU page replacement.
+recalls: [h2.scheduling]
+uses: [h2.processes-and-system-calls, h2.what-an-operating-system-does, h0.bitwise-operations-and-masks, h0.binary-and-hexadecimal, h0.alignment-and-the-size-of-things, h1.latches-registers-and-memory, f0.powers-of-two, s1.exceptions, s0.lists-and-tuples]
+leads: [h2.the-tlb-and-address-translation]
+starter: |
+  # Scratch space. With 4 KiB pages, the low 12 bits of an address are the
+  # offset inside the page and the rest is the page number.
+  vaddr = 0x00401A2C
+  print("page", hex(vaddr >> 12), "offset", hex(vaddr & 0xFFF))
+parts:
+  recall:
+    - text: |
+        [[h2.scheduling]] chose which process runs next, and switching between them meant saving and loading registers. But registers are a few hundred bytes; a process's real state is its memory, often hundreds of megabytes. Two processes may both believe their data lives at address 0x10010000, and neither must be able to touch the other's. This lesson shows how one set of memory chips is shared out so that every process gets its own. Three quick pulls first.
+  puzzle:
+    - text: |
+        A 32-bit computer uses pages of 4 KiB. Each process has a single flat page table with one 4-byte entry for every page of its 4 GiB address space, whether the page is used or not.
+
+        **How many MiB does each process's page table take?**
+  intuition:
+    - text: |
+        A big apartment complex in Bengaluru gives every family the same kind of address: flat 101, flat 102, and so on. Two families in different towers can both live in flat 101, and the letters still reach the right door, because the post office keeps a list for each tower that turns "flat 101" into an actual location. A family never needs to know where its flat sits on the land, and if the society moves it to another floor, only the list changes.
+
+        A **virtual address** is the flat number, the same small numbers in every process. The **page table** is the list, one per process, kept by the kernel and read by the hardware on every load and store. The figure follows five addresses through one process's page table: two that translate, and three that fault in different ways.
+    - figure: page-table
+      props: { access: code }
+    - text: |
+        The page number picks a row; the offset passes through unchanged. The row says whether the page is in memory, which frame holds it, and what the process may do with it. Notice how much the table costs to cover even a small address space: one row per page, used or not. That cost is the puzzle.
+  derivation:
+    - text: |
+        **Why not use physical addresses?** If every program used real memory addresses, a bug in one could overwrite another, two programs compiled to use the same addresses could not run together, and a program could never use more memory than the machine has. **Virtual memory** fixes all three at once. Each process gets its own **address space**, a range of virtual addresses, often from 0 to 2⁴⁸ − 1 on a 64-bit machine. On every memory access, a unit in the processor called the **memory management unit** (MMU) translates the virtual address into a physical one using tables the kernel set up. A process can only reach physical memory that its tables map, so it cannot see anyone else's; it can be loaded anywhere; and parts of it can live on disk until needed.
+    - question:
+        id: derivation-why
+        type: choice
+        system: s2
+        prompt: |
+          Two processes both store a value at virtual address 0x10010000. What happens?
+        options:
+          - "Each value goes to a different physical location, because each process has its own page table"
+          - "The second store overwrites the first"
+          - "The second process gets a protection fault"
+          - "The kernel must relocate one program before it can run"
+        answer: 0
+        explanation: |
+          The same virtual address means different things in different address spaces. Each process's table maps page 0x10010 to its own frame.
+    - text: |
+        **Pages and frames.** Translating every byte separately would need an enormous table, so memory is managed in fixed-size blocks: **pages** of virtual memory and **frames** of physical memory, the same size, usually 4 KiB = 2¹² bytes. A virtual address then splits in two. The low 12 bits are the **offset** within the page, and the bits above are the **virtual page number** (VPN). Translation replaces the page number with a **physical frame number** (PFN) and keeps the offset:
+
+        physical address = (PFN << 12) | offset.
+
+        Each **page table entry** (PTE) holds the frame number and a few bits: **present** (the page is in memory), **writable**, **user** (user mode may touch it, not only the kernel), **executable**, **accessed** (set by the hardware on any use), and **dirty** (set on any write, so the kernel knows the page must be saved before its frame is reused).
+    - question:
+        id: derivation-split
+        type: choice
+        system: s2
+        prompt: |
+          With 4 KiB pages, virtual page 0x2 maps to frame 0x9. What physical address does virtual address 0x2345 become?
+        options:
+          - "0x9345"
+          - "0x2349"
+          - "0x9000"
+          - "0x2345"
+        answer: 0
+        explanation: |
+          0x2345 is page 0x2 with offset 0x345. The page number becomes 0x9 and the offset is kept: 0x9345.
+    - text: |
+        **Page faults.** When a translation cannot go ahead, the MMU raises an exception, a **page fault**, and the kernel's handler looks at the cause.
+
+        - The page is **not mapped** at all, like address 0 or a wild pointer. The kernel sends the process SIGSEGV, the familiar "segmentation fault".
+        - The page is mapped but **not present**. This is normal, not an error: the kernel allocates a frame, fills it from disk or with zeros, sets the entry present and restarts the faulting instruction, which now succeeds. Loading pages only when they are first touched is **demand paging**, and it is why a 200 MB program starts in a fraction of a second.
+        - The access breaks the **protection** bits, such as a write to read-only code. Usually a SIGSEGV; but see copy-on-write below.
+
+        **Sharing.** Two page tables can point at the same frame. All processes running the same program, or using the same library, share one read-only copy of its code. After `fork`, parent and child share every frame, with both tables marked read-only; the first write by either takes a protection fault, and the kernel copies just that page and makes it writable. This **copy-on-write** is why fork is cheap even for a big process.
+    - question:
+        id: derivation-cow
+        type: choice
+        system: s2
+        prompt: |
+          Just after fork, the child writes to a page of its heap. What happens?
+        options:
+          - "A protection fault; the kernel copies that one page for the child, makes it writable, and restarts the write"
+          - "The write changes the parent's heap too"
+          - "The child is ended with a segmentation fault"
+          - "The kernel copies the child's whole address space"
+        answer: 0
+        explanation: |
+          Both tables mark the shared page read-only, so the write faults. The kernel sees a copy-on-write page, copies only it, and the write goes ahead in the child's new copy.
+    - text: |
+        **Multi-level tables.** A flat table needs one entry for every page of the address space, whether used or not, and most of an address space is empty: some code near the bottom, a heap above it, a stack near the top, and a vast gap between. The fix is the same as for any sparse data: a tree. A **two-level** table for 32-bit addresses splits the page number into 10 bits that index a **root** table and 10 bits that index one of up to 1,024 **second-level** tables, each of 1,024 entries filling exactly one page. A second-level table is created only for a region in use; an empty root entry stands for 4 MiB of nothing. x86-64 uses four levels of 9 bits each over 48-bit addresses, and newer chips a fifth. The price is that a translation now needs several memory reads, one per level, which the next lesson deals with.
+    - question:
+        id: derivation-levels
+        type: numeric
+        system: s2
+        prompt: |
+          A process on a 32-bit machine with a two-level page table uses three pages: one at address 0x00400000, one at 0x00401000 and one at 0xBFFFF000. How many second-level tables does it need?
+        answer: "2"
+        explanation: |
+          The top 10 bits decide the second-level table. The first two addresses share their top 10 bits (both lie in the region 0x00400000 to 0x007FFFFF), so they share a table; the stack page needs another. Two in all, plus the root.
+    - text: |
+        **When memory runs out.** If every frame is in use and a page fault needs one, the kernel must **evict** a page: write it to disk if it is dirty, clear its present bit, and reuse its frame. The best page to evict is the one that will not be needed for the longest time, but that needs the future. **FIFO** evicts the page loaded longest ago, which can throw out a page in constant use. **LRU** evicts the page used longest ago, betting that the recent past predicts the near future; exact LRU is too costly in hardware, so kernels approximate it with the accessed bit, as in the **clock** algorithm, which sweeps the frames, clearing accessed bits and evicting the first page whose bit is already clear.
+
+        If the pages a process keeps using, its **working set**, do not fit in memory, nearly every access faults, each fault waits milliseconds for the disk, and the machine spends its time moving pages instead of computing. That is **thrashing**, and the cure is more memory or fewer processes.
+    - question:
+        id: derivation-lru
+        type: numeric
+        system: s2
+        prompt: |
+          A process touches pages 1, 2, 3, 1, 4, 1, in that order, with 3 frames, all empty to begin with. How many page faults are there under LRU?
+        answer: "4"
+        explanation: |
+          1, 2 and 3 fault. The second 1 is a hit and makes 2 the least recently used, so 4 faults and evicts 2. The last 1 is a hit. Four faults; FIFO would evict 1 for 4 and fault again on 1, five.
+  formal:
+    - text: |
+        **Translation.** Virtual address = page number · offset. Physical address = (frame number << offset bits) | offset. 4 KiB pages give 12 offset bits.
+
+        **Page table entry.** Frame number with present, writable, user, executable, accessed and dirty bits. One table per process, set by the kernel, read by the MMU.
+
+        **Page faults.** Unmapped → SIGSEGV. Not present → load the page (demand paging) and restart. Protection → SIGSEGV, or copy-on-write.
+
+        **Multi-level tables.** A tree of tables indexed by slices of the page number; only regions in use need lower-level tables.
+
+        **Replacement.** On a fault with no free frame, evict a page: FIFO, LRU, or clock as a cheap LRU. Thrashing when the working set does not fit.
+  drill:
+    - text: Seconds each. Split the address, then look it up.
+    - question:
+        id: drill-dirty
+        type: choice
+        system: s1
+        prompt: |
+          The kernel wants to reuse the frame of a page whose dirty bit is clear. What must it do with the page's contents first?
+        options:
+          - "Nothing: the copy on disk is still correct, so the frame can be reused at once"
+          - "Write the page to disk"
+          - "Copy it to another frame"
+          - "Send the process SIGSEGV"
+        answer: 0
+        explanation: A clear dirty bit means nobody wrote to the page since it was loaded, so the disk copy matches and no write is needed.
+    - question:
+        id: drill-demand
+        type: choice
+        system: s1
+        prompt: |
+          A program reads an array element it has never touched before, and its page has an entry but is not present. What kind of fault is it?
+        options:
+          - "A not-present fault, which the kernel handles by loading the page, and the program carries on"
+          - "A protection fault that ends the program"
+          - "A segmentation fault"
+          - "No fault: the MMU loads pages from disk itself"
+        answer: 0
+        explanation: Demand paging loads pages on first touch through exactly this fault; the program only sees a slower load.
+    - question:
+        id: predict-split
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          vaddr = 0x3A7F
+          print(hex(vaddr >> 12), hex(vaddr & 0xFFF))
+        output: "0x3 0xa7f"
+        explanation: Shifting right by 12 leaves the page number, 3, and masking with 0xFFF keeps the 12-bit offset.
+    - question:
+        id: predict-translate
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          table = {0: None, 1: 5, 2: 3}
+          vaddr = 0x2010
+          frame = table[vaddr >> 12]
+          print(hex((frame << 12) | (vaddr & 0xFFF)))
+        output: "0x3010"
+        explanation: Page 2 maps to frame 3, and the offset 0x010 is kept.
+    - question:
+        id: predict-levels
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          address_bits = 48
+          offset_bits = 12
+          bits_per_level = 9
+          print((address_bits - offset_bits) // bits_per_level)
+        output: "4"
+        explanation: A 48-bit address has 36 bits of page number, and a 4 KiB table of 8-byte entries holds 512, which is 9 bits, so x86-64 walks 4 levels.
+  work:
+    - text: Slower now. Each answer is part of a memory management unit or a kernel.
+    - question:
+        id: write-translate
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `translate`, which turns a virtual address into a physical one through the page table, or raises the right kind of page fault. The program should print three translations, `0x1a2c -> 0x5a2c`, `0x2010 -> 0x3010` and `0x7ff8 -> 0x1ff8`, and then a protection fault, a not-present fault and an unmapped fault.
+        starter: |
+          class PageFault(Exception):
+              pass
+
+
+          PAGE_BITS = 12  # pages of 4 KiB, so the low 12 bits of an address are the offset
+
+          # One process's page table: virtual page number -> entry. A page with no
+          # entry is not mapped at all.
+          table = {
+              1: {"present": True, "frame": 5, "writable": False},  # code
+              2: {"present": True, "frame": 3, "writable": True},   # data
+              4: {"present": False, "frame": None, "writable": True},  # swapped out to disk
+              7: {"present": True, "frame": 1, "writable": True},   # stack
+          }
+
+
+          def translate(vaddr, write):
+              # Split vaddr into a virtual page number and an offset. Raise
+              # PageFault("unmapped") if the page has no entry, PageFault("not present")
+              # if its entry is not present, and PageFault("protection") for a write to
+              # a page that is not writable. Otherwise return the physical address: the
+              # frame number followed by the same offset.
+              return vaddr
+
+
+          for vaddr, write in [(0x1A2C, False), (0x2010, True), (0x7FF8, True), (0x1004, True), (0x4100, False), (0x0000, False)]:
+              try:
+                  print(hex(vaddr), "->", hex(translate(vaddr, write)))
+              except PageFault as fault:
+                  print(hex(vaddr), "-> page fault:", fault)
+        solution: |
+          class PageFault(Exception):
+              pass
+
+
+          PAGE_BITS = 12  # pages of 4 KiB, so the low 12 bits of an address are the offset
+
+          # One process's page table: virtual page number -> entry. A page with no
+          # entry is not mapped at all.
+          table = {
+              1: {"present": True, "frame": 5, "writable": False},  # code
+              2: {"present": True, "frame": 3, "writable": True},   # data
+              4: {"present": False, "frame": None, "writable": True},  # swapped out to disk
+              7: {"present": True, "frame": 1, "writable": True},   # stack
+          }
+
+
+          def translate(vaddr, write):
+              vpn = vaddr >> PAGE_BITS
+              offset = vaddr & ((1 << PAGE_BITS) - 1)
+              entry = table.get(vpn)
+              if entry is None:
+                  raise PageFault("unmapped")
+              if not entry["present"]:
+                  raise PageFault("not present")
+              if write and not entry["writable"]:
+                  raise PageFault("protection")
+              return (entry["frame"] << PAGE_BITS) | offset
+
+
+          for vaddr, write in [(0x1A2C, False), (0x2010, True), (0x7FF8, True), (0x1004, True), (0x4100, False), (0x0000, False)]:
+              try:
+                  print(hex(vaddr), "->", hex(translate(vaddr, write)))
+              except PageFault as fault:
+                  print(hex(vaddr), "-> page fault:", fault)
+        tests: |
+          def _fault(_v, _w):
+              try:
+                  translate(_v, _w)
+              except PageFault as _e:
+                  return str(_e)
+              return None
+
+
+          assert translate(0x1A2C, False) == 0x5A2C, "0x1a2c is page 1, offset 0xa2c, and page 1 is in frame 5, so 0x5a2c"
+          assert translate(0x2FFF, True) == 0x3FFF, "the last byte of page 2 is the last byte of frame 3, 0x3fff"
+          assert translate(0x7000, False) == 0x1000, "the first byte of page 7 is the first byte of frame 1, 0x1000"
+          assert translate(0x2010, True) == 0x3010, "writes to a writable page translate like reads"
+          assert _fault(0x1004, True) == "protection", "a write to the code page, which is not writable, should be a protection fault"
+          assert _fault(0x1004, False) is None, "reading the code page is allowed"
+          assert _fault(0x4100, False) == "not present", "page 4 has an entry but is not in memory, so: not present"
+          assert _fault(0x0000, False) == "unmapped", "page 0 has no entry at all, so: unmapped"
+          assert _fault(0x6ABC, True) == "unmapped", "page 6 has no entry at all, so: unmapped"
+          assert output.splitlines() == ["0x1a2c -> 0x5a2c", "0x2010 -> 0x3010", "0x7ff8 -> 0x1ff8", "0x1004 -> page fault: protection", "0x4100 -> page fault: not present", "0x0 -> page fault: unmapped"], "The program should print three translations and then protection, not present and unmapped faults"
+        wrong:
+          - |
+            class PageFault(Exception):
+                pass
+
+
+            PAGE_BITS = 12  # pages of 4 KiB, so the low 12 bits of an address are the offset
+
+            # One process's page table: virtual page number -> entry. A page with no
+            # entry is not mapped at all.
+            table = {
+                1: {"present": True, "frame": 5, "writable": False},  # code
+                2: {"present": True, "frame": 3, "writable": True},   # data
+                4: {"present": False, "frame": None, "writable": True},  # swapped out to disk
+                7: {"present": True, "frame": 1, "writable": True},   # stack
+            }
+
+
+            def translate(vaddr, write):
+                vpn = vaddr >> PAGE_BITS
+                offset = vaddr & (1 << PAGE_BITS)
+                entry = table.get(vpn)
+                if entry is None:
+                    raise PageFault("unmapped")
+                if not entry["present"]:
+                    raise PageFault("not present")
+                if write and not entry["writable"]:
+                    raise PageFault("protection")
+                return (entry["frame"] << PAGE_BITS) | offset
+
+
+            for vaddr, write in [(0x1A2C, False), (0x2010, True), (0x7FF8, True), (0x1004, True), (0x4100, False), (0x0000, False)]:
+                try:
+                    print(hex(vaddr), "->", hex(translate(vaddr, write)))
+                except PageFault as fault:
+                    print(hex(vaddr), "-> page fault:", fault)
+          - |
+            class PageFault(Exception):
+                pass
+
+
+            PAGE_BITS = 12  # pages of 4 KiB, so the low 12 bits of an address are the offset
+
+            # One process's page table: virtual page number -> entry. A page with no
+            # entry is not mapped at all.
+            table = {
+                1: {"present": True, "frame": 5, "writable": False},  # code
+                2: {"present": True, "frame": 3, "writable": True},   # data
+                4: {"present": False, "frame": None, "writable": True},  # swapped out to disk
+                7: {"present": True, "frame": 1, "writable": True},   # stack
+            }
+
+
+            def translate(vaddr, write):
+                vpn = vaddr >> PAGE_BITS
+                offset = vaddr & ((1 << PAGE_BITS) - 1)
+                entry = table.get(vpn)
+                if entry is None:
+                    raise PageFault("unmapped")
+                if not entry["present"]:
+                    raise PageFault("not present")
+                if write and not entry["writable"]:
+                    raise PageFault("protection")
+                return (entry["frame"] << PAGE_BITS) | vaddr
+
+
+            for vaddr, write in [(0x1A2C, False), (0x2010, True), (0x7FF8, True), (0x1004, True), (0x4100, False), (0x0000, False)]:
+                try:
+                    print(hex(vaddr), "->", hex(translate(vaddr, write)))
+                except PageFault as fault:
+                    print(hex(vaddr), "-> page fault:", fault)
+          - |
+            class PageFault(Exception):
+                pass
+
+
+            PAGE_BITS = 12  # pages of 4 KiB, so the low 12 bits of an address are the offset
+
+            # One process's page table: virtual page number -> entry. A page with no
+            # entry is not mapped at all.
+            table = {
+                1: {"present": True, "frame": 5, "writable": False},  # code
+                2: {"present": True, "frame": 3, "writable": True},   # data
+                4: {"present": False, "frame": None, "writable": True},  # swapped out to disk
+                7: {"present": True, "frame": 1, "writable": True},   # stack
+            }
+
+
+            def translate(vaddr, write):
+                vpn = vaddr >> PAGE_BITS
+                offset = vaddr & ((1 << PAGE_BITS) - 1)
+                entry = table.get(vpn)
+                if entry is None:
+                    raise PageFault("unmapped")
+                if not entry["present"]:
+                    raise PageFault("not present")
+                return (entry["frame"] << PAGE_BITS) | offset
+
+
+            for vaddr, write in [(0x1A2C, False), (0x2010, True), (0x7FF8, True), (0x1004, True), (0x4100, False), (0x0000, False)]:
+                try:
+                    print(hex(vaddr), "->", hex(translate(vaddr, write)))
+                except PageFault as fault:
+                    print(hex(vaddr), "-> page fault:", fault)
+        explanation: |
+          Shift right by 12 for the page number and mask with (1 << 12) − 1, which is 0xFFF, for the offset; check the entry exists, is present, and allows a write if this is one; then put the frame number in front of the offset. Masking with 1 << 12 keeps only bit 12, not the low twelve bits; or-ing in the whole virtual address leaks the page number into the result; and skipping the writable check lets a program overwrite its own code.
+    - question:
+        id: write-two-level
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `map_page` and `lookup` for a two-level page table, creating second-level tables only when needed. The program should print `0x12234 0x3ffc None` and then `4 tables, 16 KiB instead of 4096 KiB`.
+        starter: |
+          # A two-level page table for 32-bit addresses and 4 KiB pages: the top 10
+          # bits pick an entry in the root table, the next 10 bits an entry in a
+          # second-level table, and the low 12 bits are the offset. Each table has
+          # 1024 entries and fills one 4 KiB page of memory.
+          ENTRIES = 1024
+
+
+          def new_table():
+              return [None] * ENTRIES
+
+
+          def map_page(root, vaddr, frame):
+              # Make the page containing vaddr map to frame, creating the second-level
+              # table it needs if there is none yet.
+              pass
+
+
+          def lookup(root, vaddr):
+              # Return the physical address for vaddr, or None if its page is not
+              # mapped, at either level.
+              return None
+
+
+          def tables_in_use(root):
+              return 1 + sum(1 for t in root if t is not None)
+
+
+          def show(addr):
+              return None if addr is None else hex(addr)
+
+
+          root = new_table()
+          map_page(root, 0x00400000, 17)  # code
+          map_page(root, 0x00401000, 18)
+          map_page(root, 0x10010000, 40)  # data
+          map_page(root, 0xBFFFF000, 3)   # stack, near the top
+          print(show(lookup(root, 0x00401234)), show(lookup(root, 0xBFFFFFFC)), show(lookup(root, 0x20000000)))
+          print(tables_in_use(root), "tables,", tables_in_use(root) * 4, "KiB instead of 4096 KiB")
+        solution: |
+          # A two-level page table for 32-bit addresses and 4 KiB pages: the top 10
+          # bits pick an entry in the root table, the next 10 bits an entry in a
+          # second-level table, and the low 12 bits are the offset. Each table has
+          # 1024 entries and fills one 4 KiB page of memory.
+          ENTRIES = 1024
+
+
+          def new_table():
+              return [None] * ENTRIES
+
+
+          def map_page(root, vaddr, frame):
+              top = vaddr >> 22
+              middle = (vaddr >> 12) & 0x3FF
+              if root[top] is None:
+                  root[top] = new_table()
+              root[top][middle] = frame
+
+
+          def lookup(root, vaddr):
+              top = vaddr >> 22
+              middle = (vaddr >> 12) & 0x3FF
+              table = root[top]
+              if table is None or table[middle] is None:
+                  return None
+              return (table[middle] << 12) | (vaddr & 0xFFF)
+
+
+          def tables_in_use(root):
+              return 1 + sum(1 for t in root if t is not None)
+
+
+          def show(addr):
+              return None if addr is None else hex(addr)
+
+
+          root = new_table()
+          map_page(root, 0x00400000, 17)  # code
+          map_page(root, 0x00401000, 18)
+          map_page(root, 0x10010000, 40)  # data
+          map_page(root, 0xBFFFF000, 3)   # stack, near the top
+          print(show(lookup(root, 0x00401234)), show(lookup(root, 0xBFFFFFFC)), show(lookup(root, 0x20000000)))
+          print(tables_in_use(root), "tables,", tables_in_use(root) * 4, "KiB instead of 4096 KiB")
+        tests: |
+          _root = new_table()
+          map_page(_root, 0x00400000, 17)
+          assert lookup(_root, 0x00400ABC) == 0x11ABC, "page 0x00400 maps to frame 17, so 0x00400abc becomes 0x11abc"
+          map_page(_root, 0x00401000, 18)
+          assert lookup(_root, 0x00400ABC) == 0x11ABC, "mapping a second page in the same 4 MiB region must keep the first page's mapping"
+          assert lookup(_root, 0x00401FFF) == 0x12FFF, "page 0x00401 maps to frame 18"
+          assert tables_in_use(_root) == 2, "two pages in the same 4 MiB region share one second-level table, so 2 tables in all"
+          try:
+              _r = lookup(_root, 0x00402000)
+          except Exception as _e:
+              raise AssertionError("a page whose second-level table exists but whose entry is empty is unmapped: return None (it raised " + type(_e).__name__ + ")")
+          assert _r is None, "an empty entry in an existing second-level table means unmapped, None"
+          assert lookup(_root, 0x80000000) is None, "an address whose root entry is empty is unmapped, None"
+          map_page(_root, 0xFFFFF000, 9)
+          assert lookup(_root, 0xFFFFFFFF) == 0x9FFF, "the very last page of the address space maps to frame 9"
+          assert _root[1023] is not None and _root[1023][1023] == 9, "the last page uses root entry 1023 and second-level entry 1023"
+          assert _root[1][1] == 18, "0x00401000 uses root entry 1 (its top 10 bits) and second-level entry 1 (its next 10 bits)"
+          assert output.splitlines() == ["0x12234 0x3ffc None", "4 tables, 16 KiB instead of 4096 KiB"], "The program should print 0x12234 0x3ffc None and then 4 tables, 16 KiB instead of 4096 KiB"
+        wrong:
+          - |
+            # A two-level page table for 32-bit addresses and 4 KiB pages: the top 10
+            # bits pick an entry in the root table, the next 10 bits an entry in a
+            # second-level table, and the low 12 bits are the offset. Each table has
+            # 1024 entries and fills one 4 KiB page of memory.
+            ENTRIES = 1024
+
+
+            def new_table():
+                return [None] * ENTRIES
+
+
+            def map_page(root, vaddr, frame):
+                top = vaddr >> 22
+                middle = (vaddr >> 12) & 0x3FF
+                root[top] = new_table()
+                root[top][middle] = frame
+
+
+            def lookup(root, vaddr):
+                top = vaddr >> 22
+                middle = (vaddr >> 12) & 0x3FF
+                table = root[top]
+                if table is None or table[middle] is None:
+                    return None
+                return (table[middle] << 12) | (vaddr & 0xFFF)
+
+
+            def tables_in_use(root):
+                return 1 + sum(1 for t in root if t is not None)
+
+
+            def show(addr):
+                return None if addr is None else hex(addr)
+
+
+            root = new_table()
+            map_page(root, 0x00400000, 17)  # code
+            map_page(root, 0x00401000, 18)
+            map_page(root, 0x10010000, 40)  # data
+            map_page(root, 0xBFFFF000, 3)   # stack, near the top
+            print(show(lookup(root, 0x00401234)), show(lookup(root, 0xBFFFFFFC)), show(lookup(root, 0x20000000)))
+            print(tables_in_use(root), "tables,", tables_in_use(root) * 4, "KiB instead of 4096 KiB")
+          - |
+            # A two-level page table for 32-bit addresses and 4 KiB pages: the top 10
+            # bits pick an entry in the root table, the next 10 bits an entry in a
+            # second-level table, and the low 12 bits are the offset. Each table has
+            # 1024 entries and fills one 4 KiB page of memory.
+            ENTRIES = 1024
+
+
+            def new_table():
+                return [None] * ENTRIES
+
+
+            def map_page(root, vaddr, frame):
+                top = vaddr >> 22
+                middle = (vaddr >> 10) & 0x3FF
+                if root[top] is None:
+                    root[top] = new_table()
+                root[top][middle] = frame
+
+
+            def lookup(root, vaddr):
+                top = vaddr >> 22
+                middle = (vaddr >> 10) & 0x3FF
+                table = root[top]
+                if table is None or table[middle] is None:
+                    return None
+                return (table[middle] << 12) | (vaddr & 0xFFF)
+
+
+            def tables_in_use(root):
+                return 1 + sum(1 for t in root if t is not None)
+
+
+            def show(addr):
+                return None if addr is None else hex(addr)
+
+
+            root = new_table()
+            map_page(root, 0x00400000, 17)  # code
+            map_page(root, 0x00401000, 18)
+            map_page(root, 0x10010000, 40)  # data
+            map_page(root, 0xBFFFF000, 3)   # stack, near the top
+            print(show(lookup(root, 0x00401234)), show(lookup(root, 0xBFFFFFFC)), show(lookup(root, 0x20000000)))
+            print(tables_in_use(root), "tables,", tables_in_use(root) * 4, "KiB instead of 4096 KiB")
+          - |
+            # A two-level page table for 32-bit addresses and 4 KiB pages: the top 10
+            # bits pick an entry in the root table, the next 10 bits an entry in a
+            # second-level table, and the low 12 bits are the offset. Each table has
+            # 1024 entries and fills one 4 KiB page of memory.
+            ENTRIES = 1024
+
+
+            def new_table():
+                return [None] * ENTRIES
+
+
+            def map_page(root, vaddr, frame):
+                top = vaddr >> 22
+                middle = (vaddr >> 12) & 0x3FF
+                if root[top] is None:
+                    root[top] = new_table()
+                root[top][middle] = frame
+
+
+            def lookup(root, vaddr):
+                top = vaddr >> 22
+                middle = (vaddr >> 12) & 0x3FF
+                table = root[top]
+                if table is None:
+                    return None
+                return (table[middle] << 12) | (vaddr & 0xFFF)
+
+
+            def tables_in_use(root):
+                return 1 + sum(1 for t in root if t is not None)
+
+
+            def show(addr):
+                return None if addr is None else hex(addr)
+
+
+            root = new_table()
+            map_page(root, 0x00400000, 17)  # code
+            map_page(root, 0x00401000, 18)
+            map_page(root, 0x10010000, 40)  # data
+            map_page(root, 0xBFFFF000, 3)   # stack, near the top
+            print(show(lookup(root, 0x00401234)), show(lookup(root, 0xBFFFFFFC)), show(lookup(root, 0x20000000)))
+            print(tables_in_use(root), "tables,", tables_in_use(root) * 4, "KiB instead of 4096 KiB")
+        explanation: |
+          The root index is vaddr >> 22, the top 10 bits, and the second-level index is (vaddr >> 12) & 0x3FF, the next 10. Create a second-level table only if the root entry is empty. Creating one every time throws away the pages already mapped in that region; shifting by 10 instead of 12 reads part of the offset as page number; and checking only the root entry crashes on an empty slot in a table that exists.
+    - question:
+        id: fix-lru
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `lru_faults` should count page faults under least-recently-used replacement. For the reference string it should print `12 faults with 3 frames` and `8 faults with 4 frames`, but it prints 15 and 10. Find the fault and fix it.
+        starter: |
+          def lru_faults(refs, frames):
+              # Count the page faults when a process touches the pages in refs, in
+              # order, with room for frames pages in memory. On a fault with memory
+              # full, evict the least recently used page: the one touched longest ago.
+              memory = []  # the pages in memory, least recently used first
+              faults = 0
+              for page in refs:
+                  if page in memory:
+                      continue
+                  faults += 1
+                  if len(memory) == frames:
+                      memory.pop(0)
+                  memory.append(page)
+              return faults
+
+
+          refs = [7, 0, 1, 2, 0, 3, 0, 4, 2, 3, 0, 3, 2, 1, 2, 0, 1, 7, 0, 1]
+          print(lru_faults(refs, 3), "faults with 3 frames")
+          print(lru_faults(refs, 4), "faults with 4 frames")
+        solution: |
+          def lru_faults(refs, frames):
+              # Count the page faults when a process touches the pages in refs, in
+              # order, with room for frames pages in memory. On a fault with memory
+              # full, evict the least recently used page: the one touched longest ago.
+              memory = []  # the pages in memory, least recently used first
+              faults = 0
+              for page in refs:
+                  if page in memory:
+                      memory.remove(page)
+                      memory.append(page)
+                      continue
+                  faults += 1
+                  if len(memory) == frames:
+                      memory.pop(0)
+                  memory.append(page)
+              return faults
+
+
+          refs = [7, 0, 1, 2, 0, 3, 0, 4, 2, 3, 0, 3, 2, 1, 2, 0, 1, 7, 0, 1]
+          print(lru_faults(refs, 3), "faults with 3 frames")
+          print(lru_faults(refs, 4), "faults with 4 frames")
+        tests: |
+          assert lru_faults([1, 2, 3, 1, 4, 1], 3) == 4, "with 3 frames, touching 1 again makes 2 the least recently used, so 4 evicts 2 and the last 1 is a hit: 4 faults, not " + repr(lru_faults([1, 2, 3, 1, 4, 1], 3))
+          assert lru_faults([1, 2, 1, 3, 1, 4, 1, 5], 2) == 5, "a page touched every other step, like 1 here, should never be evicted with 2 frames: 5 faults"
+          assert lru_faults([1, 2, 3, 4], 4) == 4, "four different pages in four frames fault once each"
+          assert lru_faults([5, 5, 5], 1) == 1, "touching the same page again is a hit"
+          assert lru_faults([1, 2, 3, 1, 2, 3], 2) == 6, "cycling through 3 pages with 2 frames faults every time under LRU"
+          assert output.splitlines() == ["12 faults with 3 frames", "8 faults with 4 frames"], "The program should print 12 faults with 3 frames and 8 faults with 4 frames"
+        wrong:
+          - |
+            def lru_faults(refs, frames):
+                # Count the page faults when a process touches the pages in refs, in
+                # order, with room for frames pages in memory. On a fault with memory
+                # full, evict the least recently used page: the one touched longest ago.
+                memory = []  # the pages in memory, least recently used first
+                faults = 0
+                for page in refs:
+                    if page in memory:
+                        memory.remove(page)
+                        memory.insert(0, page)
+                        continue
+                    faults += 1
+                    if len(memory) == frames:
+                        memory.pop(0)
+                    memory.append(page)
+                return faults
+
+
+            refs = [7, 0, 1, 2, 0, 3, 0, 4, 2, 3, 0, 3, 2, 1, 2, 0, 1, 7, 0, 1]
+            print(lru_faults(refs, 3), "faults with 3 frames")
+            print(lru_faults(refs, 4), "faults with 4 frames")
+          - |
+            def lru_faults(refs, frames):
+                # Count the page faults when a process touches the pages in refs, in
+                # order, with room for frames pages in memory. On a fault with memory
+                # full, evict the least recently used page: the one touched longest ago.
+                memory = []  # the pages in memory, least recently used first
+                faults = 0
+                for page in refs:
+                    if page in memory:
+                        memory.remove(page)
+                        memory.append(page)
+                        continue
+                    faults += 1
+                    if len(memory) == frames:
+                        memory.pop()
+                    memory.append(page)
+                return faults
+
+
+            refs = [7, 0, 1, 2, 0, 3, 0, 4, 2, 3, 0, 3, 2, 1, 2, 0, 1, 7, 0, 1]
+            print(lru_faults(refs, 3), "faults with 3 frames")
+            print(lru_faults(refs, 4), "faults with 4 frames")
+          - |
+            def lru_faults(refs, frames):
+                # Count the page faults when a process touches the pages in refs, in
+                # order, with room for frames pages in memory. On a fault with memory
+                # full, evict the least recently used page: the one touched longest ago.
+                memory = []  # the pages in memory, least recently used first
+                faults = 0
+                for page in refs:
+                    if page in memory:
+                        memory.remove(page)
+                        memory.append(page)
+                        continue
+                    faults += 1
+                    if len(memory) >= frames - 1:
+                        memory.pop(0)
+                    memory.append(page)
+                return faults
+
+
+            refs = [7, 0, 1, 2, 0, 3, 0, 4, 2, 3, 0, 3, 2, 1, 2, 0, 1, 7, 0, 1]
+            print(lru_faults(refs, 3), "faults with 3 frames")
+            print(lru_faults(refs, 4), "faults with 4 frames")
+        explanation: |
+          On a hit the code does nothing, so the list stays in order of loading and the policy is really FIFO. A hit must move the page to the most recent end: remove it and append it. Moving it to the front instead makes it the next victim; popping from the end evicts the most recently used page; and evicting one page early wastes a frame.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. A 32-bit machine with 4 KiB pages gives each process a flat page table with one 4-byte entry per page. How many MiB is each table?
+        answer: "4"
+        unit: MiB
+        explanation: |
+          A 4 GiB address space holds 2³² / 2¹² = 2²⁰ pages, about a million, and 2²⁰ entries of 4 bytes is 2²² bytes, 4 MiB, for every process, even one that uses a few pages.
+    - question:
+        id: work-null
+        type: choice
+        system: s2
+        prompt: |
+          Kernels leave the lowest pages of every address space unmapped on purpose. A program follows a null pointer to read a field 16 bytes into a struct. What happens?
+        options:
+          - "The load from address 16 hits an unmapped page, the kernel sends SIGSEGV, and the bug shows up at once"
+          - "It reads whatever data happens to be at physical address 16"
+          - "It reads the kernel's memory"
+          - "The kernel maps a fresh zero page and the program carries on"
+        answer: 0
+        explanation: |
+          Address 16 lies in page 0, which has no mapping, so the access faults immediately. Without that guard the program would read garbage and fail somewhere far from the bug.
+  connections:
+    - text: |
+        4 MiB. There are 2³² / 2¹² = 2²⁰ pages and each entry takes 4 bytes, so 2²² bytes, for every process, even a tiny one. A hundred processes would spend 400 MiB on page tables alone. That is why real tables are trees: a small process needs only the root and a handful of second-level tables, 16 KiB in the exercise.
+
+        Every load and store now needs a translation, and with a four-level table that means four extra memory reads before the real one, which would make every program several times slower. [[h2.the-tlb-and-address-translation]] shows the small cache inside the processor that makes almost all of those reads unnecessary.

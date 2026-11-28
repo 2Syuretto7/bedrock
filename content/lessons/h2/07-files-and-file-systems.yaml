@@ -1,0 +1,773 @@
+concept: h2.files-and-file-systems
+minutes: 85
+claim: You can explain how a file system turns a disk's numbered blocks into named files and directories; describe an inode, its metadata and its direct and indirect block pointers, find the block that holds any byte of a file, and work out the largest file an inode can describe; resolve a path one directory at a time, following symbolic links with a limit; tell hard links from symbolic links and say when a file's space is really freed; follow a read through the file descriptor table, the open file table and the page cache; explain why a crash can leave a file system inconsistent, and how journaling and copy-on-write prevent it; and replace a file atomically by writing a temporary file and renaming it.
+recalls: [h2.interrupts-and-i-o]
+uses: [h2.processes-and-system-calls, h2.virtual-memory-and-page-tables, h2.what-an-operating-system-does, s1.files-and-data-formats, s1.recursion, s1.exceptions, f3.trees-and-their-properties, s5.version-control-as-a-content-addressed-store, q0.writes-constraints-and-transactions]
+leads: [h2.threads-in-the-kernel]
+starter: |
+  # Scratch space. With 4 KiB blocks, byte n of a file is in the file's
+  # block n // 4096, at position n % 4096 inside it.
+  for n in [0, 4095, 4096, 50000]:
+      print(n, "is in block", n // 4096, "at", n % 4096)
+parts:
+  recall:
+    - text: |
+        [[h2.interrupts-and-i-o]] showed the kernel moving blocks between memory and a disk by DMA, one interrupt per transfer. But a disk is only a long row of numbered blocks; it has no idea which ones belong to your thesis and which to a photo. Every name you have ever opened, `notes.txt`, `/home/meera/projects`, is an invention of the file system, kept in some of those same blocks. This lesson opens it up. Three quick pulls first.
+  puzzle:
+    - text: |
+        A file system uses 4 KiB blocks and 4-byte block numbers. Each file's inode holds 12 direct pointers, each naming one data block, and one single-indirect pointer, naming a block that is itself full of pointers to data blocks.
+
+        **What is the largest file, in KiB, such an inode can describe?**
+  intuition:
+    - text: |
+        A school library in Mysuru keeps a register card for every book. The card does not hold the book; it says who wrote it, when it came in, and where its parts are kept: a big reference work might be spread over several shelves, and the card lists the shelves. For a work too big for the card, the last line says "see the folder in drawer 7", and the folder lists the rest. Separately, a catalogue maps titles to card numbers, and the same card can be filed under two titles.
+
+        The card is an **inode**, the shelves are disk **blocks**, the folder is an **indirect block**, and the catalogue is a **directory**. The figure shows how many pointers files of different sizes need, and how many disk reads it takes to reach their last byte.
+    - figure: inode-blocks
+      props: { size: "10k" }
+    - text: |
+        Small files, the vast majority, fit entirely in the inode's direct pointers and cost one read per block. Bigger files spill into an indirect block of 1,024 pointers, and very big ones into a double-indirect block of indirect blocks, each level adding a read. The puzzle asks where the single-indirect level runs out.
+  derivation:
+    - text: |
+        **The abstraction.** To a program, a **file** is a named sequence of bytes that survives the program, the power going off and the machine being moved. It also has **metadata**: size, owner, permissions, and times of last change and access. A **directory** is a file whose contents are a list of entries, each a name and an **inode number**. The tree of directories gives every file a **path** such as `/home/meera/notes.txt`.
+
+        **On the disk.** A classic Unix file system, such as ext2, divides the disk into a **superblock** that describes the whole file system, **bitmaps** that mark which inodes and blocks are free, a table of **inodes**, and the **data blocks**. Each inode holds a file's metadata and the numbers of its data blocks: 12 **direct** pointers, then a **single indirect** pointer to a block of pointers, a **double indirect** pointer to a block of pointers to blocks of pointers, and a **triple indirect** one. It is a tree, deliberately lopsided so that small files are cheap. Notice what the inode does not hold: the file's name. Names live only in directories.
+    - question:
+        id: derivation-dir
+        type: choice
+        system: s2
+        prompt: |
+          What does a directory's data block contain?
+        options:
+          - "A list of names, each with the inode number of the file or directory it names"
+          - "The contents of the files in the directory"
+          - "The inodes of the files in the directory"
+          - "The free-block bitmap for that directory"
+        answer: 0
+        explanation: |
+          A directory is just a table from names to inode numbers. The inode holds the metadata and block pointers, and the data blocks hold the contents.
+    - text: |
+        **Finding a byte.** Byte n of a file is in the file's block n // 4096, at position n % 4096 inside it. If that block number is below 12, the inode names the disk block directly; otherwise subtract 12 and look in the single-indirect block, and so on down the tree. With the inode in memory, a byte in the first 48 KiB costs one disk read, one in the next 4 MiB costs two, and beyond that three. Modern file systems such as ext4 replace most of these pointers with **extents**, entries of the form "the next 300 blocks start at disk block 81,442", which describe a large contiguous file in a few bytes.
+    - question:
+        id: derivation-double
+        type: numeric
+        system: s2
+        prompt: |
+          With 4 KiB blocks and 4-byte pointers, how many GiB of data can a double-indirect pointer reach on its own?
+        answer: "4"
+        unit: GiB
+        explanation: |
+          It names a block of 1,024 pointers, each naming a block of 1,024 pointers to data blocks: 1,024 × 1,024 blocks of 4 KiB, which is 2³⁰ × 4 bytes, 4 GiB.
+    - text: |
+        **Following a path.** To open `/home/meera/notes.txt`, the kernel starts at the root directory's inode, whose number is fixed (2 on ext file systems), reads the root directory's data, finds `home` and its inode number, reads that inode and its directory data, finds `meera`, and so on. With nothing cached, every component costs a few disk reads, which is why the kernel keeps a **directory entry cache** of recent lookups. A **symbolic link** is a small file whose contents are another path; when the walk meets one, it resolves that path and carries on from where it leads. Since a link can point at itself, or at a chain that loops, the kernel follows at most a fixed number (Linux allows 40, nested at most 8 deep) and then fails with ELOOP.
+
+        **Hard links.** Two directory entries can hold the same inode number: one file, two names. The inode keeps a **link count**, and `rm`, which is really the `unlink` system call, removes one name and decrements it. The file's blocks are freed only when the link count is 0 and no process still has the file open, which is why deleting a large log file that a server still holds open frees no space until the server closes it.
+    - question:
+        id: derivation-lookup
+        type: numeric
+        system: s2
+        prompt: |
+          Nothing is cached. How many directories must the kernel read to find the inode of `/home/meera/notes.txt`?
+        answer: "3"
+        explanation: |
+          The root directory to find home, home to find meera, and meera to find notes.txt: three directories, each needing its inode and at least one data block read.
+    - text: |
+        **From descriptor to disk.** When a process opens a file, the kernel creates an entry in a system-wide **open file table** holding the current offset and the mode, and points the lowest free slot of the process's descriptor table at it. `read(fd, buf, n)` follows the descriptor to the open file entry, the entry to the inode, and the inode's pointers to blocks. Those blocks are kept in the **page cache**, in memory, so a second read of the same data never touches the disk, and writes normally just change cached pages, which a background thread writes back seconds later. `fsync(fd)` forces a file's dirty pages to the disk and waits, which is what a database calls before telling you a transaction is committed.
+
+        **Crashes.** Appending one block to a file changes three places on the disk: the block bitmap, to mark the block used; the inode, to point to it and update the size; and the data block itself. The disk writes them one at a time, in whatever order suits it, and the power can fail between any two. Crash after the inode is written but before the data, and the file ends in garbage; after the bitmap but before the inode, and a block is lost for ever. Old systems ran a slow checker, **fsck**, over the whole disk after every crash.
+    - question:
+        id: derivation-crash
+        type: choice
+        system: s2
+        prompt: |
+          A crash happens after the new inode is written but before the newly allocated block is marked used in the bitmap. What can go wrong later?
+        options:
+          - "The block may be given to another file too, so two files share it and overwrite each other"
+          - "Nothing, since the inode is correct"
+          - "The file loses its name"
+          - "The disk refuses to start"
+        answer: 0
+        explanation: |
+          The bitmap still says the block is free, so a later allocation can hand it out again. Two inodes then point at the same block, which corrupts both files.
+    - text: |
+        **Journaling.** A journaling file system, such as ext4, NTFS or APFS in its own way, uses the trick of [[q0.writes-constraints-and-transactions]]: before changing anything in place, it writes a description of all the changes for one operation to a **journal**, a log in a reserved area, followed by a commit record. Only then does it write the changes to their real places. After a crash, the kernel replays committed entries from the journal and ignores uncommitted ones, so each operation has happened entirely or not at all, and recovery takes seconds. Most systems journal only metadata, for speed, so file contents can still be half-written. **Copy-on-write** file systems, such as ZFS and btrfs, never overwrite live blocks at all: they write new versions elsewhere and switch a single root pointer, much as a version control system adds new objects and moves a branch.
+
+        **Replacing a file safely.** For an application, the standard recipe is to write the new contents to a temporary file in the same directory, `fsync` it, and `rename` it over the old name. The file system guarantees that rename replaces the directory entry atomically, so after a crash the name refers either to the old file or the new one, never a half-written one.
+    - question:
+        id: derivation-journal
+        type: choice
+        system: s2
+        prompt: |
+          A journaling file system crashes after writing an operation's journal entry but before its commit record. What does recovery do with that operation?
+        options:
+          - "Ignores it, so none of its changes appear"
+          - "Replays the parts that were written"
+          - "Runs fsck over the whole disk"
+          - "Marks the disk read-only"
+        answer: 0
+        explanation: |
+          Without its commit record the entry might be incomplete, so recovery discards it. The operation never happened, and the file system is consistent.
+  formal:
+    - text: |
+        **Inode.** Metadata and block pointers: direct, single, double and triple indirect. With block size B and p pointers per block, direct pointers reach 12B bytes, single indirect pB more, double p²B more.
+
+        **Directory.** A file of (name, inode number) entries. Path lookup reads one directory per component; symbolic links are followed with a limit.
+
+        **Links.** Hard links share an inode; the inode's link count, plus open descriptors, decides when its blocks are freed.
+
+        **Reads and writes.** Descriptor table → open file table (offset, mode) → inode → blocks, through the page cache. fsync forces writes to disk.
+
+        **Consistency.** One operation touches several blocks. Journaling logs the whole change and a commit record first; copy-on-write never overwrites live data. Applications replace files atomically by writing a temporary file and renaming it.
+  drill:
+    - text: Seconds each. Follow the pointers.
+    - question:
+        id: drill-name
+        type: choice
+        system: s1
+        prompt: |
+          Where is a file's name stored?
+        options:
+          - "In the directory entries that point to its inode"
+          - "In its inode"
+          - "In its first data block"
+          - "In the superblock"
+        answer: 0
+        explanation: The inode has no name; a directory entry gives a name to an inode number, and several entries can name the same inode.
+    - question:
+        id: drill-open-delete
+        type: choice
+        system: s1
+        prompt: |
+          A server keeps a 20 GB log file open, and an administrator deletes it with rm. When is the space freed?
+        options:
+          - "When the server closes the file or exits"
+          - "At once"
+          - "Never, until fsck runs"
+          - "At the next reboot only"
+        answer: 0
+        explanation: rm removes the name and lowers the link count to 0, but an open descriptor keeps the inode alive until it is closed.
+    - question:
+        id: predict-byte
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          offset = 10000
+          print(offset // 4096, offset % 4096)
+        output: "2 1808"
+        explanation: Two whole blocks, 8,192 bytes, come before it, and it is 1,808 bytes into the third, block 2.
+    - question:
+        id: predict-links
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          names = {"notes.txt": 31, "backup.txt": 31, "todo.txt": 40}
+          del names["notes.txt"]
+          count = sum(1 for n in names.values() if n == 31)
+          print(count, "name left, so inode 31 is", "kept" if count else "freed")
+        output: "1 name left, so inode 31 is kept"
+        explanation: notes.txt and backup.txt were two hard links to inode 31; removing one leaves the other, so the file lives on.
+    - question:
+        id: predict-blocks
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          sizes = [0, 1, 4096, 4097, 10000]
+          print([(s + 4095) // 4096 for s in sizes])
+        output: "[0, 1, 1, 2, 3]"
+        explanation: Each file needs its size divided by 4,096, rounded up; even a 1-byte file takes a whole block.
+  work:
+    - text: Slower now. Each answer is part of a file system, or a program that uses one safely.
+    - question:
+        id: write-block-for
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `block_for`, which finds the disk block holding any byte of a file through its direct and single-indirect pointers, and counts the reads. The program should print `(500, 1)`, `(501, 1)`, `(511, 1)`, `(612, 2)`, `(640, 2)` and `None` for the six offsets.
+        starter: |
+          BLOCK = 4096          # bytes in a disk block
+          POINTERS = 1024       # block numbers that fit in one block, 4 bytes each
+
+          # A file of 60,000 bytes: 15 blocks. The inode lists the first 12 blocks
+          # directly; the rest are listed in an indirect block, number 900, which
+          # holds up to 1024 block numbers.
+          inode = {"size": 60000, "direct": [500 + i for i in range(12)], "indirect": 900}
+          disk = {900: [612, 613, 640] + [None] * (POINTERS - 3)}
+
+
+          def block_for(inode, offset):
+              # Return (the disk block that holds byte `offset` of the file, the
+              # number of block reads needed to find and read it), counting the
+              # indirect block if one is needed and the data block itself; the inode
+              # is already in memory. Return None for an offset at or past the end of
+              # the file.
+              return None
+
+
+          for offset in [0, 5000, 49151, 49152, 59999, 60000]:
+              print(offset, block_for(inode, offset))
+        solution: |
+          BLOCK = 4096          # bytes in a disk block
+          POINTERS = 1024       # block numbers that fit in one block, 4 bytes each
+
+          # A file of 60,000 bytes: 15 blocks. The inode lists the first 12 blocks
+          # directly; the rest are listed in an indirect block, number 900, which
+          # holds up to 1024 block numbers.
+          inode = {"size": 60000, "direct": [500 + i for i in range(12)], "indirect": 900}
+          disk = {900: [612, 613, 640] + [None] * (POINTERS - 3)}
+
+
+          def block_for(inode, offset):
+              if offset < 0 or offset >= inode["size"]:
+                  return None
+              index = offset // BLOCK
+              if index < len(inode["direct"]):
+                  return inode["direct"][index], 1
+              return disk[inode["indirect"]][index - len(inode["direct"])], 2
+
+
+          for offset in [0, 5000, 49151, 49152, 59999, 60000]:
+              print(offset, block_for(inode, offset))
+        tests: |
+          assert block_for(inode, 0) == (500, 1), "byte 0 is in the first direct block, 500, found with 1 read"
+          assert block_for(inode, 4095) == (500, 1) and block_for(inode, 4096) == (501, 1), "each block holds 4096 bytes: byte 4095 is still in block 500 and byte 4096 starts block 501"
+          assert block_for(inode, 49151) == (511, 1), "byte 49151 is the last byte of the twelfth block, the last direct one, 511"
+          assert block_for(inode, 49152) == (612, 2), "byte 49152 starts the thirteenth block, the first one listed in the indirect block, 612; it takes 2 reads, the indirect block and then the data"
+          assert block_for(inode, 57344) == (640, 2), "the fifteenth block is the third entry of the indirect block, 640"
+          assert block_for(inode, 60000) is None, "byte 60000 is past the end of a 60,000-byte file"
+          _big = {"size": 13 * 4096, "direct": list(range(100, 112)), "indirect": 7}
+          disk[7] = [999] + [None] * 1023
+          assert block_for(_big, 12 * 4096 + 10) == (999, 2), "another file's thirteenth block comes from its own indirect block"
+          assert output.splitlines() == ["0 (500, 1)", "5000 (501, 1)", "49151 (511, 1)", "49152 (612, 2)", "59999 (640, 2)", "60000 None"], "The program should print the block and read count for each offset, and None for 60000"
+        wrong:
+          - |
+            BLOCK = 4096          # bytes in a disk block
+            POINTERS = 1024       # block numbers that fit in one block, 4 bytes each
+
+            # A file of 60,000 bytes: 15 blocks. The inode lists the first 12 blocks
+            # directly; the rest are listed in an indirect block, number 900, which
+            # holds up to 1024 block numbers.
+            inode = {"size": 60000, "direct": [500 + i for i in range(12)], "indirect": 900}
+            disk = {900: [612, 613, 640] + [None] * (POINTERS - 3)}
+
+
+            def block_for(inode, offset):
+                if offset < 0 or offset >= inode["size"]:
+                    return None
+                index = offset // BLOCK
+                if index < len(inode["direct"]):
+                    return inode["direct"][index], 1
+                return disk[inode["indirect"]][index], 2
+
+
+            for offset in [0, 5000, 49151, 49152, 59999, 60000]:
+                print(offset, block_for(inode, offset))
+          - |
+            BLOCK = 4096          # bytes in a disk block
+            POINTERS = 1024       # block numbers that fit in one block, 4 bytes each
+
+            # A file of 60,000 bytes: 15 blocks. The inode lists the first 12 blocks
+            # directly; the rest are listed in an indirect block, number 900, which
+            # holds up to 1024 block numbers.
+            inode = {"size": 60000, "direct": [500 + i for i in range(12)], "indirect": 900}
+            disk = {900: [612, 613, 640] + [None] * (POINTERS - 3)}
+
+
+            def block_for(inode, offset):
+                if offset < 0 or offset > inode["size"]:
+                    return None
+                index = offset // BLOCK
+                if index < len(inode["direct"]):
+                    return inode["direct"][index], 1
+                return disk[inode["indirect"]][index - len(inode["direct"])], 2
+
+
+            for offset in [0, 5000, 49151, 49152, 59999, 60000]:
+                print(offset, block_for(inode, offset))
+          - |
+            BLOCK = 4096          # bytes in a disk block
+            POINTERS = 1024       # block numbers that fit in one block, 4 bytes each
+
+            # A file of 60,000 bytes: 15 blocks. The inode lists the first 12 blocks
+            # directly; the rest are listed in an indirect block, number 900, which
+            # holds up to 1024 block numbers.
+            inode = {"size": 60000, "direct": [500 + i for i in range(12)], "indirect": 900}
+            disk = {900: [612, 613, 640] + [None] * (POINTERS - 3)}
+
+
+            def block_for(inode, offset):
+                if offset < 0 or offset >= inode["size"]:
+                    return None
+                index = offset // POINTERS
+                if index < len(inode["direct"]):
+                    return inode["direct"][index], 1
+                return disk[inode["indirect"]][index - len(inode["direct"])], 2
+
+
+            for offset in [0, 5000, 49151, 49152, 59999, 60000]:
+                print(offset, block_for(inode, offset))
+        explanation: |
+          Check the offset is inside the file, divide by BLOCK for the file's block index, and use the direct list for the first 12; for the rest, subtract 12 and index the indirect block, which costs one more read. Forgetting to subtract 12 skips the first twelve entries of the indirect block; using > instead of >= lets a read run one byte past the end; and dividing by POINTERS confuses how many pointers fit in a block with how many bytes do.
+    - question:
+        id: write-resolve
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `resolve`, which walks an absolute path from the root directory to an inode number, following symbolic links with a limit. The program should print 31 for the first three paths and then `no such file`, `too many links` and `not a directory`.
+        starter: |
+          ROOT = 2
+          MAX_LINKS = 8
+
+          inodes = {
+              2: {"type": "dir", "entries": {"home": 11, "etc": 12}},
+              11: {"type": "dir", "entries": {"meera": 21}},
+              12: {"type": "dir", "entries": {"hosts": 41, "config": 34}},
+              21: {"type": "dir", "entries": {"notes.txt": 31, "latest": 32, "loop": 33}},
+              31: {"type": "file", "size": 1200},
+              32: {"type": "link", "target": "/home/meera/notes.txt"},
+              33: {"type": "link", "target": "/home/meera/loop"},
+              34: {"type": "link", "target": "/home/meera"},
+              41: {"type": "file", "size": 220},
+          }
+
+
+          def resolve(path, links=0):
+              # Turn an absolute path into an inode number, starting at ROOT and
+              # looking each name up in the directory reached so far. A name that
+              # leads to a symbolic link is replaced by resolving the link's target,
+              # and then the walk carries on from there; links counts how many links
+              # are being followed, one inside another. Raise
+              # LookupError("not a directory") when a name must be looked up in
+              # something that is not a directory, LookupError("no such file") when a
+              # name is missing, and LookupError("too many links") instead of
+              # following a link when MAX_LINKS are already being followed.
+              return ROOT
+
+
+          for path in ["/home/meera/notes.txt", "/home/meera/latest", "/etc/config/notes.txt", "/etc/passwd", "/home/meera/loop", "/etc/hosts/x"]:
+              try:
+                  print(path, "->", resolve(path))
+              except LookupError as e:
+                  print(path, "->", str(e))
+        solution: |
+          ROOT = 2
+          MAX_LINKS = 8
+
+          inodes = {
+              2: {"type": "dir", "entries": {"home": 11, "etc": 12}},
+              11: {"type": "dir", "entries": {"meera": 21}},
+              12: {"type": "dir", "entries": {"hosts": 41, "config": 34}},
+              21: {"type": "dir", "entries": {"notes.txt": 31, "latest": 32, "loop": 33}},
+              31: {"type": "file", "size": 1200},
+              32: {"type": "link", "target": "/home/meera/notes.txt"},
+              33: {"type": "link", "target": "/home/meera/loop"},
+              34: {"type": "link", "target": "/home/meera"},
+              41: {"type": "file", "size": 220},
+          }
+
+
+          def resolve(path, links=0):
+              here = ROOT
+              for name in path.split("/"):
+                  if name == "":
+                      continue
+                  node = inodes[here]
+                  if node["type"] != "dir":
+                      raise LookupError("not a directory")
+                  if name not in node["entries"]:
+                      raise LookupError("no such file")
+                  here = node["entries"][name]
+                  if inodes[here]["type"] == "link":
+                      if links >= MAX_LINKS:
+                          raise LookupError("too many links")
+                      links += 1
+                      here = resolve(inodes[here]["target"], links)
+              return here
+
+
+          for path in ["/home/meera/notes.txt", "/home/meera/latest", "/etc/config/notes.txt", "/etc/passwd", "/home/meera/loop", "/etc/hosts/x"]:
+              try:
+                  print(path, "->", resolve(path))
+              except LookupError as e:
+                  print(path, "->", str(e))
+        tests: |
+          def _err(_p):
+              try:
+                  return resolve(_p)
+              except LookupError as _e:
+                  return str(_e)
+
+
+          assert resolve("/") == 2, "the root directory is inode 2"
+          assert resolve("/home/meera") == 21, "/home/meera is inode 21"
+          assert resolve("/etc/hosts") == 41, "/etc/hosts is inode 41"
+          assert resolve("/home/meera/latest") == 31, "a link as the last name must be followed too: latest points to notes.txt, inode 31"
+          assert resolve("/etc/config/notes.txt") == 31, "a link in the middle of a path is followed and the walk carries on from where it leads"
+          assert _err("/home/arjun") == "no such file", "a missing name should raise no such file"
+          assert _err("/etc/hosts/x") == "not a directory", "hosts is a file, so looking up x inside it should raise not a directory"
+          assert _err("/home/meera/loop") == "too many links", "a link that leads to itself must stop with too many links, not recurse for ever"
+          inodes[50] = {"type": "link", "target": "/home/meera/notes.txt"}
+          _prev = 50
+          for _n in range(51, 58):
+              inodes[_n] = {"type": "link", "target": "/home/meera/l" + str(_prev)}
+              inodes[21]["entries"]["l" + str(_prev)] = _prev
+              _prev = _n
+          inodes[21]["entries"]["l" + str(_prev)] = _prev
+          assert resolve("/home/meera/l57") == 31, "a chain of 8 links, one leading to the next, is allowed"
+          inodes[58] = {"type": "link", "target": "/home/meera/l57"}
+          inodes[21]["entries"]["l58"] = 58
+          assert _err("/home/meera/l58") == "too many links", "a chain of 9 links is one too many"
+          assert output.splitlines() == ["/home/meera/notes.txt -> 31", "/home/meera/latest -> 31", "/etc/config/notes.txt -> 31", "/etc/passwd -> no such file", "/home/meera/loop -> too many links", "/etc/hosts/x -> not a directory"], "The program should print 31 three times, then no such file, too many links and not a directory"
+        wrong:
+          - |
+            ROOT = 2
+            MAX_LINKS = 8
+
+            inodes = {
+                2: {"type": "dir", "entries": {"home": 11, "etc": 12}},
+                11: {"type": "dir", "entries": {"meera": 21}},
+                12: {"type": "dir", "entries": {"hosts": 41, "config": 34}},
+                21: {"type": "dir", "entries": {"notes.txt": 31, "latest": 32, "loop": 33}},
+                31: {"type": "file", "size": 1200},
+                32: {"type": "link", "target": "/home/meera/notes.txt"},
+                33: {"type": "link", "target": "/home/meera/loop"},
+                34: {"type": "link", "target": "/home/meera"},
+                41: {"type": "file", "size": 220},
+            }
+
+
+            def resolve(path, links=0):
+                here = ROOT
+                for name in path.split("/"):
+                    if name == "":
+                        continue
+                    node = inodes[here]
+                    if node["type"] != "dir":
+                        raise LookupError("not a directory")
+                    if name not in node["entries"]:
+                        raise LookupError("no such file")
+                    here = node["entries"][name]
+                    if inodes[here]["type"] == "link":
+                        if links > MAX_LINKS:
+                            raise LookupError("too many links")
+                        links += 1
+                        here = resolve(inodes[here]["target"], links)
+                return here
+
+
+            for path in ["/home/meera/notes.txt", "/home/meera/latest", "/etc/config/notes.txt", "/etc/passwd", "/home/meera/loop", "/etc/hosts/x"]:
+                try:
+                    print(path, "->", resolve(path))
+                except LookupError as e:
+                    print(path, "->", str(e))
+          - |
+            ROOT = 2
+            MAX_LINKS = 8
+
+            inodes = {
+                2: {"type": "dir", "entries": {"home": 11, "etc": 12}},
+                11: {"type": "dir", "entries": {"meera": 21}},
+                12: {"type": "dir", "entries": {"hosts": 41, "config": 34}},
+                21: {"type": "dir", "entries": {"notes.txt": 31, "latest": 32, "loop": 33}},
+                31: {"type": "file", "size": 1200},
+                32: {"type": "link", "target": "/home/meera/notes.txt"},
+                33: {"type": "link", "target": "/home/meera/loop"},
+                34: {"type": "link", "target": "/home/meera"},
+                41: {"type": "file", "size": 220},
+            }
+
+
+            def resolve(path, links=0):
+                here = ROOT
+                names = [n for n in path.split("/") if n != ""]
+                for i, name in enumerate(names):
+                    node = inodes[here]
+                    if node["type"] != "dir":
+                        raise LookupError("not a directory")
+                    if name not in node["entries"]:
+                        raise LookupError("no such file")
+                    here = node["entries"][name]
+                    if inodes[here]["type"] == "link" and i < len(names) - 1:
+                        if links >= MAX_LINKS:
+                            raise LookupError("too many links")
+                        links += 1
+                        here = resolve(inodes[here]["target"], links)
+                return here
+
+
+            for path in ["/home/meera/notes.txt", "/home/meera/latest", "/etc/config/notes.txt", "/etc/passwd", "/home/meera/loop", "/etc/hosts/x"]:
+                try:
+                    print(path, "->", resolve(path))
+                except LookupError as e:
+                    print(path, "->", str(e))
+          - |
+            ROOT = 2
+            MAX_LINKS = 8
+
+            inodes = {
+                2: {"type": "dir", "entries": {"home": 11, "etc": 12}},
+                11: {"type": "dir", "entries": {"meera": 21}},
+                12: {"type": "dir", "entries": {"hosts": 41, "config": 34}},
+                21: {"type": "dir", "entries": {"notes.txt": 31, "latest": 32, "loop": 33}},
+                31: {"type": "file", "size": 1200},
+                32: {"type": "link", "target": "/home/meera/notes.txt"},
+                33: {"type": "link", "target": "/home/meera/loop"},
+                34: {"type": "link", "target": "/home/meera"},
+                41: {"type": "file", "size": 220},
+            }
+
+
+            def resolve(path, links=0):
+                here = ROOT
+                for name in path.split("/"):
+                    if name == "":
+                        continue
+                    node = inodes[here]
+                    if name not in node["entries"]:
+                        raise LookupError("no such file")
+                    here = node["entries"][name]
+                    if inodes[here]["type"] == "link":
+                        if links >= MAX_LINKS:
+                            raise LookupError("too many links")
+                        links += 1
+                        here = resolve(inodes[here]["target"], links)
+                return here
+
+
+            for path in ["/home/meera/notes.txt", "/home/meera/latest", "/etc/config/notes.txt", "/etc/passwd", "/home/meera/loop", "/etc/hosts/x"]:
+                try:
+                    print(path, "->", resolve(path))
+                except LookupError as e:
+                    print(path, "->", str(e))
+        explanation: |
+          Split the path on "/", skip empty names, and for each one check the current inode is a directory, look the name up, and, if it leads to a link, resolve the link's target with one more link counted. Checking the limit with > lets a chain of nine through; skipping links in the last name returns the link itself instead of what it points to; and skipping the directory check fails with a confusing error deep in the lookup.
+    - question:
+        id: fix-atomic-save
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `save` replaces a settings file, but a power cut at the wrong moment leaves it empty or half-written. The program should print `10 operations; 2 different files could survive a crash`. Find the fault and fix it.
+        starter: |
+          def apply(fs, ops, crash_after):
+              # The disk carries out the first crash_after operations in order, and
+              # then the power fails. rename replaces its target in one atomic step.
+              for op in ops[:crash_after]:
+                  if op[0] == "truncate":
+                      fs[op[1]] = ""
+                  elif op[0] == "append":
+                      fs[op[1]] = fs.get(op[1], "") + op[2]
+                  elif op[0] == "rename":
+                      fs[op[2]] = fs.pop(op[1])
+              return fs
+
+
+          def save(name, data):
+              # Return the operations that replace the file `name` with data, written
+              # in chunks of 4 characters. A crash at any point must leave `name`
+              # holding either its old contents or the new ones, never a mixture or a
+              # stump.
+              ops = [("truncate", name)]
+              for i in range(0, len(data), 4):
+                  ops.append(("append", name, data[i:i + 4]))
+              return ops
+
+
+          old = {"settings.json": '{"theme": "dark"}'}
+          ops = save("settings.json", '{"theme": "light", "font": 14}')
+          survivors = set()
+          for crash in range(len(ops) + 1):
+              fs = apply(dict(old), ops, crash)
+              survivors.add(fs["settings.json"])
+          print(len(ops), "operations;", len(survivors), "different files could survive a crash")
+        solution: |
+          def apply(fs, ops, crash_after):
+              # The disk carries out the first crash_after operations in order, and
+              # then the power fails. rename replaces its target in one atomic step.
+              for op in ops[:crash_after]:
+                  if op[0] == "truncate":
+                      fs[op[1]] = ""
+                  elif op[0] == "append":
+                      fs[op[1]] = fs.get(op[1], "") + op[2]
+                  elif op[0] == "rename":
+                      fs[op[2]] = fs.pop(op[1])
+              return fs
+
+
+          def save(name, data):
+              # Return the operations that replace the file `name` with data, written
+              # in chunks of 4 characters. A crash at any point must leave `name`
+              # holding either its old contents or the new ones, never a mixture or a
+              # stump.
+              temp = name + ".tmp"
+              ops = [("truncate", temp)]
+              for i in range(0, len(data), 4):
+                  ops.append(("append", temp, data[i:i + 4]))
+              ops.append(("rename", temp, name))
+              return ops
+
+
+          old = {"settings.json": '{"theme": "dark"}'}
+          ops = save("settings.json", '{"theme": "light", "font": 14}')
+          survivors = set()
+          for crash in range(len(ops) + 1):
+              fs = apply(dict(old), ops, crash)
+              survivors.add(fs["settings.json"])
+          print(len(ops), "operations;", len(survivors), "different files could survive a crash")
+        tests: |
+          def _outcomes(_start, _name, _data):
+              _ops = save(_name, _data)
+              _seen = set()
+              for _crash in range(len(_ops) + 1):
+                  _fs = apply(dict(_start), _ops, _crash)
+                  _seen.add(_fs.get(_name))
+              return _ops, _seen
+
+
+          _ops, _seen = _outcomes({"a.txt": "old"}, "a.txt", "brand new text")
+          assert apply({"a.txt": "old"}, _ops, len(_ops))["a.txt"] == "brand new text", "when nothing crashes, the file should end up holding the new data"
+          assert _seen == {"old", "brand new text"}, "whenever the power fails, a.txt must hold either the old text or the new, whole; these could survive: " + repr(sorted(str(_x) for _x in _seen))
+          assert all(_op[0] in ("truncate", "append", "rename") for _op in _ops), "use only truncate, append and rename"
+          _ops, _seen = _outcomes({"a.txt": "old", "a.txt.tmp": "junk left by an earlier crash"}, "a.txt", "fresh")
+          assert _seen == {"old", "fresh"}, "a temporary file left over from an earlier crash must not leak into the new contents; these could survive: " + repr(sorted(str(_x) for _x in _seen))
+          _ops, _seen = _outcomes({"b.cfg": "v1"}, "b.cfg", "v2")
+          assert _seen == {"v1", "v2"}, "a short file must be replaced atomically too"
+          assert output.splitlines() == ["10 operations; 2 different files could survive a crash"], "The program should print 10 operations; 2 different files could survive a crash"
+        wrong:
+          - |
+            def apply(fs, ops, crash_after):
+                # The disk carries out the first crash_after operations in order, and
+                # then the power fails. rename replaces its target in one atomic step.
+                for op in ops[:crash_after]:
+                    if op[0] == "truncate":
+                        fs[op[1]] = ""
+                    elif op[0] == "append":
+                        fs[op[1]] = fs.get(op[1], "") + op[2]
+                    elif op[0] == "rename":
+                        fs[op[2]] = fs.pop(op[1])
+                return fs
+
+
+            def save(name, data):
+                # Return the operations that replace the file `name` with data, written
+                # in chunks of 4 characters. A crash at any point must leave `name`
+                # holding either its old contents or the new ones, never a mixture or a
+                # stump.
+                temp = name + ".tmp"
+                ops = [("truncate", temp), ("rename", temp, name)]
+                for i in range(0, len(data), 4):
+                    ops.append(("append", name, data[i:i + 4]))
+                return ops
+
+
+            old = {"settings.json": '{"theme": "dark"}'}
+            ops = save("settings.json", '{"theme": "light", "font": 14}')
+            survivors = set()
+            for crash in range(len(ops) + 1):
+                fs = apply(dict(old), ops, crash)
+                survivors.add(fs["settings.json"])
+            print(len(ops), "operations;", len(survivors), "different files could survive a crash")
+          - |
+            def apply(fs, ops, crash_after):
+                # The disk carries out the first crash_after operations in order, and
+                # then the power fails. rename replaces its target in one atomic step.
+                for op in ops[:crash_after]:
+                    if op[0] == "truncate":
+                        fs[op[1]] = ""
+                    elif op[0] == "append":
+                        fs[op[1]] = fs.get(op[1], "") + op[2]
+                    elif op[0] == "rename":
+                        fs[op[2]] = fs.pop(op[1])
+                return fs
+
+
+            def save(name, data):
+                # Return the operations that replace the file `name` with data, written
+                # in chunks of 4 characters. A crash at any point must leave `name`
+                # holding either its old contents or the new ones, never a mixture or a
+                # stump.
+                temp = name + ".tmp"
+                ops = [("truncate", temp)]
+                for i in range(0, len(data), 4):
+                    ops.append(("append", temp, data[i:i + 4]))
+                ops.append(("truncate", name))
+                ops.append(("append", name, data))
+                return ops
+
+
+            old = {"settings.json": '{"theme": "dark"}'}
+            ops = save("settings.json", '{"theme": "light", "font": 14}')
+            survivors = set()
+            for crash in range(len(ops) + 1):
+                fs = apply(dict(old), ops, crash)
+                survivors.add(fs["settings.json"])
+            print(len(ops), "operations;", len(survivors), "different files could survive a crash")
+          - |
+            def apply(fs, ops, crash_after):
+                # The disk carries out the first crash_after operations in order, and
+                # then the power fails. rename replaces its target in one atomic step.
+                for op in ops[:crash_after]:
+                    if op[0] == "truncate":
+                        fs[op[1]] = ""
+                    elif op[0] == "append":
+                        fs[op[1]] = fs.get(op[1], "") + op[2]
+                    elif op[0] == "rename":
+                        fs[op[2]] = fs.pop(op[1])
+                return fs
+
+
+            def save(name, data):
+                # Return the operations that replace the file `name` with data, written
+                # in chunks of 4 characters. A crash at any point must leave `name`
+                # holding either its old contents or the new ones, never a mixture or a
+                # stump.
+                temp = name + ".tmp"
+                ops = []
+                for i in range(0, len(data), 4):
+                    ops.append(("append", temp, data[i:i + 4]))
+                ops.append(("rename", temp, name))
+                return ops
+
+
+            old = {"settings.json": '{"theme": "dark"}'}
+            ops = save("settings.json", '{"theme": "light", "font": 14}')
+            survivors = set()
+            for crash in range(len(ops) + 1):
+                fs = apply(dict(old), ops, crash)
+                survivors.add(fs["settings.json"])
+            print(len(ops), "operations;", len(survivors), "different files could survive a crash")
+        explanation: |
+          Writing straight into the file truncates it first, so every crash point after that leaves a stump. Write the new data to a temporary file, truncating it first in case an earlier crash left one behind, and then rename it over the old name in one atomic step. Renaming the empty temporary file first and appending afterwards is no better; copying the data back with truncate and append reopens the window; and skipping the truncate lets an old temporary file's junk into the result. Real code also calls fsync on the temporary file before the rename, so its data is on disk before the name points to it.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. With 4 KiB blocks, 4-byte pointers, 12 direct pointers and one single-indirect pointer, what is the largest file in KiB?
+        answer: "4144"
+        unit: KiB
+        explanation: |
+          12 direct blocks hold 48 KiB. The indirect block holds 4096 / 4 = 1,024 pointers, so 1,024 more blocks, 4,096 KiB. In all 48 + 4,096 = 4,144 KiB, just over 4 MiB.
+    - question:
+        id: work-db-fsync
+        type: choice
+        system: s2
+        prompt: |
+          A small payments app writes each transaction to a file with write and then tells the customer "payment recorded". After a power cut, some recorded payments are missing. What should it do before telling the customer?
+        options:
+          - "Call fsync on the file and wait for it to return"
+          - "Write the transaction twice"
+          - "Close and reopen the file"
+          - "Use a bigger buffer"
+        answer: 0
+        explanation: |
+          write only puts the data in the page cache; it reaches the disk seconds later. fsync waits until it is on the disk, so a crash after the confirmation cannot lose it.
+  connections:
+    - text: |
+        4,144 KiB. The 12 direct pointers reach 12 × 4 = 48 KiB, and the single-indirect block holds 4,096 / 4 = 1,024 more pointers, reaching 1,024 × 4 = 4,096 KiB more. Beyond that you need the double-indirect pointer, which adds 4 GiB, and a third read for every block it reaches.
+
+        A file system is shared by every process, and inside the kernel many of its operations can be in progress at once: one thread waiting for a disk block while another looks up a name. [[h2.threads-in-the-kernel]] looks at threads, several flows of control sharing one address space, and at how the kernel creates, schedules and protects them.

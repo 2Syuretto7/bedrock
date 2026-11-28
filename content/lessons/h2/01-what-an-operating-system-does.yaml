@@ -1,0 +1,825 @@
+concept: h2.what-an-operating-system-does
+minutes: 75
+claim: You can say what an operating system is for, sharing one machine safely among many programs and giving each of them clean abstractions in place of raw hardware; explain user mode and kernel mode and why some instructions are privileged; follow a system call as a trap into the kernel and back; tell a system call, an exception and an interrupt apart; explain how a timer interrupt lets the kernel take the processor back from a program that never gives it up; and compare monolithic kernels, microkernels, virtual machines and containers.
+recalls: [h1.superscalar-and-out-of-order-execution]
+uses: [h1.the-fetch-decode-execute-cycle, h1.an-instruction-set-risc-v, h1.calling-conventions-and-the-stack, h1.latches-registers-and-memory, s1.generators-and-context-managers, s1.exceptions, s2.stacks-and-queues, s0.dictionaries-and-sets]
+leads: [h2.processes-and-system-calls]
+starter: |
+  # Scratch space. A user program cannot reach the hardware itself; it asks
+  # the kernel, by number, and the kernel decides.
+  def sys_getpid():
+      return 4321
+
+  table = {172: sys_getpid}
+  request = 172
+  print("the kernel answers", table[request]())
+parts:
+  recall:
+    - text: |
+        [[h1.superscalar-and-out-of-order-execution]] finished a processor that fetches, renames and runs billions of instructions a second, one program's instructions after another. But a phone runs a music player, a chat app, a map and dozens of background services at once, and none of them can be allowed to read another's messages or crash the rest. Something has to share out one processor, one memory and one set of devices among programs that do not trust each other. That something is the operating system. Three quick pulls first.
+  puzzle:
+    - text: |
+        A buggy program on a laptop with one processor core runs `while True: pass`. It makes no system calls and never gives up the processor of its own accord. Yet the music keeps playing, the mouse still moves, and you can open a terminal and kill the program.
+
+        **The kernel's timer interrupts the processor every 4 milliseconds. How many times a second does the kernel get the processor back from the loop?**
+  intuition:
+    - text: |
+        Think of a big housing society in Pune with a watchman at the gate. Residents do their own cooking, studying and arguing inside their flats, and nobody asks the watchman about any of it. But no resident can let a delivery van in, switch off the water pump for the whole building, or walk into a neighbour's flat. For those things they ring the gate, the watchman checks whether the request is allowed, does it himself, and tells them what happened. And whatever a resident is busy with, the watchman's bell rings every so often and he walks his rounds.
+
+        A program is a resident. It runs its own instructions at full speed, in **user mode**, without the kernel looking. For anything that touches shared hardware it rings the gate with a system call, and the processor switches into **kernel mode** and runs the kernel's code. The bell on its rounds is the **timer interrupt**. The figure follows four journeys across that boundary: a system call, two programs that break the rules, and the timer.
+    - figure: mode-switch
+      props: { event: write, step: 0 }
+    - text: |
+        In every journey the processor ends up running kernel code, but it gets there three different ways: the program asked (a system call), the program did something that cannot go on (an exception), or the hardware asked (an interrupt). Only the last one needs no co-operation from the program at all, and it is the answer to the puzzle.
+  derivation:
+    - text: |
+        **Two jobs.** An operating system does two things. It is a **referee**: it shares the processor, memory, disks and network among programs, and stops any one of them from reading, wrecking or starving the others. And it is an **illusionist**: it hides awkward hardware behind clean **abstractions**. A program sees a **process**, as if it had a processor to itself; an **address space**, as if it had a private memory starting at 0; **files**, named sequences of bytes that outlive it, instead of numbered disk blocks; and **sockets**, reliable streams to other machines, instead of a network card dropping packets. The part of the operating system that does this, and that runs with the hardware's full powers, is the **kernel**. Everything else, the shell, the window system, the settings app, is ordinary programs.
+    - question:
+        id: derivation-jobs
+        type: choice
+        system: s2
+        prompt: |
+          Which of these is an abstraction the operating system provides, rather than a piece of hardware?
+        options:
+          - "A file, a named sequence of bytes that outlives the program that wrote it"
+          - "A disk block, 4096 bytes at a numbered position on the drive"
+          - "A register in the processor"
+          - "A network card's receive buffer"
+        answer: 0
+        explanation: |
+          The disk only knows numbered blocks. The kernel builds files on top of them, keeping track of which blocks belong to which name, so a program can say "append to sales.csv" instead of "write block 81,442".
+    - text: |
+        **Two modes.** None of this works if a program can simply ignore the kernel. So the processor has a **mode bit**, in a register only the processor and kernel control. In **user mode** some instructions are **privileged** and refused: talking to devices, changing the tables that map memory, switching interrupts off, setting the timer, and changing the mode bit itself. In **kernel mode** everything is allowed. A program that tries a privileged instruction in user mode does not get to run it; the processor raises an **illegal instruction** exception instead, and the kernel decides what happens, usually that the program is ended. RISC-V has three such levels, machine, supervisor and user, and x86 has four rings, but the idea is the same: the kernel's code runs with powers user code never has.
+    - question:
+        id: derivation-privileged
+        type: choice
+        system: s2
+        prompt: |
+          Which of these must be a privileged instruction for the kernel to stay in charge?
+        options:
+          - "Setting the timer that interrupts the processor"
+          - "Adding two registers"
+          - "Loading a word from the program's own memory"
+          - "Calling a function in the program's own code"
+        answer: 0
+        explanation: |
+          A program that could switch off or reset the timer could keep the processor for ever. Adding, loading from its own memory and calling its own functions harm nobody, so they run at full speed with no check.
+    - text: |
+        **Three ways in.** The processor enters the kernel through a **trap**, and there are three causes.
+
+        1. A **system call**: the program runs a special instruction, `ecall` on RISC-V or `syscall` on x86, to ask for a service. You used one in [[h1.an-instruction-set-risc-v]] to print a number: the call number goes in a7 and the arguments in a0 onwards.
+        2. An **exception**: the instruction just run cannot go on, such as a load from an address with no memory behind it, an illegal instruction, or on x86 a division by zero.
+        3. An **interrupt**: a device needs attention, such as a key pressed, a network packet arrived, a disk read finished, or the timer fired. It has nothing to do with the instruction that happened to be running.
+
+        Whatever the cause, the hardware does the same few things at once: it records the cause and the program counter of the interrupted instruction in special registers, switches to kernel mode, and jumps to a **trap handler** whose address the kernel stored at boot. The handler saves the program's registers, works out the cause, and deals with it. For a system call it looks the number up in a table of handlers, checks the arguments, does the work and puts the result in the saved a0. Then a return-from-trap instruction, `sret` on RISC-V, restores the program counter and switches back to user mode in one step. The program carries on after its `ecall` as if a slow instruction had just finished.
+    - question:
+        id: derivation-trap-order
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of a `write` system call in order.
+        steps:
+          - "The program puts 64 in a7 and its arguments in a0 to a2, and runs ecall."
+          - "The hardware records the program counter, switches to kernel mode and jumps to the trap handler."
+          - "The handler saves the program's registers and looks 64 up in its table of system calls."
+          - "The kernel checks the buffer lies in the program's memory and hands the bytes to the device."
+          - "The kernel puts the result in the saved a0, and sret returns to user mode after the ecall."
+        explanation: |
+          The program asks, the hardware switches modes and jumps somewhere only the kernel chose, the kernel checks and works, and a single instruction both returns and drops the privilege.
+    - text: |
+        **Why the kernel checks everything.** A system call's arguments come from the program, and a program may be buggy or hostile. If `write` printed whatever address it was handed, a program could pass an address inside the kernel and read its secrets. So the kernel checks that every byte a call names lies in the caller's own memory, that file numbers are ones the caller actually opened, and that sizes are not negative or absurd. Many security holes in real kernels have been one missing check of this kind.
+
+        **The timer.** A program in user mode can run for ever without a system call or an exception, as the puzzle's loop does. Early systems trusted programs to give the processor back, **co-operative multitasking**, and one stuck program froze the whole machine; Windows 3.1 and the classic Mac OS worked this way. Modern kernels set a hardware timer before they hand the processor to any program. When it fires, the interrupt drags the processor into the kernel, which can let the same program carry on or pick another. This is **preemptive multitasking**, and the slice of time between timer interrupts is called a **quantum**, typically 1 to 10 milliseconds. Each switch costs a few microseconds, so the kernel's share of the processor stays small.
+    - question:
+        id: derivation-overhead
+        type: numeric
+        system: s2
+        prompt: |
+          A kernel switches programs every 4 milliseconds, and each switch costs 5 microseconds of kernel time. What percentage of the processor goes on switching?
+        answer: "0.125"
+        unit: "%"
+        explanation: |
+          5 microseconds out of every 4,000 is 5 / 4000 = 0.00125, which is 0.125%. A shorter quantum makes the machine feel more responsive but spends more of it on switching.
+    - text: |
+        **How much lives in the kernel.** A **monolithic kernel**, such as Linux, runs the scheduler, memory manager, file systems, network stack and every device driver in kernel mode, in one program. Calls between them are plain function calls, which is fast, but a bug in any driver can crash or compromise everything. A **microkernel**, such as seL4 or QNX, keeps only the minimum in kernel mode, address spaces, threads and message passing, and runs file systems and drivers as ordinary user programs that talk by messages. A crashed driver can then be restarted, at the cost of more mode switches. Most desktop kernels, including macOS's and Windows's, sit somewhere between.
+
+        **One more layer.** A **hypervisor** does to whole operating systems what a kernel does to programs: it runs several of them on one machine, each believing it has the hardware to itself, which is how cloud providers rent out slices of a server as virtual machines. A **container** is lighter: several groups of programs share one kernel, which gives each group its own view of files, process numbers and network, so they cannot see each other.
+    - question:
+        id: derivation-kernel-kinds
+        type: choice
+        system: s2
+        prompt: |
+          A faulty network driver dereferences a bad pointer. On which system can the rest of the machine most easily carry on?
+        options:
+          - "A microkernel, where the driver is a user program that can be restarted"
+          - "A monolithic kernel, where the driver runs in kernel mode"
+          - "Either: drivers never run in kernel mode"
+          - "Neither: a bad pointer always stops the processor"
+        answer: 0
+        explanation: |
+          In a microkernel the driver's bad load is an exception in an ordinary user program, which the kernel ends and can restart. In a monolithic kernel the same load happens in kernel mode, where it can corrupt anything.
+  formal:
+    - text: |
+        **Operating system.** Referee, sharing the hardware safely among programs, and illusionist, providing processes, address spaces, files and sockets. The **kernel** is the part that runs in kernel mode.
+
+        **Modes.** User mode refuses privileged instructions: device access, memory mapping, interrupts, the timer, the mode itself. Kernel mode allows everything.
+
+        **Traps.** System call (asked for), exception (caused by the instruction), interrupt (caused by a device). The hardware saves the cause and program counter, enters kernel mode and jumps to the handler the kernel set; return-from-trap goes back to user mode.
+
+        **Preemption.** A timer interrupt every quantum lets the kernel take the processor back from any program.
+
+        **Designs.** Monolithic kernel, microkernel, hypervisor and virtual machines, containers sharing one kernel.
+  drill:
+    - text: Seconds each. Ask which side of the boundary each step is on.
+    - question:
+        id: drill-cause
+        type: choice
+        system: s1
+        prompt: |
+          A packet arrives at the network card while a program is adding numbers. What kind of trap follows?
+        options:
+          - "An interrupt"
+          - "A system call"
+          - "An exception"
+          - "None: the program must check for packets"
+        answer: 0
+        explanation: A device asking for attention is an interrupt, unrelated to the instruction that was running.
+    - question:
+        id: drill-mode
+        type: choice
+        system: s1
+        prompt: |
+          A program runs a loop of additions for ten seconds with no system calls. Which mode is the processor in while the additions run?
+        options:
+          - "User mode"
+          - "Kernel mode"
+          - "It switches modes on every addition"
+          - "Neither: the timer is off"
+        answer: 0
+        explanation: Ordinary instructions run in user mode at full speed. The processor enters kernel mode only on a trap, here each timer interrupt.
+    - question:
+        id: predict-privileged
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          privileged = {"set_timer", "write_page_table", "disable_interrupts"}
+          for op in ["add", "load", "set_timer", "store"]:
+              if op in privileged:
+                  print(op, "-> illegal instruction")
+                  break
+              print(op, "ok")
+        output: |
+          add ok
+          load ok
+          set_timer -> illegal instruction
+        explanation: The first two run; set_timer is privileged, so in user mode it traps, and this program goes no further.
+    - question:
+        id: predict-entries
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          events = ["add", "ecall", "add", "timer", "load", "page fault", "add"]
+          entries = [e for e in events if e not in ("add", "load")]
+          print(len(entries))
+        output: "3"
+        explanation: A system call, an interrupt and an exception each enter the kernel. Ordinary adds and loads that succeed do not.
+    - question:
+        id: predict-quantum
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          quantum_ms = 10
+          print(1000 // quantum_ms, "switches a second at most")
+        output: "100 switches a second at most"
+        explanation: A 10-millisecond quantum fits 100 times into the 1,000 milliseconds of a second.
+  work:
+    - text: Slower now. Each answer is a small piece of a kernel.
+    - question:
+        id: write-syscall-table
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `ecall`, the kernel's system call dispatcher. It should find the handler for the number in a7, pass it the right number of arguments from a0 onwards, and put the result in a0, without crashing on a number it does not know. The program should print the greeting and then `write returned 21`, `getpid returned 4321` and `call 999 returned -38`.
+        starter: |
+          ENOSYS = 38
+
+
+          def sys_write(text):
+              print(text, end="")
+              return len(text)
+
+
+          def sys_getpid():
+              return 4321
+
+
+          def sys_exit(code):
+              return code
+
+
+          # The kernel's table from system call number to (handler, number of
+          # arguments), filled in at boot. The numbers are RISC-V Linux's.
+          TABLE = {64: (sys_write, 1), 172: (sys_getpid, 0), 93: (sys_exit, 1)}
+
+
+          def ecall(regs):
+              # regs holds the user program's saved registers, such as
+              # {"a7": 64, "a0": "hi\n"}. a7 is the system call number, and the
+              # arguments are in a0, a1, a2 and so on, as many as the handler takes.
+              # Look the number up in TABLE, call the handler with the arguments and
+              # put its result in a0. An unknown number must not crash the kernel:
+              # put -ENOSYS in a0 instead. Return regs.
+              return regs
+
+
+          regs = ecall({"a7": 64, "a0": "hello from user mode\n"})
+          print("write returned", regs.get("a0"))
+          print("getpid returned", ecall({"a7": 172}).get("a0"))
+          print("call 999 returned", ecall({"a7": 999}).get("a0"))
+        solution: |
+          ENOSYS = 38
+
+
+          def sys_write(text):
+              print(text, end="")
+              return len(text)
+
+
+          def sys_getpid():
+              return 4321
+
+
+          def sys_exit(code):
+              return code
+
+
+          # The kernel's table from system call number to (handler, number of
+          # arguments), filled in at boot. The numbers are RISC-V Linux's.
+          TABLE = {64: (sys_write, 1), 172: (sys_getpid, 0), 93: (sys_exit, 1)}
+
+
+          def ecall(regs):
+              entry = TABLE.get(regs["a7"])
+              if entry is None:
+                  regs["a0"] = -ENOSYS
+                  return regs
+              handler, count = entry
+              args = [regs["a" + str(i)] for i in range(count)]
+              regs["a0"] = handler(*args)
+              return regs
+
+
+          regs = ecall({"a7": 64, "a0": "hello from user mode\n"})
+          print("write returned", regs.get("a0"))
+          print("getpid returned", ecall({"a7": 172}).get("a0"))
+          print("call 999 returned", ecall({"a7": 999}).get("a0"))
+        tests: |
+          import io as _io
+          import contextlib as _ctx
+
+          _buf = _io.StringIO()
+          with _ctx.redirect_stdout(_buf):
+              _r = ecall({"a7": 64, "a0": "abc"})
+          assert _buf.getvalue() == "abc", "write should print its text, abc"
+          assert _r["a0"] == 3, "write's result, the number of characters written, belongs in a0, not " + repr(_r.get("a0"))
+          assert _r["a7"] == 64, "the call number in a7 should be left as it was"
+          _r = ecall({"a7": 172, "a0": 7})
+          assert _r["a0"] == 4321, "getpid takes no arguments and its result, 4321, belongs in a0, not " + repr(_r.get("a0"))
+          _r = ecall({"a7": 93, "a0": 5})
+          assert _r["a0"] == 5, "exit should be called with a0 as its one argument"
+          try:
+              _r = ecall({"a7": 5, "a0": 0})
+          except Exception as _e:
+              raise AssertionError("An unknown call number must not crash the kernel; put -ENOSYS in a0 instead (it raised " + type(_e).__name__ + ")")
+          assert _r["a0"] == -38, "An unknown call number should leave -ENOSYS, -38, in a0, not " + repr(_r["a0"])
+          assert output.splitlines() == ["hello from user mode", "write returned 21", "getpid returned 4321", "call 999 returned -38"], "The program should print the greeting, then write returned 21, getpid returned 4321 and call 999 returned -38"
+        wrong:
+          - |
+            ENOSYS = 38
+
+
+            def sys_write(text):
+                print(text, end="")
+                return len(text)
+
+
+            def sys_getpid():
+                return 4321
+
+
+            def sys_exit(code):
+                return code
+
+
+            # The kernel's table from system call number to (handler, number of
+            # arguments), filled in at boot. The numbers are RISC-V Linux's.
+            TABLE = {64: (sys_write, 1), 172: (sys_getpid, 0), 93: (sys_exit, 1)}
+
+
+            def ecall(regs):
+                entry = TABLE.get(regs["a7"])
+                if entry is None:
+                    regs["a0"] = ENOSYS
+                    return regs
+                handler, count = entry
+                args = [regs["a" + str(i)] for i in range(count)]
+                regs["a0"] = handler(*args)
+                return regs
+
+
+            regs = ecall({"a7": 64, "a0": "hello from user mode\n"})
+            print("write returned", regs.get("a0"))
+            print("getpid returned", ecall({"a7": 172}).get("a0"))
+            print("call 999 returned", ecall({"a7": 999}).get("a0"))
+          - |
+            ENOSYS = 38
+
+
+            def sys_write(text):
+                print(text, end="")
+                return len(text)
+
+
+            def sys_getpid():
+                return 4321
+
+
+            def sys_exit(code):
+                return code
+
+
+            # The kernel's table from system call number to (handler, number of
+            # arguments), filled in at boot. The numbers are RISC-V Linux's.
+            TABLE = {64: (sys_write, 1), 172: (sys_getpid, 0), 93: (sys_exit, 1)}
+
+
+            def ecall(regs):
+                handler, count = TABLE[regs["a7"]]
+                args = [regs["a" + str(i)] for i in range(count)]
+                regs["a0"] = handler(*args)
+                return regs
+
+
+            regs = ecall({"a7": 64, "a0": "hello from user mode\n"})
+            print("write returned", regs.get("a0"))
+            print("getpid returned", ecall({"a7": 172}).get("a0"))
+            print("call 999 returned", ecall({"a7": 999}).get("a0"))
+          - |
+            ENOSYS = 38
+
+
+            def sys_write(text):
+                print(text, end="")
+                return len(text)
+
+
+            def sys_getpid():
+                return 4321
+
+
+            def sys_exit(code):
+                return code
+
+
+            # The kernel's table from system call number to (handler, number of
+            # arguments), filled in at boot. The numbers are RISC-V Linux's.
+            TABLE = {64: (sys_write, 1), 172: (sys_getpid, 0), 93: (sys_exit, 1)}
+
+
+            def ecall(regs):
+                entry = TABLE.get(regs["a7"])
+                if entry is None:
+                    regs["a0"] = -ENOSYS
+                    return regs
+                handler, count = entry
+                args = [regs["a" + str(i)] for i in range(count)]
+                regs["a7"] = handler(*args)
+                return regs
+
+
+            regs = ecall({"a7": 64, "a0": "hello from user mode\n"})
+            print("write returned", regs.get("a0"))
+            print("getpid returned", ecall({"a7": 172}).get("a0"))
+            print("call 999 returned", ecall({"a7": 999}).get("a0"))
+        explanation: |
+          Use `TABLE.get` so that an unknown number gives None rather than an exception, and answer it with -ENOSYS; otherwise gather a0 up to the handler's count, call it, and store the result in a0. Errors are returned as negative numbers so that one register can carry either a result or an error. Returning +38 looks like a successful result, indexing the table directly lets any program crash the kernel with a bad number, and writing the result into a7 leaves the program reading its own argument back.
+    - question:
+        id: write-timer
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `run`, a kernel that shares one processor among programs with a timer interrupt every `tick` instructions. Even with `busy`, which never gives the processor up, the music player and the chat should both finish. The program should print `music 0`, `music 1`, `chat 0`, `chat 1`, `music 2` and then `14 timer interrupts`.
+        starter: |
+          from collections import deque
+
+
+          def busy():
+              # A buggy program: it loops for ever and never makes a system call.
+              while True:
+                  yield
+
+
+          def player(name, n):
+              # A program that does n steps of useful work, printing as it goes.
+              for i in range(n):
+                  print(name, i)
+                  yield
+
+
+          def run(programs, tick, steps):
+              # Each program is a generator, and one next() runs one instruction of it;
+              # StopIteration means the program has exited. Keep the programs in a
+              # line. Run the one at the front for up to tick instructions, counting
+              # each next(), including one that ends in StopIteration. If it exits,
+              # drop it. If it uses its whole tick, the timer interrupts: count one
+              # interrupt and move the program to the back of the line. Stop when the
+              # line is empty, or when steps instructions or more have run by the time
+              # the next program would start. Return the number of timer interrupts.
+              return 0
+
+
+          fired = run([busy(), player("music", 3), player("chat", 2)], 2, 30)
+          print(fired, "timer interrupts")
+        solution: |
+          from collections import deque
+
+
+          def busy():
+              # A buggy program: it loops for ever and never makes a system call.
+              while True:
+                  yield
+
+
+          def player(name, n):
+              # A program that does n steps of useful work, printing as it goes.
+              for i in range(n):
+                  print(name, i)
+                  yield
+
+
+          def run(programs, tick, steps):
+              line = deque(programs)
+              ran = 0
+              fired = 0
+              while line and ran < steps:
+                  program = line.popleft()
+                  exited = False
+                  for _ in range(tick):
+                      ran += 1
+                      try:
+                          next(program)
+                      except StopIteration:
+                          exited = True
+                          break
+                  if not exited:
+                      fired += 1
+                      line.append(program)
+              return fired
+
+
+          fired = run([busy(), player("music", 3), player("chat", 2)], 2, 30)
+          print(fired, "timer interrupts")
+        tests: |
+          import io as _io
+          import contextlib as _ctx
+
+
+          def _go(_programs, _tick, _steps):
+              _buf = _io.StringIO()
+              with _ctx.redirect_stdout(_buf):
+                  _n = run(_programs, _tick, _steps)
+              return _n, _buf.getvalue().splitlines()
+
+
+          _n, _lines = _go([busy(), player("music", 3), player("chat", 2)], 2, 30)
+          assert _lines == ["music 0", "music 1", "chat 0", "chat 1", "music 2"], "With a timer, the music player and the chat should both finish even though busy never gives up the processor; they printed " + repr(_lines)
+          assert _n == 14, "busy, music and chat with tick 2 and 30 steps should take 14 timer interrupts, not " + repr(_n)
+          _n, _lines = _go([player("a", 1)], 3, 100)
+          assert (_n, _lines) == (0, ["a 0"]), "a program that exits within its tick is never interrupted, but this gave " + repr(_n)
+          _n, _lines = _go([player("a", 5)], 2, 100)
+          assert _n == 2, "a program of 5 steps with tick 2 uses up two whole ticks before it exits in the third, so 2 interrupts, not " + repr(_n)
+          _n, _lines = _go([busy(), busy()], 1, 10)
+          assert _n == 10, "two busy programs with tick 1 and 10 steps take 10 interrupts, not " + repr(_n)
+          _n, _lines = _go([player("x", 2), busy(), player("y", 4)], 3, 40)
+          assert _lines == ["x 0", "x 1", "y 0", "y 1", "y 2", "y 3"], "every program that has work to do should get to do it, but they printed " + repr(_lines)
+          assert output.splitlines() == ["music 0", "music 1", "chat 0", "chat 1", "music 2", "14 timer interrupts"], "The program should print the music and chat lines and then 14 timer interrupts"
+        wrong:
+          - |
+            from collections import deque
+
+
+            def busy():
+                # A buggy program: it loops for ever and never makes a system call.
+                while True:
+                    yield
+
+
+            def player(name, n):
+                # A program that does n steps of useful work, printing as it goes.
+                for i in range(n):
+                    print(name, i)
+                    yield
+
+
+            def run(programs, tick, steps):
+                line = deque(programs)
+                ran = 0
+                fired = 0
+                while line and ran < steps:
+                    program = line.popleft()
+                    exited = False
+                    while ran < steps:
+                        ran += 1
+                        try:
+                            next(program)
+                        except StopIteration:
+                            exited = True
+                            break
+                    if not exited:
+                        fired += 1
+                        line.append(program)
+                return fired
+
+
+            fired = run([busy(), player("music", 3), player("chat", 2)], 2, 30)
+            print(fired, "timer interrupts")
+          - |
+            from collections import deque
+
+
+            def busy():
+                # A buggy program: it loops for ever and never makes a system call.
+                while True:
+                    yield
+
+
+            def player(name, n):
+                # A program that does n steps of useful work, printing as it goes.
+                for i in range(n):
+                    print(name, i)
+                    yield
+
+
+            def run(programs, tick, steps):
+                line = deque(programs)
+                ran = 0
+                fired = 0
+                while line and ran < steps:
+                    program = line.popleft()
+                    exited = False
+                    for _ in range(tick):
+                        ran += 1
+                        try:
+                            next(program)
+                        except StopIteration:
+                            exited = True
+                            break
+                    if not exited:
+                        fired += 1
+                        line.appendleft(program)
+                return fired
+
+
+            fired = run([busy(), player("music", 3), player("chat", 2)], 2, 30)
+            print(fired, "timer interrupts")
+          - |
+            from collections import deque
+
+
+            def busy():
+                # A buggy program: it loops for ever and never makes a system call.
+                while True:
+                    yield
+
+
+            def player(name, n):
+                # A program that does n steps of useful work, printing as it goes.
+                for i in range(n):
+                    print(name, i)
+                    yield
+
+
+            def run(programs, tick, steps):
+                line = deque(programs)
+                ran = 0
+                fired = 0
+                while line and ran < steps:
+                    program = line.popleft()
+                    exited = False
+                    for _ in range(tick):
+                        ran += 1
+                        try:
+                            next(program)
+                        except StopIteration:
+                            exited = True
+                            break
+                    fired += 1
+                    if not exited:
+                        line.append(program)
+                return fired
+
+
+            fired = run([busy(), player("music", 3), player("chat", 2)], 2, 30)
+            print(fired, "timer interrupts")
+        explanation: |
+          Take the program at the front of a deque, run it for up to tick steps, and either drop it when it exits or count an interrupt and put it at the back. Running each program until it finishes is co-operative multitasking, and busy then holds the processor for good; putting the interrupted program back at the front has the same effect; and counting an interrupt when a program exits gives 16.
+    - question:
+        id: fix-user-pointer
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The kernel's `write` should refuse any request that touches memory outside the user's range. The program should print `hello`, `6` and `-14`, but the second call leaks the password the kernel keeps just above user memory. Find the fault and fix it.
+        starter: |
+          EFAULT = 14
+          USER_START = 0x1000
+          USER_END = 0x8000  # user memory runs from USER_START up to, not including, USER_END
+
+          memory = [0] * 0x10000
+          for i, ch in enumerate("hello\n"):
+              memory[0x2000 + i] = ord(ch)
+          for i, ch in enumerate("> "):
+              memory[0x7FFE + i] = ord(ch)
+          for i, ch in enumerate("hunter2\n"):
+              memory[USER_END + i] = ord(ch)  # the kernel keeps a password just above user memory
+
+
+          def sys_write(addr, n):
+              # Print n bytes of the caller's memory, starting at addr. The caller is a
+              # user program, so neither addr nor n can be trusted: every byte it asks
+              # for must lie in user memory, or the call fails with -EFAULT.
+              if addr < USER_START or addr > USER_END:
+                  return -EFAULT
+              text = "".join(chr(b) for b in memory[addr:addr + n])
+              print(text, end="")
+              return n
+
+
+          print(sys_write(0x2000, 6))
+          print(sys_write(0x7FFE, 10))  # starts in user memory and runs into the kernel's
+        solution: |
+          EFAULT = 14
+          USER_START = 0x1000
+          USER_END = 0x8000  # user memory runs from USER_START up to, not including, USER_END
+
+          memory = [0] * 0x10000
+          for i, ch in enumerate("hello\n"):
+              memory[0x2000 + i] = ord(ch)
+          for i, ch in enumerate("> "):
+              memory[0x7FFE + i] = ord(ch)
+          for i, ch in enumerate("hunter2\n"):
+              memory[USER_END + i] = ord(ch)  # the kernel keeps a password just above user memory
+
+
+          def sys_write(addr, n):
+              # Print n bytes of the caller's memory, starting at addr. The caller is a
+              # user program, so neither addr nor n can be trusted: every byte it asks
+              # for must lie in user memory, or the call fails with -EFAULT.
+              if addr < USER_START or n < 0 or addr + n > USER_END:
+                  return -EFAULT
+              text = "".join(chr(b) for b in memory[addr:addr + n])
+              print(text, end="")
+              return n
+
+
+          print(sys_write(0x2000, 6))
+          print(sys_write(0x7FFE, 10))  # starts in user memory and runs into the kernel's
+        tests: |
+          import io as _io
+          import contextlib as _ctx
+
+
+          def _go(_addr, _n):
+              _buf = _io.StringIO()
+              with _ctx.redirect_stdout(_buf):
+                  _r = sys_write(_addr, _n)
+              return _r, _buf.getvalue()
+
+
+          assert _go(0x2000, 6) == (6, "hello\n"), "a write inside user memory should print and return its length"
+          _r, _shown = _go(0x7FFE, 10)
+          assert "hunter2" not in _shown, "a write that runs past the end of user memory leaked the kernel's password"
+          assert _r == -14, "a write that runs past the end of user memory should fail with -EFAULT, -14, not " + repr(_r)
+          assert _go(0x7FF0, 16)[0] == 16, "a write that ends exactly at the end of user memory is allowed, but it gave " + repr(_go(0x7FF0, 16)[0])
+          assert _go(0x7FF0, 17)[0] == -14, "a write one byte past the end of user memory should fail with -14"
+          assert _go(0x0800, 4)[0] == -14, "a write that starts below user memory, in the kernel's low pages, should fail with -14"
+          assert _go(0x0FFF, 2)[0] == -14, "a write that starts one byte below user memory should fail with -14"
+          assert _go(0x1000, 1)[0] == 1, "the first byte of user memory belongs to the user"
+          assert output == "hello\n6\n-14\n", "The program should print hello, 6 and then -14"
+        wrong:
+          - |
+            EFAULT = 14
+            USER_START = 0x1000
+            USER_END = 0x8000  # user memory runs from USER_START up to, not including, USER_END
+
+            memory = [0] * 0x10000
+            for i, ch in enumerate("hello\n"):
+                memory[0x2000 + i] = ord(ch)
+            for i, ch in enumerate("> "):
+                memory[0x7FFE + i] = ord(ch)
+            for i, ch in enumerate("hunter2\n"):
+                memory[USER_END + i] = ord(ch)  # the kernel keeps a password just above user memory
+
+
+            def sys_write(addr, n):
+                # Print n bytes of the caller's memory, starting at addr. The caller is a
+                # user program, so neither addr nor n can be trusted: every byte it asks
+                # for must lie in user memory, or the call fails with -EFAULT.
+                if addr < USER_START or n < 0 or addr + n >= USER_END:
+                    return -EFAULT
+                text = "".join(chr(b) for b in memory[addr:addr + n])
+                print(text, end="")
+                return n
+
+
+            print(sys_write(0x2000, 6))
+            print(sys_write(0x7FFE, 10))  # starts in user memory and runs into the kernel's
+          - |
+            EFAULT = 14
+            USER_START = 0x1000
+            USER_END = 0x8000  # user memory runs from USER_START up to, not including, USER_END
+
+            memory = [0] * 0x10000
+            for i, ch in enumerate("hello\n"):
+                memory[0x2000 + i] = ord(ch)
+            for i, ch in enumerate("> "):
+                memory[0x7FFE + i] = ord(ch)
+            for i, ch in enumerate("hunter2\n"):
+                memory[USER_END + i] = ord(ch)  # the kernel keeps a password just above user memory
+
+
+            def sys_write(addr, n):
+                # Print n bytes of the caller's memory, starting at addr. The caller is a
+                # user program, so neither addr nor n can be trusted: every byte it asks
+                # for must lie in user memory, or the call fails with -EFAULT.
+                if n < 0 or addr + n > USER_END:
+                    return -EFAULT
+                text = "".join(chr(b) for b in memory[addr:addr + n])
+                print(text, end="")
+                return n
+
+
+            print(sys_write(0x2000, 6))
+            print(sys_write(0x7FFE, 10))  # starts in user memory and runs into the kernel's
+          - |
+            EFAULT = 14
+            USER_START = 0x1000
+            USER_END = 0x8000  # user memory runs from USER_START up to, not including, USER_END
+
+            memory = [0] * 0x10000
+            for i, ch in enumerate("hello\n"):
+                memory[0x2000 + i] = ord(ch)
+            for i, ch in enumerate("> "):
+                memory[0x7FFE + i] = ord(ch)
+            for i, ch in enumerate("hunter2\n"):
+                memory[USER_END + i] = ord(ch)  # the kernel keeps a password just above user memory
+
+
+            def sys_write(addr, n):
+                # Print n bytes of the caller's memory, starting at addr. The caller is a
+                # user program, so neither addr nor n can be trusted: every byte it asks
+                # for must lie in user memory, or the call fails with -EFAULT.
+                if addr < USER_START or n > USER_END:
+                    return -EFAULT
+                text = "".join(chr(b) for b in memory[addr:addr + n])
+                print(text, end="")
+                return n
+
+
+            print(sys_write(0x2000, 6))
+            print(sys_write(0x7FFE, 10))  # starts in user memory and runs into the kernel's
+        explanation: |
+          The check looks only at where the request starts. A request may start inside user memory and run past its end, so the kernel must check both ends: addr at or above USER_START and addr + n at or below USER_END, with n not negative. Using >= refuses a write that ends exactly at the boundary, dropping the lower check lets a program read the kernel's low pages, and comparing n with an address checks nothing useful.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. A program loops for ever without system calls on a one-core laptop, and the kernel's timer interrupts every 4 milliseconds. How many times a second does the kernel get the processor back?
+        answer: "250"
+        explanation: |
+          A second is 1,000 milliseconds, and 1000 / 4 = 250 interrupts. Each one puts the kernel in charge, whatever the loop is doing.
+    - question:
+        id: work-sandbox
+        type: choice
+        system: s2
+        prompt: |
+          A banking app on a phone must never read the messages of the chat app beside it, even if the bank's code has a bug that loads from a random address. What makes that guarantee hold?
+        options:
+          - "The app runs in user mode, where it cannot change how memory is mapped, so its loads reach only its own memory"
+          - "The chat app checks every load the bank makes"
+          - "Phone apps are written in languages without pointers"
+          - "The timer interrupts the bank's code before it can load anything"
+        answer: 0
+        explanation: |
+          The mapping from the app's addresses to real memory is set by the kernel with privileged instructions. In user mode the bank cannot change it, so a wild load either reaches its own memory or traps.
+  connections:
+    - text: |
+        250. A second is 1,000 milliseconds and the timer fires every 4, so the kernel gets the processor back 250 times a second, however tightly the program loops. Each time, the scheduler can give the next slice to the music player, the mouse driver or your terminal, which is why the machine stays usable and why you can kill the loop.
+
+        Everything in this lesson happens on behalf of a **process**, the kernel's name for a running program with its own registers, memory and open files. [[h2.processes-and-system-calls]] looks at what a process is, how one is created by copying another, and the handful of system calls through which programs do almost everything.

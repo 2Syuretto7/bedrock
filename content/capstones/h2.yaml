@@ -1,0 +1,368 @@
+cluster: H2
+title: The fare server of a metro line
+minutes: 100
+claim: You will have taken the ticketing server of a metro line apart, from the gate software that tried to read its card reader without the kernel, through the journey log's system calls, the morning rush that a first-come scheduler made slow, the fare table that spent its time missing in the TLB, the packet storm that drowned the processor in interrupts, the ledger that a power cut emptied, the ticket count that threads made wrong and the zombies that filled the process table, to a worker that shuts down without leaving a half-written file.
+brief: |
+  This cluster was about the operating system: what it does and how the processor's modes let it, processes and system calls, scheduling, virtual memory and page tables, the TLB and address translation, interrupts and I/O, files and file systems, threads in the kernel, and signals and the life of a process.
+
+  **The project.** A metro line in Kochi runs its fare gates from a single Linux server in the depot. The server reads the card taps sent by the gates, checks each fare against a large fare table, writes a journey log, settles the day's takings into a ledger every night and uploads them to the bank. It has been patched by several people over the years, and this year it has misbehaved in a different way almost every month. You have been asked to go through it and explain each failure.
+
+  Each stage below is one of those failures. Every stage draws on one or more lessons of this cluster, and the skill being tested is tracing a symptom you can see from outside down to what the kernel and the hardware are doing underneath.
+language: python
+starter: |
+  # Scratch space for the fare server.
+  lines_per_second = 32768
+  line_bytes = 128
+  buffer_bytes = 64 * 1024
+  print(lines_per_second * line_bytes // buffer_bytes, "write calls a second")
+stages:
+  - title: The gate software that touched the hardware
+    blocks:
+      - text: |
+          The oldest part of the system is the gate software, first written for a small board with no operating system, where it read the card reader by loading from the reader's registers at a fixed physical address. When it was moved onto the Linux server unchanged, it was killed with a segmentation fault on its very first read of the reader.
+      - question:
+          id: gate-registers
+          type: choice
+          system: s2
+          concepts: [h2.what-an-operating-system-does]
+          prompt: |
+            Why was the program killed?
+          options:
+            - "It runs in user mode in its own virtual address space, where that address is not mapped; only the kernel, through the reader's driver, may touch the device's registers"
+            - "Linux cannot use card readers"
+            - "Load instructions are privileged, so a user program can never execute one"
+            - "The address was too large to fit in a 64-bit register"
+          answer: 0
+          explanation: |
+            On the bare board the program was the only software and had the whole machine. Under an operating system it is a process: its addresses are virtual, translated through its own page table, and the device's registers are mapped only into the kernel. The access faults, and the kernel turns the fault into SIGSEGV. The fix is to ask the kernel, through the reader's driver and a system call such as read, which is exactly the protection that lets several programs share one machine safely.
+  - title: The journey log
+    blocks:
+      - text: |
+          Each tap at a gate adds a 128-byte line to the journey log. At the evening peak the gates produce 32,768 lines a second. The first version called `write` once for every line, and the server spent a noticeable share of its time entering and leaving the kernel. A colleague put a 64 KiB buffer in the program, so that lines are copied into it and one `write` sends the whole buffer when it is full.
+      - question:
+          id: log-writes
+          type: numeric
+          system: s2
+          concepts: [h2.processes-and-system-calls]
+          prompt: |
+            At the evening peak, how many `write` system calls a second does the buffered version make?
+          answer: "64"
+          explanation: |
+            The log grows by 32,768 × 128 = 4,194,304 bytes, which is 4 MiB, a second, and 4 MiB / 64 KiB = 64 writes. The data copied is the same, but the fixed cost of each crossing into the kernel is now paid 64 times a second instead of 32,768 times. This is what C's stdio and Python's buffered files do for you; the price is that lines sit in the buffer until it is flushed, so a crash can lose the last few.
+  - title: The morning rush
+    blocks:
+      - text: |
+          Before the server was upgraded it had one core and a first-come, first-served scheduler for its jobs. At 8:58 one morning, the nightly report job, still running late, became ready with a 40 ms burst of computing, and an instant later five gate validations of 2 ms each became ready behind it. Passengers at the gates noticed the delay.
+      - question:
+          id: rush-wait
+          type: numeric
+          system: s2
+          concepts: [h2.scheduling]
+          prompt: |
+            Under first-come, first-served, what is the average time the five validations wait before they start running?
+          answer: "44"
+          unit: "ms"
+          explanation: |
+            The validations wait 40, 42, 44, 46 and 48 ms, which add up to 220 ms, an average of 44 ms. This is the convoy effect. Shortest job first would run them first, with waits of 0, 2, 4, 6 and 8 ms, an average of 4 ms, while the report starts only 10 ms late. A real scheduler gets close to that by preempting the report as soon as a validation becomes ready, because tasks that have been sleeping are owed processor time.
+  - title: The fare table
+    blocks:
+      - text: |
+          The fare-lookup service maps a 2 GiB fare table into memory and reads it at random places. Profiling shows that most of its time goes on TLB misses: with 4 KiB pages, the table spans 524,288 pages, while the processor's TLB has room for about 1,500 translations, so almost every lookup needs a page-table walk. The team maps the table with 2 MiB huge pages instead.
+      - question:
+          id: fare-pages
+          type: numeric
+          system: s2
+          concepts: [h2.virtual-memory-and-page-tables, h2.the-tlb-and-address-translation]
+          prompt: |
+            How many 2 MiB pages does the 2 GiB table span, which is the number of TLB entries needed to cover all of it?
+          answer: "1024"
+          explanation: |
+            2 GiB / 2 MiB = 2^31 / 2^21 = 2^10 = 1024. That fits within the TLB, so once it is warm nearly every lookup finds its translation, and each miss that does happen stops one level earlier in the page-table walk. The cost is that the kernel must find 2 MiB of contiguous, aligned physical memory for each page, which is why huge pages are usually reserved for large, long-lived mappings like this one.
+  - title: The packet storm
+    blocks:
+      - text: |
+          During a festival weekend, the gates' traffic reached 400,000 small packets a second, and the network card raised an interrupt for every packet. The server did not crash, but its processor spent almost all its time entering and leaving the interrupt handler, the validation process barely ran, and the number of taps actually checked each second fell as the load rose.
+      - question:
+          id: packet-storm
+          type: choice
+          system: s2
+          concepts: [h2.interrupts-and-i-o]
+          prompt: |
+            Which change lets the server keep up?
+          options:
+            - "Under load, mask the card's interrupts and poll its receive ring in batches, unmasking them when the ring is empty, or have the card coalesce several packets into one interrupt"
+            - "Give the validation process the highest real-time priority, so that it preempts the interrupt handler"
+            - "Add more interrupt lines, so that each packet has a line of its own"
+            - "Make the interrupt handler validate the tap itself, so the validation process is not needed"
+          answer: 0
+          explanation: |
+            This is receive livelock: the fixed cost of every interrupt eats the processor, leaving nothing for the work the packets carry. Polling under load, as Linux's NAPI does, or interrupt coalescing in the card, pays that cost once per batch instead of once per packet. No process priority outranks an interrupt, and moving the validation into the handler would make each interrupt longer and the livelock worse.
+  - title: The empty ledger
+    blocks:
+      - text: |
+          Every night the server replaces `ledger.dat`, the day's settled fares, with a new version. It used to open the file, truncate it and write the new contents in place. Last month a power cut struck a few seconds after the job finished, and the morning found `ledger.dat` with the right name and a length of zero.
+      - question:
+          id: ledger-steps
+          type: order
+          system: s2
+          concepts: [h2.files-and-file-systems]
+          prompt: |
+            Put the steps of a crash-safe replacement in order.
+          steps:
+            - "Create ledger.dat.tmp in the same directory as ledger.dat."
+            - "Write the whole new ledger into ledger.dat.tmp."
+            - "Call fsync on ledger.dat.tmp, so its data is on the disk and not only in the page cache."
+            - "Rename ledger.dat.tmp to ledger.dat, which replaces the directory entry in one atomic step."
+          explanation: |
+            The old method lost everything because the truncation reached the disk before the new data, which was still only in the page cache. Writing a separate file, forcing it to disk and only then renaming means that after a crash at any point the name refers either to the complete old ledger or the complete new one. The temporary file must be in the same directory, because rename is atomic only within one file system. Careful programs also fsync the directory afterwards, so that the rename itself survives a crash.
+  - title: The ticket count
+    blocks:
+      - text: |
+          The server keeps a running count of tickets sold today in one shared integer, and its eight worker threads each run `sold += 1` for every ticket they process. On busy days the count comes out a few thousand short of the number of payment records, and never over.
+      - question:
+          id: ticket-count
+          type: choice
+          system: s2
+          concepts: [h2.threads-in-the-kernel]
+          prompt: |
+            Why is the count short?
+          options:
+            - "sold += 1 is a load, an add and a store; two threads can load the same value and both store that value plus one, so one increment is lost"
+            - "Each thread has its own copy of global variables, and only one copy is reported"
+            - "The integer overflows on busy days"
+            - "The kernel discards a thread's last write when it switches to another thread"
+          answer: 0
+          explanation: |
+            Threads share the process's memory, which is why one counter can serve all eight, and also why their updates can interleave. A lost update can only make the count smaller, which matches the symptom. The fix is a lock around the increment, an atomic increment, or a count per thread added up at the end, which are the tools of the concurrency cluster.
+  - title: How the server's processes end
+    blocks:
+      - text: |
+          The server forks a child process for each settlement upload to the bank, often several within a second. By evening `ps` lists hundreds of processes marked `<defunct>`, and soon `fork` starts failing. The parent does have a SIGCHLD handler, which calls `waitpid` once each time it runs.
+      - question:
+          id: zombie-fix
+          type: choice
+          system: s2
+          concepts: [h2.signals-and-the-life-of-a-process, h2.processes-and-system-calls]
+          prompt: |
+            What fixes it?
+          options:
+            - "In the handler, call waitpid(-1, &status, WNOHANG) in a loop until it reports no more exited children, because several exits can arrive as one pending SIGCHLD"
+            - "Send SIGKILL to each defunct process"
+            - "Have each child call exit twice, to be sure the kernel notices"
+            - "Block SIGCHLD in the parent, so the handler is never interrupted"
+          answer: 0
+          explanation: |
+            A defunct process is a zombie: it has exited, and its entry stays in the process table, holding its exit status, until the parent waits for it. Standard signals are not counted, so when several children exit close together, the parent may see only one SIGCHLD and reap only one child. Looping with WNOHANG reaps every child that has exited and then returns at once. A zombie is already dead, so SIGKILL does nothing to it, and blocking SIGCHLD would only delay the handler further.
+      - text: |
+          During each deployment, the service manager sends the worker that writes fare files SIGTERM, waits 30 seconds, and then sends SIGKILL if it is still running. Some deployments left a half-written fare file behind. The rewrite installs a SIGTERM handler that only sets a flag; the main loop finishes the job it is on, checks the flag before starting another, and exits cleanly. Before it goes live, you will simulate the worker tick by tick to check what it leaves behind.
+      - question:
+          id: graceful-worker
+          type: code
+          mode: write
+          system: s2
+          concepts: [h2.signals-and-the-life-of-a-process]
+          prompt: |
+            Write `run_worker`, which simulates the worker as its comment describes. The tests deliver SIGTERM and SIGKILL at other ticks. The program should print the three results for a SIGTERM halfway through the second job, a SIGKILL at the same moment, and no signal at all.
+          starter: |
+            def run_worker(jobs, signals):
+                # The worker writes one fare file per job, and each job takes 2 ticks.
+                # signals maps a tick number to "SIGTERM" or "SIGKILL", delivered at the
+                # start of that tick, before any work. The SIGTERM handler only sets a
+                # flag: the worker finishes the job in progress, starts no new one, and
+                # exits with status 0. SIGKILL cannot be handled: the worker stops at
+                # once with status 137, leaving the job in progress half-written. With
+                # no signal, it exits with status 0 when the jobs run out. Return
+                # (the jobs finished, the exit status, the half-written job or None).
+                return [], 0, None
+
+
+            jobs = ["fare-101", "fare-102", "fare-103", "fare-104"]
+            print(run_worker(jobs, {3: "SIGTERM", 30: "SIGKILL"}))
+            print(run_worker(jobs, {3: "SIGKILL"}))
+            print(run_worker(jobs, {}))
+          solution: |
+            def run_worker(jobs, signals):
+                # The worker writes one fare file per job, and each job takes 2 ticks.
+                # signals maps a tick number to "SIGTERM" or "SIGKILL", delivered at the
+                # start of that tick, before any work. The SIGTERM handler only sets a
+                # flag: the worker finishes the job in progress, starts no new one, and
+                # exits with status 0. SIGKILL cannot be handled: the worker stops at
+                # once with status 137, leaving the job in progress half-written. With
+                # no signal, it exits with status 0 when the jobs run out. Return
+                # (the jobs finished, the exit status, the half-written job or None).
+                done = []
+                waiting = list(jobs)
+                current = None
+                progress = 0
+                stopping = False
+                tick = 0
+                while True:
+                    signal = signals.get(tick)
+                    if signal == "SIGKILL":
+                        return done, 137, current
+                    if signal == "SIGTERM":
+                        stopping = True
+                    if current is None:
+                        if stopping or not waiting:
+                            return done, 0, None
+                        current = waiting.pop(0)
+                        progress = 0
+                    progress += 1
+                    if progress == 2:
+                        done.append(current)
+                        current = None
+                    tick += 1
+
+
+            jobs = ["fare-101", "fare-102", "fare-103", "fare-104"]
+            print(run_worker(jobs, {3: "SIGTERM", 30: "SIGKILL"}))
+            print(run_worker(jobs, {3: "SIGKILL"}))
+            print(run_worker(jobs, {}))
+          tests: |
+            _jobs = ["fare-101", "fare-102", "fare-103", "fare-104"]
+            _r = run_worker(_jobs, {3: "SIGTERM"})
+            assert _r == (["fare-101", "fare-102"], 0, None), "SIGTERM at tick 3 arrives halfway through fare-102: the worker should finish it, start nothing new and exit 0, giving (['fare-101', 'fare-102'], 0, None), not " + repr(_r)
+            _r = run_worker(_jobs, {2: "SIGTERM"})
+            assert _r == (["fare-101"], 0, None), "SIGTERM at tick 2 arrives just as fare-101 is done and before fare-102 starts, so the worker should exit 0 at once with (['fare-101'], 0, None), not " + repr(_r)
+            _r = run_worker(_jobs, {0: "SIGTERM"})
+            assert _r == ([], 0, None), "SIGTERM before any work should give ([], 0, None), not " + repr(_r)
+            _r = run_worker(_jobs, {3: "SIGKILL"})
+            assert _r == (["fare-101"], 137, "fare-102"), "SIGKILL at tick 3 stops the worker in the middle of fare-102, giving (['fare-101'], 137, 'fare-102'), not " + repr(_r)
+            _r = run_worker(_jobs, {2: "SIGKILL"})
+            assert _r == (["fare-101"], 137, None), "SIGKILL at tick 2 arrives between jobs, so nothing is half-written: (['fare-101'], 137, None), not " + repr(_r)
+            _r = run_worker(_jobs, {1: "SIGTERM", 30: "SIGKILL"})
+            assert _r == (["fare-101"], 0, None), "SIGTERM at tick 1 lets fare-101 finish and then the worker exits 0, long before the SIGKILL at tick 30, not " + repr(_r)
+            _r = run_worker(_jobs, {})
+            assert _r == (_jobs, 0, None), "with no signal, all four jobs should finish with status 0, not " + repr(_r)
+            assert _jobs == ["fare-101", "fare-102", "fare-103", "fare-104"], "run_worker should not change the list of jobs it is given"
+            _r = run_worker([], {})
+            assert _r == ([], 0, None), "with no jobs and no signal the worker exits 0 at once, not " + repr(_r)
+            assert output.splitlines() == ["(['fare-101', 'fare-102'], 0, None)", "(['fare-101'], 137, 'fare-102')", "(['fare-101', 'fare-102', 'fare-103', 'fare-104'], 0, None)"], "The program should print the three results for SIGTERM, SIGKILL and no signal"
+          wrong:
+            - |
+              def run_worker(jobs, signals):
+                  # The worker writes one fare file per job, and each job takes 2 ticks.
+                  # signals maps a tick number to "SIGTERM" or "SIGKILL", delivered at the
+                  # start of that tick, before any work. The SIGTERM handler only sets a
+                  # flag: the worker finishes the job in progress, starts no new one, and
+                  # exits with status 0. SIGKILL cannot be handled: the worker stops at
+                  # once with status 137, leaving the job in progress half-written. With
+                  # no signal, it exits with status 0 when the jobs run out. Return
+                  # (the jobs finished, the exit status, the half-written job or None).
+                  done = []
+                  waiting = list(jobs)
+                  current = None
+                  progress = 0
+                  stopping = False
+                  tick = 0
+                  while True:
+                      signal = signals.get(tick)
+                      if signal == "SIGKILL":
+                          return done, 137, current
+                      if signal == "SIGTERM":
+                          return done, 0, current
+                      if current is None:
+                          if stopping or not waiting:
+                              return done, 0, None
+                          current = waiting.pop(0)
+                          progress = 0
+                      progress += 1
+                      if progress == 2:
+                          done.append(current)
+                          current = None
+                      tick += 1
+
+
+              jobs = ["fare-101", "fare-102", "fare-103", "fare-104"]
+              print(run_worker(jobs, {3: "SIGTERM", 30: "SIGKILL"}))
+              print(run_worker(jobs, {3: "SIGKILL"}))
+              print(run_worker(jobs, {}))
+            - |
+              def run_worker(jobs, signals):
+                  # The worker writes one fare file per job, and each job takes 2 ticks.
+                  # signals maps a tick number to "SIGTERM" or "SIGKILL", delivered at the
+                  # start of that tick, before any work. The SIGTERM handler only sets a
+                  # flag: the worker finishes the job in progress, starts no new one, and
+                  # exits with status 0. SIGKILL cannot be handled: the worker stops at
+                  # once with status 137, leaving the job in progress half-written. With
+                  # no signal, it exits with status 0 when the jobs run out. Return
+                  # (the jobs finished, the exit status, the half-written job or None).
+                  done = []
+                  waiting = list(jobs)
+                  current = None
+                  progress = 0
+                  stopping = False
+                  tick = 0
+                  while True:
+                      signal = signals.get(tick)
+                      if signal == "SIGKILL":
+                          return done, 137, current
+                      if signal == "SIGTERM":
+                          stopping = True
+                      if current is None:
+                          if not waiting:
+                              return done, 0, None
+                          current = waiting.pop(0)
+                          progress = 0
+                      progress += 1
+                      if progress == 2:
+                          done.append(current)
+                          current = None
+                      tick += 1
+
+
+              jobs = ["fare-101", "fare-102", "fare-103", "fare-104"]
+              print(run_worker(jobs, {3: "SIGTERM", 30: "SIGKILL"}))
+              print(run_worker(jobs, {3: "SIGKILL"}))
+              print(run_worker(jobs, {}))
+            - |
+              def run_worker(jobs, signals):
+                  # The worker writes one fare file per job, and each job takes 2 ticks.
+                  # signals maps a tick number to "SIGTERM" or "SIGKILL", delivered at the
+                  # start of that tick, before any work. The SIGTERM handler only sets a
+                  # flag: the worker finishes the job in progress, starts no new one, and
+                  # exits with status 0. SIGKILL cannot be handled: the worker stops at
+                  # once with status 137, leaving the job in progress half-written. With
+                  # no signal, it exits with status 0 when the jobs run out. Return
+                  # (the jobs finished, the exit status, the half-written job or None).
+                  done = []
+                  waiting = list(jobs)
+                  current = None
+                  progress = 0
+                  stopping = False
+                  tick = 0
+                  while True:
+                      signal = signals.get(tick)
+                      if signal == "SIGKILL":
+                          return done, 9, None
+                      if signal == "SIGTERM":
+                          stopping = True
+                      if current is None:
+                          if stopping or not waiting:
+                              return done, 0, None
+                          current = waiting.pop(0)
+                          progress = 0
+                      progress += 1
+                      if progress == 2:
+                          done.append(current)
+                          current = None
+                      tick += 1
+
+
+              jobs = ["fare-101", "fare-102", "fare-103", "fare-104"]
+              print(run_worker(jobs, {3: "SIGTERM", 30: "SIGKILL"}))
+              print(run_worker(jobs, {3: "SIGKILL"}))
+              print(run_worker(jobs, {}))
+          explanation: |
+            Each tick, check for a signal first. SIGKILL ends everything at once with status 128 + 9 = 137, and whatever job was in progress stays half-written, because the process gets no chance to run any code. SIGTERM only sets the flag. Then, if no job is in progress, either stop with status 0 because the flag is set or the jobs have run out, or take the next job; work on it, and record it as done after its second tick. Returning as soon as SIGTERM arrives abandons the job in progress, just as the old worker did; ignoring the flag when choosing the next job runs every job anyway; and reporting SIGKILL as status 9 with nothing half-written misreads both the shell's exit status and what the kill leaves behind.
+review: |
+  Each failure of the fare server came from something this cluster taught:
+
+  - The gate software was killed because a user process cannot reach device registers that the kernel has not mapped for it, the protection of [[h2.what-an-operating-system-does]].
+  - Buffering the journey log cut its system calls from 32,768 to 64 a second, the cost of crossing into the kernel from [[h2.processes-and-system-calls]].
+  - Five short validations waited 44 ms on average behind one long report under first-come, first-served, the convoy effect of [[h2.scheduling]].
+  - The fare table fits 1024 TLB entries with 2 MiB pages instead of 524,288 with 4 KiB pages, the translation of [[h2.virtual-memory-and-page-tables]] and the reach of [[h2.the-tlb-and-address-translation]].
+  - The packet storm was receive livelock, cured by polling or coalescing, as [[h2.interrupts-and-i-o]] explains.
+  - The ledger is replaced by writing a temporary file, forcing it to disk and renaming it, the recipe of [[h2.files-and-file-systems]].
+  - The ticket count lost increments because threads share memory and sold += 1 is not one step, the hazard named in [[h2.threads-in-the-kernel]].
+  - The zombies are reaped by a loop of waitpid with WNOHANG, and the worker shuts down cleanly on SIGTERM but not on SIGKILL, both from [[h2.signals-and-the-life-of-a-process]].

@@ -1,0 +1,710 @@
+concept: h2.scheduling
+minutes: 85
+claim: You can name what a scheduler tries to achieve, turnaround, waiting and response time, throughput and fairness, and see that they pull against each other; schedule jobs by first come first served, shortest job first, shortest remaining time first and round robin, and work out each job's waiting and turnaround time; prove that running the shortest job first minimises average waiting time; choose a round-robin quantum; explain priorities, starvation and aging, and how a multi-level feedback queue spots interactive programs; and build a fair-share scheduler that picks the task with the least virtual runtime from a heap.
+recalls: [h2.processes-and-system-calls, s2.heaps-and-priority-queues]
+uses: [h2.what-an-operating-system-does, s2.stacks-and-queues, s3.greedy-algorithms, s0.dictionaries-and-sets, f0.ratio-rate-and-proportion]
+leads: [h2.virtual-memory-and-page-tables]
+bridges:
+  s2.heaps-and-priority-queues: |
+    A heap gives you the smallest item of a changing collection in logarithmic time: push items as they come, pop the minimum whenever you need one. An operating system's scheduler has exactly this job, hundreds of times a second. The collection is the set of processes ready to run, items join as processes wake up, and the one to pop is the one whose turn it is by some measure: the shortest remaining work, the highest priority, or the least processor time received so far. The choice of measure is the whole of scheduling policy, and the heap, or a balanced tree that does the same job, is how a kernel makes that choice fast.
+starter: |
+  # Scratch space. Three jobs ready at once: try every order and see which
+  # gives the least total waiting.
+  from itertools import permutations
+  jobs = {"compile": 24, "key": 3, "save": 3}
+  for order in permutations(jobs):
+      time, waited = 0, 0
+      for name in order:
+          waited += time
+          time += jobs[name]
+      print(order, waited / 3)
+parts:
+  recall:
+    - text: |
+        [[h2.processes-and-system-calls]] gave every running program a process, and showed processes moving between ready, running and blocked. Usually several are ready at once, and only one can run on each core. Deciding which, and for how long, is the scheduler's job. It is a problem you have the tools for: [[s2.heaps-and-priority-queues]] gave you a structure that always hands back the most deserving item, and the greedy arguments of the algorithms cluster will show which choice is best. Three quick pulls first.
+  puzzle:
+    - text: |
+        Three jobs are ready at the same moment on a laptop with one core: a compile that needs 24 ms of processor time, a keystroke handler that needs 3 ms, and an autosave that needs 3 ms. Each job runs to the end once started. Run in the order compile, keystroke, autosave, their waiting times are 0, 24 and 27 ms, an average of 17 ms.
+
+        **What is the smallest average waiting time any order can achieve, in milliseconds?**
+  intuition:
+    - text: |
+        At a ration shop in a small town, one clerk serves a queue. A farmer at the front has a full month's order for a joint family, twenty minutes of weighing; behind him are two people who each want only a packet of salt. Served in the order they came, the two wait twenty minutes for a minute's business, and the queue's average wait is long. If the clerk serves the salt first, the farmer waits two extra minutes and everyone else's wait nearly vanishes. Whether that is fair is another question, and a scheduler has to answer it too.
+
+        The figure runs four jobs that arrive a millisecond apart under four policies. Pale bars are time spent waiting, solid bars time running. Compare the average waits, then try round robin with different quanta and watch the response times and the number of switches.
+    - figure: scheduler-gantt
+      props: { policy: fcfs, quantum: 3 }
+    - text: |
+        Putting short jobs first cuts the average wait every time, and letting a newly arrived short job interrupt a long one cuts it further. Round robin has the worst average wait here but the best response: every job gets started within a few milliseconds. No policy wins on every measure, which is why real schedulers mix several ideas.
+  derivation:
+    - text: |
+        **What to measure.** For each job, the **turnaround time** is from arrival to finish, the **waiting time** is the part of that spent ready but not running, and the **response time** is from arrival until it first runs. Over the whole machine, **throughput** is jobs finished per second, **utilisation** is the fraction of time the processor is busy, and **fairness** asks whether each job gets its due share. A batch system crunching payroll overnight cares about throughput and turnaround; a phone cares about response, because a tap that takes 200 ms to answer feels broken.
+
+        Jobs also differ in kind. A **CPU-bound** job, such as a compile or a video encode, would use the processor for seconds on end. An **I/O-bound** job, such as an editor or a chat app, runs for a fraction of a millisecond and then blocks waiting for a key, a disk or the network. A good scheduler lets I/O-bound jobs in quickly, because they will soon get out of the way again.
+    - question:
+        id: derivation-measure
+        type: choice
+        system: s2
+        prompt: |
+          A text editor, waiting for keystrokes, shares a core with a long video encode. Which measure matters most for the editor?
+        options:
+          - "Response time: how soon it runs after a key is pressed"
+          - "Throughput: how many jobs finish per second"
+          - "Turnaround time of the video encode"
+          - "Utilisation of the processor"
+        answer: 0
+        explanation: |
+          The editor needs only a sliver of processor time per key, but it needs it at once. Throughput and utilisation are measures of the whole machine, and the encode's turnaround is the encode's concern.
+    - text: |
+        **First come, first served** (FCFS) runs jobs in order of arrival, each to the end. It is simple and never starves anyone, but one long job at the front makes everyone behind it wait, the **convoy effect**. **Shortest job first** (SJF) runs, whenever the processor is free, the shortest job that is ready.
+
+        **Why shortest first is best for average waiting.** Take n jobs, all ready at once, run in some order with lengths t₁, t₂, …, tₙ. The first job waits 0, the second t₁, the third t₁ + t₂, and so on, so the total waiting is (n − 1)t₁ + (n − 2)t₂ + … + 1·tₙ₋₁. The first job's length is counted n − 1 times and the last job's not at all. If any longer job sits just before a shorter one, swapping them takes the longer length out of one more waiting time and puts the shorter length in, which can only lower the total. So the total is smallest when lengths rise from first to last, the exchange argument you met with greedy algorithms.
+    - question:
+        id: derivation-sjf
+        type: numeric
+        system: s2
+        prompt: |
+          Jobs of 6, 3 and 3 ms are all ready at once. What is the average waiting time, in ms, under shortest job first?
+        answer: "3"
+        unit: ms
+        explanation: |
+          Run 3, 3, 6: the waits are 0, 3 and 6, totalling 9, so the average is 3 ms. In the order 6, 3, 3 they would be 0, 6 and 9, an average of 5.
+    - text: |
+        **The catch.** The kernel does not know how long a job will run. Schedulers estimate it from the past, often as an average that weights recent bursts more, since a process that ran briefly before each block usually does so again. And a steady stream of short jobs can keep a long one waiting for ever, **starvation**. **Shortest remaining time first** (SRTF) is the preemptive version: when a new job arrives with less work left than the running one, it takes the processor at once.
+
+        **Round robin** gives each ready job a **quantum** of time in turn and puts it at the back of the queue if it is not done, using the timer interrupt from the first lesson. Every job is started soon, so response is good, but each switch costs a few microseconds and disturbs the caches. If the quantum is much longer than most bursts, round robin becomes FCFS; if it is very short, the machine spends its time switching. Real systems use a few milliseconds, longer than a typical interactive burst, so that an editor finishes its work and blocks before its quantum is up.
+    - question:
+        id: derivation-quantum
+        type: choice
+        system: s2
+        prompt: |
+          A round-robin scheduler's quantum is raised from 4 ms to 10 seconds. What does it now behave like?
+        options:
+          - "First come, first served, since almost every job finishes or blocks within one quantum"
+          - "Shortest job first"
+          - "A scheduler that switches more often"
+          - "Nothing changes"
+        answer: 0
+        explanation: |
+          With a quantum longer than almost any burst, no job is ever preempted, so they run in queue order to the end of each burst, which is FCFS with its convoy effect.
+    - text: |
+        **Priorities.** Often some jobs simply matter more: audio playback over a backup, a kernel thread handling a network card over a user's spreadsheet. A **priority scheduler** keeps the ready jobs in a heap keyed by priority and always runs the top one. Low-priority jobs can starve, so many schedulers use **aging**: a job's priority rises the longer it waits.
+
+        **Learning who is interactive.** The **multi-level feedback queue** (MLFQ) keeps several queues of falling priority, with longer quanta lower down. A new job starts at the top. A job that uses up its whole quantum is probably CPU-bound and moves down a level; a job that blocks before its quantum ends stays where it is. Interactive jobs therefore stay near the top and get quick response, while long computations sink and share the leftovers. Every so often all jobs are lifted back to the top, so that nothing starves and a job whose behaviour changes is re-judged.
+    - question:
+        id: derivation-mlfq
+        type: choice
+        system: s2
+        prompt: |
+          Under a multi-level feedback queue, a job runs for its full quantum without blocking, three times in a row. Where is it now?
+        options:
+          - "Three levels down, in a lower-priority queue with a longer quantum"
+          - "At the top, since it has been running well"
+          - "Removed from the scheduler"
+          - "At the same level, since quanta do not affect priority"
+        answer: 0
+        explanation: |
+          Using a whole quantum is the sign of a CPU-bound job, and each time it moves down a level. Jobs that block early, typically interactive ones, keep their place near the top.
+    - text: |
+        **Fair share.** Linux's scheduler from 2007 to 2023, the **Completely Fair Scheduler**, and its successor EEVDF, start from a different idea: each task should get a share of the processor in proportion to its **weight**, set from its "nice" value. Each task keeps a **virtual runtime**, the processor time it has had divided by its weight, and the scheduler always runs the task whose virtual runtime is smallest, the one furthest behind its fair share. A task of twice the weight earns virtual runtime half as fast, so it gets picked twice as often. The tasks are kept ordered by virtual runtime in a red-black tree, a balanced search tree that gives the minimum as quickly as a heap does. A task that wakes after blocking is given a virtual runtime near the current minimum, so it runs soon but cannot claim the time it spent asleep.
+
+        **Many cores.** With several cores, each usually has its own run queue, so that cores do not fight over one lock, and the kernel moves tasks between queues to balance the load. It prefers to leave a task on the core it ran on last, since that core's caches still hold its data, called **affinity**.
+    - question:
+        id: derivation-weights
+        type: numeric
+        system: s2
+        prompt: |
+          Two CPU-bound tasks share a core under a fair-share scheduler. One has weight 3072 and the other 1024. What percentage of the processor does the heavier one get?
+        answer: "75"
+        unit: "%"
+        explanation: |
+          Shares are proportional to weight, so the heavier task gets 3072 / (3072 + 1024) = 3/4 of the processor, 75%.
+  formal:
+    - text: |
+        **Measures.** Turnaround = finish − arrival. Waiting = turnaround − running time. Response = first run − arrival. Also throughput, utilisation, fairness.
+
+        **Policies.** FCFS: arrival order, convoy effect. SJF: shortest ready job, minimal average waiting when all are ready, risk of starvation, lengths must be estimated. SRTF: preemptive SJF. Round robin: a quantum each in turn; long quanta tend to FCFS, short ones waste time switching.
+
+        **Priorities.** A heap of ready jobs keyed by priority; aging prevents starvation. MLFQ: jobs that use a whole quantum move down, jobs that block stay up.
+
+        **Fair share.** Run the task with the least virtual runtime, the time used divided by weight, so shares are proportional to weights.
+  drill:
+    - text: Seconds each. Work out who waits.
+    - question:
+        id: drill-convoy
+        type: choice
+        system: s1
+        prompt: |
+          A 30-second job arrives just before ten 1-millisecond jobs on a first-come, first-served system. What do the short jobs suffer?
+        options:
+          - "The convoy effect: each waits about 30 seconds"
+          - "Starvation: they never run"
+          - "Nothing: they each run at once"
+          - "Preemption every millisecond"
+        answer: 0
+        explanation: Under FCFS the long job runs to the end first, so every short job behind it waits its whole length.
+    - question:
+        id: drill-starve
+        type: choice
+        system: s1
+        prompt: |
+          Which change stops a low-priority job from waiting for ever behind a stream of higher-priority ones?
+        options:
+          - "Aging: raising a job's priority the longer it waits"
+          - "A longer quantum"
+          - "Running shortest jobs first"
+          - "First come, first served within each priority"
+        answer: 0
+        explanation: Aging makes a waiting job's priority climb until it is eventually the highest.
+    - question:
+        id: predict-fcfs
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          lengths = [6, 3, 3]
+          time = 0
+          waits = []
+          for n in lengths:
+              waits.append(time)
+              time += n
+          print(waits, sum(waits) / len(waits))
+        output: "[0, 6, 9] 5.0"
+        explanation: Each job waits for all the ones before it, 0, 6 and 6 + 3, so the average is 15 / 3.
+    - question:
+        id: predict-heap-order
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import heapq
+          ready = []
+          for name, length in [("compile", 24), ("key", 3), ("save", 5)]:
+              heapq.heappush(ready, (length, name))
+          print([heapq.heappop(ready)[1] for _ in range(3)])
+        output: "['key', 'save', 'compile']"
+        explanation: The heap orders by the first item of each tuple, the length, so it hands back the shortest job first.
+    - question:
+        id: predict-slices
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          quantum = 4
+          lengths = [10, 4]
+          print(sum((n + quantum - 1) // quantum for n in lengths))
+        output: "4"
+        explanation: The 10 ms job needs 3 quanta, the last one partly used, and the 4 ms job needs 1, so 4 slices in all.
+  work:
+    - text: Slower now. Each answer is a scheduler.
+    - question:
+        id: write-round-robin
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `round_robin`, which runs jobs with a quantum and returns each job's turnaround time. The program should print `{'B': 15, 'D': 18, 'A': 23, 'C': 24}` and `average 20.0`.
+        starter: |
+          from collections import deque
+
+
+          def round_robin(jobs, quantum):
+              # jobs is a list of (name, arrival, length), sorted by arrival, with times
+              # in milliseconds. Keep a queue of ready jobs. Run the job at the front
+              # for its quantum, or less if it needs less. Jobs that have arrived by
+              # the time it stops join the back of the queue first, and then the job
+              # itself, if it still has work left. If no job is ready, the processor
+              # sits idle until the next arrival. Return a dictionary from each name
+              # to its turnaround time: when it finished minus when it arrived.
+              return {}
+
+
+          jobs = [("A", 0, 8), ("B", 1, 4), ("C", 2, 9), ("D", 3, 5)]
+          turnaround = round_robin(jobs, 3)
+          print(turnaround)
+          print("average", sum(turnaround.values()) / len(jobs))
+        solution: |
+          from collections import deque
+
+
+          def round_robin(jobs, quantum):
+              pending = deque(jobs)
+              queue = deque()
+              arrived = {}
+              left = {}
+              done = {}
+              time = 0
+              while pending or queue:
+                  while pending and pending[0][1] <= time:
+                      name, arrival, length = pending.popleft()
+                      arrived[name] = arrival
+                      left[name] = length
+                      queue.append(name)
+                  if not queue:
+                      time = pending[0][1]
+                      continue
+                  name = queue.popleft()
+                  run = min(quantum, left[name])
+                  time += run
+                  left[name] -= run
+                  while pending and pending[0][1] <= time:
+                      new, arrival, length = pending.popleft()
+                      arrived[new] = arrival
+                      left[new] = length
+                      queue.append(new)
+                  if left[name] > 0:
+                      queue.append(name)
+                  else:
+                      done[name] = time - arrived[name]
+              return done
+
+
+          jobs = [("A", 0, 8), ("B", 1, 4), ("C", 2, 9), ("D", 3, 5)]
+          turnaround = round_robin(jobs, 3)
+          print(turnaround)
+          print("average", sum(turnaround.values()) / len(jobs))
+        tests: |
+          _t = round_robin([("A", 0, 8), ("B", 1, 4), ("C", 2, 9), ("D", 3, 5)], 3)
+          assert _t == {"A": 23, "B": 15, "C": 24, "D": 18}, "With quantum 3 the turnaround times should be A 23, B 15, C 24, D 18, not " + repr(_t)
+          _t = round_robin([("A", 0, 2), ("B", 0, 2)], 5)
+          assert _t == {"A": 2, "B": 4}, "A job that needs less than its quantum runs only as long as it needs: A finishes at 2 and B at 4, not " + repr(_t)
+          _t = round_robin([("A", 0, 4), ("B", 2, 2)], 2)
+          assert _t == {"A": 6, "B": 2}, "B arrives as A's first slice ends, so it joins the queue before A goes back: B runs 2 to 4 and A finishes at 6, giving " + repr(_t)
+          _t = round_robin([("A", 0, 1), ("B", 5, 2)], 4)
+          assert _t == {"A": 1, "B": 2}, "With nothing ready the processor waits for the next arrival, so B, arriving at 5, takes 2 ms from arrival to finish, not " + repr(_t)
+          _t = round_robin([("X", 3, 6)], 2)
+          assert _t == {"X": 6}, "Turnaround is the finish time minus the arrival time"
+          assert output.splitlines() == ["{'B': 15, 'D': 18, 'A': 23, 'C': 24}", "average 20.0"], "The program should print the turnaround times in the order the jobs finish, B, D, A, C, and then average 20.0"
+        wrong:
+          - |
+            from collections import deque
+
+
+            def round_robin(jobs, quantum):
+                pending = deque(jobs)
+                queue = deque()
+                arrived = {}
+                left = {}
+                done = {}
+                time = 0
+                while pending or queue:
+                    while pending and pending[0][1] <= time:
+                        name, arrival, length = pending.popleft()
+                        arrived[name] = arrival
+                        left[name] = length
+                        queue.append(name)
+                    if not queue:
+                        time = pending[0][1]
+                        continue
+                    name = queue.popleft()
+                    run = min(quantum, left[name])
+                    time += run
+                    left[name] -= run
+                    if left[name] > 0:
+                        queue.append(name)
+                    else:
+                        done[name] = time - arrived[name]
+                    while pending and pending[0][1] <= time:
+                        new, arrival, length = pending.popleft()
+                        arrived[new] = arrival
+                        left[new] = length
+                        queue.append(new)
+                return done
+
+
+            jobs = [("A", 0, 8), ("B", 1, 4), ("C", 2, 9), ("D", 3, 5)]
+            turnaround = round_robin(jobs, 3)
+            print(turnaround)
+            print("average", sum(turnaround.values()) / len(jobs))
+          - |
+            from collections import deque
+
+
+            def round_robin(jobs, quantum):
+                pending = deque(jobs)
+                queue = deque()
+                arrived = {}
+                left = {}
+                done = {}
+                time = 0
+                while pending or queue:
+                    while pending and pending[0][1] <= time:
+                        name, arrival, length = pending.popleft()
+                        arrived[name] = arrival
+                        left[name] = length
+                        queue.append(name)
+                    if not queue:
+                        time = pending[0][1]
+                        continue
+                    name = queue.popleft()
+                    run = min(quantum, left[name])
+                    time += quantum
+                    left[name] -= run
+                    while pending and pending[0][1] <= time:
+                        new, arrival, length = pending.popleft()
+                        arrived[new] = arrival
+                        left[new] = length
+                        queue.append(new)
+                    if left[name] > 0:
+                        queue.append(name)
+                    else:
+                        done[name] = time - arrived[name]
+                return done
+
+
+            jobs = [("A", 0, 8), ("B", 1, 4), ("C", 2, 9), ("D", 3, 5)]
+            turnaround = round_robin(jobs, 3)
+            print(turnaround)
+            print("average", sum(turnaround.values()) / len(jobs))
+          - |
+            from collections import deque
+
+
+            def round_robin(jobs, quantum):
+                pending = deque(jobs)
+                queue = deque()
+                arrived = {}
+                left = {}
+                done = {}
+                time = 0
+                while pending or queue:
+                    while pending and pending[0][1] <= time:
+                        name, arrival, length = pending.popleft()
+                        arrived[name] = arrival
+                        left[name] = length
+                        queue.append(name)
+                    if not queue:
+                        time = pending[0][1]
+                        continue
+                    name = queue.popleft()
+                    run = min(quantum, left[name])
+                    time += run
+                    left[name] -= run
+                    while pending and pending[0][1] <= time:
+                        new, arrival, length = pending.popleft()
+                        arrived[new] = arrival
+                        left[new] = length
+                        queue.append(new)
+                    if left[name] > 0:
+                        queue.append(name)
+                    else:
+                        done[name] = time
+                return done
+
+
+            jobs = [("A", 0, 8), ("B", 1, 4), ("C", 2, 9), ("D", 3, 5)]
+            turnaround = round_robin(jobs, 3)
+            print(turnaround)
+            print("average", sum(turnaround.values()) / len(jobs))
+        explanation: |
+          Admit arrivals, take the front job, run it for min(quantum, what it has left), admit anything that arrived meanwhile, and then requeue the job or record its finish. Requeuing the job before the new arrivals lets it jump ahead of them; adding a whole quantum when less was needed leaves the processor idle for nothing; and the finish time alone is not the turnaround, which starts at arrival.
+    - question:
+        id: write-fair-share
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `fair_share`, which runs the task with the least virtual runtime each tick, so that each task's share is proportional to its weight. The program should print `backup 10`, `compile 20` and `video 40`.
+        starter: |
+          import heapq
+
+
+          def fair_share(weights, ticks):
+              # weights is a dictionary from task name to weight: a task of twice the
+              # weight deserves twice the processor. Each task has a virtual runtime,
+              # starting at 0. Keep a heap of (virtual runtime, name). Each tick,
+              # take the task with the smallest virtual runtime (on a tie, the name
+              # that sorts first, which the heap does for you), run it for the tick,
+              # add 1024 / its weight to its virtual runtime, and put it back.
+              # Return a dictionary from each name to the number of ticks it ran.
+              return {}
+
+
+          share = fair_share({"video": 2048, "compile": 1024, "backup": 512}, 70)
+          for name in sorted(share):
+              print(name, share[name])
+        solution: |
+          import heapq
+
+
+          def fair_share(weights, ticks):
+              heap = [(0, name) for name in weights]
+              heapq.heapify(heap)
+              ran = {name: 0 for name in weights}
+              for _ in range(ticks):
+                  vruntime, name = heapq.heappop(heap)
+                  ran[name] += 1
+                  heapq.heappush(heap, (vruntime + 1024 / weights[name], name))
+              return ran
+
+
+          share = fair_share({"video": 2048, "compile": 1024, "backup": 512}, 70)
+          for name in sorted(share):
+              print(name, share[name])
+        tests: |
+          _s = fair_share({"a": 1024, "b": 1024}, 10)
+          assert _s == {"a": 5, "b": 5}, "two tasks of equal weight should share ten ticks five and five, not " + repr(_s)
+          _s = fair_share({"heavy": 3072, "light": 1024}, 40)
+          assert _s == {"heavy": 30, "light": 10}, "a task of three times the weight should get three quarters of the ticks, 30 of 40, not " + repr(_s)
+          _s = fair_share({"only": 100}, 7)
+          assert _s == {"only": 7}, "a task alone gets every tick"
+          _s = fair_share({"x": 1024, "y": 512}, 3)
+          assert _s == {"x": 2, "y": 1}, "over 3 ticks, weights 1024 and 512 run x, y, x: 2 and 1, not " + repr(_s)
+          assert output.splitlines() == ["backup 10", "compile 20", "video 40"], "The program should print backup 10, compile 20 and video 40"
+        wrong:
+          - |
+            import heapq
+
+
+            def fair_share(weights, ticks):
+                heap = [(0, name) for name in weights]
+                heapq.heapify(heap)
+                ran = {name: 0 for name in weights}
+                for _ in range(ticks):
+                    vruntime, name = heapq.heappop(heap)
+                    ran[name] += 1
+                    heapq.heappush(heap, (vruntime + weights[name] / 1024, name))
+                return ran
+
+
+            share = fair_share({"video": 2048, "compile": 1024, "backup": 512}, 70)
+            for name in sorted(share):
+                print(name, share[name])
+          - |
+            import heapq
+
+
+            def fair_share(weights, ticks):
+                heap = [(0, name) for name in weights]
+                heapq.heapify(heap)
+                ran = {name: 0 for name in weights}
+                for _ in range(ticks):
+                    vruntime, name = heapq.heappop(heap)
+                    ran[name] += 1
+                    heapq.heappush(heap, (vruntime + 1, name))
+                return ran
+
+
+            share = fair_share({"video": 2048, "compile": 1024, "backup": 512}, 70)
+            for name in sorted(share):
+                print(name, share[name])
+          - |
+            import heapq
+
+
+            def fair_share(weights, ticks):
+                heap = [(0, name) for name in weights]
+                heapq.heapify(heap)
+                ran = {name: 0 for name in weights}
+                for _ in range(ticks):
+                    vruntime, name = heapq.heappop(heap)
+                    ran[name] += 1
+                    heapq.heappush(heap, (1024 / weights[name], name))
+                return ran
+
+
+            share = fair_share({"video": 2048, "compile": 1024, "backup": 512}, 70)
+            for name in sorted(share):
+                print(name, share[name])
+        explanation: |
+          Heapify (0, name) for every task, then each tick pop the smallest, count the tick, and push it back with 1024 / weight added. Adding weight / 1024 gives heavy tasks the smallest share instead of the largest; adding 1 ignores weights and shares equally; and pushing back only the increment, forgetting the time already used, lets the heaviest task run almost every tick.
+    - question:
+        id: fix-sjf-heap
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `sjf` should run the shortest ready job first. For four jobs it should print `{'A': 0, 'B': 7, 'D': 9, 'C': 15}` and `average 7.75`, but it prints C before D, with an average of 8.75. Find the fault and fix it.
+        starter: |
+          import heapq
+
+
+          def sjf(jobs):
+              # Shortest job first, without preemption. jobs is a list of
+              # (name, arrival, length), sorted by arrival. Whenever the processor is
+              # free, run the shortest job that has arrived, to the end; on a tie, the
+              # one that arrived first. Return a dictionary from name to waiting time:
+              # when it started minus when it arrived.
+              pending = list(jobs)
+              ready = []
+              time = 0
+              waits = {}
+              while pending or ready:
+                  while pending and pending[0][1] <= time:
+                      name, arrival, length = pending.pop(0)
+                      heapq.heappush(ready, (arrival, length, name))
+                  if not ready:
+                      time = pending[0][1]
+                      continue
+                  arrival, length, name = heapq.heappop(ready)
+                  waits[name] = time - arrival
+                  time += length
+              return waits
+
+
+          waits = sjf([("A", 0, 8), ("B", 1, 4), ("C", 2, 9), ("D", 3, 5)])
+          print(waits)
+          print("average", sum(waits.values()) / len(waits))
+        solution: |
+          import heapq
+
+
+          def sjf(jobs):
+              # Shortest job first, without preemption. jobs is a list of
+              # (name, arrival, length), sorted by arrival. Whenever the processor is
+              # free, run the shortest job that has arrived, to the end; on a tie, the
+              # one that arrived first. Return a dictionary from name to waiting time:
+              # when it started minus when it arrived.
+              pending = list(jobs)
+              ready = []
+              time = 0
+              waits = {}
+              while pending or ready:
+                  while pending and pending[0][1] <= time:
+                      name, arrival, length = pending.pop(0)
+                      heapq.heappush(ready, (length, arrival, name))
+                  if not ready:
+                      time = pending[0][1]
+                      continue
+                  length, arrival, name = heapq.heappop(ready)
+                  waits[name] = time - arrival
+                  time += length
+              return waits
+
+
+          waits = sjf([("A", 0, 8), ("B", 1, 4), ("C", 2, 9), ("D", 3, 5)])
+          print(waits)
+          print("average", sum(waits.values()) / len(waits))
+        tests: |
+          _w = sjf([("A", 0, 8), ("B", 1, 4), ("C", 2, 9), ("D", 3, 5)])
+          assert _w == {"A": 0, "B": 7, "D": 9, "C": 15}, "A runs first, alone; then B (4), D (5) and C (9), shortest first, waiting 0, 7, 9 and 15, not " + repr(_w)
+          _w = sjf([("compile", 0, 24), ("key", 0, 3), ("save", 0, 5)])
+          assert _w == {"key": 0, "save": 3, "compile": 8}, "three jobs ready at once run shortest first, not " + repr(_w)
+          _w = sjf([("zed", 0, 2), ("late", 0, 4), ("early", 1, 4)])
+          assert _w == {"zed": 0, "late": 2, "early": 5}, "between two jobs of the same length, the one that arrived first runs first, whatever their names, not " + repr(_w)
+          _w = sjf([("A", 0, 2), ("B", 10, 1)])
+          assert _w == {"A": 0, "B": 0}, "a job that arrives while the processor is idle starts at once"
+          assert output.splitlines() == ["{'A': 0, 'B': 7, 'D': 9, 'C': 15}", "average 7.75"], "The program should print the waits A 0, B 7, D 9, C 15 and average 7.75"
+        wrong:
+          - |
+            import heapq
+
+
+            def sjf(jobs):
+                # Shortest job first, without preemption. jobs is a list of
+                # (name, arrival, length), sorted by arrival. Whenever the processor is
+                # free, run the shortest job that has arrived, to the end; on a tie, the
+                # one that arrived first. Return a dictionary from name to waiting time:
+                # when it started minus when it arrived.
+                pending = list(jobs)
+                ready = []
+                time = 0
+                waits = {}
+                while pending or ready:
+                    while pending and pending[0][1] <= time:
+                        name, arrival, length = pending.pop(0)
+                        heapq.heappush(ready, (length, arrival, name))
+                    if not ready:
+                        time = pending[0][1]
+                        continue
+                    arrival, length, name = heapq.heappop(ready)
+                    waits[name] = time - arrival
+                    time += length
+                return waits
+
+
+            waits = sjf([("A", 0, 8), ("B", 1, 4), ("C", 2, 9), ("D", 3, 5)])
+            print(waits)
+            print("average", sum(waits.values()) / len(waits))
+          - |
+            import heapq
+
+
+            def sjf(jobs):
+                # Shortest job first, without preemption. jobs is a list of
+                # (name, arrival, length), sorted by arrival. Whenever the processor is
+                # free, run the shortest job that has arrived, to the end; on a tie, the
+                # one that arrived first. Return a dictionary from name to waiting time:
+                # when it started minus when it arrived.
+                pending = list(jobs)
+                ready = []
+                time = 0
+                waits = {}
+                while pending or ready:
+                    while pending and pending[0][1] <= time:
+                        name, arrival, length = pending.pop(0)
+                        heapq.heappush(ready, (-length, arrival, name))
+                    if not ready:
+                        time = pending[0][1]
+                        continue
+                    length, arrival, name = heapq.heappop(ready)
+                    length = -length
+                    waits[name] = time - arrival
+                    time += length
+                return waits
+
+
+            waits = sjf([("A", 0, 8), ("B", 1, 4), ("C", 2, 9), ("D", 3, 5)])
+            print(waits)
+            print("average", sum(waits.values()) / len(waits))
+          - |
+            import heapq
+
+
+            def sjf(jobs):
+                # Shortest job first, without preemption. jobs is a list of
+                # (name, arrival, length), sorted by arrival. Whenever the processor is
+                # free, run the shortest job that has arrived, to the end; on a tie, the
+                # one that arrived first. Return a dictionary from name to waiting time:
+                # when it started minus when it arrived.
+                pending = list(jobs)
+                ready = []
+                time = 0
+                waits = {}
+                while pending or ready:
+                    while pending and pending[0][1] <= time:
+                        name, arrival, length = pending.pop(0)
+                        heapq.heappush(ready, (length, name, arrival))
+                    if not ready:
+                        time = pending[0][1]
+                        continue
+                    length, name, arrival = heapq.heappop(ready)
+                    waits[name] = time - arrival
+                    time += length
+                return waits
+
+
+            waits = sjf([("A", 0, 8), ("B", 1, 4), ("C", 2, 9), ("D", 3, 5)])
+            print(waits)
+            print("average", sum(waits.values()) / len(waits))
+        explanation: |
+          A heap of tuples orders by the first item, then the second. With arrival first, the heap hands back the earliest arrival, which is first come, first served; the length must come first and the arrival second, both where the tuple is pushed and where it is unpacked. Changing only the push mixes the two up, negating the length runs the longest job first, and putting the name before the arrival breaks ties alphabetically instead of by arrival.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. A 24 ms compile and two 3 ms jobs are ready at once on one core, and each job runs to the end once started. What is the smallest average waiting time any order can achieve, in ms?
+        answer: "3"
+        unit: ms
+        explanation: |
+          Shortest first: the two 3 ms jobs wait 0 and 3, and the compile waits 6, a total of 9 and an average of 3 ms.
+    - question:
+        id: work-mixed
+        type: choice
+        system: s2
+        prompt: |
+          A cloud server runs web requests, each needing about 2 ms of processor time, next to nightly report jobs that need minutes. Users complain about slow pages while reports run. Which scheduler change helps most?
+        options:
+          - "Give the web server's tasks more weight, or a higher priority, so they run first whenever they are ready"
+          - "Switch to first come, first served"
+          - "Make the quantum several seconds long"
+          - "Run the report jobs first so they finish sooner"
+        answer: 0
+        explanation: |
+          The requests are short and I/O-bound, the reports long and CPU-bound. Favouring the requests costs the reports little, since each request takes only a sliver, and brings page times back down. FCFS and long quanta would make the requests wait behind the reports.
+  connections:
+    - text: |
+        3 ms. Running the two 3 ms jobs first gives waits of 0, 3 and 6, an average of 3, against 17 for compile-first. The exchange argument says this is the best possible: putting a long job before a short one always adds to the total. The same argument explains why schedulers favour short, interactive bursts, and why they need aging or fair shares so that the compile still finishes.
+
+        So far a process has been something the scheduler picks; the next lessons look at what it runs in. Every process believes it has a memory of its own, starting at address 0, even though they all share one set of memory chips. [[h2.virtual-memory-and-page-tables]] shows how the hardware and kernel keep up that illusion.

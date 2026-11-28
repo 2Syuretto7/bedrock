@@ -1,0 +1,789 @@
+concept: h2.signals-and-the-life-of-a-process
+minutes: 80
+claim: You can follow a process through its whole life, from fork through ready, running and blocked to exit, zombie and reaping; explain zombies and orphans and build the process table logic that handles them; describe signals as the kernel's asynchronous notifications to a process, with their default actions, handlers and masks; say which signals cannot be caught; decode the status that wait returns and work out a shell's exit code for a killed command; write a handler that reaps every exited child even when signals merge; and shut a service down gracefully with SIGTERM before SIGKILL.
+recalls: [h2.threads-in-the-kernel]
+uses: [h2.processes-and-system-calls, h2.what-an-operating-system-does, h2.interrupts-and-i-o, h2.scheduling, h0.bitwise-operations-and-masks, s1.classes-and-objects, s0.dictionaries-and-sets, s4.dependency-injection-and-testable-code]
+leads: [d0.interleavings-and-race-conditions]
+starter: |
+  # Scratch space. A shell reports a command killed by a signal as
+  # 128 plus the signal's number.
+  for name, number in [("SIGINT", 2), ("SIGKILL", 9), ("SIGSEGV", 11), ("SIGTERM", 15)]:
+      print(name, number, "-> $? =", 128 + number)
+parts:
+  recall:
+    - text: |
+        [[h2.threads-in-the-kernel]] showed one process holding many threads, and the kernel scheduling each. Processes, though, do not live for ever. Every one of them was made by another, and when it ends, someone has to find out how it ended and clear away what is left. And sometimes the outside world has to interrupt a process that is busy with something else: a user pressing Ctrl+C, a server being told to shut down. This last lesson of the cluster follows a process to its end. Three quick pulls first.
+  puzzle:
+    - text: |
+        In a terminal, you run `sleep 100` and press Ctrl+C after a few seconds. The terminal sends SIGINT, signal number 2, to the program, which has no handler for it. Then you type `echo $?` to see the exit status of the last command.
+
+        **What number does the shell print?**
+  intuition:
+    - text: |
+        When an employee leaves a firm in Ahmedabad, the desk is cleared and the laptop returned at once, but the HR file stays open until their manager signs off the final settlement. Only then is the file closed. If the manager has left too, the file passes to the head of HR, who signs off everyone's leftovers. And while someone is still working, the office can interrupt them with a note on the desk: "finish what you are doing and go home", which they deal with when they next look up, or a security guard who walks them out at once, mid-sentence.
+
+        The open HR file is a **zombie**; the manager's sign-off is `wait`; the head of HR is **init**; the notes are **signals**. The figure follows one process, a backup started from a shell, through four different endings.
+    - figure: process-life
+      props: { ending: exit, step: 0 }
+    - text: |
+        Every ending passes through the zombie state, and every one ends with somebody calling wait. SIGTERM lets the process clean up first; SIGKILL does not, and the status the shell sees records which signal it was. That record, turned into a number by the shell, is the puzzle.
+  derivation:
+    - text: |
+        **The life cycle.** A process is born when its parent calls fork. It moves between **ready**, **running** and **blocked** as the scheduler and its I/O decide. It ends by calling `exit(status)`, or by being killed. At that moment the kernel frees almost everything: its memory, its open files, its threads. What it keeps is a small entry in the process table holding the pid and the **exit status**, because the parent may want to know how the child ended. A process in that state is a **zombie**. When the parent calls `wait` or `waitpid`, the kernel hands over the status and removes the entry; the child has been **reaped**.
+
+        **Zombies and orphans.** A parent that never waits leaves its zombies in the table. Each costs little, but the table has a limit, and a long-running server that forgets to reap can eventually be unable to fork at all. If the parent exits first, its children become **orphans**: the kernel makes init, pid 1, their new parent (Linux also allows a nearer "subreaper"), and init calls wait in a loop, so orphans are reaped when they exit.
+    - question:
+        id: derivation-zombie
+        type: choice
+        system: s2
+        prompt: |
+          A server forks a worker for each job and never calls wait. After a day, `ps` shows thousands of entries marked `<defunct>`. What are they?
+        options:
+          - "Zombies: exited workers whose status nobody has collected"
+          - "Workers stuck in an infinite loop"
+          - "Workers blocked on disk reads"
+          - "Orphans that init has adopted"
+        answer: 0
+        explanation: |
+          The workers have exited and freed their memory, but each entry waits for the parent's wait to collect the status. The fix is for the server to reap its children.
+    - text: |
+        **Signals.** A **signal** is a small asynchronous notification sent to a process, by the kernel or by another process with the `kill` system call. Each has a number and a default action:
+
+        - SIGINT (2), sent by the terminal on Ctrl+C: terminate.
+        - SIGTERM (15), the polite request to stop, sent by `kill` by default and by service managers: terminate.
+        - SIGKILL (9): terminate, and it **cannot be caught, blocked or ignored**.
+        - SIGSEGV (11), sent by the kernel after a bad memory access: terminate and dump core.
+        - SIGCHLD (17 on Linux), sent to a parent when a child exits or stops: ignored by default.
+        - SIGSTOP and SIGCONT: stop and resume the process; SIGSTOP, like SIGKILL, cannot be caught.
+
+        A process can install a **handler**, a function to run instead of the default action, or ask for a signal to be ignored, for every signal except SIGKILL and SIGSTOP. Those two exist so that the administrator always has the last word.
+    - question:
+        id: derivation-uncatchable
+        type: choice
+        system: s2
+        prompt: |
+          A buggy program has installed handlers that ignore SIGINT and SIGTERM. Which signal still stops it for certain?
+        options:
+          - "SIGKILL"
+          - "SIGCHLD"
+          - "SIGINT, sent twice"
+          - "SIGCONT"
+        answer: 0
+        explanation: |
+          SIGKILL cannot be caught, blocked or ignored; the kernel ends the process itself. SIGCHLD and SIGCONT do not terminate anything by default.
+    - text: |
+        **Delivery.** Sending a signal only sets a **pending** bit in the target's kernel record and, if it is blocked in a system call, wakes it. The signal is acted on the next time the target is about to return from the kernel to user mode, after a system call, an interrupt or a context switch. If the signal is not in the process's **blocked mask**, the kernel either applies the default action or arranges for the handler to run: it pushes a frame on the user stack so that the process "returns" into the handler, and the handler's return lands in a small `sigreturn` call that restores the interrupted state. Because there is one pending bit per signal, ordinary signals do not queue: three SIGCHLDs sent before the first is delivered arrive as one.
+
+        **Handlers are dangerous places.** A handler can run between any two instructions of the program, even in the middle of `malloc` or `printf`. Calling those again from the handler can deadlock or corrupt their data. So handlers should do almost nothing: set a flag the main loop checks, or write a byte to a pipe the main loop watches, and only call functions listed as **async-signal-safe**, such as `write` and `waitpid`.
+    - question:
+        id: derivation-merge
+        type: numeric
+        system: s2
+        prompt: |
+          Five child processes exit while their parent is running a long computation that makes no system calls, and only then does the parent return to user mode from a timer interrupt. How many times does its SIGCHLD handler run?
+        answer: "1"
+        explanation: |
+          Each exit sets the same pending bit, which is already set after the first. When the signal is finally delivered, the handler runs once, and must reap all five children itself.
+    - text: |
+        **Exit status.** `wait` hands the parent one integer that encodes how the child ended. On Linux, the low 7 bits are the number of the signal that killed it, or 0 if it exited by itself; in that case bits 8 to 15 hold the exit code, the value passed to `exit`, which is why exit codes run from 0 to 255. Bit 7 says whether a killed child dumped core. C programs decode this with macros such as `WIFEXITED` and `WEXITSTATUS`. Shells turn it into one number, `$?`: the exit code, or **128 plus the signal number** for a killed command, so a command killed by SIGKILL gives 137.
+
+        **Graceful shutdown.** Service managers such as systemd, and Kubernetes when it stops a container, send SIGTERM first. A well-written service catches it, stops taking new work, finishes or saves what is in progress, and exits with status 0. If it has not exited after a grace period, 30 seconds by default in Kubernetes, the manager sends SIGKILL. A service that ignores SIGTERM therefore always dies the hard way, possibly mid-write.
+    - question:
+        id: derivation-status
+        type: numeric
+        system: s2
+        prompt: |
+          A container is stopped by SIGTERM (15), which it does not handle. What exit code does the shell report?
+        answer: "143"
+        explanation: |
+          With no handler, SIGTERM's default action terminates the process, and the shell reports a killed command as 128 + 15 = 143.
+  formal:
+    - text: |
+        **Life cycle.** fork → ready ⇄ running ⇄ blocked → exit or killed → zombie (status kept) → wait → reaped. Orphans are adopted by init, which reaps them.
+
+        **Signals.** Asynchronous notifications with default actions: terminate, core dump, ignore, stop. Handlers may replace them, except for SIGKILL and SIGSTOP. A signal is marked pending and acted on at the next return to user mode, unless blocked; ordinary signals do not queue.
+
+        **Handlers.** Run between any two instructions; do the minimum with async-signal-safe calls; a SIGCHLD handler must reap in a loop.
+
+        **Status.** Low 7 bits: killing signal, or 0. Bits 8 to 15: exit code. Bit 7: core dumped. Shell's $? = exit code, or 128 + signal.
+
+        **Shutdown.** SIGTERM, a grace period, then SIGKILL.
+  drill:
+    - text: Seconds each. Ask who must act, and when.
+    - question:
+        id: drill-orphan
+        type: choice
+        system: s1
+        prompt: |
+          A parent exits while its child is still running. Who reaps the child when it exits?
+        options:
+          - "init, pid 1, or a subreaper, which adopts orphans"
+          - "Nobody: it stays a zombie for ever"
+          - "The child reaps itself"
+          - "The parent's parent, always"
+        answer: 0
+        explanation: Orphans are re-parented to init (or a subreaper), which waits for its children in a loop.
+    - question:
+        id: drill-when
+        type: choice
+        system: s1
+        prompt: |
+          A signal is sent to a process that is running a long loop of arithmetic on another core. When does the process act on it?
+        options:
+          - "The next time it returns from the kernel to user mode, such as after the next timer interrupt"
+          - "Never, until the loop ends"
+          - "At the exact instruction the signal was sent"
+          - "Only at its next system call"
+        answer: 0
+        explanation: The kernel checks for pending signals on every return to user mode; the timer interrupt guarantees one soon, so the loop cannot hide from signals.
+    - question:
+        id: predict-dollar
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          status = 0x0009
+          signal = status & 0x7F
+          print(128 + signal if signal else (status >> 8) & 0xFF)
+        output: "137"
+        explanation: The low 7 bits are 9, so the child was killed by SIGKILL, and the shell reports 128 + 9.
+    - question:
+        id: predict-merge
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          pending = set()
+          for child in [201, 202, 203]:
+              pending.add("SIGCHLD")
+          print(len(pending))
+        output: "1"
+        explanation: A set holds each signal once, as the kernel's pending bits do, so three exits leave one pending SIGCHLD.
+    - question:
+        id: predict-zombie
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          table = {101: "running", 102: "running", 103: "running"}
+          for pid in [102, 103]:
+              table[pid] = "zombie"
+          del table[102]
+          print(sorted(table.items()))
+        output: "[(101, 'running'), (103, 'zombie')]"
+        explanation: Both children exited and became zombies, but only 102 was waited for and removed; 103 stays a zombie.
+  work:
+    - text: Slower now. Each answer is part of how a kernel or a careful program ends processes.
+    - question:
+        id: write-process-table
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `exit` and `wait` for a kernel's process table, with zombies, orphans adopted by init, and the three answers wait can give. The program should print `blocked`, `zombie 1`, `(102, 3)`, `False -10` and `(103, 0)`.
+        starter: |
+          ECHILD = 10
+
+
+          class Kernel:
+              def __init__(self):
+                  # pid -> {"parent": pid, "state": "running" or "zombie", "status": exit status}
+                  self.procs = {1: {"parent": 0, "state": "running", "status": None}}  # pid 1 is init
+                  self.next_pid = 100
+
+              def fork(self, parent):
+                  self.next_pid += 1
+                  self.procs[self.next_pid] = {"parent": parent, "state": "running", "status": None}
+                  return self.next_pid
+
+              def exit(self, pid, status):
+                  # pid has finished with an exit status. It becomes a zombie, keeping
+                  # only that status until its parent waits for it. Any children it
+                  # had are adopted by init, pid 1.
+                  pass
+
+              def wait(self, parent):
+                  # If parent has a zombie child, remove the one with the lowest pid
+                  # from the table altogether and return (its pid, its status). If
+                  # parent has children but none has exited, return "blocked". If it
+                  # has no children at all, return -ECHILD.
+                  return "blocked"
+
+
+          k = Kernel()
+          shell = k.fork(1)
+          job = k.fork(shell)
+          helper = k.fork(job)
+          print(k.wait(shell))
+          k.exit(job, 3)
+          print(k.procs[job]["state"], k.procs[helper]["parent"])
+          print(k.wait(shell))
+          print(job in k.procs, k.wait(shell))
+          k.exit(helper, 0)
+          print(k.wait(1))
+        solution: |
+          ECHILD = 10
+
+
+          class Kernel:
+              def __init__(self):
+                  # pid -> {"parent": pid, "state": "running" or "zombie", "status": exit status}
+                  self.procs = {1: {"parent": 0, "state": "running", "status": None}}  # pid 1 is init
+                  self.next_pid = 100
+
+              def fork(self, parent):
+                  self.next_pid += 1
+                  self.procs[self.next_pid] = {"parent": parent, "state": "running", "status": None}
+                  return self.next_pid
+
+              def exit(self, pid, status):
+                  self.procs[pid]["state"] = "zombie"
+                  self.procs[pid]["status"] = status
+                  for p in self.procs.values():
+                      if p["parent"] == pid:
+                          p["parent"] = 1
+
+              def wait(self, parent):
+                  children = sorted(pid for pid, p in self.procs.items() if p["parent"] == parent)
+                  if not children:
+                      return -ECHILD
+                  for pid in children:
+                      if self.procs[pid]["state"] == "zombie":
+                          status = self.procs[pid]["status"]
+                          del self.procs[pid]
+                          return pid, status
+                  return "blocked"
+
+
+          k = Kernel()
+          shell = k.fork(1)
+          job = k.fork(shell)
+          helper = k.fork(job)
+          print(k.wait(shell))
+          k.exit(job, 3)
+          print(k.procs[job]["state"], k.procs[helper]["parent"])
+          print(k.wait(shell))
+          print(job in k.procs, k.wait(shell))
+          k.exit(helper, 0)
+          print(k.wait(1))
+        tests: |
+          _k = Kernel()
+          assert _k.wait(1) == -10, "init with no children at all should get -ECHILD, -10"
+          _a = _k.fork(1)
+          assert _k.wait(1) == "blocked", "a parent whose children are all still running must wait: blocked"
+          _k.exit(_a, 7)
+          assert _a in _k.procs and _k.procs[_a]["state"] == "zombie", "an exited process stays in the table as a zombie until its parent waits"
+          assert _k.wait(1) == (_a, 7), "wait should return the zombie child's pid and status, 7"
+          assert _a not in _k.procs, "once waited for, the zombie is removed from the table"
+          assert _k.wait(1) == -10, "after reaping its only child, init has no children left"
+          _p = _k.fork(1)
+          _c1 = _k.fork(_p)
+          _c2 = _k.fork(_p)
+          _k.exit(_c2, 2)
+          _k.exit(_c1, 1)
+          assert _k.wait(_p) == (_c1, 1) and _k.wait(_p) == (_c2, 2), "with two zombie children, wait returns the lowest pid first, then the next"
+          _q = _k.fork(1)
+          _g = _k.fork(_q)
+          _k.exit(_q, 0)
+          assert _k.procs[_g]["parent"] == 1, "when a process exits, its children are adopted by init, pid 1"
+          _k.exit(_g, 5)
+          assert _k.wait(1) == (_q, 0) and _k.wait(1) == (_g, 5), "init can then reap both the exited parent and the orphan"
+          assert output.splitlines() == ["blocked", "zombie 1", "(102, 3)", "False -10", "(103, 0)"], "The program should print blocked, zombie 1, (102, 3), False -10 and (103, 0)"
+        wrong:
+          - |
+            ECHILD = 10
+
+
+            class Kernel:
+                def __init__(self):
+                    # pid -> {"parent": pid, "state": "running" or "zombie", "status": exit status}
+                    self.procs = {1: {"parent": 0, "state": "running", "status": None}}  # pid 1 is init
+                    self.next_pid = 100
+
+                def fork(self, parent):
+                    self.next_pid += 1
+                    self.procs[self.next_pid] = {"parent": parent, "state": "running", "status": None}
+                    return self.next_pid
+
+                def exit(self, pid, status):
+                    for p in self.procs.values():
+                        if p["parent"] == pid:
+                            p["parent"] = 1
+                    del self.procs[pid]
+
+                def wait(self, parent):
+                    children = sorted(pid for pid, p in self.procs.items() if p["parent"] == parent)
+                    if not children:
+                        return -ECHILD
+                    for pid in children:
+                        if self.procs[pid]["state"] == "zombie":
+                            status = self.procs[pid]["status"]
+                            del self.procs[pid]
+                            return pid, status
+                    return "blocked"
+
+
+            k = Kernel()
+            shell = k.fork(1)
+            job = k.fork(shell)
+            helper = k.fork(job)
+            print(k.wait(shell))
+            k.exit(job, 3)
+            print(k.procs[job]["state"], k.procs[helper]["parent"])
+            print(k.wait(shell))
+            print(job in k.procs, k.wait(shell))
+            k.exit(helper, 0)
+            print(k.wait(1))
+          - |
+            ECHILD = 10
+
+
+            class Kernel:
+                def __init__(self):
+                    # pid -> {"parent": pid, "state": "running" or "zombie", "status": exit status}
+                    self.procs = {1: {"parent": 0, "state": "running", "status": None}}  # pid 1 is init
+                    self.next_pid = 100
+
+                def fork(self, parent):
+                    self.next_pid += 1
+                    self.procs[self.next_pid] = {"parent": parent, "state": "running", "status": None}
+                    return self.next_pid
+
+                def exit(self, pid, status):
+                    self.procs[pid]["state"] = "zombie"
+                    self.procs[pid]["status"] = status
+
+                def wait(self, parent):
+                    children = sorted(pid for pid, p in self.procs.items() if p["parent"] == parent)
+                    if not children:
+                        return -ECHILD
+                    for pid in children:
+                        if self.procs[pid]["state"] == "zombie":
+                            status = self.procs[pid]["status"]
+                            del self.procs[pid]
+                            return pid, status
+                    return "blocked"
+
+
+            k = Kernel()
+            shell = k.fork(1)
+            job = k.fork(shell)
+            helper = k.fork(job)
+            print(k.wait(shell))
+            k.exit(job, 3)
+            print(k.procs[job]["state"], k.procs[helper]["parent"])
+            print(k.wait(shell))
+            print(job in k.procs, k.wait(shell))
+            k.exit(helper, 0)
+            print(k.wait(1))
+          - |
+            ECHILD = 10
+
+
+            class Kernel:
+                def __init__(self):
+                    # pid -> {"parent": pid, "state": "running" or "zombie", "status": exit status}
+                    self.procs = {1: {"parent": 0, "state": "running", "status": None}}  # pid 1 is init
+                    self.next_pid = 100
+
+                def fork(self, parent):
+                    self.next_pid += 1
+                    self.procs[self.next_pid] = {"parent": parent, "state": "running", "status": None}
+                    return self.next_pid
+
+                def exit(self, pid, status):
+                    self.procs[pid]["state"] = "zombie"
+                    self.procs[pid]["status"] = status
+                    for p in self.procs.values():
+                        if p["parent"] == pid:
+                            p["parent"] = 1
+
+                def wait(self, parent):
+                    children = sorted(pid for pid, p in self.procs.items() if p["parent"] == parent)
+                    if not children:
+                        return -ECHILD
+                    for pid in children:
+                        if self.procs[pid]["state"] == "zombie":
+                            status = self.procs[pid]["status"]
+                            return pid, status
+                    return "blocked"
+
+
+            k = Kernel()
+            shell = k.fork(1)
+            job = k.fork(shell)
+            helper = k.fork(job)
+            print(k.wait(shell))
+            k.exit(job, 3)
+            print(k.procs[job]["state"], k.procs[helper]["parent"])
+            print(k.wait(shell))
+            print(job in k.procs, k.wait(shell))
+            k.exit(helper, 0)
+            print(k.wait(1))
+        explanation: |
+          exit marks the process a zombie with its status and hands its children to init. wait lists the parent's children: none means -ECHILD; a zombie among them, lowest pid first, is removed and its pid and status returned; otherwise the parent must block. Deleting the process at exit loses the status the parent is owed; not re-parenting leaves orphans whose zombies nobody can reap; and not removing the reaped entry returns the same child again and again.
+    - question:
+        id: write-wait-status
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `describe`, which decodes the status wait returns into the shell's `$?` and a message. The program should print five lines, ending `(137, 'killed by SIGKILL')`, `(139, 'killed by SIGSEGV, core dumped')` and `(130, 'killed by SIGINT')`.
+        starter: |
+          NAMES = {2: "SIGINT", 9: "SIGKILL", 11: "SIGSEGV", 15: "SIGTERM"}
+
+
+          def describe(status):
+              # status is the number wait hands the parent. Its low 7 bits hold the
+              # number of the signal that killed the child, or 0 if the child exited
+              # by itself; then bits 8 to 15 hold its exit code. Bit 7 is set when a
+              # killed child also dumped core. Return the shell's $?, which is the
+              # exit code, or 128 + the signal number for a killed child, and a
+              # message: "exited with 3", "killed by SIGKILL", or
+              # "killed by SIGSEGV, core dumped". Name a signal not in NAMES as, for
+              # example, "signal 6".
+              return 0, ""
+
+
+          for status in [0x0000, 0x0300, 0x0009, 0x008B, 0x0002]:
+              print(hex(status), describe(status))
+        solution: |
+          NAMES = {2: "SIGINT", 9: "SIGKILL", 11: "SIGSEGV", 15: "SIGTERM"}
+
+
+          def describe(status):
+              signal = status & 0x7F
+              if signal == 0:
+                  code = (status >> 8) & 0xFF
+                  return code, "exited with " + str(code)
+              message = "killed by " + NAMES.get(signal, "signal " + str(signal))
+              if status & 0x80:
+                  message += ", core dumped"
+              return 128 + signal, message
+
+
+          for status in [0x0000, 0x0300, 0x0009, 0x008B, 0x0002]:
+              print(hex(status), describe(status))
+        tests: |
+          assert describe(0) == (0, "exited with 0"), "status 0 means the child exited with code 0"
+          assert describe(0x0300) == (3, "exited with 3"), "the exit code sits in bits 8 to 15, so 0x0300 is exit code 3"
+          assert describe(0xFF00) == (255, "exited with 255"), "0xff00 is exit code 255"
+          assert describe(0x000F) == (143, "killed by SIGTERM"), "a child killed by signal 15 gives $? = 128 + 15 = 143"
+          assert describe(0x008B) == (139, "killed by SIGSEGV, core dumped"), "0x8b is signal 11 with the core-dump bit, bit 7, set: 139 and core dumped"
+          assert describe(0x0086) == (134, "killed by signal 6, core dumped"), "a signal without a name in NAMES is written as signal 6"
+          assert describe(0x0002) == (130, "killed by SIGINT"), "Ctrl+C kills with SIGINT, 2, so $? is 130"
+          assert output.splitlines() == ["0x0 (0, 'exited with 0')", "0x300 (3, 'exited with 3')", "0x9 (137, 'killed by SIGKILL')", "0x8b (139, 'killed by SIGSEGV, core dumped')", "0x2 (130, 'killed by SIGINT')"], "The program should print the five decoded statuses"
+        wrong:
+          - |
+            NAMES = {2: "SIGINT", 9: "SIGKILL", 11: "SIGSEGV", 15: "SIGTERM"}
+
+
+            def describe(status):
+                signal = status & 0x7F
+                if signal == 0:
+                    code = status & 0xFF
+                    return code, "exited with " + str(code)
+                message = "killed by " + NAMES.get(signal, "signal " + str(signal))
+                if status & 0x80:
+                    message += ", core dumped"
+                return 128 + signal, message
+
+
+            for status in [0x0000, 0x0300, 0x0009, 0x008B, 0x0002]:
+                print(hex(status), describe(status))
+          - |
+            NAMES = {2: "SIGINT", 9: "SIGKILL", 11: "SIGSEGV", 15: "SIGTERM"}
+
+
+            def describe(status):
+                signal = status & 0xFF
+                if signal == 0:
+                    code = (status >> 8) & 0xFF
+                    return code, "exited with " + str(code)
+                message = "killed by " + NAMES.get(signal, "signal " + str(signal))
+                if status & 0x80:
+                    message += ", core dumped"
+                return 128 + signal, message
+
+
+            for status in [0x0000, 0x0300, 0x0009, 0x008B, 0x0002]:
+                print(hex(status), describe(status))
+          - |
+            NAMES = {2: "SIGINT", 9: "SIGKILL", 11: "SIGSEGV", 15: "SIGTERM"}
+
+
+            def describe(status):
+                signal = status & 0x7F
+                if signal == 0:
+                    code = (status >> 8) & 0xFF
+                    return code, "exited with " + str(code)
+                message = "killed by " + NAMES.get(signal, "signal " + str(signal))
+                if status & 0x80:
+                    message += ", core dumped"
+                return signal, message
+
+
+            for status in [0x0000, 0x0300, 0x0009, 0x008B, 0x0002]:
+                print(hex(status), describe(status))
+        explanation: |
+          Mask the low 7 bits for the signal. If it is 0, shift right by 8 and mask with 0xFF for the exit code; otherwise report 128 + signal, its name, and the core-dump flag from bit 7. Taking the exit code from the low byte reads the signal field instead; masking the signal with 0xFF drags the core-dump bit into the number; and reporting the bare signal number makes a command killed by SIGINT look like one that exited with code 2.
+    - question:
+        id: fix-sigchld
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A download server forks a child per download and reaps them in its SIGCHLD handler, but zombies pile up under load. The program should print `reaped [(201, 0), (202, 1), (203, 0), (204, 0)]` and `zombies left 0`. Find the fault and fix it, changing only the handler.
+        starter: |
+          zombies = []     # children that have exited but not been waited for, oldest first
+          pending = set()  # signals waiting to be delivered: one of each kind at most
+          reaped = []
+
+
+          def child_exits(pid, status):
+              zombies.append((pid, status))
+              pending.add("SIGCHLD")  # if one is already pending, the two merge into one
+
+
+          def waitpid_nohang():
+              # Reap one exited child and return (pid, status), or None at once if no
+              # child has exited, without blocking.
+              if zombies:
+                  return zombies.pop(0)
+              return None
+
+
+          def on_sigchld():
+              # The server's SIGCHLD handler: it should reap every child that has
+              # exited, so that none is left a zombie.
+              result = waitpid_nohang()
+              if result is not None:
+                  reaped.append(result)
+
+
+          def deliver():
+              if "SIGCHLD" in pending:
+                  pending.remove("SIGCHLD")
+                  on_sigchld()
+
+
+          # Three downloads finish while the server is busy, then a fourth.
+          child_exits(201, 0)
+          child_exits(202, 1)
+          child_exits(203, 0)
+          deliver()
+          child_exits(204, 0)
+          deliver()
+          print("reaped", reaped)
+          print("zombies left", len(zombies))
+        solution: |
+          zombies = []     # children that have exited but not been waited for, oldest first
+          pending = set()  # signals waiting to be delivered: one of each kind at most
+          reaped = []
+
+
+          def child_exits(pid, status):
+              zombies.append((pid, status))
+              pending.add("SIGCHLD")  # if one is already pending, the two merge into one
+
+
+          def waitpid_nohang():
+              # Reap one exited child and return (pid, status), or None at once if no
+              # child has exited, without blocking.
+              if zombies:
+                  return zombies.pop(0)
+              return None
+
+
+          def on_sigchld():
+              # The server's SIGCHLD handler: it should reap every child that has
+              # exited, so that none is left a zombie.
+              result = waitpid_nohang()
+              while result is not None:
+                  reaped.append(result)
+                  result = waitpid_nohang()
+
+
+          def deliver():
+              if "SIGCHLD" in pending:
+                  pending.remove("SIGCHLD")
+                  on_sigchld()
+
+
+          # Three downloads finish while the server is busy, then a fourth.
+          child_exits(201, 0)
+          child_exits(202, 1)
+          child_exits(203, 0)
+          deliver()
+          child_exits(204, 0)
+          deliver()
+          print("reaped", reaped)
+          print("zombies left", len(zombies))
+        tests: |
+          del zombies[:]
+          del reaped[:]
+          pending.add("SIGCHLD")
+          zombies.extend([(301, 0), (302, 2), (303, 0), (304, 9)])
+          on_sigchld()
+          assert reaped == [(301, 0), (302, 2), (303, 0), (304, 9)], "four children exited but their SIGCHLDs merged into one; one run of the handler must reap all four, in order, but it reaped " + repr(reaped)
+          assert zombies == [], "no zombie should be left after the handler runs"
+          del reaped[:]
+          on_sigchld()
+          assert reaped == [], "with no child exited, the handler must return at once without reaping anything"
+          assert output.splitlines() == ["reaped [(201, 0), (202, 1), (203, 0), (204, 0)]", "zombies left 0"], "The program should reap all four children and leave 0 zombies"
+        wrong:
+          - |
+            zombies = []     # children that have exited but not been waited for, oldest first
+            pending = set()  # signals waiting to be delivered: one of each kind at most
+            reaped = []
+
+
+            def child_exits(pid, status):
+                zombies.append((pid, status))
+                pending.add("SIGCHLD")  # if one is already pending, the two merge into one
+
+
+            def waitpid_nohang():
+                # Reap one exited child and return (pid, status), or None at once if no
+                # child has exited, without blocking.
+                if zombies:
+                    return zombies.pop(0)
+                return None
+
+
+            def on_sigchld():
+                # The server's SIGCHLD handler: it should reap every child that has
+                # exited, so that none is left a zombie.
+                for _ in range(2):
+                    result = waitpid_nohang()
+                    if result is not None:
+                        reaped.append(result)
+
+
+            def deliver():
+                if "SIGCHLD" in pending:
+                    pending.remove("SIGCHLD")
+                    on_sigchld()
+
+
+            # Three downloads finish while the server is busy, then a fourth.
+            child_exits(201, 0)
+            child_exits(202, 1)
+            child_exits(203, 0)
+            deliver()
+            child_exits(204, 0)
+            deliver()
+            print("reaped", reaped)
+            print("zombies left", len(zombies))
+          - |
+            zombies = []     # children that have exited but not been waited for, oldest first
+            pending = set()  # signals waiting to be delivered: one of each kind at most
+            reaped = []
+
+
+            def child_exits(pid, status):
+                zombies.append((pid, status))
+                pending.add("SIGCHLD")  # if one is already pending, the two merge into one
+
+
+            def waitpid_nohang():
+                # Reap one exited child and return (pid, status), or None at once if no
+                # child has exited, without blocking.
+                if zombies:
+                    return zombies.pop(0)
+                return None
+
+
+            def on_sigchld():
+                # The server's SIGCHLD handler: it should reap every child that has
+                # exited, so that none is left a zombie.
+                while zombies:
+                    zombies.pop(0)
+
+
+            def deliver():
+                if "SIGCHLD" in pending:
+                    pending.remove("SIGCHLD")
+                    on_sigchld()
+
+
+            # Three downloads finish while the server is busy, then a fourth.
+            child_exits(201, 0)
+            child_exits(202, 1)
+            child_exits(203, 0)
+            deliver()
+            child_exits(204, 0)
+            deliver()
+            print("reaped", reaped)
+            print("zombies left", len(zombies))
+          - |
+            zombies = []     # children that have exited but not been waited for, oldest first
+            pending = set()  # signals waiting to be delivered: one of each kind at most
+            reaped = []
+
+
+            def child_exits(pid, status):
+                zombies.append((pid, status))
+                pending.add("SIGCHLD")  # if one is already pending, the two merge into one
+
+
+            def waitpid_nohang():
+                # Reap one exited child and return (pid, status), or None at once if no
+                # child has exited, without blocking.
+                if zombies:
+                    return zombies.pop(0)
+                return None
+
+
+            def on_sigchld():
+                # The server's SIGCHLD handler: it should reap every child that has
+                # exited, so that none is left a zombie.
+                while waitpid_nohang() is not None:
+                    reaped.append(waitpid_nohang())
+
+
+            def deliver():
+                if "SIGCHLD" in pending:
+                    pending.remove("SIGCHLD")
+                    on_sigchld()
+
+
+            # Three downloads finish while the server is busy, then a fourth.
+            child_exits(201, 0)
+            child_exits(202, 1)
+            child_exits(203, 0)
+            deliver()
+            child_exits(204, 0)
+            deliver()
+            print("reaped", reaped)
+            print("zombies left", len(zombies))
+        explanation: |
+          The handler reaps one child per signal, but signals do not queue: three children exiting before delivery produce one SIGCHLD. The handler must call the non-blocking wait in a loop until it reports no more exited children. Reaping a fixed number per signal fails as soon as more merge; popping zombies directly loses their statuses, which the server needs; and calling wait twice per pass throws away every other status.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. `sleep 100` is killed by SIGINT, signal 2, which it does not handle. What does `echo $?` print?
+        answer: "130"
+        explanation: |
+          The child was killed by a signal, so the status's low bits hold 2 and the shell reports 128 + 2 = 130. Scripts use exactly this to tell an interrupted command from one that failed by itself.
+    - question:
+        id: work-graceful
+        type: choice
+        system: s2
+        prompt: |
+          A payment service is stopped during every deployment, and now and then a payment is half-written. Its code has no signal handlers. What is the best fix?
+        options:
+          - "Handle SIGTERM: stop taking new requests, finish the ones in progress, then exit, within the grace period"
+          - "Handle SIGKILL to finish the payment first"
+          - "Ignore SIGTERM so the service is never stopped"
+          - "Make the deployment send SIGKILL straight away"
+        answer: 0
+        explanation: |
+          Without a handler, SIGTERM kills the service mid-request. Handling it lets the service drain its work and exit cleanly before the manager's SIGKILL, which cannot be handled at all, arrives.
+  connections:
+    - text: |
+        130. sleep has no handler, so SIGINT's default action kills it; wait reports "killed by signal 2", and the shell, by convention, turns that into 128 + 2. A script can test for 130 to tell that the user interrupted a command rather than that the command failed.
+
+        That completes the operating system: processes and the system calls that make them, the scheduler that shares the processor, virtual memory and the TLB that share the memory, interrupts and DMA for the devices, files that survive crashes, threads that share an address space, and signals and the end of a process. Threads sharing memory raised a question this cluster left open: what happens when two of them update the same data at the same moment. [[d0.interleavings-and-race-conditions]] begins the concurrency cluster with exactly that.

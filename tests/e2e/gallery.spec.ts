@@ -1155,3 +1155,115 @@ test("issuing out of order hides a load's wait behind independent work", async (
   await figure.getByRole("button", { name: "Decrease width" }).click();
   await expect(figure).toContainText("Out of order, up to 1 instruction a cycle: the program's last result is ready after cycle 6, against 9 in order.");
 });
+
+test("a system call, a fault and a timer interrupt each take the processor into the kernel", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="mode-switch"]').first().getByRole("figure");
+  await expect(figure).toContainText("Step 1 of 6, in user mode: ecall with a7 = 64, the number of write.");
+  for (let i = 0; i < 5; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("The program crossed into the kernel once and came back once, and never touched the terminal itself.");
+  await figure.getByRole("button", { name: "load from address 0", exact: true }).click();
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("The program never asked for the kernel: its own bad load took it there, and it did not come back.");
+  await figure.getByRole("button", { name: "timer fires", exact: true }).click();
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("The loop made no system call and did nothing wrong, yet the kernel took the processor back.");
+});
+
+test("fork in a loop doubles the processes, unless the children break out", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="fork-tree"]').first().getByRole("figure");
+  await expect(figure).toContainText("Step 1 of 5. Before the loop there is 1 process, pid 100.");
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("each of the 8 processes prints hi, so hi appears 8 times: 2 to the power 3.");
+  await figure.getByRole("button", { name: "children break out", exact: true }).click();
+  await expect(figure).toContainText("each of the 4 processes prints hi, so hi appears 4 times: 3 + 1.");
+});
+
+test("each scheduling policy trades average waiting time against response", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="scheduler-gantt"]').first().getByRole("figure");
+  await expect(figure).toContainText("Waiting times A 0, B 7, C 10, D 18, average 8.75 ms");
+  await figure.getByRole("button", { name: "shortest job first", exact: true }).click();
+  await expect(figure).toContainText("Shortest job first: A 0–8, B 8–12, D 12–17, C 17–26.");
+  await figure.getByRole("button", { name: "shortest remaining time first", exact: true }).click();
+  await expect(figure).toContainText("average 6.50 ms; average response 4.25 ms; 4 switches between jobs.");
+  await figure.getByRole("button", { name: "round robin", exact: true }).click();
+  await expect(figure).toContainText("average 13.50 ms; average response 3 ms; 9 switches between jobs.");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Decrease quantum" }).click();
+  await expect(figure).toContainText("average 12.50 ms; average response 0.75 ms; 23 switches between jobs.");
+});
+
+test("the page table translates, protects and faults", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="page-table"]').first().getByRole("figure");
+  await expect(figure).toContainText("so the physical address is frame 5 followed by the same offset: 0x5a2c.");
+  await figure.getByRole("button", { name: "write 0x1004", exact: true }).click();
+  await expect(figure).toContainText("The write raises a protection fault, and the kernel ends the process with SIGSEGV.");
+  await figure.getByRole("button", { name: "read 0x4100", exact: true }).click();
+  await expect(figure).toContainText("the kernel reads the page from disk into free frame 2, marks the entry present, and runs the load again, which now gives 0x2100.");
+  await figure.getByRole("button", { name: "read 0x0000", exact: true }).click();
+  await expect(figure).toContainText("Page 0 is not mapped at all");
+});
+
+test("the TLB hits when accesses stay on a few pages and misses when they stride across many", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="tlb"]').first().getByRole("figure");
+  await expect(figure).toContainText("So far 0 hits and 1 miss, 4 extra memory reads.");
+  for (let i = 0; i < 11; i++) await figure.getByRole("button", { name: "Increase access" }).click();
+  await expect(figure).toContainText("So far 9 hits and 3 misses, 12 extra memory reads.");
+  await figure.getByRole("button", { name: "one int per page", exact: true }).click();
+  for (let i = 0; i < 11; i++) await figure.getByRole("button", { name: "Increase access" }).click();
+  await expect(figure).toContainText("evicting page 1, the least recently used. So far 0 hits and 12 misses, 48 extra memory reads.");
+});
+
+test("polling, interrupts and DMA free different amounts of the processor", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="io-timeline"]').first().getByRole("figure");
+  await expect(figure).toContainText("The processor spends all 21 on the transfer, 16 of them spinning on the status register");
+  await figure.getByRole("button", { name: "an interrupt per word", exact: true }).click();
+  await expect(figure).toContainText("The processor spends 5 units on it, starting the read and handling 4 interrupts, one per word, and has 16 units free");
+  await figure.getByRole("button", { name: "DMA", exact: true }).click();
+  await expect(figure).toContainText("Reading 4 words with DMA takes 18 time units");
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase words" }).click();
+  await expect(figure).toContainText("The processor spends 2 units, starting the transfer and handling 1 interrupt at the end, and has 32 units free.");
+});
+
+test("bigger files reach their last block through more levels of pointers", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="inode-blocks"]').first().getByRole("figure");
+  await expect(figure).toContainText("A file of 10 KiB fills 3 data blocks of 4 KiB. All 3 are listed directly in the inode.");
+  await figure.getByRole("button", { name: "100 KiB", exact: true }).click();
+  await expect(figure).toContainText("the single indirect block lists 13 more. That is 1 extra block of pointers.");
+  await expect(figure).toContainText("takes 2 disk reads.");
+  await figure.getByRole("button", { name: "1 GiB", exact: true }).click();
+  await expect(figure).toContainText("A file of 1 GiB fills 2,62,144 data blocks of 4 KiB.");
+  await expect(figure).toContainText("the double indirect block points to 255 blocks of pointers listing the last 2,61,108. That is 257 extra blocks of pointers.");
+  await expect(figure).toContainText("takes 3 disk reads.");
+});
+
+test("a blocking read stops every user-level thread but only one kernel thread", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="thread-models"]').first().getByRole("figure");
+  await expect(figure).toContainText("1:1 kernel threads: 4 threads running on 4 cores.");
+  await figure.getByRole("button", { name: "T1 blocks in read", exact: true }).click();
+  await expect(figure).toContainText("runs four of the other five on the four cores; T6 waits its turn.");
+  await figure.getByRole("button", { name: "N:1 user-level threads", exact: true }).click();
+  await expect(figure).toContainText("0 threads running on 4 cores.");
+  await figure.getByRole("button", { name: "M:N runtime", exact: true }).click();
+  await expect(figure).toContainText("The runtime notices, starts another kernel thread and moves the waiting work onto it, so four threads still run.");
+});
+
+test("every ending passes through the zombie state, and the shell sees how it ended", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="process-life"]').first().getByRole("figure");
+  await expect(figure).toContainText("Step 1 of 8, new: The shell forks: the child, pid 4242, exists but has not run yet.");
+  for (let i = 0; i < 7; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("In the end: exit status 0, so $? is 0.");
+  await figure.getByRole("button", { name: "gets SIGKILL", exact: true }).click();
+  for (let i = 0; i < 7; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("In the end: killed by signal 9, so $? is 128 + 9 = 137.");
+  await figure.getByRole("button", { name: "outlives its parent", exact: true }).click();
+  for (let i = 0; i < 8; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("init, which waits for any child in a loop, reaps it. In the end: exit status 0, collected by init.");
+});
