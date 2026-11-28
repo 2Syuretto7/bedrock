@@ -1,0 +1,625 @@
+concept: h1.superscalar-and-out-of-order-execution
+minutes: 85
+claim: You can explain how a superscalar core starts several instructions per cycle and why dependences limit it; tell true dependences from the false ones, write-after-read and write-after-write, that register renaming removes; rename a sequence of instructions onto physical registers; work out the dataflow limit of a program from its critical path, and restructure a computation to shorten it; describe how a scheduler issues instructions out of order while a reorder buffer retires them in order, keeping exceptions precise and recovering from wrong guesses; and say why single cores stopped getting much faster and what replaced them.
+recalls: [h1.hazards-and-branch-prediction]
+uses: [h1.pipelining, h1.an-instruction-set-risc-v, h1.calling-conventions-and-the-stack, h1.latches-registers-and-memory, h1.the-fetch-decode-execute-cycle, s0.dictionaries-and-sets, s2.graphs-and-their-representations]
+leads: [h2.what-an-operating-system-does]
+starter: |
+  # Scratch space. With unlimited hardware, each result is ready one
+  # latency after the last of its inputs.
+  latency = {"load": 3, "add": 1}
+  ready = {}
+  for dest, sources, op in [("x", [], "load"), ("y", [], "load"), ("s", ["x", "y"], "add")]:
+      ready[dest] = max([ready.get(src, 0) for src in sources] + [0]) + latency[op]
+      print(dest, "ready at cycle", ready[dest])
+parts:
+  recall:
+    - text: |
+        [[h1.hazards-and-branch-prediction]] kept the pipeline flowing at close to one instruction per cycle, forwarding results and guessing branches. A modern laptop core finishes three to five instructions per cycle on ordinary code, which means it must start several at once and run them in whatever order their inputs allow. This last lesson of the cluster shows how, and why it stops there. Three quick pulls first.
+  puzzle:
+    - text: |
+        A processor can start any number of instructions in a cycle, as long as their inputs are ready. A program loads 8 numbers from memory, each load taking 3 cycles and all of them independent. It then adds them into one running total, one at a time: the first add combines the first two numbers, and each later add adds the next number to the total. Each add takes 1 cycle.
+
+        **What is the fewest cycles in which the last result can be ready?**
+  intuition:
+    - text: |
+        A wedding kitchen has many cooks. The head cook reads the recipes in order, but the cooks do not wait for each other in that order: while the biryani rice soaks for half an hour, someone fries onions, someone else grinds masala, and another starts on the raita. Each dish is plated only when its parts are done, and the dishes go out to the guests in the order of the menu, so nobody can tell the kitchen worked out of order. Only two things truly limit it: a step that needs the result of another, and the number of cooks.
+
+        A modern processor core is that kitchen. The figure issues a short program, a load whose result is needed by the next instruction and some independent work after it, first in order and then out of order, starting up to the chosen number of instructions each cycle.
+    - figure: ooo-issue
+      props: { mode: inorder, width: 2 }
+    - text: |
+        In order, the add waits three cycles for the load, and so does everything behind it. Out of order, the independent instructions run in those cycles instead, and the whole program finishes sooner, though the add itself is no faster. More width helps only while there are independent instructions to fill it; the chain from addi to mul to the final add sets a limit that no amount of hardware beats.
+  derivation:
+    - text: |
+        **Superscalar.** A pipeline finishes at most one instruction per cycle. A **superscalar** core fetches, decodes and issues several per cycle, its **width**, using several ALUs, load units and so on side by side; current cores are 4 to 8 wide. Performance is then measured as **IPC**, instructions per cycle, the inverse of CPI. Width pays off only when there are enough independent instructions near each other, which is called **instruction-level parallelism**.
+
+        **True and false dependences.** A **true dependence**, read after write, is an instruction needing another's result; it is the substance of the computation. Two other kinds are accidents of having only 32 register names. **Write after read**: an instruction writes t0 while an earlier one still has to read the old t0. **Write after write**: two instructions both write t0, and the later value must be the one that remains. Neither passes any value from one instruction to the other; they only reuse a name.
+    - question:
+        id: derivation-false
+        type: choice
+        system: s2
+        prompt: |
+          `add t1, t0, a2` is followed by `addi t0, a3, 4`. What kind of dependence links them?
+        options:
+          - "Write after read: the addi writes t0, which the add must read first"
+          - "Read after write: the addi needs the add's result"
+          - "Write after write: both write t1"
+          - "None"
+        answer: 0
+        explanation: |
+          The addi does not use anything the add computes; it just reuses the name t0. Giving the addi's result a different register would remove the dependence completely.
+    - text: |
+        **Register renaming.** So the core gives them different names. It has far more **physical registers** than architectural ones, a couple of hundred, and a **rename table** saying which physical register holds each architectural register's current value. Each instruction's sources are looked up in the table, and its destination gets a fresh physical register, which the table then records. The sources must be looked up before the destination is renamed, since `add t0, t0, a1` reads the old t0. After renaming, the only dependences left are true ones: a later write to t0 goes to a new physical register and cannot disturb an earlier reader of the old one.
+    - question:
+        id: derivation-rename
+        type: choice
+        system: s2
+        prompt: |
+          Which dependences does register renaming remove?
+        options:
+          - "Write after read and write after write"
+          - "Read after write only"
+          - "All three kinds"
+          - "None; it only saves power"
+        answer: 0
+        explanation: |
+          The false dependences come from reusing names, so fresh names remove them. A true dependence carries a value, and no renaming can make the value exist sooner.
+    - text: |
+        **The dataflow limit.** Once only true dependences remain, a program is a graph of the kind in [[s2.graphs-and-their-representations]]: instructions are nodes, and an edge runs from each producer to each consumer. With unlimited width, every instruction could start the moment its inputs are ready, and the program would take as long as its longest chain of dependences weighted by latency, its **critical path**. No processor can beat it. But programmers and compilers can shorten it. Adding eight numbers into one running total is a chain of seven adds; adding them in pairs, then pairs of pairs, is three levels deep. Using several accumulators in a loop, or unrolling it, does the same for longer sums, which is part of why library routines for sums and dot products are so much faster than a naive loop.
+    - question:
+        id: derivation-chain
+        type: numeric
+        system: s2
+        prompt: |
+          A 4-wide core runs a loop of 12 instructions in which every instruction needs the result of the one before, each taking 1 cycle. What is the best IPC it can reach on this loop?
+        answer: "1"
+        explanation: |
+          Each instruction must wait for the one before, so only one can run in any cycle, however wide the core. Width needs independent instructions.
+    - text: |
+        **Out-of-order execution.** The core fetches and decodes in program order, then renames, then places each instruction in a **scheduler** or reservation station, where it waits until its operands are ready. Every cycle, the scheduler picks ready instructions, oldest first, up to the width, and sends them to the execution units; their results wake up the instructions waiting for them. Instructions thus run in **dataflow order**, whatever order their inputs allow. Meanwhile every instruction also takes a place, in program order, in a **reorder buffer**. An instruction is **retired**, its result made permanent in the architectural state, only when it reaches the head of the buffer and has finished. Instructions run out of order but retire in order.
+
+        In-order retirement is what makes the trick invisible. If an instruction faults, say a load from a bad address, every older instruction has retired and no younger one has, so the operating system sees a **precise exception**, as if the program had run one instruction at a time. If a branch was mispredicted, the instructions after it are simply thrown out of the buffer before they retire. The buffer holds a few hundred instructions on current cores, so the core can look far ahead, past a slow load from memory, for useful work: this is **speculative execution**, and it is where most of a modern core's speed comes from.
+    - question:
+        id: derivation-rob
+        type: order
+        system: s2
+        prompt: |
+          Put the journey of one instruction through an out-of-order core in order.
+        steps:
+          - "Fetch and decode, in program order."
+          - "Rename its registers and take a place at the tail of the reorder buffer."
+          - "Wait in the scheduler until its operands are ready."
+          - "Execute, possibly before older instructions."
+          - "Retire when it reaches the head of the reorder buffer, in program order."
+        explanation: |
+          Everything before the scheduler and the retirement at the end happen in program order; only execution is reordered. That is what keeps exceptions precise.
+    - text: |
+        **The end of easy speed.** For decades each new chip ran single programs faster, through higher clock rates and cleverer cores. Around 2005 both ran out. Shrinking transistors stopped making them proportionally less power-hungry, so faster clocks made chips too hot to cool; and there is only so much instruction-level parallelism in ordinary code, so wider cores give less and less. The industry turned to **many cores** on one chip, each running its own stream of instructions, and to **simultaneous multithreading**, where one core interleaves two streams to fill its idle units. Using that hardware is no longer automatic: the work must be divided among several programs or several threads, which need an operating system to share the machine among them and careful programming to cooperate. Those are the next two clusters.
+  formal:
+    - text: |
+        **Superscalar.** Issues up to w instructions per cycle; IPC = instructions per cycle ≤ w.
+
+        **Dependences.** Read after write (true), write after read and write after write (false, from reused names).
+
+        **Renaming.** Sources are mapped through the rename table, then the destination is given a fresh physical register. Only true dependences remain.
+
+        **Dataflow limit.** With unlimited width, time is the longest latency-weighted path in the dependence graph.
+
+        **Out-of-order core.** In-order fetch, decode and rename; out-of-order issue from a scheduler when operands are ready; in-order retirement from a reorder buffer, which gives precise exceptions and recovery from misprediction.
+  drill:
+    - text: Seconds each. Ask which instruction is really waiting for which.
+    - question:
+        id: drill-retire
+        type: choice
+        system: s1
+        prompt: |
+          In an out-of-order core, which step happens strictly in program order?
+        options:
+          - "Retirement from the reorder buffer"
+          - "Execution in the ALUs"
+          - "Waking up instructions whose operands are ready"
+          - "Loads returning from memory"
+        answer: 0
+        explanation: Execution follows the data; retirement follows the program, so the result looks sequential.
+    - question:
+        id: drill-ilp
+        type: choice
+        system: s1
+        prompt: |
+          A sum of a million numbers is changed from one running total to four totals added together at the end. Why can it run faster on a wide core?
+        options:
+          - "The four totals are independent chains, so four adds can run each cycle"
+          - "It does fewer additions"
+          - "It uses fewer registers"
+          - "Branches become easier to predict"
+        answer: 0
+        explanation: One running total is a single chain of dependences; four totals give the core four chains to overlap.
+    - question:
+        id: predict-ready
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          ready = {"x": 3, "y": 1}
+          print(max(ready["x"], ready["y"]) + 1)
+        output: "4"
+        explanation: An add of x and y must wait for the later of its inputs, x at cycle 3, and its own result is ready one cycle after that.
+    - question:
+        id: predict-table
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          names = iter(["p0", "p1", "p2"])
+          table = {}
+          for dest in ["t0", "t1", "t0"]:
+              table[dest] = next(names)
+          print(table)
+        output: "{'t0': 'p2', 't1': 'p1'}"
+        explanation: The second write to t0 gets a fresh physical register, p2, and the table now points t0 at it; p0 still holds the old value for anyone who needs it.
+    - question:
+        id: predict-ipc
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          instructions, cycles = 12, 5
+          print(instructions / cycles)
+        output: "2.4"
+        explanation: IPC is instructions divided by cycles, here 2.4, more than the one per cycle a simple pipeline can reach.
+  work:
+    - text: Slower now. Each answer is one of the mechanisms of an out-of-order core.
+    - question:
+        id: write-rename
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `rename`, which gives every destination a fresh physical register and rewrites each source through the rename table. The program should print the four renamed instructions, from `p0 = a0 + a1` to `p3 = p2 + p1`.
+        starter: |
+          def rename(program):
+              # program lists instructions as (destination, source1, source2), using
+              # architectural register names. Give every destination a fresh physical
+              # register, "p0", "p1", "p2", ... in order, and rewrite each source to
+              # the physical register currently holding that architectural register.
+              # A register not yet written keeps its own name. Return the new list.
+              return program
+
+
+          program = [
+              ("t0", "a0", "a1"),
+              ("t1", "t0", "a2"),
+              ("t0", "a3", "a4"),
+              ("t2", "t0", "t1"),
+          ]
+          for dest, src1, src2 in rename(program):
+              print(dest, "=", src1, "+", src2)
+        solution: |
+          def rename(program):
+              # program lists instructions as (destination, source1, source2), using
+              # architectural register names. Give every destination a fresh physical
+              # register, "p0", "p1", "p2", ... in order, and rewrite each source to
+              # the physical register currently holding that architectural register.
+              # A register not yet written keeps its own name. Return the new list.
+              table = {}
+              renamed = []
+              for dest, src1, src2 in program:
+                  new1 = table.get(src1, src1)
+                  new2 = table.get(src2, src2)
+                  table[dest] = "p" + str(len(renamed))
+                  renamed.append((table[dest], new1, new2))
+              return renamed
+
+
+          program = [
+              ("t0", "a0", "a1"),
+              ("t1", "t0", "a2"),
+              ("t0", "a3", "a4"),
+              ("t2", "t0", "t1"),
+          ]
+          for dest, src1, src2 in rename(program):
+              print(dest, "=", src1, "+", src2)
+        tests: |
+          _cases = [
+              ([("t0", "a0", "a1")], [("p0", "a0", "a1")]),
+              ([("t0", "a0", "a1"), ("t1", "t0", "t0")], [("p0", "a0", "a1"), ("p1", "p0", "p0")]),
+              ([("t0", "t0", "a1"), ("t0", "t0", "t0")], [("p0", "t0", "a1"), ("p1", "p0", "p0")]),
+              ([("t0", "a0", "a1"), ("t1", "t0", "a2"), ("t0", "a3", "a4"), ("t2", "t0", "t1")], [("p0", "a0", "a1"), ("p1", "p0", "a2"), ("p2", "a3", "a4"), ("p3", "p2", "p1")]),
+              ([("s1", "s1", "s2"), ("s2", "s1", "s1"), ("s1", "s2", "s1")], [("p0", "s1", "s2"), ("p1", "p0", "p0"), ("p2", "p1", "p0")]),
+          ]
+          for _prog, _want in _cases:
+              _got = [tuple(_x) for _x in rename(_prog)]
+              assert _got == _want, "rename(" + str(_prog) + ") should give " + str(_want) + ", not " + str(_got)
+          assert output.splitlines() == ["p0 = a0 + a1", "p1 = p0 + a2", "p2 = a3 + a4", "p3 = p2 + p1"], "The program should print the four renamed instructions, ending p3 = p2 + p1"
+        wrong:
+          - |
+            def rename(program):
+                # program lists instructions as (destination, source1, source2), using
+                # architectural register names. Give every destination a fresh physical
+                # register, "p0", "p1", "p2", ... in order, and rewrite each source to
+                # the physical register currently holding that architectural register.
+                # A register not yet written keeps its own name. Return the new list.
+                table = {}
+                renamed = []
+                for dest, src1, src2 in program:
+                    table[dest] = "p" + str(len(renamed))
+                    renamed.append((table[dest], table.get(src1, src1), table.get(src2, src2)))
+                return renamed
+
+
+            program = [
+                ("t0", "a0", "a1"),
+                ("t1", "t0", "a2"),
+                ("t0", "a3", "a4"),
+                ("t2", "t0", "t1"),
+            ]
+            for dest, src1, src2 in rename(program):
+                print(dest, "=", src1, "+", src2)
+          - |
+            def rename(program):
+                # program lists instructions as (destination, source1, source2), using
+                # architectural register names. Give every destination a fresh physical
+                # register, "p0", "p1", "p2", ... in order, and rewrite each source to
+                # the physical register currently holding that architectural register.
+                # A register not yet written keeps its own name. Return the new list.
+                table = {}
+                renamed = []
+                for dest, src1, src2 in program:
+                    new1 = table.get(src1, src1)
+                    new2 = table.get(src2, src2)
+                    if dest not in table:
+                        table[dest] = "p" + str(len(table))
+                    renamed.append((table[dest], new1, new2))
+                return renamed
+
+
+            program = [
+                ("t0", "a0", "a1"),
+                ("t1", "t0", "a2"),
+                ("t0", "a3", "a4"),
+                ("t2", "t0", "t1"),
+            ]
+            for dest, src1, src2 in rename(program):
+                print(dest, "=", src1, "+", src2)
+          - |
+            def rename(program):
+                # program lists instructions as (destination, source1, source2), using
+                # architectural register names. Give every destination a fresh physical
+                # register, "p0", "p1", "p2", ... in order, and rewrite each source to
+                # the physical register currently holding that architectural register.
+                # A register not yet written keeps its own name. Return the new list.
+                renamed = []
+                for dest, src1, src2 in program:
+                    renamed.append(("p" + str(len(renamed)), src1, src2))
+                return renamed
+
+
+            program = [
+                ("t0", "a0", "a1"),
+                ("t1", "t0", "a2"),
+                ("t0", "a3", "a4"),
+                ("t2", "t0", "t1"),
+            ]
+            for dest, src1, src2 in rename(program):
+                print(dest, "=", src1, "+", src2)
+        explanation: |
+          Look up both sources in the table first, then give the destination the next physical register and record it. Renaming the destination first makes `t0 = t0 + a1` read its own new register; reusing one physical register per architectural register renames nothing; and leaving the sources alone loses track of where each value now lives.
+    - question:
+        id: write-dataflow
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `dataflow_cycles`, the time a program takes when every instruction starts as soon as its inputs are ready. The program should print 10 cycles for one running total and 6 for pairwise sums.
+        starter: |
+          def dataflow_cycles(program, latency):
+              # program lists instructions as (destination, sources, operation), with
+              # every destination written once. With unlimited hardware, an
+              # instruction starts as soon as all its sources are ready, and its own
+              # result is ready latency[operation] cycles later. A source that no
+              # instruction writes is ready at cycle 0. Return the cycle at which the
+              # last result of the whole program is ready.
+              return 0
+
+
+          latency = {"load": 3, "add": 1}
+          loads = [("x" + str(i), [], "load") for i in range(8)]
+
+          chain = loads + [("s0", ["x0", "x1"], "add")]
+          for i in range(2, 8):
+              chain.append(("s" + str(i - 1), ["s" + str(i - 2), "x" + str(i)], "add"))
+
+          pairs = loads + [
+              ("a0", ["x0", "x1"], "add"), ("a1", ["x2", "x3"], "add"),
+              ("a2", ["x4", "x5"], "add"), ("a3", ["x6", "x7"], "add"),
+              ("b0", ["a0", "a1"], "add"), ("b1", ["a2", "a3"], "add"),
+              ("c", ["b0", "b1"], "add"),
+          ]
+          print("one running total:", dataflow_cycles(chain, latency), "cycles")
+          print("pairwise sums:", dataflow_cycles(pairs, latency), "cycles")
+        solution: |
+          def dataflow_cycles(program, latency):
+              # program lists instructions as (destination, sources, operation), with
+              # every destination written once. With unlimited hardware, an
+              # instruction starts as soon as all its sources are ready, and its own
+              # result is ready latency[operation] cycles later. A source that no
+              # instruction writes is ready at cycle 0. Return the cycle at which the
+              # last result of the whole program is ready.
+              ready = {}
+              for dest, sources, op in program:
+                  start = max([ready.get(src, 0) for src in sources] + [0])
+                  ready[dest] = start + latency[op]
+              return max(ready.values()) if ready else 0
+
+
+          latency = {"load": 3, "add": 1}
+          loads = [("x" + str(i), [], "load") for i in range(8)]
+
+          chain = loads + [("s0", ["x0", "x1"], "add")]
+          for i in range(2, 8):
+              chain.append(("s" + str(i - 1), ["s" + str(i - 2), "x" + str(i)], "add"))
+
+          pairs = loads + [
+              ("a0", ["x0", "x1"], "add"), ("a1", ["x2", "x3"], "add"),
+              ("a2", ["x4", "x5"], "add"), ("a3", ["x6", "x7"], "add"),
+              ("b0", ["a0", "a1"], "add"), ("b1", ["a2", "a3"], "add"),
+              ("c", ["b0", "b1"], "add"),
+          ]
+          print("one running total:", dataflow_cycles(chain, latency), "cycles")
+          print("pairwise sums:", dataflow_cycles(pairs, latency), "cycles")
+        tests: |
+          _lat = {"load": 3, "add": 1, "mul": 4}
+          for _prog, _want in [
+              ([], 0),
+              ([("a", [], "add")], 1),
+              ([("a", [], "load"), ("b", [], "add")], 3),
+              ([("a", [], "load"), ("b", ["a"], "mul"), ("c", ["b", "a"], "add")], 8),
+              ([("a", ["in"], "add"), ("b", ["a"], "add"), ("c", ["in"], "load"), ("d", ["b", "c"], "add")], 4),
+              ([("m", [], "mul"), ("n", [], "load"), ("o", ["n"], "add"), ("p", ["o", "m"], "add")], 5),
+          ]:
+              _got = dataflow_cycles(_prog, _lat)
+              assert _got == _want, "dataflow_cycles(" + str(_prog) + ") should be " + str(_want) + ", not " + str(_got)
+          assert output.splitlines() == ["one running total: 10 cycles", "pairwise sums: 6 cycles"], "The program should print 10 cycles for one running total and 6 for pairwise sums"
+        wrong:
+          - |
+            def dataflow_cycles(program, latency):
+                # program lists instructions as (destination, sources, operation), with
+                # every destination written once. With unlimited hardware, an
+                # instruction starts as soon as all its sources are ready, and its own
+                # result is ready latency[operation] cycles later. A source that no
+                # instruction writes is ready at cycle 0. Return the cycle at which the
+                # last result of the whole program is ready.
+                ready = {}
+                for dest, sources, op in program:
+                    start = min([ready.get(src, 0) for src in sources] + [99]) if sources else 0
+                    ready[dest] = start + latency[op]
+                return max(ready.values()) if ready else 0
+
+
+            latency = {"load": 3, "add": 1}
+            loads = [("x" + str(i), [], "load") for i in range(8)]
+
+            chain = loads + [("s0", ["x0", "x1"], "add")]
+            for i in range(2, 8):
+                chain.append(("s" + str(i - 1), ["s" + str(i - 2), "x" + str(i)], "add"))
+
+            pairs = loads + [
+                ("a0", ["x0", "x1"], "add"), ("a1", ["x2", "x3"], "add"),
+                ("a2", ["x4", "x5"], "add"), ("a3", ["x6", "x7"], "add"),
+                ("b0", ["a0", "a1"], "add"), ("b1", ["a2", "a3"], "add"),
+                ("c", ["b0", "b1"], "add"),
+            ]
+            print("one running total:", dataflow_cycles(chain, latency), "cycles")
+            print("pairwise sums:", dataflow_cycles(pairs, latency), "cycles")
+          - |
+            def dataflow_cycles(program, latency):
+                # program lists instructions as (destination, sources, operation), with
+                # every destination written once. With unlimited hardware, an
+                # instruction starts as soon as all its sources are ready, and its own
+                # result is ready latency[operation] cycles later. A source that no
+                # instruction writes is ready at cycle 0. Return the cycle at which the
+                # last result of the whole program is ready.
+                ready = {}
+                for dest, sources, op in program:
+                    start = max([ready.get(src, 0) for src in sources] + [0])
+                    ready[dest] = start + 1
+                return max(ready.values()) if ready else 0
+
+
+            latency = {"load": 3, "add": 1}
+            loads = [("x" + str(i), [], "load") for i in range(8)]
+
+            chain = loads + [("s0", ["x0", "x1"], "add")]
+            for i in range(2, 8):
+                chain.append(("s" + str(i - 1), ["s" + str(i - 2), "x" + str(i)], "add"))
+
+            pairs = loads + [
+                ("a0", ["x0", "x1"], "add"), ("a1", ["x2", "x3"], "add"),
+                ("a2", ["x4", "x5"], "add"), ("a3", ["x6", "x7"], "add"),
+                ("b0", ["a0", "a1"], "add"), ("b1", ["a2", "a3"], "add"),
+                ("c", ["b0", "b1"], "add"),
+            ]
+            print("one running total:", dataflow_cycles(chain, latency), "cycles")
+            print("pairwise sums:", dataflow_cycles(pairs, latency), "cycles")
+          - |
+            def dataflow_cycles(program, latency):
+                # program lists instructions as (destination, sources, operation), with
+                # every destination written once. With unlimited hardware, an
+                # instruction starts as soon as all its sources are ready, and its own
+                # result is ready latency[operation] cycles later. A source that no
+                # instruction writes is ready at cycle 0. Return the cycle at which the
+                # last result of the whole program is ready.
+                ready = {}
+                for dest, sources, op in program:
+                    start = max([ready.get(src, 0) for src in sources] + [0])
+                    ready[dest] = start + latency[op]
+                return ready[program[-1][0]] if program else 0
+
+
+            latency = {"load": 3, "add": 1}
+            loads = [("x" + str(i), [], "load") for i in range(8)]
+
+            chain = loads + [("s0", ["x0", "x1"], "add")]
+            for i in range(2, 8):
+                chain.append(("s" + str(i - 1), ["s" + str(i - 2), "x" + str(i)], "add"))
+
+            pairs = loads + [
+                ("a0", ["x0", "x1"], "add"), ("a1", ["x2", "x3"], "add"),
+                ("a2", ["x4", "x5"], "add"), ("a3", ["x6", "x7"], "add"),
+                ("b0", ["a0", "a1"], "add"), ("b1", ["a2", "a3"], "add"),
+                ("c", ["b0", "b1"], "add"),
+            ]
+            print("one running total:", dataflow_cycles(chain, latency), "cycles")
+            print("pairwise sums:", dataflow_cycles(pairs, latency), "cycles")
+        explanation: |
+          Each result is ready its operation's latency after the latest of its sources, with unwritten sources ready at 0; the answer is the latest result of all. Waiting for the earliest source instead of the latest, giving every operation one cycle, or reporting only the last instruction's result, which need not be the last ready, all misjudge the critical path.
+    - question:
+        id: fix-retire
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The reorder buffer should retire instructions in program order, so the program should print `[(5, 0), (5, 1), (5, 2), (9, 3), (9, 4)]`. Instead it retires instruction 1 at cycle 2, before instruction 0 has finished. Find the fault and fix it.
+        starter: |
+          def retire_order(finish):
+              # finish[i] is the cycle at which instruction i finishes executing, in
+              # whatever order the out-of-order core ran them. The reorder buffer
+              # retires instructions strictly in program order: in each cycle,
+              # starting from the oldest not yet retired, it retires every finished
+              # instruction until it meets one that has not finished. Return the
+              # (cycle, instruction) pairs in the order they retire.
+              retired = []
+              done = set()
+              cycle = 0
+              while len(retired) < len(finish):
+                  cycle += 1
+                  for i in range(len(finish)):
+                      if finish[i] <= cycle and i not in done:
+                          done.add(i)
+                          retired.append((cycle, i))
+              return retired
+
+
+          print(retire_order([5, 2, 3, 9, 4]))
+        solution: |
+          def retire_order(finish):
+              # finish[i] is the cycle at which instruction i finishes executing, in
+              # whatever order the out-of-order core ran them. The reorder buffer
+              # retires instructions strictly in program order: in each cycle,
+              # starting from the oldest not yet retired, it retires every finished
+              # instruction until it meets one that has not finished. Return the
+              # (cycle, instruction) pairs in the order they retire.
+              retired = []
+              head = 0
+              cycle = 0
+              while head < len(finish):
+                  cycle += 1
+                  while head < len(finish) and finish[head] <= cycle:
+                      retired.append((cycle, head))
+                      head += 1
+              return retired
+
+
+          print(retire_order([5, 2, 3, 9, 4]))
+        tests: |
+          def _ref(_f):
+              _out, _h, _c = [], 0, 0
+              while _h < len(_f):
+                  _c += 1
+                  while _h < len(_f) and _f[_h] <= _c:
+                      _out.append((_c, _h))
+                      _h += 1
+              return _out
+
+
+          for _f in [[1], [3, 1], [1, 2, 3], [4, 4, 4], [2, 9, 1, 1, 1], [5, 2, 3, 9, 4], [], [6, 5, 4, 3, 2, 1]]:
+              _got = [tuple(_x) for _x in retire_order(_f)]
+              assert _got == _ref(_f), "retire_order(" + str(_f) + ") should be " + str(_ref(_f)) + ", not " + str(_got)
+          assert output.strip() == "[(5, 0), (5, 1), (5, 2), (9, 3), (9, 4)]", "The program should retire instructions 0, 1 and 2 at cycle 5 and 3 and 4 at cycle 9"
+        wrong:
+          - |
+            def retire_order(finish):
+                # finish[i] is the cycle at which instruction i finishes executing, in
+                # whatever order the out-of-order core ran them. The reorder buffer
+                # retires instructions strictly in program order: in each cycle,
+                # starting from the oldest not yet retired, it retires every finished
+                # instruction until it meets one that has not finished. Return the
+                # (cycle, instruction) pairs in the order they retire.
+                retired = []
+                head = 0
+                cycle = 0
+                while head < len(finish):
+                    cycle += 1
+                    if head < len(finish) and finish[head] <= cycle:
+                        retired.append((cycle, head))
+                        head += 1
+                return retired
+
+
+            print(retire_order([5, 2, 3, 9, 4]))
+          - |
+            def retire_order(finish):
+                # finish[i] is the cycle at which instruction i finishes executing, in
+                # whatever order the out-of-order core ran them. The reorder buffer
+                # retires instructions strictly in program order: in each cycle,
+                # starting from the oldest not yet retired, it retires every finished
+                # instruction until it meets one that has not finished. Return the
+                # (cycle, instruction) pairs in the order they retire.
+                retired = []
+                head = 0
+                cycle = 0
+                while head < len(finish):
+                    cycle += 1
+                    while head < len(finish) and finish[head] < cycle:
+                        retired.append((cycle, head))
+                        head += 1
+                return retired
+
+
+            print(retire_order([5, 2, 3, 9, 4]))
+          - |
+            def retire_order(finish):
+                # finish[i] is the cycle at which instruction i finishes executing, in
+                # whatever order the out-of-order core ran them. The reorder buffer
+                # retires instructions strictly in program order: in each cycle,
+                # starting from the oldest not yet retired, it retires every finished
+                # instruction until it meets one that has not finished. Return the
+                # (cycle, instruction) pairs in the order they retire.
+                retired = []
+                for i in range(len(finish)):
+                    retired.append((finish[i], i))
+                return retired
+
+
+            print(retire_order([5, 2, 3, 9, 4]))
+        explanation: |
+          The buffer retires any finished instruction, which is out-of-order retirement. Keep a head pointer to the oldest instruction not yet retired, and each cycle retire from the head for as long as the head has finished. Retiring at most one a cycle, retiring a cycle late, or using each instruction's finish time as its retirement time all break either the order or the timing.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. Eight independent loads take 3 cycles each, and then seven adds of 1 cycle each combine them one at a time into a running total. With unlimited hardware, what is the fewest cycles in which the last result can be ready?
+        answer: "10"
+        explanation: |
+          All eight loads finish at cycle 3. The seven adds form a chain, each waiting for the one before, so the last is ready at 3 + 7 = 10.
+    - question:
+        id: work-multicore
+        type: choice
+        system: s2
+        prompt: |
+          Why did chip makers turn from faster single cores to many cores around 2005?
+        options:
+          - "Faster clocks made chips too hot, and wider cores found too little parallelism in ordinary code"
+          - "Transistors stopped getting smaller"
+          - "Out-of-order execution was found to give wrong answers"
+          - "Programs stopped using branches"
+        answer: 0
+        explanation: |
+          Power and instruction-level parallelism both ran out, while transistors kept shrinking, so the extra transistors went into more cores, which programs must be written to use.
+  connections:
+    - text: |
+        10. The loads overlap perfectly and are all done at cycle 3, but the running total is a chain of seven adds that must happen one after another, so no amount of width gets the last result before cycle 10. Adding in pairs would cut the chain to three adds and the time to 6.
+
+        That completes the machine: gates, adders, memory, a processor that runs its own instructions, functions on a stack, and the pipelining, prediction and out-of-order tricks that make it fast. One machine must also run many programs at once, keep them from harming each other, and give each the illusion of having the computer to itself. [[h2.what-an-operating-system-does]] begins the operating systems cluster, the software that manages this hardware for everything else.

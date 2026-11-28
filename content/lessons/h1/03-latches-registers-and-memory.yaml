@@ -1,0 +1,650 @@
+concept: h1.latches-registers-and-memory
+minutes: 85
+claim: You can explain how feedback lets gates remember a bit; trace an SR latch built from two NOR gates; tell a D latch, which is transparent while enabled, from an edge-triggered D flip-flop; work out the shortest clock period a circuit of flip-flops and logic allows; build registers and a register file with read ports and a write port; describe how SRAM and DRAM store bits and why DRAM must be refreshed; and split an address into the row and column a memory's decoder selects.
+recalls: [h1.adders-and-the-alu]
+uses: [h1.logic-gates, h0.binary-and-hexadecimal, h0.unsigned-integers-and-fixed-widths, h0.alignment-and-the-size-of-things, f0.powers-of-two, f0.units-prefixes-and-orders-of-magnitude, s1.classes-and-objects]
+leads: [h1.the-fetch-decode-execute-cycle]
+starter: |
+  # Scratch space. A flip-flop changes only when the clock rises from 0 to 1.
+  q, last_clock = 0, 0
+  for d, clock in [(1, 0), (1, 1), (0, 1), (0, 0), (0, 1)]:
+      if clock == 1 and last_clock == 0:
+          q = d
+      last_clock = clock
+      print("d", d, "clock", clock, "-> q", q)
+parts:
+  recall:
+    - text: |
+        [[h1.adders-and-the-alu]] built circuits that add, subtract and compare, and every one of them forgets: change an input and the old answer is gone a few picoseconds later. A processor has to keep numbers from one instruction to the next, and a program's data for hours. This lesson makes gates remember. Three quick pulls first.
+  puzzle:
+    - text: |
+        The main memory of a laptop stores each bit as a tiny charge on a capacitor, and the charge leaks away. Every row of the memory chip must be read and written back within 64 milliseconds or its bits are lost. A chip has 8192 rows and refreshes them one at a time, evenly spaced.
+
+        **How often, in microseconds, must the chip refresh a row?**
+  intuition:
+    - text: |
+        Think of the token display at a clinic. The board keeps showing 47 while patient 47 is inside, however many people walk past, and changes only when the doctor presses the button for the next patient. It does not matter what the receptionist is about to type before the press or after it; only the number at the moment of the press counts. A display that instead showed whatever the receptionist was typing, keystroke by keystroke, would be useless, because half-typed numbers would flash up and be acted on.
+
+        Memory in a processor works the same way. The figure shows a stored bit Q, an input D that wanders, and a clock that ticks between 0 and 1. Step through time, first for a D flip-flop, then for a D latch.
+    - figure: clocked-store
+      props: { device: flipflop, time: 15 }
+    - text: |
+        The flip-flop is the clinic display: it looks at D only at the instant the clock rises and holds that value for the whole cycle, so Q changes at most once per tick. The latch is the display that shows the typing: while the clock is 1 it is transparent and Q follows every wobble of D. Processors are built almost entirely from flip-flops for exactly that reason. Between two ticks, the adders and gates have a whole cycle to settle, and only the settled answer is captured.
+  derivation:
+    - text: |
+        **Feedback.** Every circuit so far has been a graph without cycles. Loop a wire back and something new happens. Two NOT gates in a ring, each feeding the other, have two stable states: 1 then 0, or 0 then 1. Whichever state the ring is in, it stays in, because each gate keeps confirming the other. That is one bit of memory, and nothing changes it.
+
+        **The SR latch** makes the ring controllable by using NOR gates instead: q = NOR(r, q̄) and q̄ = NOR(s, q). With s = r = 0 each NOR acts as a NOT of the other's output, so the pair holds its bit. Setting s = 1 forces q̄ to 0, which makes q = 1: the latch is **set**. Setting r = 1 forces q to 0: it is **reset**. When s returns to 0 the latch keeps its new value. s = r = 1 is forbidden, since it forces both outputs to 0, and what happens when both are released together depends on which gate is faster.
+    - question:
+        id: derivation-latch
+        type: choice
+        system: s2
+        prompt: |
+          An SR latch built from two NOR gates holds q = 1. Then s = 0 and r = 0 for a long time. What is q?
+        options:
+          - "1, because with s = r = 0 the two gates keep each other in their state"
+          - "0, because both inputs are 0"
+          - "It flips between 0 and 1 for as long as s and r stay 0"
+          - "It cannot be known"
+        answer: 0
+        explanation: |
+          With s and r at 0, each NOR is just a NOT of the other gate's output, and two NOTs in a ring hold whichever state they are in. That holding is the memory.
+    - text: |
+        **The D latch.** An SR latch needs two inputs and has a forbidden combination. The **D latch** has a data input D and an enable input E. While E = 1, gates turn D into s = D and r = NOT D, so q follows D; while E = 0, s = r = 0 and q holds. It is **transparent** while enabled.
+
+        **The D flip-flop.** Transparency is a problem in a processor. Suppose a register feeds an adder whose output goes back into the same register, as in a loop counter adding 1 each cycle. If the register were a latch enabled for half of each cycle, the new value would pass through the adder and back in again, and again, as many times as the half-cycle allows. The **edge-triggered D flip-flop** fixes it with two latches in series, enabled on opposite phases of the clock. While the clock is 0 the first latch follows D and the second holds; when the clock rises, the first freezes and the second copies it. The output changes only at the **rising edge**, to whatever D was just before it, and never in between.
+    - question:
+        id: derivation-edge
+        type: choice
+        system: s2
+        prompt: |
+          A counter's register feeds an adder that adds 1, and the adder's output goes back into the register. Why must the register be a flip-flop rather than a latch?
+        options:
+          - "A transparent latch would let the value go round the loop several times in one clock phase"
+          - "A latch cannot hold a bit when its enable is 0"
+          - "A flip-flop needs fewer transistors than a latch"
+          - "An adder cannot drive the input of a latch"
+        answer: 0
+        explanation: |
+          While a latch is enabled, its output follows its input, so a new value would pass through the adder and back in repeatedly. A flip-flop takes in exactly one new value per rising edge.
+    - text: |
+        **The clock.** A **synchronous** circuit is flip-flops with combinational logic between them, all flip-flops sharing one clock. At each rising edge every flip-flop captures its input at once; during the cycle the logic settles; at the next edge the settled results are captured. For this to work, the cycle must be long enough. After the edge, a flip-flop takes a little time to change its output, the **clock-to-Q delay**. The signal then crosses the logic's critical path, from [[h1.logic-gates]]. And it must arrive a little before the next edge, the **setup time**, so the flip-flop can capture it reliably. The clock period is at least the sum of the three, and the clock frequency at most its reciprocal: a period of 0.25 nanoseconds allows 4 gigahertz, using the prefixes of [[f0.units-prefixes-and-orders-of-magnitude]].
+    - question:
+        id: derivation-clock
+        type: numeric
+        system: s2
+        prompt: |
+          In a circuit, a flip-flop's clock-to-Q delay is 30 picoseconds, the longest path through the logic takes 220 picoseconds, and the setup time is 20 picoseconds. What is the shortest clock period that works, in picoseconds?
+        answer: "270"
+        unit: picoseconds
+        explanation: |
+          30 + 220 + 20 = 270 picoseconds, which allows a clock of about 3.7 gigahertz.
+    - text: |
+        **Registers and the register file.** A **register** is n flip-flops sharing a clock, holding an n-bit word. To hold its value on cycles when nothing is written, each flip-flop's input passes through a 2-to-1 multiplexer that chooses between the new value and the flip-flop's own output, controlled by a **write enable**. A **register file** gathers the registers a processor's instructions name; RISC-V has 32 of 32 bits. An instruction such as "add these two registers and put the sum in a third" needs two **read ports**, each a 32-to-1 multiplexer choosing one register's value by its number, and a **write port**, a decoder that turns the destination register's number into a write enable for that register alone. Reads see the values from before the clock edge and the write lands at the edge, which is what lets an instruction read a register and write the same one in one cycle. RISC-V's register 0 is wired to read 0 and ignore writes, which turns out to be very convenient.
+    - question:
+        id: derivation-regfile
+        type: choice
+        system: s2
+        prompt: |
+          A register file has 32 registers, two read ports and one write port. What selects the register written to?
+        options:
+          - "A 5-to-32 decoder that turns the destination number into a write enable for one register"
+          - "A 32-to-1 multiplexer on each register's output"
+          - "The adder in the ALU"
+          - "A separate clock for each register"
+        answer: 0
+        explanation: |
+          Five bits name one of 32 registers. A decoder turns them into 32 wires with exactly one 1, the write enable of the chosen register; the read ports are the multiplexers.
+    - text: |
+        **SRAM.** A bit of **static RAM** is a pair of NOT gates in a ring, four transistors, plus two access transistors that connect the ring to a pair of bit lines when the row's **word line** is on: six transistors in all. It keeps its bit as long as power is on, and is fast, a fraction of a nanosecond to read, which is why registers and the caches near the processor are SRAM. It is also large.
+
+        **DRAM.** A bit of **dynamic RAM** is one transistor and one tiny capacitor, charged for 1 and empty for 0. That is several times denser than SRAM, which is why main memory is DRAM and comes in gigabytes. The price is twofold. Reading drains the capacitor into a sense amplifier, so every read must write the row back. And the charge leaks, so every row must be **refreshed**, read and rewritten, every 64 milliseconds. A DRAM access takes tens of nanoseconds, a hundred or more processor cycles, which shapes much of how fast software runs.
+
+        **Addressing.** Memory is a grid. A **row decoder** takes the high bits of an address and switches on one word line, so that row's cells all connect to their bit lines; a **column multiplexer** uses the low bits to pick the bits wanted from the row. With 2ᵏ columns, the low k bits of an address are the column and the rest the row, the powers of two of [[f0.powers-of-two]] at work. Fetching a whole row costs the same as fetching one bit of it, which is why memory is read in blocks and why the aligned, adjacent data of [[h0.alignment-and-the-size-of-things]] is fast to reach.
+    - question:
+        id: derivation-dram
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of reading one word from a DRAM chip in order.
+        steps:
+          - "The row decoder takes the high bits of the address and switches on one word line."
+          - "Every capacitor in the row shares its charge with its bit line."
+          - "Sense amplifiers turn the tiny voltage differences into clean 0s and 1s."
+          - "The column multiplexer uses the low bits of the address to pick the wanted word from the row."
+          - "The sense amplifiers write the whole row back, since reading drained it."
+        explanation: |
+          A DRAM read is destructive. The row is read into the sense amplifiers, which both supply the bits asked for and restore the charges that reading drained.
+  formal:
+    - text: |
+        **SR latch.** q = NOR(r, q̄), q̄ = NOR(s, q). s = 1 sets q to 1, r = 1 resets it to 0, s = r = 0 holds, s = r = 1 is forbidden.
+
+        **D latch.** While enable is 1, q follows D (transparent); while 0, q holds.
+
+        **D flip-flop.** Two latches on opposite clock phases; q takes the value of D at each rising clock edge and holds it otherwise.
+
+        **Clock period.** At least clock-to-Q delay + the longest combinational path + setup time.
+
+        **Register file.** Registers of flip-flops with write enables; read ports are multiplexers, the write port is a decoder. Reads see values from before the edge.
+
+        **SRAM and DRAM.** SRAM: 6 transistors per bit, fast, keeps its bit while powered. DRAM: 1 transistor and 1 capacitor per bit, dense, destructive reads, refreshed every 64 milliseconds.
+
+        **Addressing.** With 2ᵏ columns, the low k address bits select the column and the high bits the row.
+  drill:
+    - text: Seconds each. Ask when each device lets its input through.
+    - question:
+        id: drill-transparent
+        type: choice
+        system: s1
+        prompt: |
+          Which device lets its output follow its input for as long as its enable is 1?
+        options:
+          - "A D latch"
+          - "A D flip-flop"
+          - "A ROM"
+          - "A decoder"
+        answer: 0
+        explanation: That is what transparent means. A flip-flop changes only at a clock edge.
+    - question:
+        id: drill-dram
+        type: choice
+        system: s1
+        prompt: |
+          Why does main memory use DRAM rather than SRAM?
+        options:
+          - "One transistor and a capacitor per bit is far denser, so gigabytes fit on a chip"
+          - "DRAM is faster than SRAM"
+          - "DRAM never needs refreshing"
+          - "DRAM keeps its contents without power"
+        answer: 0
+        explanation: DRAM is slower and needs refresh, but it packs several times more bits into the same space.
+    - question:
+        id: predict-edge
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          q, last = 0, 0
+          for d, clock in [(1, 0), (1, 1), (0, 1), (0, 0), (1, 0)]:
+              if clock == 1 and last == 0:
+                  q = d
+              last = clock
+          print(q)
+        output: "1"
+        explanation: The clock rises only once, at the second step, when D is 1. The flip-flop ignores D at every other moment.
+    - question:
+        id: predict-latch
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          q = 0
+          for d, enable in [(1, 0), (1, 1), (0, 1), (0, 0), (1, 0)]:
+              if enable == 1:
+                  q = d
+          print(q)
+        output: "0"
+        explanation: The latch follows D while enabled, so it ends with the last D it saw while enable was 1, which was 0.
+    - question:
+        id: predict-address
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          address = 0b101101
+          print(address >> 4, address & 0xF)
+        output: "2 13"
+        explanation: The high two bits, 10, are the row, 2, and the low four bits, 1101, are the column, 13.
+  work:
+    - text: Slower now. Each answer stores bits and gets them back.
+    - question:
+        id: write-sr-latch
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `latch`, which lets two NOR gates in a loop settle, starting from the bit they hold. The program sets, holds, resets and holds again, and should print q as 1, 1, 0 and 0.
+        starter: |
+          def nor(a, b):
+              return 1 - (a | b)
+
+
+          def latch(s, r, q, q_bar):
+              # Two NOR gates wired in a loop: q = nor(r, q_bar) and q_bar = nor(s, q).
+              # Starting from the stored q and q_bar, work out the first gate and then
+              # the second, again and again, until a round changes neither. Return the
+              # settled (q, q_bar).
+              return q, q_bar
+
+
+          q, q_bar = 0, 1
+          for s, r, what in [(1, 0, "set"), (0, 0, "hold"), (0, 1, "reset"), (0, 0, "hold")]:
+              q, q_bar = latch(s, r, q, q_bar)
+              print(what, "-> q =", q)
+        solution: |
+          def nor(a, b):
+              return 1 - (a | b)
+
+
+          def latch(s, r, q, q_bar):
+              # Two NOR gates wired in a loop: q = nor(r, q_bar) and q_bar = nor(s, q).
+              # Starting from the stored q and q_bar, work out the first gate and then
+              # the second, again and again, until a round changes neither. Return the
+              # settled (q, q_bar).
+              while True:
+                  new_q = nor(r, q_bar)
+                  new_q_bar = nor(s, new_q)
+                  if new_q == q and new_q_bar == q_bar:
+                      return q, q_bar
+                  q, q_bar = new_q, new_q_bar
+
+
+          q, q_bar = 0, 1
+          for s, r, what in [(1, 0, "set"), (0, 0, "hold"), (0, 1, "reset"), (0, 0, "hold")]:
+              q, q_bar = latch(s, r, q, q_bar)
+              print(what, "-> q =", q)
+        tests: |
+          _state = (0, 1)
+          for _s, _r, _want in [(0, 0, 0), (1, 0, 1), (0, 0, 1), (1, 0, 1), (0, 0, 1), (0, 1, 0), (0, 0, 0), (0, 1, 0), (0, 0, 0), (1, 0, 1), (0, 0, 1)]:
+              _state = tuple(latch(_s, _r, _state[0], _state[1]))
+              assert _state == (_want, 1 - _want), "After s = " + str(_s) + ", r = " + str(_r) + " the latch should settle with q = " + str(_want) + " and q_bar = " + str(1 - _want) + ", not " + str(_state)
+          assert tuple(latch(0, 0, 1, 0)) == (1, 0), "With s = r = 0 a latch holding 1 should keep it"
+          assert tuple(latch(0, 0, 0, 1)) == (0, 1), "With s = r = 0 a latch holding 0 should keep it"
+          assert output.splitlines() == ["set -> q = 1", "hold -> q = 1", "reset -> q = 0", "hold -> q = 0"], "The program should print q = 1, 1, 0, 0"
+        wrong:
+          - |
+            def nor(a, b):
+                return 1 - (a | b)
+
+
+            def latch(s, r, q, q_bar):
+                # Two NOR gates wired in a loop: q = nor(r, q_bar) and q_bar = nor(s, q).
+                # Starting from the stored q and q_bar, work out the first gate and then
+                # the second, again and again, until a round changes neither. Return the
+                # settled (q, q_bar).
+                new_q = nor(r, q_bar)
+                new_q_bar = nor(s, new_q)
+                return new_q, new_q_bar
+
+
+            q, q_bar = 0, 1
+            for s, r, what in [(1, 0, "set"), (0, 0, "hold"), (0, 1, "reset"), (0, 0, "hold")]:
+                q, q_bar = latch(s, r, q, q_bar)
+                print(what, "-> q =", q)
+          - |
+            def nor(a, b):
+                return 1 - (a | b)
+
+
+            def latch(s, r, q, q_bar):
+                # Two NOR gates wired in a loop: q = nor(r, q_bar) and q_bar = nor(s, q).
+                # Starting from the stored q and q_bar, work out the first gate and then
+                # the second, again and again, until a round changes neither. Return the
+                # settled (q, q_bar).
+                q, q_bar = 0, 0
+                while True:
+                    new_q = nor(r, q_bar)
+                    new_q_bar = nor(s, new_q)
+                    if new_q == q and new_q_bar == q_bar:
+                        return q, q_bar
+                    q, q_bar = new_q, new_q_bar
+
+
+            q, q_bar = 0, 1
+            for s, r, what in [(1, 0, "set"), (0, 0, "hold"), (0, 1, "reset"), (0, 0, "hold")]:
+                q, q_bar = latch(s, r, q, q_bar)
+                print(what, "-> q =", q)
+          - |
+            def nor(a, b):
+                return 1 - (a | b)
+
+
+            def latch(s, r, q, q_bar):
+                # Two NOR gates wired in a loop: q = nor(r, q_bar) and q_bar = nor(s, q).
+                # Starting from the stored q and q_bar, work out the first gate and then
+                # the second, again and again, until a round changes neither. Return the
+                # settled (q, q_bar).
+                while True:
+                    new_q = nor(s, q_bar)
+                    new_q_bar = nor(r, new_q)
+                    if new_q == q and new_q_bar == q_bar:
+                        return q, q_bar
+                    q, q_bar = new_q, new_q_bar
+
+
+            q, q_bar = 0, 1
+            for s, r, what in [(1, 0, "set"), (0, 0, "hold"), (0, 1, "reset"), (0, 0, "hold")]:
+                q, q_bar = latch(s, r, q, q_bar)
+                print(what, "-> q =", q)
+        explanation: |
+          Recompute the two gates in turn from the stored outputs, and stop when a whole round changes nothing. A single round is not enough for a set, which takes two rounds to settle; starting from 0 and 0 forgets the stored bit, so a hold after a reset comes out as 1; and swapping s and r turns set into reset.
+    - question:
+        id: write-register-file
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `cycle` for a register file whose reads see the registers as they were before the clock edge, and whose write lands at the edge. The program should print `(0, 0)`, then `(200, 0)`, `(200, 44)`, `(0, 44)` and `(200, 0)`, one per line.
+        starter: |
+          class RegisterFile:
+              # Eight 8-bit registers, numbered 0 to 7. Register 0 always reads 0 and
+              # ignores writes, as in RISC-V.
+
+              def __init__(self):
+                  self.regs = [0] * 8
+
+              def cycle(self, ra, rb, rd, value, write):
+                  # One clock cycle. Read registers ra and rb. Then, at the clock edge,
+                  # if write is 1, store the low 8 bits of value in register rd. The
+                  # reads see the registers as they were before the edge. Return the
+                  # two values read.
+                  return 0, 0
+
+
+          rf = RegisterFile()
+          print(rf.cycle(1, 2, 1, 200, 1))
+          print(rf.cycle(1, 2, 2, 300, 1))
+          print(rf.cycle(1, 2, 0, 99, 1))
+          print(rf.cycle(0, 2, 3, 5, 0))
+          print(rf.cycle(1, 3, 0, 0, 0))
+        solution: |
+          class RegisterFile:
+              # Eight 8-bit registers, numbered 0 to 7. Register 0 always reads 0 and
+              # ignores writes, as in RISC-V.
+
+              def __init__(self):
+                  self.regs = [0] * 8
+
+              def cycle(self, ra, rb, rd, value, write):
+                  # One clock cycle. Read registers ra and rb. Then, at the clock edge,
+                  # if write is 1, store the low 8 bits of value in register rd. The
+                  # reads see the registers as they were before the edge. Return the
+                  # two values read.
+                  a = self.regs[ra]
+                  b = self.regs[rb]
+                  if write == 1 and rd != 0:
+                      self.regs[rd] = value & 0xFF
+                  return a, b
+
+
+          rf = RegisterFile()
+          print(rf.cycle(1, 2, 1, 200, 1))
+          print(rf.cycle(1, 2, 2, 300, 1))
+          print(rf.cycle(1, 2, 0, 99, 1))
+          print(rf.cycle(0, 2, 3, 5, 0))
+          print(rf.cycle(1, 3, 0, 0, 0))
+        tests: |
+          _rf = RegisterFile()
+          assert tuple(_rf.cycle(5, 6, 5, 42, 1)) == (0, 0), "Reads in the cycle that writes should see the old value, 0"
+          assert tuple(_rf.cycle(5, 6, 6, 7, 1)) == (42, 0), "Register 5 should hold 42 in the next cycle"
+          assert tuple(_rf.cycle(5, 6, 0, 0, 0)) == (42, 7), "Register 6 should hold 7"
+          _rf.cycle(0, 0, 7, 0x1FF, 1)
+          assert _rf.cycle(7, 0, 0, 0, 0)[0] == 0xFF, "Only the low 8 bits of 0x1FF, 255, should be stored"
+          _rf.cycle(0, 0, 0, 123, 1)
+          assert tuple(_rf.cycle(0, 0, 0, 0, 0)) == (0, 0), "Register 0 should always read 0, even after a write to it"
+          _rf.cycle(0, 0, 4, 9, 0)
+          assert _rf.cycle(4, 4, 0, 0, 0)[0] == 0, "Nothing should be stored when write is 0"
+          assert output.splitlines() == ["(0, 0)", "(200, 0)", "(200, 44)", "(0, 44)", "(200, 0)"], "The program should print (0, 0), (200, 0), (200, 44), (0, 44) and (200, 0)"
+        wrong:
+          - |
+            class RegisterFile:
+                # Eight 8-bit registers, numbered 0 to 7. Register 0 always reads 0 and
+                # ignores writes, as in RISC-V.
+
+                def __init__(self):
+                    self.regs = [0] * 8
+
+                def cycle(self, ra, rb, rd, value, write):
+                    # One clock cycle. Read registers ra and rb. Then, at the clock edge,
+                    # if write is 1, store the low 8 bits of value in register rd. The
+                    # reads see the registers as they were before the edge. Return the
+                    # two values read.
+                    if write == 1 and rd != 0:
+                        self.regs[rd] = value & 0xFF
+                    return self.regs[ra], self.regs[rb]
+
+
+            rf = RegisterFile()
+            print(rf.cycle(1, 2, 1, 200, 1))
+            print(rf.cycle(1, 2, 2, 300, 1))
+            print(rf.cycle(1, 2, 0, 99, 1))
+            print(rf.cycle(0, 2, 3, 5, 0))
+            print(rf.cycle(1, 3, 0, 0, 0))
+          - |
+            class RegisterFile:
+                # Eight 8-bit registers, numbered 0 to 7. Register 0 always reads 0 and
+                # ignores writes, as in RISC-V.
+
+                def __init__(self):
+                    self.regs = [0] * 8
+
+                def cycle(self, ra, rb, rd, value, write):
+                    # One clock cycle. Read registers ra and rb. Then, at the clock edge,
+                    # if write is 1, store the low 8 bits of value in register rd. The
+                    # reads see the registers as they were before the edge. Return the
+                    # two values read.
+                    a = self.regs[ra]
+                    b = self.regs[rb]
+                    if write == 1 and rd != 0:
+                        self.regs[rd] = value
+                    return a, b
+
+
+            rf = RegisterFile()
+            print(rf.cycle(1, 2, 1, 200, 1))
+            print(rf.cycle(1, 2, 2, 300, 1))
+            print(rf.cycle(1, 2, 0, 99, 1))
+            print(rf.cycle(0, 2, 3, 5, 0))
+            print(rf.cycle(1, 3, 0, 0, 0))
+          - |
+            class RegisterFile:
+                # Eight 8-bit registers, numbered 0 to 7. Register 0 always reads 0 and
+                # ignores writes, as in RISC-V.
+
+                def __init__(self):
+                    self.regs = [0] * 8
+
+                def cycle(self, ra, rb, rd, value, write):
+                    # One clock cycle. Read registers ra and rb. Then, at the clock edge,
+                    # if write is 1, store the low 8 bits of value in register rd. The
+                    # reads see the registers as they were before the edge. Return the
+                    # two values read.
+                    a = self.regs[ra]
+                    b = self.regs[rb]
+                    if write == 1:
+                        self.regs[rd] = value & 0xFF
+                    return a, b
+
+
+            rf = RegisterFile()
+            print(rf.cycle(1, 2, 1, 200, 1))
+            print(rf.cycle(1, 2, 2, 300, 1))
+            print(rf.cycle(1, 2, 0, 99, 1))
+            print(rf.cycle(0, 2, 3, 5, 0))
+            print(rf.cycle(1, 3, 0, 0, 0))
+        explanation: |
+          Read both registers first, then write, keeping only 8 bits and never touching register 0. Writing before reading makes a read see a value that only arrives at the edge; storing 300 unmasked breaks the 8-bit width; and allowing writes to register 0 breaks the promise that it always reads 0.
+    - question:
+        id: fix-address-split
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The program stores the letters of BEDROCK at addresses 14 to 20 and reads them back, which should print `BEDROCK` and then the row and column of address 20, `(1, 4)`. Instead it prints `BEKROCK` and `(1, 0)`. Find the fault and fix it.
+        starter: |
+          class Memory:
+              # 64 bytes, held as 4 rows of 16. A decoder takes an address's low 4 bits
+              # as the column within a row and the bits above them as the row.
+
+              def __init__(self):
+                  self.rows = [[0] * 16 for _ in range(4)]
+
+              def split(self, address):
+                  row = address >> 4
+                  column = address & 0x3
+                  return row, column
+
+              def store(self, address, byte):
+                  row, column = self.split(address)
+                  self.rows[row][column] = byte
+
+              def load(self, address):
+                  row, column = self.split(address)
+                  return self.rows[row][column]
+
+
+          mem = Memory()
+          for i, ch in enumerate("BEDROCK"):
+              mem.store(14 + i, ord(ch))
+          print("".join(chr(mem.load(14 + i)) for i in range(7)))
+          print(mem.split(20))
+        solution: |
+          class Memory:
+              # 64 bytes, held as 4 rows of 16. A decoder takes an address's low 4 bits
+              # as the column within a row and the bits above them as the row.
+
+              def __init__(self):
+                  self.rows = [[0] * 16 for _ in range(4)]
+
+              def split(self, address):
+                  row = address >> 4
+                  column = address & 0xF
+                  return row, column
+
+              def store(self, address, byte):
+                  row, column = self.split(address)
+                  self.rows[row][column] = byte
+
+              def load(self, address):
+                  row, column = self.split(address)
+                  return self.rows[row][column]
+
+
+          mem = Memory()
+          for i, ch in enumerate("BEDROCK"):
+              mem.store(14 + i, ord(ch))
+          print("".join(chr(mem.load(14 + i)) for i in range(7)))
+          print(mem.split(20))
+        tests: |
+          _m = Memory()
+          for _a in range(64):
+              _m.store(_a, (_a * 37 + 11) % 256)
+          for _a in range(64):
+              assert _m.load(_a) == (_a * 37 + 11) % 256, "Each of the 64 addresses should hold its own byte, but address " + str(_a) + " was overwritten"
+          for _a, _want in [(0, (0, 0)), (15, (0, 15)), (16, (1, 0)), (20, (1, 4)), (47, (2, 15)), (63, (3, 15))]:
+              assert tuple(_m.split(_a)) == _want, "Address " + str(_a) + " should be row " + str(_want[0]) + ", column " + str(_want[1])
+          assert output.splitlines() == ["BEDROCK", "(1, 4)"], "The program should print BEDROCK, then (1, 4)"
+        wrong:
+          - |
+            class Memory:
+                # 64 bytes, held as 4 rows of 16. A decoder takes an address's low 4 bits
+                # as the column within a row and the bits above them as the row.
+
+                def __init__(self):
+                    self.rows = [[0] * 16 for _ in range(4)]
+
+                def split(self, address):
+                    row = address & 0x3
+                    column = address >> 4
+                    return row, column
+
+                def store(self, address, byte):
+                    row, column = self.split(address)
+                    self.rows[row][column] = byte
+
+                def load(self, address):
+                    row, column = self.split(address)
+                    return self.rows[row][column]
+
+
+            mem = Memory()
+            for i, ch in enumerate("BEDROCK"):
+                mem.store(14 + i, ord(ch))
+            print("".join(chr(mem.load(14 + i)) for i in range(7)))
+            print(mem.split(20))
+          - |
+            class Memory:
+                # 64 bytes, held as 4 rows of 16. A decoder takes an address's low 4 bits
+                # as the column within a row and the bits above them as the row.
+
+                def __init__(self):
+                    self.rows = [[0] * 16 for _ in range(4)]
+
+                def split(self, address):
+                    row = address >> 4
+                    column = address & 0x7
+                    return row, column
+
+                def store(self, address, byte):
+                    row, column = self.split(address)
+                    self.rows[row][column] = byte
+
+                def load(self, address):
+                    row, column = self.split(address)
+                    return self.rows[row][column]
+
+
+            mem = Memory()
+            for i, ch in enumerate("BEDROCK"):
+                mem.store(14 + i, ord(ch))
+            print("".join(chr(mem.load(14 + i)) for i in range(7)))
+            print(mem.split(20))
+          - |
+            class Memory:
+                # 64 bytes, held as 4 rows of 16. A decoder takes an address's low 4 bits
+                # as the column within a row and the bits above them as the row.
+
+                def __init__(self):
+                    self.rows = [[0] * 16 for _ in range(4)]
+
+                def split(self, address):
+                    row = (address >> 2) & 0x3
+                    column = address & 0xF
+                    return row, column
+
+                def store(self, address, byte):
+                    row, column = self.split(address)
+                    self.rows[row][column] = byte
+
+                def load(self, address):
+                    row, column = self.split(address)
+                    return self.rows[row][column]
+
+
+            mem = Memory()
+            for i, ch in enumerate("BEDROCK"):
+                mem.store(14 + i, ord(ch))
+            print("".join(chr(mem.load(14 + i)) for i in range(7)))
+            print(mem.split(20))
+        explanation: |
+          With 16 columns the column is the low 4 bits, address & 0xF, and the row is the rest. Masking with 0x3 keeps only 2 bits, so addresses 16 and 20 share a cell and K overwrites D. Masking with 0x7 keeps 3 bits, still too few, and taking the row from bits 2 and 3 makes different addresses collide in the same way.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. A DRAM chip has 8192 rows, each to be refreshed once every 64 milliseconds, one row at a time and evenly spaced. How often must it refresh a row, in microseconds? Give one decimal place.
+        answer: "7.8"
+        tolerance: "0.05"
+        unit: microseconds
+        explanation: |
+          64 milliseconds is 64,000 microseconds, and 64,000 / 8192 ≈ 7.8 microseconds between refreshes.
+    - question:
+        id: work-clock-edge
+        type: choice
+        system: s2
+        prompt: |
+          A designer shortens the longest path of logic between two rows of flip-flops from 300 to 200 picoseconds. The clock-to-Q delay and setup time together are 50 picoseconds. Which is true?
+        options:
+          - "The shortest safe clock period falls from 350 to 250 picoseconds"
+          - "The clock period stays the same, because flip-flops set it"
+          - "The shortest safe clock period falls from 300 to 200 picoseconds"
+          - "The circuit can now run without a clock"
+        answer: 0
+        explanation: |
+          The period must cover the flip-flop overheads as well as the logic: 300 + 50 = 350 before and 200 + 50 = 250 after.
+  connections:
+    - text: |
+        7.8. Sixty-four thousand microseconds shared among 8192 rows gives about 7.8 microseconds each. Memory chips really do work on that schedule, refreshing a row or a group of rows every 7.8 microseconds, and a read that arrives during a refresh has to wait for it.
+
+        There are now all the parts of a computer: an ALU that computes, registers that hold values between cycles, and memory that holds programs and data. [[h1.the-fetch-decode-execute-cycle]] wires them together with a program counter and a little control logic, so that the machine fetches its own instructions from memory and runs them one after another.

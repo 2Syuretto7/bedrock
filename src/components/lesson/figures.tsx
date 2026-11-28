@@ -10496,6 +10496,912 @@ function MarkSweep(props: Props) {
   );
 }
 
+type GcGate = { id: string; kind: string; x: number; y: number; ins: string[] };
+
+const GC_CIRCUITS: Record<string, { label: string; inputs: { id: string; y: number }[]; gates: GcGate[]; depth: number }> = {
+  xor: {
+    label: "XOR from four NANDs",
+    inputs: [
+      { id: "A", y: 50 },
+      { id: "B", y: 170 },
+    ],
+    gates: [
+      { id: "n1", kind: "NAND", x: 160, y: 110, ins: ["A", "B"] },
+      { id: "n2", kind: "NAND", x: 270, y: 50, ins: ["A", "n1"] },
+      { id: "n3", kind: "NAND", x: 270, y: 170, ins: ["n1", "B"] },
+      { id: "out", kind: "NAND", x: 380, y: 110, ins: ["n2", "n3"] },
+    ],
+    depth: 3,
+  },
+  mux: {
+    label: "2-to-1 multiplexer",
+    inputs: [
+      { id: "A", y: 40 },
+      { id: "S", y: 110 },
+      { id: "B", y: 180 },
+    ],
+    gates: [
+      { id: "ns", kind: "NOT", x: 150, y: 75, ins: ["S"] },
+      { id: "p", kind: "AND", x: 260, y: 50, ins: ["A", "ns"] },
+      { id: "q", kind: "AND", x: 260, y: 170, ins: ["S", "B"] },
+      { id: "out", kind: "OR", x: 380, y: 110, ins: ["p", "q"] },
+    ],
+    depth: 3,
+  },
+};
+
+function gcEval(kind: string, values: number[]) {
+  if (kind === "NOT") return 1 - values[0];
+  if (kind === "AND") return values[0] & values[1];
+  if (kind === "OR") return values[0] | values[1];
+  return 1 - (values[0] & values[1]);
+}
+
+/** Signals moving through a small circuit of gates, with inputs the learner can switch. */
+function GateCircuit(props: Props) {
+  const [key, setKey] = useState(props.circuit === "mux" ? "mux" : "xor");
+  const [inputs, setInputs] = useState<Record<string, number>>({
+    A: props.a === 1 ? 1 : 0,
+    B: props.b === 1 ? 1 : 0,
+    S: props.s === 1 ? 1 : 0,
+  });
+  const circuit = GC_CIRCUITS[key];
+  const values: Record<string, number> = { ...inputs };
+  for (const g of circuit.gates) values[g.id] = gcEval(g.kind, g.ins.map((w) => values[w]));
+  const pos = (id: string): [number, number] => {
+    const input = circuit.inputs.find((i) => i.id === id);
+    if (input) return [40, input.y];
+    const g = circuit.gates.find((gate) => gate.id === id)!;
+    return [g.x, g.y];
+  };
+  const out = values.out;
+  const summary =
+    key === "xor"
+      ? `A = ${values.A}, B = ${values.B}. The first NAND gives ${values.n1}, the middle two give ${values.n2} and ${values.n3}, and the last gives ${out}. ` +
+        `XOR is 1 exactly when one input is 1, so this is ${values.A ^ values.B ? "a case where it is 1" : "a case where it is 0"}. The slowest path passes through ${circuit.depth} gates.`
+      : `S = ${values.S} selects ${values.S ? "B" : "A"}, which is ${values.S ? values.B : values.A}, so the output is ${out}. ` +
+        `The NOT gives ${values.ns}, the top AND passes A only when S is 0 (${values.p}), the bottom AND passes B only when S is 1 (${values.q}), and the OR joins them. The slowest path passes through ${circuit.depth} gates.`;
+  return (
+    <Frame
+      title={circuit.label}
+      summary={summary}
+      controls={
+        <>
+          <span className="label">the circuit</span>
+          {Object.entries(GC_CIRCUITS).map(([k, c]) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={k === key} onClick={() => setKey(k)}>
+              {c.label}
+            </button>
+          ))}
+          <span className="label">inputs</span>
+          {circuit.inputs.map((i) => (
+            <button
+              key={i.id}
+              type="button"
+              className="btn btn-secondary btn-small"
+              aria-pressed={inputs[i.id] === 1}
+              onClick={() => setInputs({ ...inputs, [i.id]: 1 - inputs[i.id] })}
+            >
+              {`${i.id} = ${inputs[i.id]}`}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 220" role="img" aria-label={`${circuit.label}: output ${out}`}>
+        {circuit.gates.flatMap((g) =>
+          g.ins.map((w, k) => {
+            const [x1, y1] = pos(w);
+            const ty = g.ins.length === 1 ? g.y : g.y - 8 + 16 * k;
+            const sx = circuit.inputs.some((i) => i.id === w) ? x1 + 14 : x1 + 26;
+            return (
+              <polyline
+                key={`${g.id}-${w}`}
+                points={`${sx},${y1} ${(sx + g.x - 26) / 2},${y1} ${(sx + g.x - 26) / 2},${ty} ${g.x - 26},${ty}`}
+                fill="none"
+                className={values[w] ? "fig-accent-line" : "fig-line"}
+                style={values[w] ? { strokeWidth: 2.5 } : { opacity: 0.5 }}
+              />
+            );
+          }),
+        )}
+        <line x1={406} y1={110} x2={440} y2={110} className={out ? "fig-accent-line" : "fig-line"} style={out ? { strokeWidth: 2.5 } : { opacity: 0.5 }} />
+        {circuit.inputs.map((i) => (
+          <g key={i.id}>
+            <circle cx={40} cy={i.y} r={14} className={inputs[i.id] ? "fig-accent" : "fig-fill"} />
+            <text x={40} y={i.y + 4} textAnchor="middle" style={{ fill: inputs[i.id] ? "var(--bg)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+              {i.id}
+            </text>
+            <text x={12} y={i.y + 4} textAnchor="middle" className="fig-small">
+              {inputs[i.id]}
+            </text>
+          </g>
+        ))}
+        {circuit.gates.map((g) => (
+          <g key={g.id}>
+            <rect x={g.x - 26} y={g.y - 18} width={52} height={36} rx={8} className="fig-fill" />
+            <text x={g.x} y={g.y + 4} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+              {g.kind}
+            </text>
+            <text x={g.x + 30} y={g.y - 20} className="fig-small" style={{ fill: values[g.id] ? "var(--focus)" : undefined, fontWeight: 600 }}>
+              {values[g.id]}
+            </text>
+          </g>
+        ))}
+        <text x={444} y={104} textAnchor="end" className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+          {`out ${out}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** A 4-bit ripple-carry adder: the carry passes from each full adder to the next, and subtracting adds NOT B with a carry in of 1. */
+function RippleAdder(props: Props) {
+  const [a, setA] = useState(clamp(num(props.a, 9), 0, 15));
+  const [b, setB] = useState(clamp(num(props.b, 5), 0, 15));
+  const [op, setOp] = useState(props.op === "sub" ? "sub" : "add");
+  const bb = op === "sub" ? ~b & 15 : b;
+  const carries = [op === "sub" ? 1 : 0];
+  const sums: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    const x = (a >> i) & 1;
+    const y = (bb >> i) & 1;
+    const c = carries[i];
+    sums.push(x ^ y ^ c);
+    carries.push((x & y) | (c & (x ^ y)));
+  }
+  const result = sums.reduce((acc, bit, i) => acc + (bit << i), 0);
+  const signed = (n: number) => (n >= 8 ? n - 16 : n);
+  const trueSigned = op === "sub" ? signed(a) - signed(b) : signed(a) + signed(b);
+  const flags = { Z: result === 0 ? 1 : 0, N: result >> 3, C: carries[4], V: trueSigned < -8 || trueSigned > 7 ? 1 : 0 };
+  const bits = (n: number) => n.toString(2).padStart(4, "0");
+  const show = (n: number) => (n < 0 ? `−${-n}` : `${n}`);
+  const sign = op === "sub" ? "−" : "+";
+  const summary =
+    (op === "sub"
+      ? `A − B is worked out as A + (NOT B) + 1: ${a} + ${bb} + 1 = ${a + bb + 1}. `
+      : `A + B = ${a} + ${b} = ${a + b}. `) +
+    `Four bits keep ${result} (${bits(result)}) and the carry out is ${carries[4]}. ` +
+    `Read as signed 4-bit numbers this is ${show(signed(a))} ${sign} ${show(signed(b))} = ${show(trueSigned)}, ` +
+    (flags.V ? `which does not fit between −8 and 7, so V, the overflow flag, is 1.` : `which fits, so V, the overflow flag, is 0.`) +
+    ` Flags: Z ${flags.Z}, N ${flags.N}, C ${flags.C}, V ${flags.V}.`;
+  const xs = [390, 290, 190, 90];
+  return (
+    <Frame
+      title={op === "sub" ? "Subtracting with an adder" : "A 4-bit ripple-carry adder"}
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="A" value={a} onChange={setA} min={0} max={15} />
+          <Stepper label="B" value={b} onChange={setB} min={0} max={15} />
+          {(["add", "sub"] as const).map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={op === k} onClick={() => setOp(k)}>
+              {k === "add" ? "add" : "subtract"}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 220" role="img" aria-label={`${a} ${sign} ${b}: result ${result}, carry out ${carries[4]}`}>
+        <text x={230} y={18} textAnchor="middle" className="fig-small">
+          {`A = ${bits(a)}  ·  ${op === "sub" ? "NOT B" : "B"} = ${bits(bb)}  ·  carry in = ${carries[0]}`}
+        </text>
+        {xs.map((x, i) => (
+          <g key={i}>
+            <text x={x - 18} y={50} textAnchor="end" className="fig-small">{`a${i}=${(a >> i) & 1}`}</text>
+            <text x={x + 18} y={50} textAnchor="start" className="fig-small">{`${op === "sub" ? "¬b" : "b"}${i}=${(bb >> i) & 1}`}</text>
+            <line x1={x - 14} y1={42} x2={x - 14} y2={80} className={(a >> i) & 1 ? "fig-accent-line" : "fig-line"} />
+            <line x1={x + 14} y1={42} x2={x + 14} y2={80} className={(bb >> i) & 1 ? "fig-accent-line" : "fig-line"} />
+            <rect x={x - 32} y={80} width={64} height={50} rx={8} className="fig-fill" />
+            <text x={x} y={109} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+              {`FA ${i}`}
+            </text>
+            <line x1={x + 50} y1={105} x2={x + 32} y2={105} className={carries[i] ? "fig-accent-line" : "fig-line"} style={carries[i] ? { strokeWidth: 2.5 } : undefined} />
+            <text x={x + 50} y={98} textAnchor="middle" className="fig-small">{`c${i}=${carries[i]}`}</text>
+            <line x1={x} y1={130} x2={x} y2={152} className={sums[i] ? "fig-accent-line" : "fig-line"} />
+            <text x={x} y={168} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>{`s${i}=${sums[i]}`}</text>
+          </g>
+        ))}
+        <line x1={58} y1={105} x2={30} y2={105} className={carries[4] ? "fig-accent-line" : "fig-line"} style={carries[4] ? { strokeWidth: 2.5 } : undefined} />
+        <text x={26} y={98} textAnchor="middle" className="fig-small">{`c4=${carries[4]}`}</text>
+        <text x={230} y={200} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+          {`result ${bits(result)} = ${result} (signed ${show(signed(result))})  ·  Z ${flags.Z} N ${flags.N} C ${flags.C} V ${flags.V}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const CS_D = [0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1];
+
+/** A D latch against a D flip-flop over sixteen half-cycles of the clock: the latch follows D while the clock is high, the flip-flop copies it only at a rising edge. */
+function ClockedStore(props: Props) {
+  const [device, setDevice] = useState(props.device === "latch" ? "latch" : "flipflop");
+  const [time, setTime] = useState(clamp(num(props.time, 15), 0, 15));
+  const clock = CS_D.map((_, i) => i % 2);
+  const q: number[] = [];
+  let held = 0;
+  CS_D.forEach((d, i) => {
+    if (device === "latch" ? clock[i] === 1 : clock[i] === 1 && (i === 0 || clock[i - 1] === 0)) held = d;
+    q.push(held);
+  });
+  const x0 = 70;
+  const w = 24;
+  const wave = (values: number[], top: number) =>
+    values
+      .slice(0, time + 1)
+      .map((v, i) => `${x0 + i * w},${top + (v ? 0 : 22)} ${x0 + (i + 1) * w},${top + (v ? 0 : 22)}`)
+      .join(" ");
+  const edges = clock.map((c, i) => (c === 1 && (i === 0 || clock[i - 1] === 0) ? i : -1)).filter((i) => i >= 0 && i <= time);
+  const lastEdge = edges.length ? edges[edges.length - 1] : -1;
+  const changes = q.slice(0, time + 1).filter((v, i) => i > 0 && v !== q[i - 1]).length;
+  const now = `At time ${time} the clock is ${clock[time]} and D is ${CS_D[time]}. `;
+  const summary =
+    device === "latch"
+      ? now +
+        (clock[time]
+          ? `The latch is transparent while the clock is 1, so Q follows D and is ${q[time]}. `
+          : `The clock is 0, so the latch holds what it had when the clock fell: Q is ${q[time]}. `) +
+        `Q has changed ${plural(changes, "time")} so far, including every change of D while the clock was high.`
+      : now +
+        (lastEdge >= 0
+          ? `The flip-flop copies D only at a rising edge of the clock. The last edge was at time ${lastEdge}, when D was ${CS_D[lastEdge]}, so Q is ${q[time]}. `
+          : `No rising edge has come yet, so Q is still ${q[time]}. `) +
+        `Q has changed ${plural(changes, "time")} so far, and only at edges, however D wanders between them.`;
+  return (
+    <Frame
+      title={device === "latch" ? "A D latch follows its input while the clock is high" : "A D flip-flop samples its input at each rising edge"}
+      summary={summary}
+      controls={
+        <>
+          {(["latch", "flipflop"] as const).map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={device === k} onClick={() => setDevice(k)}>
+              {k === "latch" ? "D latch" : "D flip-flop"}
+            </button>
+          ))}
+          <Stepper label="time" value={time} onChange={setTime} min={0} max={15} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 200" role="img" aria-label={`${device === "latch" ? "D latch" : "D flip-flop"} at time ${time}: Q is ${q[time]}`}>
+        {edges.map((i) => (
+          <line key={i} x1={x0 + i * w} y1={20} x2={x0 + i * w} y2={180} className="fig-line" style={{ strokeDasharray: "3 3", opacity: device === "flipflop" ? 0.9 : 0.3 }} />
+        ))}
+        {[
+          ["clock", clock, 28],
+          ["D", CS_D, 88],
+          ["Q", q, 148],
+        ].map(([name, values, top]) => (
+          <g key={name as string}>
+            <text x={52} y={(top as number) + 16} textAnchor="end" className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+              {name as string}
+            </text>
+            <polyline points={wave(values as number[], top as number)} fill="none" className={name === "Q" ? "fig-accent-line" : "fig-line"} style={{ strokeWidth: 2 }} />
+          </g>
+        ))}
+        <rect x={x0 + time * w} y={18} width={w} height={164} className="fig-accent" style={{ opacity: 0.12 }} />
+        <text x={x0 + time * w + w / 2} y={196} textAnchor="middle" className="fig-small">{`t=${time}`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+type FeInstr = { name: string; rd: number; rs: number; imm: number };
+
+function feProgram(n: number): FeInstr[] {
+  return [
+    { name: "li", rd: 0, rs: 0, imm: 0 },
+    { name: "li", rd: 1, rs: 0, imm: n },
+    { name: "li", rd: 2, rs: 0, imm: 1 },
+    { name: "add", rd: 0, rs: 1, imm: 0 },
+    { name: "sub", rd: 1, rs: 2, imm: 0 },
+    { name: "bnez", rd: 1, rs: 0, imm: 3 },
+    { name: "halt", rd: 0, rs: 0, imm: 0 },
+  ];
+}
+
+const FE_OPS = ["halt", "li", "add", "sub", "bnez"];
+
+function feText(i: FeInstr) {
+  if (i.name === "halt") return "halt";
+  if (i.name === "li") return `li r${i.rd}, ${i.imm}`;
+  if (i.name === "bnez") return `bnez r${i.rd}, ${i.imm}`;
+  return `${i.name} r${i.rd}, r${i.rs}`;
+}
+
+function feWord(i: FeInstr) {
+  const w = (FE_OPS.indexOf(i.name) << 12) | (i.rd << 8) | (i.rs << 4) | i.imm;
+  return "0x" + w.toString(16).padStart(4, "0");
+}
+
+/** A toy machine fetching, decoding and executing a loop that adds n + (n − 1) + … + 1, one phase per step. */
+function FetchExecute(props: Props) {
+  const [n, setN] = useState(clamp(num(props.n, 3), 1, 5));
+  const program = feProgram(n);
+  const trace: { pc: number; before: number[]; after: number[]; next: number }[] = [];
+  let regs = [0, 0, 0];
+  let pc = 0;
+  for (;;) {
+    const ins = program[pc];
+    const before = regs.slice();
+    let next = pc + 1;
+    if (ins.name === "li") regs[ins.rd] = ins.imm;
+    if (ins.name === "add") regs[ins.rd] = regs[ins.rd] + regs[ins.rs];
+    if (ins.name === "sub") regs[ins.rd] = regs[ins.rd] - regs[ins.rs];
+    if (ins.name === "bnez" && regs[ins.rd] !== 0) next = ins.imm;
+    trace.push({ pc, before, after: regs.slice(), next });
+    if (ins.name === "halt") break;
+    regs = regs.slice();
+    pc = next;
+  }
+  const last = trace.length * 3 - 1;
+  const [rawStep, setStep] = useState(clamp(num(props.step, 0), 0, 3 * 34));
+  const step = Math.min(rawStep, last);
+  const t = trace[Math.floor(step / 3)];
+  const phase = step % 3;
+  const ins = program[t.pc];
+  const shown = phase === 2 ? t.after : t.before;
+  const pcShown = phase === 0 ? t.pc + 1 : phase === 1 ? t.pc + 1 : t.next;
+  let what: string;
+  if (phase === 0) what = `Fetch: the word at address ${t.pc}, ${feWord(ins)}, is copied into the instruction register, and the PC moves on to ${t.pc + 1}.`;
+  else if (phase === 1)
+    what =
+      `Decode: opcode ${FE_OPS.indexOf(ins.name)} means ${ins.name}` +
+      (ins.name === "halt" ? "." : ins.name === "li" ? `, with r${ins.rd} as the destination and ${ins.imm} as the number to load.` : ins.name === "bnez" ? `, testing r${ins.rd}, which holds ${t.before[ins.rd]}.` : `, so the register file reads r${ins.rd} = ${t.before[ins.rd]} and r${ins.rs} = ${t.before[ins.rs]}.`);
+  else if (ins.name === "halt") what = `Execute: halt stops the machine. It fetched ${plural(trace.length, "instruction")}, and r0 holds ${t.after[0]}.`;
+  else if (ins.name === "li") what = `Execute: ${ins.imm} is written into r${ins.rd}.`;
+  else if (ins.name === "bnez") what = t.next === ins.imm ? `Execute: r${ins.rd} is ${t.before[ins.rd]}, not zero, so the PC is set to ${ins.imm} and the loop runs again.` : `Execute: r${ins.rd} is 0, so the PC is left at ${t.pc + 1} and the loop ends.`;
+  else what = `Execute: the ALU computes ${t.before[ins.rd]} ${ins.name === "add" ? "+" : "−"} ${t.before[ins.rs]} = ${t.after[ins.rd]} and writes it into r${ins.rd}.`;
+  const summary = `Step ${step + 1} of ${last + 1}. ${what}`;
+  const phases = ["fetch", "decode", "execute"];
+  return (
+    <Frame
+      title="Fetch, decode, execute"
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="n" value={n} onChange={(v) => { setN(v); setStep(0); }} min={1} max={5} />
+          <Stepper label="step" value={step + 1} onChange={(v) => setStep(v - 1)} min={1} max={last + 1} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 230" role="img" aria-label={`${phases[phase]} of ${feText(ins)} at address ${t.pc}`}>
+        {program.map((p, i) => (
+          <g key={i}>
+            {i === t.pc ? <rect x={14} y={22 + i * 26} width={200} height={22} rx={4} className="fig-accent" style={{ opacity: 0.18 }} /> : null}
+            <text x={24} y={37 + i * 26} className="fig-small">{i}</text>
+            <text x={44} y={37 + i * 26} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{feWord(p)}</text>
+            <text x={104} y={37 + i * 26} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{feText(p)}</text>
+          </g>
+        ))}
+        <text x={14} y={14} className="fig-small">memory</text>
+        {phases.map((name, k) => (
+          <g key={name}>
+            <rect x={240 + k * 72} y={14} width={64} height={24} rx={12} className={k === phase ? "fig-accent" : "fig-fill"} />
+            <text x={272 + k * 72} y={30} textAnchor="middle" style={{ fill: k === phase ? "var(--bg)" : "var(--text)", fontSize: 12 }}>{name}</text>
+          </g>
+        ))}
+        <text x={240} y={70} className="fig-small">PC</text>
+        <text x={300} y={70} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 600 }}>{pcShown}</text>
+        <text x={240} y={98} className="fig-small">instruction</text>
+        <text x={320} y={98} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{`${feWord(ins)}  ${phase === 0 ? "" : feText(ins)}`}</text>
+        {[0, 1, 2].map((r) => (
+          <g key={r}>
+            <rect x={240 + r * 72} y={130} width={64} height={44} rx={6} className="fig-fill" />
+            <text x={272 + r * 72} y={147} textAnchor="middle" className="fig-small">{`r${r}`}</text>
+            <text x={272 + r * 72} y={166} textAnchor="middle" style={{ fill: phase === 2 && ins.rd === r && ins.name !== "bnez" && ins.name !== "halt" ? "var(--focus)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 600 }}>
+              {shown[r]}
+            </text>
+          </g>
+        ))}
+        <text x={240} y={204} className="fig-small">{`instructions fetched: ${Math.floor(step / 3) + 1}`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+type RvField = { label: string; lo: number; width: number; value: number };
+
+const RV_EXAMPLES: Record<string, { text: string; format: string; fields: RvField[]; note: string }> = (() => {
+  const r = (f7: number, rs2: number, rs1: number, f3: number, rd: number, op: number) => [
+    { label: "funct7", lo: 25, width: 7, value: f7 },
+    { label: "rs2", lo: 20, width: 5, value: rs2 },
+    { label: "rs1", lo: 15, width: 5, value: rs1 },
+    { label: "f3", lo: 12, width: 3, value: f3 },
+    { label: "rd", lo: 7, width: 5, value: rd },
+    { label: "opcode", lo: 0, width: 7, value: op },
+  ];
+  const i = (imm: number, rs1: number, f3: number, rd: number, op: number) => [
+    { label: "imm", lo: 20, width: 12, value: imm & 0xfff },
+    { label: "rs1", lo: 15, width: 5, value: rs1 },
+    { label: "f3", lo: 12, width: 3, value: f3 },
+    { label: "rd", lo: 7, width: 5, value: rd },
+    { label: "opcode", lo: 0, width: 7, value: op },
+  ];
+  const s = (imm: number, rs2: number, rs1: number, f3: number, op: number) => [
+    { label: "imm hi", lo: 25, width: 7, value: (imm >> 5) & 0x7f },
+    { label: "rs2", lo: 20, width: 5, value: rs2 },
+    { label: "rs1", lo: 15, width: 5, value: rs1 },
+    { label: "f3", lo: 12, width: 3, value: f3 },
+    { label: "imm lo", lo: 7, width: 5, value: imm & 0x1f },
+    { label: "opcode", lo: 0, width: 7, value: op },
+  ];
+  const b = (imm: number, rs2: number, rs1: number, f3: number, op: number) => [
+    { label: "imm hi", lo: 25, width: 7, value: (((imm >> 12) & 1) << 6) | ((imm >> 5) & 0x3f) },
+    { label: "rs2", lo: 20, width: 5, value: rs2 },
+    { label: "rs1", lo: 15, width: 5, value: rs1 },
+    { label: "f3", lo: 12, width: 3, value: f3 },
+    { label: "imm lo", lo: 7, width: 5, value: (((imm >> 1) & 0xf) << 1) | ((imm >> 11) & 1) },
+    { label: "opcode", lo: 0, width: 7, value: op },
+  ];
+  return {
+    add: { text: "add x5, x6, x7", format: "R", fields: r(0, 7, 6, 0, 5, 0x33), note: "Two source registers and a destination; funct7 and funct3 say which operation." },
+    sub: { text: "sub x5, x6, x7", format: "R", fields: r(0x20, 7, 6, 0, 5, 0x33), note: "Only funct7 differs from add: one bit tells the ALU to subtract." },
+    addi: { text: "addi x5, x0, 42", format: "I", fields: i(42, 0, 0, 5, 0x13), note: "The second operand is a 12-bit signed number held in the instruction itself, from −2048 to 2047." },
+    lw: { text: "lw x5, 8(x10)", format: "I", fields: i(8, 10, 2, 5, 0x03), note: "A load has the same shape as addi: the address is x10 + 8, and funct3 = 2 means a 4-byte word." },
+    sw: { text: "sw x5, 8(x10)", format: "S", fields: s(8, 5, 10, 2, 0x23), note: "A store has no destination register, so the offset is split in two around rs1, rs2 and funct3." },
+    beq: { text: "beq x5, x6, 16", format: "B", fields: b(16, 6, 5, 0, 0x63), note: "A branch offset is always even, so bit 0 is not stored; the other bits are shuffled so that the hardware finds each one where S-type keeps it." },
+    lui: { text: "lui x5, 0x12345", format: "U", fields: [{ label: "imm (upper 20 bits)", lo: 12, width: 20, value: 0x12345 }, { label: "rd", lo: 7, width: 5, value: 5 }, { label: "opcode", lo: 0, width: 7, value: 0x37 }], note: "A 20-bit number goes into the top of rd; an addi can then fill in the low 12 bits." },
+  };
+})();
+
+/** How a RISC-V instruction is packed into 32 bits, field by field, for each of the instruction formats. */
+function RvEncoding(props: Props) {
+  const initial = typeof props.instr === "string" && props.instr in RV_EXAMPLES ? props.instr : "add";
+  const [key, setKey] = useState(initial);
+  const ex = RV_EXAMPLES[key];
+  const word = ex.fields.reduce((acc, f) => (acc + f.value * 2 ** f.lo), 0);
+  const hex = "0x" + word.toString(16).padStart(8, "0");
+  const bits = Array.from({ length: 32 }, (_, k) => Math.floor(word / 2 ** k) % 2);
+  const x = (bit: number) => 22 + (31 - bit) * 13;
+  const fieldText = ex.fields.map((f) => `${f.label} ${f.value.toString(2).padStart(f.width, "0")}`).join(", ");
+  const summary = `${ex.text} is ${ex.format}-type. Fields from bit 31 down: ${fieldText}. As one word it is ${hex}. ${ex.note}`;
+  return (
+    <Frame
+      title={`${ex.format}-type: ${ex.text}`}
+      summary={summary}
+      controls={
+        <>
+          <span className="label">instruction</span>
+          {Object.keys(RV_EXAMPLES).map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={k === key} onClick={() => setKey(k)}>
+              {k}
+            </button>
+          ))}
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 180" role="img" aria-label={`${ex.text} encodes as ${hex}`}>
+        <text x={230} y={22} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 600 }}>
+          {`${ex.text}   →   ${hex}`}
+        </text>
+        {[31, 24, 19, 14, 11, 6, 0].map((bit) => (
+          <text key={bit} x={x(bit) + 6.5} y={46} textAnchor="middle" className="fig-small">{bit}</text>
+        ))}
+        {ex.fields.map((f, k) => (
+          <g key={f.label}>
+            <rect x={x(f.lo + f.width - 1)} y={54} width={f.width * 13} height={28} className={k % 2 ? "fig-fill" : "fig-accent"} style={k % 2 ? undefined : { opacity: 0.22 }} />
+            <text x={x(f.lo + f.width - 1) + (f.width * 13) / 2} y={102} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>
+              {f.label}
+            </text>
+            <text x={x(f.lo + f.width - 1) + (f.width * 13) / 2} y={120} textAnchor="middle" className="fig-small">
+              {f.value}
+            </text>
+          </g>
+        ))}
+        {bits.map((v, bit) => (
+          <text key={bit} x={x(bit) + 6.5} y={73} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+            {v}
+          </text>
+        ))}
+        <text x={230} y={160} textAnchor="middle" className="fig-small">
+          {"rs1, rs2 and rd sit in the same bits in every format that has them"}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const AT_LINES = [
+  "    la t0, prices",
+  "    lw t1, n",
+  "    li a0, 0",
+  "loop:",
+  "    beqz t1, done",
+  "    lw t2, 0(t0)",
+  "    add a0, a0, t2",
+  "    addi t0, t0, 4",
+  "    addi t1, t1, -1",
+  "    j loop",
+  "done:",
+  "    li a7, 1",
+  "    ecall",
+];
+const AT_PRICES = [120, 45, 300];
+const AT_BASE = 0x10010004;
+
+/** Stepping through an assembly loop that adds up an array, one instruction at a time, with the registers and memory it touches. */
+function AsmTrace(props: Props) {
+  type Row = { line: number; regs: Record<string, number>; note: string };
+  const rows: Row[] = [];
+  const r: Record<string, number> = { t0: 0, t1: 0, t2: 0, a0: 0 };
+  const push = (line: number, note: string) => rows.push({ line, regs: { ...r }, note });
+  r.t0 = AT_BASE;
+  push(0, "la puts the address of prices, 0x10010004, into t0.");
+  r.t1 = AT_PRICES.length;
+  push(1, `lw loads n, ${AT_PRICES.length}, the number of prices left, into t1.`);
+  r.a0 = 0;
+  push(2, "li sets the running total in a0 to 0.");
+  for (;;) {
+    if (r.t1 === 0) {
+      push(4, "t1 is 0, so beqz jumps to done: every price has been added.");
+      break;
+    }
+    push(4, `t1 is ${r.t1}, not 0, so beqz falls through into the loop body.`);
+    const k = (r.t0 - AT_BASE) / 4;
+    r.t2 = AT_PRICES[k];
+    push(5, `lw reads the word at the address in t0, 0x${r.t0.toString(16)}: price ${k}, which is ${r.t2}.`);
+    r.a0 += r.t2;
+    push(6, `add makes the total ${r.a0 - r.t2} + ${r.t2} = ${r.a0}.`);
+    r.t0 += 4;
+    push(7, "addi moves t0 on by 4 bytes, one word, to the next price.");
+    r.t1 -= 1;
+    push(8, `addi counts down: ${r.t1} ${r.t1 === 1 ? "price is" : "prices are"} left.`);
+    push(9, "j jumps back to loop to test t1 again.");
+  }
+  push(11, "li puts 1 in a7, choosing the print-a-number service.");
+  push(12, `ecall prints a0, ${r.a0}, the total of the three prices.`);
+  const last = rows.length - 1;
+  const [step, setStep] = useState(clamp(num(props.step, 0), 0, last));
+  const s = rows[Math.min(step, last)];
+  const nextIndex = (s.regs.t0 - AT_BASE) / 4;
+  const summary = `Step ${step + 1} of ${last + 1}: ${s.note} Registers: t0 = 0x${s.regs.t0.toString(16)}, t1 = ${s.regs.t1}, t2 = ${s.regs.t2}, a0 = ${s.regs.a0}.`;
+  return (
+    <Frame
+      title="An assembly loop over an array"
+      summary={summary}
+      controls={<Stepper label="step" value={step + 1} onChange={(v) => setStep(v - 1)} min={1} max={last + 1} />}
+    >
+      <svg viewBox="0 0 460 250" role="img" aria-label={`Step ${step + 1}: ${AT_LINES[s.line].trim()}`}>
+        {AT_LINES.map((text, i) => (
+          <g key={i}>
+            {i === s.line ? <rect x={8} y={8 + i * 18} width={190} height={17} rx={3} className="fig-accent" style={{ opacity: 0.2 }} /> : null}
+            <text x={14} y={21 + i * 18} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 11.5, whiteSpace: "pre" }}>
+              {text}
+            </text>
+          </g>
+        ))}
+        {(["t0", "t1", "t2", "a0"] as const).map((name, i) => (
+          <g key={name}>
+            <rect x={222 + i * 58} y={14} width={52} height={40} rx={6} className="fig-fill" />
+            <text x={248 + i * 58} y={29} textAnchor="middle" className="fig-small">{name}</text>
+            <text x={248 + i * 58} y={47} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>
+              {name === "t0" ? `…${s.regs.t0.toString(16).slice(-2)}` : s.regs[name]}
+            </text>
+          </g>
+        ))}
+        <text x={222} y={84} className="fig-small">memory</text>
+        {[["n", AT_PRICES.length, 0x10010000], ...AT_PRICES.map((p, i) => [`prices[${i}]`, p, AT_BASE + 4 * i])].map(([label, value, address], i) => (
+          <g key={label as string}>
+            <rect x={222} y={92 + i * 32} width={176} height={26} rx={4} className={i > 0 && i - 1 === nextIndex && s.line !== 12 ? "fig-accent" : "fig-fill"} style={i > 0 && i - 1 === nextIndex ? { opacity: 0.35 } : undefined} />
+            <text x={230} y={109 + i * 32} className="fig-small">{`0x${(address as number).toString(16).slice(-3)}`}</text>
+            <text x={280} y={109 + i * 32} className="fig-small">{label as string}</text>
+            <text x={390} y={109 + i * 32} textAnchor="end" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>{value as number}</text>
+          </g>
+        ))}
+        {nextIndex < AT_PRICES.length ? <text x={404} y={109 + (nextIndex + 1) * 32} className="fig-small">{"← t0"}</text> : null}
+      </svg>
+    </Frame>
+  );
+}
+
+type SfFrame = { k: number; ra: string; s0: string };
+type SfEvent = { frames: SfFrame[]; a0: string; s0: string; ra: string; note: string };
+
+function sfEvents(n: number): SfEvent[] {
+  const out: SfEvent[] = [];
+  const frames: SfFrame[] = [];
+  let a0 = String(n);
+  let s0 = "main's";
+  let ra = "main";
+  const emit = (note: string) => out.push({ frames: frames.map((f) => ({ ...f })), a0, s0, ra, note });
+  emit(`main puts ${n} in a0 and calls fact. The call saves the way back into main in ra.`);
+  const enter = (k: number) => {
+    if (k === 0) {
+      a0 = "1";
+      emit(`fact(0) needs no frame: it puts 1 in a0 and returns at once, through ra, to fact(1).`);
+      return;
+    }
+    frames.push({ k, ra, s0 });
+    emit(`fact(${k}) moves sp down 16 bytes and saves ra (the way back into ${ra}) and s0 (${s0 === "main's" ? "main's value" : s0}) in its frame.`);
+    s0 = String(k);
+    a0 = String(k - 1);
+    ra = `fact(${k})`;
+    emit(`fact(${k}) keeps n = ${k} in s0, puts ${k - 1} in a0 and calls fact(${k - 1}); ra now leads back into fact(${k}).`);
+    enter(k - 1);
+    const product = k * Number(a0);
+    emit(`Back in fact(${k}): a0 = s0 × a0 = ${k} × ${a0} = ${product}.`);
+    a0 = String(product);
+    const f = frames.pop()!;
+    s0 = f.s0;
+    ra = f.ra;
+    emit(`fact(${k}) reloads s0 and ra from its frame, moves sp back up 16 bytes and returns to ${ra}.`);
+  };
+  enter(n);
+  emit(`main prints a0, ${a0}. The stack is back where it started, and main's s0 is untouched.`);
+  return out;
+}
+
+/** The call stack of a recursive factorial in RISC-V: each call saves its return address and s0 in a 16-byte frame, and unwinds them in reverse. */
+function StackFrames(props: Props) {
+  const [n, setN] = useState(clamp(num(props.n, 3), 1, 4));
+  const events = sfEvents(n);
+  const last = events.length - 1;
+  const [rawStep, setStep] = useState(clamp(num(props.step, 0), 0, 30));
+  const step = Math.min(rawStep, last);
+  const e = events[step];
+  const top = 0x7fffeffc;
+  const sp = top - 16 * e.frames.length;
+  const deepest = Math.max(...events.map((ev) => ev.frames.length));
+  const summary = `Step ${step + 1} of ${last + 1}. ${e.note} sp = 0x${sp.toString(16)}, ${16 * e.frames.length} bytes below where main left it; the deepest point uses ${16 * deepest} bytes.`;
+  return (
+    <Frame
+      title={`The stack during fact(${n})`}
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="n" value={n} onChange={(v) => { setN(v); setStep(0); }} min={1} max={4} />
+          <Stepper label="step" value={step + 1} onChange={(v) => setStep(v - 1)} min={1} max={last + 1} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 240" role="img" aria-label={`Step ${step + 1}: ${e.frames.length} frames on the stack`}>
+        <text x={20} y={20} className="fig-small">{"higher addresses"}</text>
+        <rect x={20} y={28} width={190} height={22} rx={4} className="fig-fill" style={{ opacity: 0.5 }} />
+        <text x={115} y={43} textAnchor="middle" className="fig-small">{"main's part of the stack"}</text>
+        {e.frames.map((f, i) => (
+          <g key={f.k}>
+            <rect x={20} y={54 + i * 40} width={190} height={36} rx={6} className={i === e.frames.length - 1 ? "fig-accent" : "fig-fill"} style={i === e.frames.length - 1 ? { opacity: 0.3 } : undefined} />
+            <text x={30} y={68 + i * 40} style={{ fill: "var(--text)", fontSize: 12, fontWeight: 600 }}>{`fact(${f.k})'s frame`}</text>
+            <text x={30} y={84 + i * 40} className="fig-small">{`ra → ${f.ra} · s0 = ${f.s0}`}</text>
+          </g>
+        ))}
+        <line x1={214} y1={52 + e.frames.length * 40} x2={238} y2={52 + e.frames.length * 40} className="fig-accent-line" style={{ strokeWidth: 2.5 }} />
+        <text x={244} y={56 + e.frames.length * 40} className="fig-small" style={{ fill: "var(--text)", fontWeight: 600 }}>sp</text>
+        {(["a0", "s0", "ra", "sp"] as const).map((name, i) => (
+          <g key={name}>
+            <rect x={300} y={20 + i * 34} width={150} height={28} rx={6} className="fig-fill" />
+            <text x={310} y={38 + i * 34} className="fig-small">{name}</text>
+            <text x={442} y={38 + i * 34} textAnchor="end" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>
+              {name === "ra" ? `→ ${e.ra}` : name === "sp" ? `0x${sp.toString(16)}` : e[name]}
+            </text>
+          </g>
+        ))}
+        <text x={20} y={234} className="fig-small">{"lower addresses: the stack grows down"}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+const PC_STAGES = ["F", "D", "X", "M", "W"];
+const PC_NAMES = ["fetch", "decode", "execute", "memory", "write back"];
+
+/** A pipeline diagram: instructions down the side, clock cycles along the top, with and without pipelining. */
+function PipelineChart(props: Props) {
+  const [n, setN] = useState(clamp(num(props.n, 4), 1, 6));
+  const [piped, setPiped] = useState(props.pipelined !== false);
+  const k = PC_STAGES.length;
+  const total = piped ? k + n - 1 : k * n;
+  const start = (i: number) => (piped ? i : i * k);
+  const left = 64;
+  const cell = Math.min(36, (450 - left) / total);
+  const rowH = 26;
+  const inFlight = piped ? Math.min(n, k) : 1;
+  const summary =
+    `${plural(n, "instruction")} through ${k} stages take ${total} cycles ${piped ? "with" : "without"} pipelining` +
+    (piped
+      ? `: ${k} cycles for the first, then one more finishing every cycle. Up to ${plural(inFlight, "instruction")} ${inFlight === 1 ? "is" : "are"} in flight at once, each in a different stage. Without pipelining the same work takes ${k * n} cycles.`
+      : `: each instruction waits for the one before to finish all ${k} stages, so four of the five stages sit idle at any moment. With pipelining it takes ${k + n - 1} cycles.`) +
+    ` Either way, each instruction takes ${k} cycles from fetch to write back.`;
+  return (
+    <Frame
+      title={piped ? "Pipelined: one instruction finishes every cycle" : "Not pipelined: one instruction at a time"}
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="instructions" value={n} onChange={setN} min={1} max={6} />
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={piped} onClick={() => setPiped(true)}>
+            pipelined
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!piped} onClick={() => setPiped(false)}>
+            not pipelined
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 220" role="img" aria-label={`${n} instructions, ${total} cycles, ${piped ? "pipelined" : "not pipelined"}`}>
+        <text x={left} y={16} className="fig-small">{`cycle 1 … ${total}`}</text>
+        {Array.from({ length: n }, (_, i) => (
+          <g key={i}>
+            <text x={10} y={40 + i * rowH + 13} className="fig-small" style={{ fill: "var(--text)" }}>{`instr ${i + 1}`}</text>
+            {PC_STAGES.map((s, j) => (
+              <g key={s}>
+                <rect x={left + (start(i) + j) * cell} y={40 + i * rowH} width={cell - 1.5} height={rowH - 4} rx={3} className={j % 2 ? "fig-fill" : "fig-accent"} style={j % 2 ? undefined : { opacity: 0.35 }} />
+                <text x={left + (start(i) + j) * cell + (cell - 1.5) / 2} y={40 + i * rowH + 15} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: cell >= 12 ? 11 : 8 }}>
+                  {s}
+                </text>
+              </g>
+            ))}
+          </g>
+        ))}
+        <text x={10} y={212} className="fig-small">{PC_STAGES.map((s, j) => `${s} ${PC_NAMES[j]}`).join("  ·  ")}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** A loop branch run through a one-bit or a two-bit predictor: the counter's state, each guess, and how many were wrong. */
+function BranchPredictor(props: Props) {
+  const [bits, setBits] = useState(props.bits === 1 ? 1 : 2);
+  const [trips, setTrips] = useState(clamp(num(props.trips, 4), 2, 6));
+  const outcomes = Array.from({ length: 3 * trips }, (_, i) => i % trips !== trips - 1);
+  const max = bits === 2 ? 3 : 1;
+  const states = [bits === 2 ? 1 : 0];
+  const guesses: boolean[] = [];
+  outcomes.forEach((taken) => {
+    const c = states[states.length - 1];
+    guesses.push(bits === 2 ? c >= 2 : c === 1);
+    states.push(taken ? Math.min(max, c + 1) : Math.max(0, c - 1));
+  });
+  const last = outcomes.length - 1;
+  const [rawStep, setStep] = useState(clamp(num(props.step, 0), 0, 17));
+  const step = Math.min(rawStep, last);
+  const wrongSoFar = outcomes.slice(0, step + 1).filter((t, i) => guesses[i] !== t).length;
+  const wrongLater = outcomes.filter((t, i) => i >= trips && guesses[i] !== t).length / 2;
+  const names = bits === 2 ? ["strongly not taken", "weakly not taken", "weakly taken", "strongly taken"] : ["not taken", "taken"];
+  const now = states[step + 1];
+  const summary =
+    `Branch ${step + 1} of ${outcomes.length}: the predictor guessed ${guesses[step] ? "taken" : "not taken"} and the branch was ${outcomes[step] ? "taken" : "not taken"}, ` +
+    `${guesses[step] === outcomes[step] ? "a right guess" : "a wrong guess"}. The ${bits}-bit state is now ${names[now]}. ` +
+    `${plural(wrongSoFar, "wrong guess", "wrong guesses")} so far. After the first pass, the ${bits}-bit predictor gets ${plural(wrongLater, "branch", "branches")} wrong in each pass of ${trips}.`;
+  return (
+    <Frame
+      title={`A ${bits}-bit predictor on a loop of ${trips}`}
+      summary={summary}
+      controls={
+        <>
+          {[1, 2].map((b) => (
+            <button key={b} type="button" className="btn btn-secondary btn-small" aria-pressed={bits === b} onClick={() => setBits(b)}>
+              {`${b}-bit`}
+            </button>
+          ))}
+          <Stepper label="loop length" value={trips} onChange={(v) => { setTrips(v); setStep(0); }} min={2} max={6} />
+          <Stepper label="branch" value={step + 1} onChange={(v) => setStep(v - 1)} min={1} max={last + 1} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 214" role="img" aria-label={`${bits}-bit predictor, ${wrongSoFar} wrong so far`}>
+        {names.map((name, s) => {
+          const w = 460 / names.length;
+          return (
+            <g key={name}>
+              <circle cx={w * s + w / 2} cy={44} r={22} className={s === now ? "fig-accent" : "fig-fill"} />
+              <text x={w * s + w / 2} y={49} textAnchor="middle" style={{ fill: s === now ? "var(--bg)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 600 }}>
+                {bits === 2 ? s.toString(2).padStart(2, "0") : s}
+              </text>
+              {(bits === 2 ? [name.slice(0, name.indexOf(" ")), name.slice(name.indexOf(" ") + 1)] : [name]).map((line, k) => (
+                <text key={line} x={w * s + w / 2} y={84 + k * 14} textAnchor="middle" className="fig-small">{line}</text>
+              ))}
+            </g>
+          );
+        })}
+        <text x={10} y={128} className="fig-small">branch</text>
+        <text x={10} y={152} className="fig-small">guess</text>
+        {outcomes.map((t, i) => {
+          const x = 70 + i * (380 / outcomes.length);
+          const wrong = guesses[i] !== t;
+          return (
+            <g key={i} style={{ opacity: i <= step ? 1 : 0.25 }}>
+              <text x={x} y={128} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{t ? "T" : "N"}</text>
+              <text x={x} y={152} textAnchor="middle" style={{ fill: wrong ? "var(--focus)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: wrong ? 700 : 400 }}>
+                {guesses[i] ? "T" : "N"}
+              </text>
+              {wrong && i <= step ? <line x1={x - 5} y1={158} x2={x + 5} y2={158} className="fig-accent-line" style={{ strokeWidth: 2 }} /> : null}
+            </g>
+          );
+        })}
+        <rect x={70 + step * (380 / outcomes.length) - 8} y={114} width={16} height={48} rx={3} className="fig-line" style={{ fill: "none" }} />
+        <text x={10} y={196} className="fig-small">{`wrong guesses so far: ${wrongSoFar}, underlined`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+const OOO_PROGRAM = [
+  { text: "lw t0, 0(a0)", dest: "t0", srcs: ["a0"], lat: 3 },
+  { text: "add t1, t0, t2", dest: "t1", srcs: ["t0", "t2"], lat: 1 },
+  { text: "addi t3, a1, 4", dest: "t3", srcs: ["a1"], lat: 1 },
+  { text: "mul t4, t3, t3", dest: "t4", srcs: ["t3"], lat: 3 },
+  { text: "addi t5, a2, 1", dest: "t5", srcs: ["a2"], lat: 1 },
+  { text: "add t6, t5, t4", dest: "t6", srcs: ["t5", "t4"], lat: 1 },
+];
+
+function oooSchedule(outOfOrder: boolean, width: number) {
+  const ready: Record<string, number> = Object.fromEntries(OOO_PROGRAM.map((ins) => [ins.dest, Infinity]));
+  const start: number[] = OOO_PROGRAM.map(() => 0);
+  const issued: boolean[] = OOO_PROGRAM.map(() => false);
+  let next = 0;
+  for (let cycle = 1; issued.some((x) => !x) && cycle < 40; cycle++) {
+    let used = 0;
+    for (let i = outOfOrder ? 0 : next; i < OOO_PROGRAM.length && used < width; i++) {
+      if (issued[i]) continue;
+      const ins = OOO_PROGRAM[i];
+      const ok = ins.srcs.every((r) => (ready[r] ?? 1) <= cycle);
+      if (!ok) {
+        if (outOfOrder) continue;
+        break;
+      }
+      issued[i] = true;
+      start[i] = cycle;
+      ready[ins.dest] = cycle + ins.lat;
+      used++;
+      if (!outOfOrder) next = i + 1;
+    }
+  }
+  const end = Math.max(...OOO_PROGRAM.map((ins, i) => start[i] + ins.lat - 1));
+  return { start, end };
+}
+
+/** Issuing a short program in order or out of order, one to three instructions a cycle, and when each result is ready. */
+function OooIssue(props: Props) {
+  const [ooo, setOoo] = useState(props.mode === "ooo");
+  const [width, setWidth] = useState(clamp(num(props.width, 2), 1, 3));
+  const { start, end } = oooSchedule(ooo, width);
+  const other = oooSchedule(!ooo, width).end;
+  const cols = 12;
+  const left = 130;
+  const cell = (450 - left) / cols;
+  const summary =
+    `${ooo ? "Out of order" : "In order"}, up to ${plural(width, "instruction")} a cycle: the program's last result is ready after cycle ${end}, against ${other} ${ooo ? "in order" : "out of order"}. ` +
+    (ooo
+      ? `Independent instructions such as addi t3 and addi t5 start while the add waits for the load, so the waiting is hidden behind useful work.`
+      : `The add must wait three cycles for the load, and everything after it waits too, even the instructions that do not need t0.`);
+  return (
+    <Frame
+      title={ooo ? "Out-of-order issue" : "In-order issue"}
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!ooo} onClick={() => setOoo(false)}>
+            in order
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={ooo} onClick={() => setOoo(true)}>
+            out of order
+          </button>
+          <Stepper label="width" value={width} onChange={setWidth} min={1} max={3} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 210" role="img" aria-label={`${ooo ? "Out of order" : "In order"}, width ${width}: done after cycle ${end}`}>
+        {Array.from({ length: cols }, (_, c) => (
+          <text key={c} x={left + c * cell + cell / 2} y={16} textAnchor="middle" className="fig-small">{c + 1}</text>
+        ))}
+        {OOO_PROGRAM.map((ins, i) => (
+          <g key={i}>
+            <text x={8} y={40 + i * 28} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{ins.text}</text>
+            {Array.from({ length: ins.lat }, (_, k) => (
+              <rect key={k} x={left + (start[i] - 1 + k) * cell + 1} y={26 + i * 28} width={cell - 2} height={20} rx={3} className={k === 0 ? "fig-accent" : "fig-fill"} style={k === 0 ? { opacity: 0.55 } : undefined} />
+            ))}
+          </g>
+        ))}
+        <line x1={left + end * cell} y1={22} x2={left + end * cell} y2={196} className="fig-accent-line" style={{ strokeDasharray: "4 3" }} />
+        <text x={left + end * cell - 4} y={206} textAnchor="end" className="fig-small">{`done after cycle ${end}`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -11862,6 +12768,16 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "scope-chain": ScopeChain,
   "type-check": TypeCheck,
   "mark-sweep": MarkSweep,
+  "gate-circuit": GateCircuit,
+  "ripple-adder": RippleAdder,
+  "clocked-store": ClockedStore,
+  "fetch-execute": FetchExecute,
+  "rv-encoding": RvEncoding,
+  "asm-trace": AsmTrace,
+  "stack-frames": StackFrames,
+  "pipeline-chart": PipelineChart,
+  "branch-predictor": BranchPredictor,
+  "ooo-issue": OooIssue,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,

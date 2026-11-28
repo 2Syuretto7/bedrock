@@ -1051,3 +1051,107 @@ test("marking from the roots frees a cycle that counting references cannot", asy
   await figure.getByRole("button", { name: "count references", exact: true }).click();
   await expect(figure).toContainText("so counting alone frees none of them.");
 });
+
+test("four NAND gates make XOR, and three gates make a multiplexer", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="gate-circuit"]').first().getByRole("figure");
+  await expect(figure).toContainText("A = 1, B = 0. The first NAND gives 1, the middle two give 0 and 1, and the last gives 1.");
+  await figure.getByRole("button", { name: "B = 0", exact: true }).click();
+  await expect(figure).toContainText("so this is a case where it is 0.");
+  await figure.getByRole("button", { name: "2-to-1 multiplexer", exact: true }).click();
+  await expect(figure).toContainText("S = 0 selects A, which is 1, so the output is 1.");
+});
+
+test("a ripple-carry adder subtracts by adding the complement and sets the flags", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="ripple-adder"]').first().getByRole("figure");
+  await expect(figure).toContainText("A + B = 9 + 5 = 14. Four bits keep 14 (1110) and the carry out is 0.");
+  for (let i = 0; i < 6; i++) await figure.getByRole("button", { name: "Increase A" }).click();
+  await expect(figure).toContainText("A + B = 15 + 5 = 20. Four bits keep 4 (0100) and the carry out is 1.");
+  await figure.getByRole("button", { name: "subtract", exact: true }).click();
+  await expect(figure).toContainText("A − B is worked out as A + (NOT B) + 1: 15 + 10 + 1 = 26.");
+  await expect(figure).toContainText("Flags: Z 0, N 1, C 1, V 0.");
+});
+
+test("a flip-flop changes only at clock edges, while a latch follows D", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="clocked-store"]').first().getByRole("figure");
+  await expect(figure).toContainText("The flip-flop copies D only at a rising edge of the clock.");
+  await figure.getByRole("button", { name: "D latch", exact: true }).click();
+  await expect(figure).toContainText("The latch is transparent while the clock is 1, so Q follows D and is 1.");
+  for (let i = 0; i < 11; i++) await figure.getByRole("button", { name: "Decrease time" }).click();
+  await expect(figure).toContainText("At time 4 the clock is 0 and D is 1. The clock is 0, so the latch holds what it had when the clock fell");
+});
+
+test("the machine fetches, decodes and executes until it halts", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="fetch-execute"]').first().getByRole("figure");
+  await expect(figure).toContainText("Step 1 of 39. Fetch: the word at address 0, 0x1000, is copied into the instruction register");
+  for (let i = 0; i < 11; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Step 12 of 39. Execute: the ALU computes 0 + 3 = 3 and writes it into r0.");
+  await figure.getByRole("button", { name: "Increase n" }).click();
+  for (let i = 0; i < 47; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("It fetched 16 instructions, and r0 holds 10.");
+});
+
+test("each RISC-V format packs its fields into one 32-bit word", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="rv-encoding"]').first().getByRole("figure");
+  await expect(figure).toContainText("add x5, x6, x7 is R-type.");
+  await expect(figure).toContainText("As one word it is 0x007302b3.");
+  await figure.getByRole("button", { name: "beq", exact: true }).click();
+  await expect(figure).toContainText("As one word it is 0x00628863.");
+  await figure.getByRole("button", { name: "lui", exact: true }).click();
+  await expect(figure).toContainText("As one word it is 0x123452b7.");
+});
+
+test("an assembly loop walks the array and prints the total", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="asm-trace"]').first().getByRole("figure");
+  await expect(figure).toContainText("Step 1 of 24: la puts the address of prices, 0x10010004, into t0.");
+  for (let i = 0; i < 5; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Step 6 of 24: add makes the total 0 + 120 = 120.");
+  for (let i = 0; i < 18; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("ecall prints a0, 465, the total of the three prices.");
+});
+
+test("each call to fact gets its own frame, and the stack shrinks back on return", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="stack-frames"]').first().getByRole("figure");
+  await expect(figure).toContainText("Step 1 of 15. main puts 3 in a0 and calls fact.");
+  for (let i = 0; i < 5; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("sp = 0x7fffefcc, 48 bytes below where main left it");
+  for (let i = 0; i < 9; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Step 15 of 15. main prints a0, 6. The stack is back where it started");
+});
+
+test("pipelining finishes one instruction a cycle once the pipe is full", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="pipeline-chart"]').first().getByRole("figure");
+  await expect(figure).toContainText("4 instructions through 5 stages take 8 cycles with pipelining");
+  await figure.getByRole("button", { name: "not pipelined", exact: true }).click();
+  await expect(figure).toContainText("4 instructions through 5 stages take 20 cycles without pipelining");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase instructions" }).click();
+  await expect(figure).toContainText("take 30 cycles without pipelining");
+  await expect(figure).toContainText("With pipelining it takes 10 cycles.");
+});
+
+test("a 2-bit predictor misses a loop's exit once a pass, a 1-bit one twice", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="branch-predictor"]').first().getByRole("figure");
+  await expect(figure).toContainText("Branch 1 of 12: the predictor guessed not taken and the branch was taken, a wrong guess.");
+  for (let i = 0; i < 11; i++) await figure.getByRole("button", { name: "Increase branch" }).click();
+  await expect(figure).toContainText("4 wrong guesses so far. After the first pass, the 2-bit predictor gets 1 branch wrong in each pass of 4.");
+  await figure.getByRole("button", { name: "1-bit", exact: true }).click();
+  await expect(figure).toContainText("6 wrong guesses so far. After the first pass, the 1-bit predictor gets 2 branches wrong in each pass of 4.");
+});
+
+test("issuing out of order hides a load's wait behind independent work", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="ooo-issue"]').first().getByRole("figure");
+  await expect(figure).toContainText("In order, up to 2 instructions a cycle: the program's last result is ready after cycle 8, against 5 out of order.");
+  await figure.getByRole("button", { name: "out of order", exact: true }).click();
+  await expect(figure).toContainText("ready after cycle 5, against 8 in order.");
+  await figure.getByRole("button", { name: "Decrease width" }).click();
+  await expect(figure).toContainText("Out of order, up to 1 instruction a cycle: the program's last result is ready after cycle 6, against 9 in order.");
+});

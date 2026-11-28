@@ -1,0 +1,741 @@
+concept: h1.logic-gates
+minutes: 80
+claim: You can explain how a voltage becomes a bit and a pair of transistor switches becomes a gate; give the truth tables of NOT, AND, OR, NAND, NOR and XOR; turn any truth table into a circuit by sum of products and simplify it with Boolean algebra; prove that NAND alone can build every gate; build a multiplexer and a decoder; and find how long a circuit takes to settle from the longest path through it.
+recalls: [s7.memory-management-and-garbage-collection, h0.alignment-and-the-size-of-things, f2.equivalence-relations-and-partial-orders]
+uses: [h0.binary-and-hexadecimal, h0.unsigned-integers-and-fixed-widths, h0.bitwise-operations-and-masks, f2.propositions-and-connectives, f2.boolean-algebra, s0.booleans-and-conditionals, s1.recursion, s7.syntax-trees-and-evaluation]
+leads: [h1.adders-and-the-alu]
+bridges:
+  s7.memory-management-and-garbage-collection: |
+    The last cluster ended with a runtime that hands out memory, counts references and runs bytecode in a loop. All of that is software, and software has to run on something. Every bytecode instruction, every reference count and every byte of the heap is in the end handled by circuits that know nothing of Python. This cluster builds that machine from the bottom: first single gates, then adders, memory and a processor that fetches its own instructions, and finally the tricks that let a modern core run billions of instructions a second. You will meet the fetch-decode-execute loop again, this time in hardware.
+  f2.equivalence-relations-and-partial-orders: |
+    The logic cluster treated AND, OR and NOT as connectives between statements, with laws you could prove, and ended with partial orders, relations that put things before other things without forcing every pair to be compared. Both return here in physical form. A connective becomes a gate, a few transistors that compute it from voltages in a few trillionths of a second, and the laws of Boolean algebra become ways to build the same circuit from fewer gates. The order in which signals flow through a circuit is a partial order, and its longest chain decides how fast the circuit can run.
+starter: |
+  # Scratch space. Every two-input gate as a function of bits 0 and 1.
+  def nand(a, b):
+      return 1 - (a & b)
+
+
+  print("a b | and or xor nand")
+  for a in [0, 1]:
+      for b in [0, 1]:
+          print(a, b, "|", a & b, " ", a | b, " ", a ^ b, " ", nand(a, b))
+parts:
+  recall:
+    - text: |
+        [[h0.alignment-and-the-size-of-things]] left every value as a pattern of bits in a word of fixed width, and [[s7.memory-management-and-garbage-collection]] left a runtime moving those words about by the billion. Neither said what a bit physically is, or what does the work when two of them are added. That is where this cluster starts. Three quick pulls first.
+  puzzle:
+    - text: |
+        A gate takes two input bits and gives one output bit. AND gives 1 only when both inputs are 1, OR gives 1 when either is, and XOR gives 1 when exactly one is. Those are three rules, but any rule that says what to output for each of the four possible pairs of inputs would make a gate.
+
+        **How many different two-input gates are there?**
+  intuition:
+    - text: |
+        Many Indian homes have a staircase light with one switch at the bottom of the stairs and another at the top. Flip either switch and the light changes, whether it was on or off. The light is on exactly when the two switches are in different positions, which is XOR. A bank locker that opens only when the customer's key and the manager's key both turn is AND. A level-crossing boom that comes down when the sensor on either side detects a train is OR. Each is a small rule that turns some yes-or-no inputs into a yes-or-no output, and a computer is millions of such rules wired together.
+
+        The figure shows two small circuits. The first builds XOR out of four NAND gates, each of which gives 0 only when both its inputs are 1. The second is a multiplexer, which passes on one of two inputs, chosen by a third. Switch the inputs and watch each gate's output change; the highlighted wires carry 1.
+    - figure: gate-circuit
+      props: { circuit: xor, a: 1, b: 0 }
+    - text: |
+        Two things are worth noticing. First, one kind of gate was enough to make a different kind; in fact NAND alone can make every gate there is, and real chips lean on that. Second, the output depends only on the inputs as they are now. Change an input and the new value ripples through the gates, a little later at each one, until the output settles. Circuits like these, with no memory of the past, are called **combinational**, and how long they take to settle decides how fast a processor can be clocked.
+  derivation:
+    - text: |
+        **From voltage to bit.** Inside a chip a wire carries a voltage. A modern processor runs its logic at under a volt; call anything near 0 V a 0 and anything near the supply voltage a 1, and treat the middle as forbidden. The gap matters. A signal picks up noise as it travels, and a gate whose output is a clean 0 or 1 even when its inputs are slightly off restores the signal at every step. This **digital abstraction** is why a billion gates can be chained without errors piling up, which no circuit of continuously varying voltages could manage.
+
+        The switches are **transistors**. In the CMOS process used for almost every chip today there are two kinds. An nMOS transistor conducts when its control input is 1, and is placed to pull the output down to 0; a pMOS transistor conducts when its control input is 0, and is placed to pull the output up to 1. A NOT gate is one of each: input 1 turns on the nMOS and pulls the output to 0, input 0 turns on the pMOS and pulls it to 1. A NAND gate is four: two nMOS in series to the ground, so the output is pulled to 0 only when both inputs are 1, and two pMOS side by side to the supply, so it is pulled to 1 when either input is 0. An AND gate is a NAND followed by a NOT, six transistors, so the inverting gates NAND, NOR and NOT are the cheap ones.
+    - text: |
+        **Gates and truth tables.** A gate computes a Boolean function, and its **truth table** lists the output for every combination of inputs, exactly as truth tables did for connectives in [[f2.propositions-and-connectives]]. The six common gates, with inputs a and b in the order 00, 01, 10, 11:
+
+        | Gate | Output for 00, 01, 10, 11 |
+        | --- | --- |
+        | AND | 0, 0, 0, 1 |
+        | OR | 0, 1, 1, 1 |
+        | XOR | 0, 1, 1, 0 |
+        | NAND | 1, 1, 1, 0 |
+        | NOR | 1, 0, 0, 0 |
+        | NOT (one input) | 1 for 0, 0 for 1 |
+
+        In Python, on bits 0 and 1, these are `a & b`, `a | b`, `a ^ b`, `1 - (a & b)`, `1 - (a | b)` and `1 - a`. The bitwise operators of [[h0.bitwise-operations-and-masks]] are these same gates applied to every bit position of a word at once: a 32-bit AND instruction is 32 AND gates side by side.
+    - question:
+        id: derivation-nor
+        type: choice
+        system: s2
+        prompt: |
+          Which gate gives 1 only when both of its inputs are 0?
+        options:
+          - "NOR"
+          - "NAND"
+          - "XOR"
+          - "AND"
+        answer: 0
+        explanation: |
+          NOR is NOT of OR. OR is 0 only when both inputs are 0, so NOR is 1 only then. NAND is 0 only when both inputs are 1.
+    - text: |
+        **Any table becomes a circuit.** A function of n input bits has a truth table of 2ⁿ rows, and choosing a 0 or 1 for each row gives a different function, so there are 2 to the power 2ⁿ of them. Every one of them can be built from AND, OR and NOT by the **sum of products** method. For each row where the output is 1, write a term that ANDs together every input, negated where that input is 0 on that row; the term is 1 on that row and on no other. Then OR the terms. For XOR the rows with output 1 are 01 and 10, so XOR = (NOT a AND b) OR (a AND NOT b).
+
+        Sum of products is always correct but rarely small. The laws of [[f2.boolean-algebra]] shrink it: distribution, absorption and De Morgan's laws, NOT (a AND b) = NOT a OR NOT b and NOT (a OR b) = NOT a AND NOT b, rewrite a circuit into an equivalent one with fewer gates, which is what the synthesis tools that turn hardware descriptions into chips spend much of their time doing.
+    - question:
+        id: derivation-sop
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of building a circuit for any truth table by sum of products in order.
+        steps:
+          - "List the rows of the truth table where the output is 1."
+          - "For each such row, AND together every input, putting a NOT on each input that is 0 in that row."
+          - "OR together all of those terms."
+          - "Simplify the result with the laws of Boolean algebra."
+        explanation: |
+          Each AND term picks out exactly one row, and the OR is 1 whenever any picked row occurs. Simplifying comes last because it needs a correct circuit to start from.
+    - question:
+        id: derivation-count
+        type: numeric
+        system: s2
+        prompt: |
+          How many different Boolean functions of three input bits are there?
+        answer: "256"
+        explanation: |
+          Three inputs give 2³ = 8 rows, and each row's output can be 0 or 1 independently, so there are 2⁸ = 256 functions.
+    - text: |
+        **NAND is universal.** Since every function can be built from AND, OR and NOT, a gate that can build those three can build everything. NAND can. Tie its inputs together and NAND(a, a) = NOT a. Follow a NAND with a NOT and you have AND. And by De Morgan, a OR b = NOT (NOT a AND NOT b) = NAND(NOT a, NOT b), three NANDs in all. NOR is universal for the same reason. A chip that needs only one kind of gate needs only one layout to perfect, and early integrated circuits, including the guidance computer that flew to the Moon, were built almost entirely from NOR gates.
+
+        Counting gates is not counting the best circuit, though. Built from the pieces above, XOR = (NOT a AND b) OR (a AND NOT b) takes many NANDs, but the clever circuit in the figure takes four: one NAND of a and b, shared by two NANDs that each combine it with one input, and a final NAND of those two.
+    - question:
+        id: derivation-or
+        type: numeric
+        system: s2
+        prompt: |
+          A circuit builds OR as NAND(NOT a, NOT b), making each NOT from a NAND with its inputs tied together. How many NAND gates does it use?
+        answer: "3"
+        explanation: |
+          Two NANDs make NOT a and NOT b, and a third combines them. By De Morgan's law, NAND of the two negations is NOT (NOT a AND NOT b), which is a OR b.
+    - text: |
+        **Selecting and decoding.** Two small circuits appear everywhere in a processor. A **multiplexer**, or mux, chooses between inputs: a 2-to-1 mux with select bit s outputs a when s is 0 and b when s is 1, which is (a AND NOT s) OR (b AND s). Wider muxes are trees of these. A 4-to-1 mux takes two select bits and uses the low one to choose within each pair and the high one to choose between the pairs, and a processor uses muxes like it to pick which register feeds the adder. A **decoder** goes the other way: it turns an n-bit number into 2ⁿ output wires, exactly one of which is 1, the wire whose number was given. Memory uses decoders to switch on the one row whose address arrived, as the third lesson of this cluster shows.
+
+        **Delay and depth.** A gate does not answer instantly; its output changes a few picoseconds after its inputs, and gates of different kinds and sizes take different times. So the time a combinational circuit needs to settle is the longest total delay along any path from an input to the output, its **critical path**. The relation "this wire feeds the gate that drives that wire" has no loops in a combinational circuit, so it orders the wires as a partial order, in the sense of [[f2.equivalence-relations-and-partial-orders]]. The circuit is a tree, or more generally a graph without cycles, like the expression trees of [[s7.syntax-trees-and-evaluation]], and its settling time is found by working up from the inputs, each gate settling its own delay after the slowest of its inputs. A processor's clock cannot tick faster than its slowest critical path allows, which is why circuit designers care so much about depth.
+    - question:
+        id: derivation-delay
+        type: numeric
+        system: s2
+        prompt: |
+          A NOT gate takes 1 unit of time, AND 2 and OR 2. In the 2-to-1 multiplexer built as (a AND NOT s) OR (b AND s), every input is steady from time 0. After how many units is the output certain to have settled?
+        answer: "5"
+        explanation: |
+          The slowest path runs from s through the NOT (1), then the AND (2), then the OR (2), a total of 5. The path from b through the other AND and the OR takes only 4.
+  formal:
+    - text: |
+        **Bits and gates.** A bit is a voltage near 0 V (0) or near the supply (1). A gate computes a Boolean function of its input bits; CMOS builds NOT from 2 transistors and NAND or NOR from 4.
+
+        **Truth tables.** A function of n bits is fixed by a table of 2ⁿ rows, so there are 2 to the power 2ⁿ such functions; for n = 2 there are 16.
+
+        **Sum of products.** Any function equals the OR, over the rows where it is 1, of the AND of the inputs, each negated where it is 0 in that row. Boolean algebra, including De Morgan's laws, rewrites it into equivalent smaller circuits.
+
+        **Universality.** NAND alone, or NOR alone, builds NOT, AND and OR, and so every Boolean function.
+
+        **Mux and decoder.** A 2-to-1 mux outputs (a AND NOT s) OR (b AND s). An n-to-2ⁿ decoder sets exactly the output wire whose number is its input.
+
+        **Settling time.** A combinational circuit's wires form a graph without cycles. A wire settles its gate's delay after the latest of the gate's inputs; the circuit settles at the longest such path, the critical path.
+  drill:
+    - text: Seconds each. Read each gate as its truth table.
+    - question:
+        id: drill-xor
+        type: choice
+        system: s1
+        prompt: |
+          A staircase light has a switch at each end, and flipping either one changes the light. Which gate gives the light's state from the two switches?
+        options:
+          - "XOR"
+          - "OR"
+          - "AND"
+          - "NAND"
+        answer: 0
+        explanation: Flipping either input flips the output, which is XOR. It is 1 exactly when the two switches differ.
+    - question:
+        id: drill-universal
+        type: choice
+        system: s1
+        prompt: |
+          A NAND gate has both of its inputs connected to the same wire a. What does it output?
+        options:
+          - "NOT a"
+          - "a"
+          - "Always 1"
+          - "Always 0"
+        answer: 0
+        explanation: NAND(a, a) = NOT (a AND a) = NOT a.
+    - question:
+        id: predict-gates
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          a, b = 1, 0
+          print(1 - (a & b), (a | b) & (1 - (a & b)))
+        output: "1 1"
+        explanation: The first value is NAND of 1 and 0, which is 1. The second is OR AND NAND, which is XOR, and 1 XOR 0 is 1.
+    - question:
+        id: predict-mux
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def mux(s, a, b):
+              return (a & (1 - s)) | (b & s)
+
+
+          print(mux(0, 1, 0), mux(1, 1, 0))
+        output: "1 0"
+        explanation: With s = 0 the mux passes a, which is 1; with s = 1 it passes b, which is 0.
+    - question:
+        id: predict-decoder
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def decode(a1, a0):
+              return [(1 - a1) & (1 - a0), (1 - a1) & a0, a1 & (1 - a0), a1 & a0]
+
+
+          print(decode(1, 0))
+        output: "[0, 0, 1, 0]"
+        explanation: The inputs 1 and 0 make the number 2, so only output wire 2 is 1.
+  work:
+    - text: Slower now. Each answer builds a circuit, or works out how long one takes.
+    - question:
+        id: write-nand-only
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Build NOT, AND, OR and XOR from the `nand` function alone, with no operators of your own, and XOR from at most four NANDs. The program should print a header and then the truth table of the three two-input gates.
+        starter: |
+          def nand(a, b):
+              # The one gate you may use. a and b are each 0 or 1.
+              return 1 - (a & b)
+
+
+          def not_(a):
+              # Build each gate below from nand alone: no and, or, not or bit operators.
+              return 0
+
+
+          def and_(a, b):
+              return 0
+
+
+          def or_(a, b):
+              return 0
+
+
+          def xor(a, b):
+              # Use at most four calls to nand.
+              return 0
+
+
+          print("a b | and or xor")
+          for a in [0, 1]:
+              for b in [0, 1]:
+                  print(a, b, "|", and_(a, b), " ", or_(a, b), " ", xor(a, b))
+        solution: |
+          def nand(a, b):
+              # The one gate you may use. a and b are each 0 or 1.
+              return 1 - (a & b)
+
+
+          def not_(a):
+              # Build each gate below from nand alone: no and, or, not or bit operators.
+              return nand(a, a)
+
+
+          def and_(a, b):
+              return not_(nand(a, b))
+
+
+          def or_(a, b):
+              return nand(not_(a), not_(b))
+
+
+          def xor(a, b):
+              # Use at most four calls to nand.
+              both = nand(a, b)
+              return nand(nand(a, both), nand(b, both))
+
+
+          print("a b | and or xor")
+          for a in [0, 1]:
+              for b in [0, 1]:
+                  print(a, b, "|", and_(a, b), " ", or_(a, b), " ", xor(a, b))
+        tests: |
+          import ast as _ast
+
+          _tree = _ast.parse(source)
+          for _node in _ast.walk(_tree):
+              if isinstance(_node, _ast.FunctionDef) and _node.name != "nand":
+                  for _inner in _ast.walk(_node):
+                      assert not isinstance(_inner, (_ast.BoolOp, _ast.BinOp, _ast.Compare)) and not (isinstance(_inner, _ast.UnaryOp) and isinstance(_inner.op, _ast.Not)), _node.name + " should be built from nand alone, with no operators of its own"
+          for _a in [0, 1]:
+              assert not_(_a) == 1 - _a, "not_(" + str(_a) + ") should be " + str(1 - _a)
+              for _b in [0, 1]:
+                  assert and_(_a, _b) == (_a & _b), "and_(" + str(_a) + ", " + str(_b) + ") is wrong"
+                  assert or_(_a, _b) == (_a | _b), "or_(" + str(_a) + ", " + str(_b) + ") is wrong"
+                  assert xor(_a, _b) == (_a ^ _b), "xor(" + str(_a) + ", " + str(_b) + ") is wrong"
+          _real = nand
+          _calls = [0]
+
+
+          def _counting(_x, _y):
+              _calls[0] += 1
+              return _real(_x, _y)
+
+
+          globals()["nand"] = _counting
+          for _a in [0, 1]:
+              for _b in [0, 1]:
+                  _calls[0] = 0
+                  xor(_a, _b)
+                  assert _calls[0] <= 4, "xor should use at most four nand gates, but it used " + str(_calls[0])
+          globals()["nand"] = _real
+          assert output.splitlines()[0] == "a b | and or xor", "Keep the header line"
+        wrong:
+          - |
+            def nand(a, b):
+                # The one gate you may use. a and b are each 0 or 1.
+                return 1 - (a & b)
+
+
+            def not_(a):
+                # Build each gate below from nand alone: no and, or, not or bit operators.
+                return nand(a, a)
+
+
+            def and_(a, b):
+                return not_(nand(a, b))
+
+
+            def or_(a, b):
+                return nand(not_(a), not_(b))
+
+
+            def xor(a, b):
+                # Use at most four calls to nand.
+                return or_(a, b)
+
+
+            print("a b | and or xor")
+            for a in [0, 1]:
+                for b in [0, 1]:
+                    print(a, b, "|", and_(a, b), " ", or_(a, b), " ", xor(a, b))
+          - |
+            def nand(a, b):
+                # The one gate you may use. a and b are each 0 or 1.
+                return 1 - (a & b)
+
+
+            def not_(a):
+                # Build each gate below from nand alone: no and, or, not or bit operators.
+                return nand(a, a)
+
+
+            def and_(a, b):
+                return not_(nand(a, b))
+
+
+            def or_(a, b):
+                return nand(not_(a), b)
+
+
+            def xor(a, b):
+                # Use at most four calls to nand.
+                both = nand(a, b)
+                return nand(nand(a, both), nand(b, both))
+
+
+            print("a b | and or xor")
+            for a in [0, 1]:
+                for b in [0, 1]:
+                    print(a, b, "|", and_(a, b), " ", or_(a, b), " ", xor(a, b))
+          - |
+            def nand(a, b):
+                # The one gate you may use. a and b are each 0 or 1.
+                return 1 - (a & b)
+
+
+            def not_(a):
+                # Build each gate below from nand alone: no and, or, not or bit operators.
+                return nand(a, a)
+
+
+            def and_(a, b):
+                return not_(nand(a, b))
+
+
+            def or_(a, b):
+                return nand(not_(a), not_(b))
+
+
+            def xor(a, b):
+                # Use at most four calls to nand.
+                return and_(or_(a, b), nand(a, b))
+
+
+            print("a b | and or xor")
+            for a in [0, 1]:
+                for b in [0, 1]:
+                    print(a, b, "|", and_(a, b), " ", or_(a, b), " ", xor(a, b))
+        explanation: |
+          NOT is a NAND with both inputs tied together, AND is NOT of NAND, and OR is NAND of the two negations by De Morgan's law. XOR shares one NAND of a and b between two NANDs that each combine it with one input; their NAND is XOR, four gates in all. The sum-of-products XOR is correct but uses far more NANDs.
+    - question:
+        id: fix-mux4
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A 4-to-1 multiplexer picks one of four level-crossing sensors by its number. Reading the sensors for gates 0 to 3 in turn should print `sensor read for gates 0 to 3: [0, 1, 0, 1]`, but the program prints `sensor read for gates 0 to 3: [0, 0, 1, 1]`. Find the fault and fix it.
+        starter: |
+          def mux2(s, a, b):
+              # A 2-to-1 multiplexer: a when s is 0, b when s is 1.
+              return (a & (1 - s)) | (b & s)
+
+
+          def mux4(s1, s0, inputs):
+              # A 4-to-1 multiplexer built from three 2-to-1 multiplexers. The select
+              # bits s1 s0 name the input numbered 2 * s1 + s0.
+              low = mux2(s1, inputs[0], inputs[1])
+              high = mux2(s1, inputs[2], inputs[3])
+              return mux2(s0, low, high)
+
+
+          # Four level-crossing sensors; only gates 1 and 3 report a train.
+          sensors = [0, 1, 0, 1]
+          picked = []
+          for gate in range(4):
+              picked.append(mux4(gate // 2, gate % 2, sensors))
+          print("sensor read for gates 0 to 3:", picked)
+        solution: |
+          def mux2(s, a, b):
+              # A 2-to-1 multiplexer: a when s is 0, b when s is 1.
+              return (a & (1 - s)) | (b & s)
+
+
+          def mux4(s1, s0, inputs):
+              # A 4-to-1 multiplexer built from three 2-to-1 multiplexers. The select
+              # bits s1 s0 name the input numbered 2 * s1 + s0.
+              low = mux2(s0, inputs[0], inputs[1])
+              high = mux2(s0, inputs[2], inputs[3])
+              return mux2(s1, low, high)
+
+
+          # Four level-crossing sensors; only gates 1 and 3 report a train.
+          sensors = [0, 1, 0, 1]
+          picked = []
+          for gate in range(4):
+              picked.append(mux4(gate // 2, gate % 2, sensors))
+          print("sensor read for gates 0 to 3:", picked)
+        tests: |
+          for _pattern in range(16):
+              _inputs = [(_pattern >> _i) & 1 for _i in range(4)]
+              for _n in range(4):
+                  _got = mux4(_n // 2, _n % 2, _inputs)
+                  assert _got == _inputs[_n], "With inputs " + str(_inputs) + ", select bits " + str(_n // 2) + " " + str(_n % 2) + " should pick input " + str(_n) + ", which is " + str(_inputs[_n]) + ", not " + str(_got)
+          assert output.strip() == "sensor read for gates 0 to 3: [0, 1, 0, 1]", "The program should print the sensors in order: [0, 1, 0, 1]"
+        wrong:
+          - |
+            def mux2(s, a, b):
+                # A 2-to-1 multiplexer: a when s is 0, b when s is 1.
+                return (a & (1 - s)) | (b & s)
+
+
+            def mux4(s1, s0, inputs):
+                # A 4-to-1 multiplexer built from three 2-to-1 multiplexers. The select
+                # bits s1 s0 name the input numbered 2 * s1 + s0.
+                low = mux2(s0, inputs[0], inputs[1])
+                high = mux2(s1, inputs[2], inputs[3])
+                return mux2(s1, low, high)
+
+
+            # Four level-crossing sensors; only gates 1 and 3 report a train.
+            sensors = [0, 1, 0, 1]
+            picked = []
+            for gate in range(4):
+                picked.append(mux4(gate // 2, gate % 2, sensors))
+            print("sensor read for gates 0 to 3:", picked)
+          - |
+            def mux2(s, a, b):
+                # A 2-to-1 multiplexer: a when s is 0, b when s is 1.
+                return (a & (1 - s)) | (b & s)
+
+
+            def mux4(s1, s0, inputs):
+                # A 4-to-1 multiplexer built from three 2-to-1 multiplexers. The select
+                # bits s1 s0 name the input numbered 2 * s1 + s0.
+                low = mux2(s0, inputs[0], inputs[1])
+                high = mux2(s0, inputs[2], inputs[3])
+                return mux2(s1, high, low)
+
+
+            # Four level-crossing sensors; only gates 1 and 3 report a train.
+            sensors = [0, 1, 0, 1]
+            picked = []
+            for gate in range(4):
+                picked.append(mux4(gate // 2, gate % 2, sensors))
+            print("sensor read for gates 0 to 3:", picked)
+          - |
+            def mux2(s, a, b):
+                # A 2-to-1 multiplexer: a when s is 0, b when s is 1.
+                return (a & (1 - s)) | (b & s)
+
+
+            def mux4(s1, s0, inputs):
+                # A 4-to-1 multiplexer built from three 2-to-1 multiplexers. The select
+                # bits s1 s0 name the input numbered 2 * s1 + s0.
+                low = mux2(s0, inputs[0], inputs[1])
+                high = mux2(s0, inputs[2], inputs[3])
+                return mux2(s0, low, high)
+
+
+            # Four level-crossing sensors; only gates 1 and 3 report a train.
+            sensors = [0, 1, 0, 1]
+            picked = []
+            for gate in range(4):
+                picked.append(mux4(gate // 2, gate % 2, sensors))
+            print("sensor read for gates 0 to 3:", picked)
+        explanation: |
+          Input 2 × s1 + s0 lives in the pair chosen by s1, at the position within the pair chosen by s0. So the first layer of muxes, which chooses within each pair, needs s0, and the last mux, which chooses between the pairs, needs s1. With the two swapped, the mux reads input 2 × s0 + s1, which swaps inputs 1 and 2.
+    - question:
+        id: write-settle
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `settle`, which works out when a wire of a combinational circuit settles, given each gate's delay. The program should print three lines giving when a full adder's sum and carry settle, 6 and 7, and then when the carry out of four adders chained together settles, 19.
+        starter: |
+          DELAY = {"not": 1, "nand": 1, "nor": 1, "and": 2, "or": 2, "xor": 3}
+
+
+          def settle(circuit, wire, memo):
+              # circuit maps each gate's output wire to (gate kind, list of input wires).
+              # A wire that is not in circuit is an input to the whole circuit, steady
+              # from time 0. A gate's output settles DELAY[kind] after the last of its
+              # inputs settles. Return when wire settles, recording answers in memo.
+              return 0
+
+
+          full_adder = {
+              "x": ("xor", ["a", "b"]),
+              "sum": ("xor", ["x", "cin"]),
+              "g": ("and", ["a", "b"]),
+              "p": ("and", ["x", "cin"]),
+              "cout": ("or", ["g", "p"]),
+          }
+          print("sum settles after", settle(full_adder, "sum", {}))
+          print("carry settles after", settle(full_adder, "cout", {}))
+
+          adder = {}
+          for i in range(4):
+              carry_in = "c" + str(i)
+              adder["x" + str(i)] = ("xor", ["a" + str(i), "b" + str(i)])
+              adder["s" + str(i)] = ("xor", ["x" + str(i), carry_in])
+              adder["g" + str(i)] = ("and", ["a" + str(i), "b" + str(i)])
+              adder["p" + str(i)] = ("and", ["x" + str(i), carry_in])
+              adder["c" + str(i + 1)] = ("or", ["g" + str(i), "p" + str(i)])
+          print("4-bit carry out settles after", settle(adder, "c4", {}))
+        solution: |
+          DELAY = {"not": 1, "nand": 1, "nor": 1, "and": 2, "or": 2, "xor": 3}
+
+
+          def settle(circuit, wire, memo):
+              # circuit maps each gate's output wire to (gate kind, list of input wires).
+              # A wire that is not in circuit is an input to the whole circuit, steady
+              # from time 0. A gate's output settles DELAY[kind] after the last of its
+              # inputs settles. Return when wire settles, recording answers in memo.
+              if wire not in circuit:
+                  return 0
+              if wire in memo:
+                  return memo[wire]
+              kind, inputs = circuit[wire]
+              latest = max(settle(circuit, w, memo) for w in inputs)
+              memo[wire] = latest + DELAY[kind]
+              return memo[wire]
+
+
+          full_adder = {
+              "x": ("xor", ["a", "b"]),
+              "sum": ("xor", ["x", "cin"]),
+              "g": ("and", ["a", "b"]),
+              "p": ("and", ["x", "cin"]),
+              "cout": ("or", ["g", "p"]),
+          }
+          print("sum settles after", settle(full_adder, "sum", {}))
+          print("carry settles after", settle(full_adder, "cout", {}))
+
+          adder = {}
+          for i in range(4):
+              carry_in = "c" + str(i)
+              adder["x" + str(i)] = ("xor", ["a" + str(i), "b" + str(i)])
+              adder["s" + str(i)] = ("xor", ["x" + str(i), carry_in])
+              adder["g" + str(i)] = ("and", ["a" + str(i), "b" + str(i)])
+              adder["p" + str(i)] = ("and", ["x" + str(i), carry_in])
+              adder["c" + str(i + 1)] = ("or", ["g" + str(i), "p" + str(i)])
+          print("4-bit carry out settles after", settle(adder, "c4", {}))
+        tests: |
+          _c = {"n": ("not", ["a"]), "o": ("and", ["n", "b"])}
+          _got = settle(_c, "o", {})
+          assert _got == 3, "not a (1) then and with b (2) should settle after 3, not " + str(_got)
+          assert settle(_c, "a", {}) == 0, "An input to the circuit is steady from time 0"
+          _c = {"slow": ("xor", ["a", "b"]), "fast": ("not", ["c"]), "out": ("nand", ["fast", "slow"])}
+          _got = settle(_c, "out", {})
+          assert _got == 4, "A gate waits for its slowest input: xor (3) then nand (1) gives 4, not " + str(_got)
+          _c = {"out": ("or", ["p", "q"]), "p": ("nor", ["a", "b"]), "q": ("and", ["a", "p"])}
+          _got = settle(_c, "out", {})
+          assert _got == 5, "nor (1), then and (2), then or (2) gives 5, not " + str(_got)
+          _c = {}
+          for _i in range(1, 300):
+              _c["w" + str(_i)] = ("nand", ["w" + str(_i - 1), "w" + str(_i - 1)])
+          _memo = {}
+          assert settle(_c, "w100", _memo) == 100, "A chain of 100 nand gates settles after 100"
+          assert _memo.get("w50") == 50, "Record each gate's settling time in memo, so a wire shared by many gates is worked out once"
+          assert output.splitlines() == ["sum settles after 6", "carry settles after 7", "4-bit carry out settles after 19"], "The program should print 6, 7 and 19"
+        wrong:
+          - |
+            DELAY = {"not": 1, "nand": 1, "nor": 1, "and": 2, "or": 2, "xor": 3}
+
+
+            def settle(circuit, wire, memo):
+                # circuit maps each gate's output wire to (gate kind, list of input wires).
+                # A wire that is not in circuit is an input to the whole circuit, steady
+                # from time 0. A gate's output settles DELAY[kind] after the last of its
+                # inputs settles. Return when wire settles, recording answers in memo.
+                if wire not in circuit:
+                    return 0
+                if wire in memo:
+                    return memo[wire]
+                kind, inputs = circuit[wire]
+                latest = settle(circuit, inputs[0], memo)
+                memo[wire] = latest + DELAY[kind]
+                return memo[wire]
+
+
+            full_adder = {
+                "x": ("xor", ["a", "b"]),
+                "sum": ("xor", ["x", "cin"]),
+                "g": ("and", ["a", "b"]),
+                "p": ("and", ["x", "cin"]),
+                "cout": ("or", ["g", "p"]),
+            }
+            print("sum settles after", settle(full_adder, "sum", {}))
+            print("carry settles after", settle(full_adder, "cout", {}))
+
+            adder = {}
+            for i in range(4):
+                carry_in = "c" + str(i)
+                adder["x" + str(i)] = ("xor", ["a" + str(i), "b" + str(i)])
+                adder["s" + str(i)] = ("xor", ["x" + str(i), carry_in])
+                adder["g" + str(i)] = ("and", ["a" + str(i), "b" + str(i)])
+                adder["p" + str(i)] = ("and", ["x" + str(i), carry_in])
+                adder["c" + str(i + 1)] = ("or", ["g" + str(i), "p" + str(i)])
+            print("4-bit carry out settles after", settle(adder, "c4", {}))
+          - |
+            DELAY = {"not": 1, "nand": 1, "nor": 1, "and": 2, "or": 2, "xor": 3}
+
+
+            def settle(circuit, wire, memo):
+                # circuit maps each gate's output wire to (gate kind, list of input wires).
+                # A wire that is not in circuit is an input to the whole circuit, steady
+                # from time 0. A gate's output settles DELAY[kind] after the last of its
+                # inputs settles. Return when wire settles, recording answers in memo.
+                if wire not in circuit:
+                    return 0
+                if wire in memo:
+                    return memo[wire]
+                kind, inputs = circuit[wire]
+                latest = min(settle(circuit, w, memo) for w in inputs)
+                memo[wire] = latest + DELAY[kind]
+                return memo[wire]
+
+
+            full_adder = {
+                "x": ("xor", ["a", "b"]),
+                "sum": ("xor", ["x", "cin"]),
+                "g": ("and", ["a", "b"]),
+                "p": ("and", ["x", "cin"]),
+                "cout": ("or", ["g", "p"]),
+            }
+            print("sum settles after", settle(full_adder, "sum", {}))
+            print("carry settles after", settle(full_adder, "cout", {}))
+
+            adder = {}
+            for i in range(4):
+                carry_in = "c" + str(i)
+                adder["x" + str(i)] = ("xor", ["a" + str(i), "b" + str(i)])
+                adder["s" + str(i)] = ("xor", ["x" + str(i), carry_in])
+                adder["g" + str(i)] = ("and", ["a" + str(i), "b" + str(i)])
+                adder["p" + str(i)] = ("and", ["x" + str(i), carry_in])
+                adder["c" + str(i + 1)] = ("or", ["g" + str(i), "p" + str(i)])
+            print("4-bit carry out settles after", settle(adder, "c4", {}))
+          - |
+            DELAY = {"not": 1, "nand": 1, "nor": 1, "and": 2, "or": 2, "xor": 3}
+
+
+            def settle(circuit, wire, memo):
+                # circuit maps each gate's output wire to (gate kind, list of input wires).
+                # A wire that is not in circuit is an input to the whole circuit, steady
+                # from time 0. A gate's output settles DELAY[kind] after the last of its
+                # inputs settles. Return when wire settles, recording answers in memo.
+                if wire not in circuit:
+                    return 1
+                if wire in memo:
+                    return memo[wire]
+                kind, inputs = circuit[wire]
+                latest = max(settle(circuit, w, memo) for w in inputs)
+                memo[wire] = latest + DELAY[kind]
+                return memo[wire]
+
+
+            full_adder = {
+                "x": ("xor", ["a", "b"]),
+                "sum": ("xor", ["x", "cin"]),
+                "g": ("and", ["a", "b"]),
+                "p": ("and", ["x", "cin"]),
+                "cout": ("or", ["g", "p"]),
+            }
+            print("sum settles after", settle(full_adder, "sum", {}))
+            print("carry settles after", settle(full_adder, "cout", {}))
+
+            adder = {}
+            for i in range(4):
+                carry_in = "c" + str(i)
+                adder["x" + str(i)] = ("xor", ["a" + str(i), "b" + str(i)])
+                adder["s" + str(i)] = ("xor", ["x" + str(i), carry_in])
+                adder["g" + str(i)] = ("and", ["a" + str(i), "b" + str(i)])
+                adder["p" + str(i)] = ("and", ["x" + str(i), carry_in])
+                adder["c" + str(i + 1)] = ("or", ["g" + str(i), "p" + str(i)])
+            print("4-bit carry out settles after", settle(adder, "c4", {}))
+        explanation: |
+          An input to the circuit settles at 0. Any other wire settles its gate's delay after the latest of the gate's inputs, so take the maximum over the inputs, found by the same function recursively, and add the delay. Storing each answer in memo means a wire that feeds many gates is worked out once. Looking at only the first input, taking the fastest input instead of the slowest, or starting the circuit's inputs at 1 instead of 0 all give the wrong times.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. How many different two-input gates are there, counting every possible rule from the four input pairs to an output bit?
+        answer: "16"
+        explanation: |
+          A two-input gate is fixed by its truth table of four rows, and each row's output can be 0 or 1, so there are 2⁴ = 16 of them.
+    - question:
+        id: work-clock
+        type: choice
+        system: s2
+        prompt: |
+          A designer speeds up one gate on a circuit's critical path, but the circuit's settling time does not change at all. What is the most likely reason?
+        options:
+          - "Another path through the circuit was exactly as slow, so it is now the critical path"
+          - "Gate delays add up only on paths of more than ten gates"
+          - "The settling time is set by the number of inputs, not by the gates"
+          - "Speeding up any one gate never changes a circuit's settling time"
+        answer: 0
+        explanation: |
+          The settling time is the longest path. If two paths tied for longest, shortening one leaves the other in charge, and the circuit is no faster until that one is shortened too.
+  connections:
+    - text: |
+        16. A two-input gate is just a truth table of four rows, each 0 or 1, so there are 2⁴ of them. Six have names that appear in every textbook; the rest include the gates that ignore one input, the gate that always gives 0, and "a AND NOT b". NAND alone builds all 16, which is why a single kind of gate is enough for a whole processor.
+
+        Gates so far only decide things. The next step is to make them count: [[h1.adders-and-the-alu]] wires gates into adders that add whole words, uses two's complement to subtract with the same circuit, and gathers the operations into the arithmetic logic unit at the centre of every processor.

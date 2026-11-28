@@ -1,0 +1,762 @@
+concept: h1.calling-conventions-and-the-stack
+minutes: 90
+claim: You can call and return from functions in RISC-V with call and ret and say what happens to ra; pass arguments and results in a0 to a7; tell caller-saved registers from callee-saved ones and keep the convention; build a stack frame with a prologue and an epilogue, keeping sp aligned; write leaf, non-leaf and recursive functions in assembly; and explain how a buffer overflow on the stack can take over a program's return, and the defences against it.
+recalls: [h1.assembly-programming]
+uses: [h1.an-instruction-set-risc-v, h1.the-fetch-decode-execute-cycle, s1.recursion, s2.stacks-and-queues, s7.how-python-runs-bytecode-and-the-interpreter-loop, s7.memory-management-and-garbage-collection]
+leads: [h1.pipelining]
+language: asm
+starter: |
+  # Scratch space. call jumps to a function and saves the way back in ra;
+  # ret jumps back through ra.
+  .text
+  main:
+      li a0, 21
+      call double
+      li a7, 1
+      ecall
+      li a7, 10           # service 10: end the program
+      ecall
+
+  double:
+      add a0, a0, a0
+      ret
+parts:
+  recall:
+    - text: |
+        [[h1.assembly-programming]] wrote loops over arrays and strings, each program one straight piece of code. Real programs are built from functions, and the same function is called from many places, with different arguments, sometimes by itself. This lesson sets out the rules that let functions written separately work together. Three quick pulls first.
+  puzzle:
+    - text: |
+        A recursive factorial in RISC-V assembly calls itself: fact(10) calls fact(9), which calls fact(8), and so on down to fact(0), which returns 1 at once. Every call from fact(10) to fact(1) saves two registers on the stack in a frame of 16 bytes, to keep sp a multiple of 16; fact(0) needs no frame.
+
+        **At the deepest point, how many bytes of stack are in use by fact's frames?**
+  intuition:
+    - text: |
+        In a government office, a clerk handling your file sometimes needs a signature from another section. Before walking over, the clerk puts a slip on top of the pile on the desk: whose file this is and which page they had reached. The other section might send them on to a third, who leaves a slip of their own. As each errand finishes, the top slip is taken off and work resumes exactly where it stopped. The pile only ever grows or shrinks at the top, and the most recent errand is always finished first.
+
+        The **call stack** is that pile. Each function call leaves a **frame** with whatever must survive the call: above all the address to return to. The figure follows a recursive factorial as it calls itself and returns. Step through it and watch sp move down as frames are added and back up as they are removed.
+    - figure: stack-frames
+      props: { n: 3, step: 0 }
+    - text: |
+        Each frame holds two things. The saved **ra** is the way back to whoever called: every call overwrites ra, so a function that calls another must save its own first. The saved **s0** belongs to the caller: fact uses s0 to keep its n across the call, and promises to put back whatever was there. Because the frames are removed in reverse order, each function finds its own frame exactly where it left it, which is the stack discipline of [[s2.stacks-and-queues]] doing real work.
+  derivation:
+    - text: |
+        **Calling and returning.** `call f` is `jal ra, f`: jump to f and put the address of the next instruction in ra. `ret` is `jalr zero, 0(ra)`: jump to the address in ra. That is all the hardware provides. A function that calls no other, a **leaf**, can leave ra alone. A function that does call another loses its own return address the moment it does, so it must save ra somewhere first and reload it before `ret`; otherwise ret jumps back into the middle of itself and the program loops for ever.
+
+        **The stack.** That somewhere is the stack, a region of memory whose current end is held in **sp**. On RISC-V the stack **grows down**: to make room, subtract from sp; to free it, add back. A function's **prologue** makes its frame and saves registers, `addi sp, sp, -16`, then `sw ra, 12(sp)` and so on; its **epilogue** reloads them and adds 16 back to sp. The standard rules keep sp a multiple of 16 at every call, so frames come in multiples of 16 bytes even when less would do.
+    - question:
+        id: derivation-ra
+        type: choice
+        system: s2
+        prompt: |
+          Function g calls function h. Why must g save ra before the call?
+        options:
+          - "call h overwrites ra with the way back into g, losing the way back to g's own caller"
+          - "h would otherwise change sp"
+          - "ra holds g's argument"
+          - "The processor clears ra at every call"
+        answer: 0
+        explanation: |
+          There is one ra register. The call to h replaces its contents, so g must keep its own return address on the stack and reload it before ret.
+    - text: |
+        **The calling convention.** For functions written by different people, or compiled by different compilers, to work together, they must agree on rules. RISC-V's standard convention says:
+
+        | Registers | Role | Who protects them |
+        | --- | --- | --- |
+        | a0 to a7 | arguments; a0 and a1 also return results | the caller, if it needs them after the call |
+        | t0 to t6 | temporaries | the caller, if it needs them after the call |
+        | s0 to s11 | values that must survive calls | the callee, which restores any it changes |
+        | sp | the stack pointer | the callee, which must leave it as it found it |
+        | ra | the return address | overwritten by every call |
+
+        **Caller-saved** registers, the a and t registers, may be destroyed by any call, so a caller that wants a value afterwards must keep it somewhere safe. **Callee-saved** registers, the s registers and sp, survive calls, because any function that changes them restores them before returning. Splitting the registers this way is a bargain: short-lived values go in t registers and cost nothing to keep; long-lived ones go in s registers, and each function pays only for the s registers it actually uses.
+    - question:
+        id: derivation-callee
+        type: choice
+        system: s2
+        prompt: |
+          A loop keeps a running total and calls a function on every pass. Where should the total live, under the standard convention?
+        options:
+          - "In an s register, saved by the loop's function in its prologue and restored in its epilogue"
+          - "In a t register, since temporaries are fastest"
+          - "In a0, since that is where results go"
+          - "In ra, since calls do not change it"
+        answer: 0
+        explanation: |
+          Any call may destroy t and a registers, and every call overwrites ra. An s register survives calls; the function using it saves the caller's value first and puts it back at the end.
+    - text: |
+        **Frames in full.** A function's frame holds its saved ra, the s registers it uses, any local variables too big or too many for registers, such as a local array, and arguments beyond the eighth. Some code also keeps a **frame pointer** in s0, fixed for the whole call, so that locals can be found at fixed offsets even while sp moves; debuggers use the chain of saved frame pointers to print a backtrace. Recursion needs no special support at all, which is the point of [[s1.recursion]] meeting the stack: each call gets its own frame, so each has its own n.
+    - question:
+        id: derivation-prologue
+        type: order
+        system: s2
+        prompt: |
+          Put the parts of a non-leaf function that uses s0 in order.
+        steps:
+          - "addi sp, sp, -16 to make the frame"
+          - "sw ra, 12(sp) and sw s0, 8(sp) to save the return address and the caller's s0"
+          - "The body, which may use s0 and call other functions"
+          - "lw s0, 8(sp) and lw ra, 12(sp) to restore them"
+          - "addi sp, sp, 16 to free the frame"
+          - "ret"
+        explanation: |
+          The frame must exist before anything is saved in it, and everything must be reloaded before sp moves back, since the frame's memory may be reused by the next call.
+    - question:
+        id: derivation-frame-size
+        type: numeric
+        system: s2
+        prompt: |
+          A function saves ra and s0 to s4, six registers of 4 bytes each, and sp must stay a multiple of 16. How many bytes should its frame take?
+        answer: "32"
+        unit: bytes
+        explanation: |
+          Six registers need 24 bytes, and the next multiple of 16 is 32.
+    - text: |
+        **Stacks in other languages.** C and Rust compile to exactly this. Python's frames, from [[s7.how-python-runs-bytecode-and-the-interpreter-loop]], are objects on the heap of [[s7.memory-management-and-garbage-collection]], but the interpreter itself is a C program running on the machine stack, and each Python call nests C calls inside it. That is why Python stops deep recursion with a RecursionError at about a thousand levels: going much deeper would overflow the real stack, which the operating system gives a fixed size, often 8 megabytes. Overflowing it crashes the program with a segmentation fault.
+
+        **Stack smashing.** A local array lives in the frame, near the saved return address. If a function copies input into a 64-byte array without checking its length, input longer than 64 bytes runs past the end and overwrites the saved ra. When the function returns, it jumps wherever the input said. For decades this **buffer overflow** was the commonest way to take over a program. The defences are layered: languages that check array bounds; a random **canary** value placed below the saved ra and checked before returning; marking the stack as data that cannot be run, as in [[h1.the-fetch-decode-execute-cycle]]; and placing the stack at a random address so the attacker cannot know where to jump.
+    - question:
+        id: derivation-smash
+        type: choice
+        system: s2
+        prompt: |
+          An attacker sends a long name to a C program that copies it into a fixed-size local array without checking the length. What makes this dangerous?
+        options:
+          - "The excess bytes overwrite the saved return address, so the function returns wherever the attacker chooses"
+          - "The program runs out of registers"
+          - "The name is stored in a0, which the function returns"
+          - "The stack grows up into the code"
+        answer: 0
+        explanation: |
+          The array and the saved ra share the frame. Writing past the array's end reaches the saved ra, which ret then trusts.
+  formal:
+    - text: |
+        **Call and return.** call f = jal ra, f; ret = jalr zero, 0(ra). A non-leaf function saves ra before calling.
+
+        **Stack.** Grows down; sp is kept a multiple of 16. Prologue: subtract the frame size from sp and save ra and the s registers used. Epilogue: reload them, add the frame size back, ret.
+
+        **Convention.** Arguments in a0–a7, results in a0 (and a1). Caller-saved: a0–a7, t0–t6. Callee-saved: s0–s11 and sp.
+
+        **Buffer overflow.** Writing past a local array can overwrite the saved return address; defended by bounds checks, canaries, non-executable stacks and randomised addresses.
+  drill:
+    - text: Seconds each. Ask who must put each register back.
+    - question:
+        id: drill-saved
+        type: choice
+        system: s1
+        prompt: |
+          Which of these registers must a function restore before it returns, if it changes them?
+        options:
+          - "s3 and sp"
+          - "t3 and a0"
+          - "a0 and ra"
+          - "t0 and t1"
+        answer: 0
+        explanation: s registers and sp are callee-saved. t and a registers may be destroyed by any call.
+    - question:
+        id: drill-grow
+        type: choice
+        system: s1
+        prompt: |
+          A function's prologue makes a 32-byte frame. Which instruction does it start with?
+        options:
+          - "addi sp, sp, -32"
+          - "addi sp, sp, 32"
+          - "sw sp, 32(sp)"
+          - "li sp, 32"
+        answer: 0
+        explanation: The stack grows down, so making room means subtracting from sp.
+    - question:
+        id: predict-calls
+        type: predict
+        system: s1
+        language: asm
+        prompt: What does this print?
+        code: |
+          main:
+              li a0, 5
+              call double
+              call double
+              li a7, 1
+              ecall
+              li a7, 10
+              ecall
+
+          double:
+              add a0, a0, a0
+              ret
+        output: "20"
+        explanation: Each call doubles a0 and returns to the instruction after the call, so 5 becomes 10 and then 20.
+    - question:
+        id: predict-push
+        type: predict
+        system: s1
+        language: asm
+        prompt: What does this print?
+        code: |
+          main:
+              li t0, 7
+              li t1, 9
+              addi sp, sp, -8
+              sw t0, 0(sp)
+              sw t1, 4(sp)
+              lw a0, 4(sp)
+              addi sp, sp, 8
+              li a7, 1
+              ecall
+        output: "9"
+        explanation: t1 was stored 4 bytes above the new sp, so loading from 4(sp) gets 9 back.
+    - question:
+        id: predict-sp
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          sp = 0x7FFFEFFC
+          for depth in range(3):
+              sp -= 16
+          print(hex(sp))
+        output: "0x7fffefcc"
+        explanation: Three frames of 16 bytes move sp down by 48, which is 0x30.
+  work:
+    - text: Slower now. All three answers are functions in assembly, checked by calling them.
+    - question:
+        id: write-factorial
+        type: code
+        mode: write
+        system: s2
+        language: asm
+        prompt: |
+          Write `fact` as a recursive function that follows the calling convention. The tests call it for n from 0 to 12 and check that it leaves sp and the s registers as it found them. The program should print 720.
+        starter: |
+          # fact(n) returns n! in a0, for n from 0 to 12. It must follow the calling
+          # convention: anything it keeps across a call goes on the stack, and it
+          # leaves sp and s0 to s11 as it found them.
+          .text
+          main:
+              li a0, 6
+              call fact
+              li a7, 1
+              ecall
+              li a7, 10           # service 10: end the program
+              ecall
+
+          fact:
+              # fact(0) is 1; otherwise it is n * fact(n - 1).
+              li a0, 1
+              ret
+        solution: |
+          # fact(n) returns n! in a0, for n from 0 to 12. It must follow the calling
+          # convention: anything it keeps across a call goes on the stack, and it
+          # leaves sp and s0 to s11 as it found them.
+          .text
+          main:
+              li a0, 6
+              call fact
+              li a7, 1
+              ecall
+              li a7, 10           # service 10: end the program
+              ecall
+
+          fact:
+              # fact(0) is 1; otherwise it is n * fact(n - 1).
+              bnez a0, recurse
+              li a0, 1
+              ret
+          recurse:
+              addi sp, sp, -16
+              sw ra, 12(sp)
+              sw s0, 8(sp)
+              mv s0, a0
+              addi a0, a0, -1
+              call fact
+              mul a0, s0, a0
+              lw s0, 8(sp)
+              lw ra, 12(sp)
+              addi sp, sp, 16
+              ret
+        tests: |
+          _f = 1
+          for _n in range(13):
+              _c = call("fact", _n)
+              assert _c.value == _f, "fact(" + str(_n) + ") should be " + str(_f) + ", not " + str(_c.value)
+              assert not _c.clobbered, "fact(" + str(_n) + ") changed " + ", ".join(_c.clobbered) + " without restoring it"
+              _f *= _n + 1
+          assert output.strip() == "720", "The program should print 720"
+        wrong:
+          - |
+            # fact(n) returns n! in a0, for n from 0 to 12. It must follow the calling
+            # convention: anything it keeps across a call goes on the stack, and it
+            # leaves sp and s0 to s11 as it found them.
+            .text
+            main:
+                li a0, 6
+                call fact
+                li a7, 1
+                ecall
+                li a7, 10           # service 10: end the program
+                ecall
+
+            fact:
+                # fact(0) is 1; otherwise it is n * fact(n - 1).
+                bnez a0, recurse
+                li a0, 1
+                ret
+            recurse:
+                addi sp, sp, -16
+                sw ra, 12(sp)
+                sw s0, 8(sp)
+                mv s0, a0
+                addi a0, a0, -1
+                call fact
+                mul a0, s0, a0
+                lw ra, 12(sp)
+                addi sp, sp, 16
+                ret
+          - |
+            # fact(n) returns n! in a0, for n from 0 to 12. It must follow the calling
+            # convention: anything it keeps across a call goes on the stack, and it
+            # leaves sp and s0 to s11 as it found them.
+            .text
+            main:
+                li a0, 6
+                call fact
+                li a7, 1
+                ecall
+                li a7, 10           # service 10: end the program
+                ecall
+
+            fact:
+                # fact(0) is 1; otherwise it is n * fact(n - 1).
+                bnez a0, recurse
+                li a0, 1
+                ret
+            recurse:
+                addi sp, sp, -16
+                sw ra, 12(sp)
+                mv s0, a0
+                addi a0, a0, -1
+                call fact
+                mul a0, s0, a0
+                lw ra, 12(sp)
+                addi sp, sp, 16
+                ret
+          - |
+            # fact(n) returns n! in a0, for n from 0 to 12. It must follow the calling
+            # convention: anything it keeps across a call goes on the stack, and it
+            # leaves sp and s0 to s11 as it found them.
+            .text
+            main:
+                li a0, 6
+                call fact
+                li a7, 1
+                ecall
+                li a7, 10           # service 10: end the program
+                ecall
+
+            fact:
+                # fact(0) is 1; otherwise it is n * fact(n - 1).
+                bnez a0, recurse
+                li a0, 1
+                ret
+            recurse:
+                addi sp, sp, -16
+                sw ra, 12(sp)
+                mv t0, a0
+                addi a0, a0, -1
+                call fact
+                mul a0, t0, a0
+                lw ra, 12(sp)
+                addi sp, sp, 16
+                ret
+        explanation: |
+          Return 1 for 0. Otherwise make a frame, save ra and s0, keep n in s0, call fact(n − 1), multiply, restore both and free the frame. Forgetting to restore s0, or never saving it, hands the caller a changed s0, and in the recursion every level then multiplies by the wrong n. Keeping n in t0 fails for the same reason: the recursive call reuses t0.
+    - question:
+        id: write-sum-squares
+        type: code
+        mode: write
+        system: s2
+        language: asm
+        prompt: |
+          Write `sum_squares`, which adds up square(k) for k from 1 to n by calling `square`, keeping its running values in s registers. square is allowed to change any t register, and does. The program should print 30.
+        starter: |
+          # sum_squares(n) returns 1*1 + 2*2 + ... + n*n, calling square for each
+          # term. square is a function like any other: it may change any t or a
+          # register, so keep your running values in s registers, and save them.
+          .text
+          main:
+              li a0, 4
+              call sum_squares
+              li a7, 1
+              ecall
+              li a7, 10
+              ecall
+
+          square:
+              mul a0, a0, a0
+              li t0, 0
+              li t1, 0
+              ret
+
+          sum_squares:
+              # Your code here.
+              li a0, 0
+              ret
+        solution: |
+          # sum_squares(n) returns 1*1 + 2*2 + ... + n*n, calling square for each
+          # term. square is a function like any other: it may change any t or a
+          # register, so keep your running values in s registers, and save them.
+          .text
+          main:
+              li a0, 4
+              call sum_squares
+              li a7, 1
+              ecall
+              li a7, 10
+              ecall
+
+          square:
+              mul a0, a0, a0
+              li t0, 0
+              li t1, 0
+              ret
+
+          sum_squares:
+              # Your code here.
+              addi sp, sp, -16
+              sw ra, 12(sp)
+              sw s0, 8(sp)
+              sw s1, 4(sp)
+              mv s0, a0           # s0: the next number to square, counting down
+              li s1, 0            # s1: the running total
+          loop:
+              beqz s0, done
+              mv a0, s0
+              call square
+              add s1, s1, a0
+              addi s0, s0, -1
+              j loop
+          done:
+              mv a0, s1
+              lw s1, 4(sp)
+              lw s0, 8(sp)
+              lw ra, 12(sp)
+              addi sp, sp, 16
+              ret
+        tests: |
+          for _n in range(11):
+              _c = call("sum_squares", _n)
+              _want = sum(_k * _k for _k in range(1, _n + 1))
+              assert _c.value == _want, "sum_squares(" + str(_n) + ") should be " + str(_want) + ", not " + str(_c.value)
+              assert not _c.clobbered, "sum_squares(" + str(_n) + ") changed " + ", ".join(_c.clobbered) + " without restoring it"
+          assert output.strip() == "30", "The program should print 30"
+        wrong:
+          - |
+            # sum_squares(n) returns 1*1 + 2*2 + ... + n*n, calling square for each
+            # term. square is a function like any other: it may change any t or a
+            # register, so keep your running values in s registers, and save them.
+            .text
+            main:
+                li a0, 4
+                call sum_squares
+                li a7, 1
+                ecall
+                li a7, 10
+                ecall
+
+            square:
+                mul a0, a0, a0
+                li t0, 0
+                li t1, 0
+                ret
+
+            sum_squares:
+                # Your code here.
+                addi sp, sp, -16
+                sw ra, 12(sp)
+                sw s0, 8(sp)
+                sw s1, 4(sp)
+                mv s0, a0           # s0: the next number to square, counting down
+                li t0, 0            # t0: the running total
+            loop:
+                beqz s0, done
+                mv a0, s0
+                call square
+                add t0, t0, a0
+                addi s0, s0, -1
+                j loop
+            done:
+                mv a0, t0
+                lw s1, 4(sp)
+                lw s0, 8(sp)
+                lw ra, 12(sp)
+                addi sp, sp, 16
+                ret
+          - |
+            # sum_squares(n) returns 1*1 + 2*2 + ... + n*n, calling square for each
+            # term. square is a function like any other: it may change any t or a
+            # register, so keep your running values in s registers, and save them.
+            .text
+            main:
+                li a0, 4
+                call sum_squares
+                li a7, 1
+                ecall
+                li a7, 10
+                ecall
+
+            square:
+                mul a0, a0, a0
+                li t0, 0
+                li t1, 0
+                ret
+
+            sum_squares:
+                # Your code here.
+                addi sp, sp, -16
+                sw ra, 12(sp)
+                sw s0, 8(sp)
+                sw s1, 4(sp)
+                mv s0, a0           # s0: the next number to square, counting down
+                li s1, 0            # s1: the running total
+            loop:
+                beqz s0, done
+                mv a0, s0
+                call square
+                add s1, s1, a0
+                addi s0, s0, -1
+                j loop
+            done:
+                mv a0, s1
+                lw s0, 8(sp)
+                lw ra, 12(sp)
+                addi sp, sp, 16
+                ret
+          - |
+            # sum_squares(n) returns 1*1 + 2*2 + ... + n*n, calling square for each
+            # term. square is a function like any other: it may change any t or a
+            # register, so keep your running values in s registers, and save them.
+            .text
+            main:
+                li a0, 4
+                call sum_squares
+                li a7, 1
+                ecall
+                li a7, 10
+                ecall
+
+            square:
+                mul a0, a0, a0
+                li t0, 0
+                li t1, 0
+                ret
+
+            sum_squares:
+                # Your code here.
+                addi sp, sp, -16
+                sw ra, 12(sp)
+                sw s0, 8(sp)
+                sw s1, 4(sp)
+                mv s0, a0           # s0: the next number to square, counting down
+                li s1, 0            # s1: the running total
+            loop:
+                beqz s0, done
+                mv a0, s0
+                call square
+                add s1, s1, a0
+                addi s0, s0, -1
+                j loop
+            done:
+                lw s1, 4(sp)
+                lw s0, 8(sp)
+                lw ra, 12(sp)
+                addi sp, sp, 16
+                ret
+        explanation: |
+          Save ra, s0 and s1, count down in s0, total in s1, call square on each k, and restore everything before returning the total in a0. Keeping the total in t0 loses it whenever square runs; not restoring s1 breaks the caller's s1; and forgetting to move the total into a0 returns the last square instead.
+    - question:
+        id: fix-gst
+        type: code
+        mode: find-bug
+        system: s2
+        language: asm
+        prompt: |
+          main adds up the GST on three bills, 90 + 216 + 63, and should print 369. Instead it prints `163`. Find the fault and fix it.
+        starter: |
+          # main adds up the GST on three bills, keeping its running total in s0
+          # across the calls. gst(amount) returns 18% of the amount, rounded down.
+          .text
+          main:
+              li s0, 0
+              li a0, 500
+              call gst
+              add s0, s0, a0
+              li a0, 1200
+              call gst
+              add s0, s0, a0
+              li a0, 350
+              call gst
+              add s0, s0, a0
+              mv a0, s0
+              li a7, 1
+              ecall
+              li a7, 10
+              ecall
+
+          gst:
+              li s0, 18
+              mul a0, a0, s0
+              li s0, 100
+              div a0, a0, s0
+              ret
+        solution: |
+          # main adds up the GST on three bills, keeping its running total in s0
+          # across the calls. gst(amount) returns 18% of the amount, rounded down.
+          .text
+          main:
+              li s0, 0
+              li a0, 500
+              call gst
+              add s0, s0, a0
+              li a0, 1200
+              call gst
+              add s0, s0, a0
+              li a0, 350
+              call gst
+              add s0, s0, a0
+              mv a0, s0
+              li a7, 1
+              ecall
+              li a7, 10
+              ecall
+
+          gst:
+              li t0, 18
+              mul a0, a0, t0
+              li t0, 100
+              div a0, a0, t0
+              ret
+        tests: |
+          for _amount in [500, 1200, 350, 0, 99, 1000]:
+              _c = call("gst", _amount)
+              assert _c.value == _amount * 18 // 100, "gst(" + str(_amount) + ") should be " + str(_amount * 18 // 100) + ", not " + str(_c.value)
+              assert not _c.clobbered, "gst changed " + ", ".join(_c.clobbered) + " without restoring it, which its caller is allowed to rely on"
+          assert output.strip() == "369", "The program should print 369"
+        wrong:
+          - |
+            # main adds up the GST on three bills, keeping its running total in s0
+            # across the calls. gst(amount) returns 18% of the amount, rounded down.
+            .text
+            main:
+                li s0, 0
+                li a0, 500
+                call gst
+                add s0, s0, a0
+                li a0, 1200
+                call gst
+                add s0, s0, a0
+                li a0, 350
+                call gst
+                add s0, s0, a0
+                mv a0, s0
+                li a7, 1
+                ecall
+                li a7, 10
+                ecall
+
+            gst:
+                addi sp, sp, -16
+                sw s0, 12(sp)
+                li s0, 18
+                mul a0, a0, s0
+                li s0, 100
+                div a0, a0, s0
+                addi sp, sp, 16
+                ret
+          - |
+            # main adds up the GST on three bills, keeping its running total in s0
+            # across the calls. gst(amount) returns 18% of the amount, rounded down.
+            .text
+            main:
+                li t0, 0
+                li a0, 500
+                call gst
+                add t0, t0, a0
+                li a0, 1200
+                call gst
+                add t0, t0, a0
+                li a0, 350
+                call gst
+                add t0, t0, a0
+                mv a0, t0
+                li a7, 1
+                ecall
+                li a7, 10
+                ecall
+
+            gst:
+                li s0, 18
+                mul a0, a0, s0
+                li s0, 100
+                div a0, a0, s0
+                ret
+          - |
+            # main adds up the GST on three bills, keeping its running total in s0
+            # across the calls. gst(amount) returns 18% of the amount, rounded down.
+            .text
+            main:
+                li s0, 0
+                li a0, 500
+                call gst
+                add s0, s0, a0
+                li a0, 1200
+                call gst
+                add s0, s0, a0
+                li a0, 350
+                call gst
+                add s0, s0, a0
+                mv a0, s0
+                li a7, 1
+                ecall
+                li a7, 10
+                ecall
+
+            gst:
+                addi sp, sp, -16
+                sw s0, 12(sp)
+                li s0, 18
+                mul a0, a0, s0
+                li s0, 100
+                div a0, a0, s0
+                lw s0, 12(sp)
+                ret
+        explanation: |
+          gst uses s0 for its constants without saving it, so main's total is replaced by 100 at every call. gst is a leaf with no long-lived values, so the simplest fix is to use t0, which a caller never expects to survive. Saving s0 without reloading it, moving main's total to a t register while gst still breaks s0, or reloading s0 but leaving sp 16 bytes down all still break the rules a caller relies on.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. fact(10) recurses down to fact(0), and each of fact(10) to fact(1) uses a 16-byte frame while fact(0) uses none. At the deepest point, how many bytes of stack do fact's frames use?
+        answer: "160"
+        unit: bytes
+        explanation: |
+          Ten frames of 16 bytes are on the stack at once when fact(0) runs, 160 bytes.
+    - question:
+        id: work-leaf
+        type: choice
+        system: s2
+        prompt: |
+          A function adds its two arguments and returns, calling nothing else and using only a0, a1 and t0. What must it save on the stack?
+        options:
+          - "Nothing: it is a leaf, so ra survives, and it touches no s registers"
+          - "ra, because every function must save it"
+          - "a0 and a1, because it changes them"
+          - "t0, because it uses it"
+        answer: 0
+        explanation: |
+          A leaf never overwrites ra, and a, t registers are caller-saved, so it needs no frame at all. Most small functions are leaves, which is why calls are cheap.
+  connections:
+    - text: |
+        160. Ten frames of 16 bytes are stacked up when fact(0) runs, and they unwind one by one as each call multiplies and returns. Recursion that goes deeper, say a million levels, would need 16 megabytes of stack and overflow a typical 8-megabyte stack, which is why deep recursion is turned into loops.
+
+        You can now write real programs for the machine. The rest of the cluster turns from what the machine does to how it does it fast. [[h1.pipelining]] overlaps the fetch, decode and execute of successive instructions, as an assembly line overlaps the work on successive cars, so that a processor finishes close to one instruction every cycle.

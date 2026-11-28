@@ -1,0 +1,417 @@
+cluster: H1
+title: The controller in a highway toll reader
+minutes: 100
+claim: You will have worked through the small RISC-V controller inside a highway toll reader, from the gates that decide when the barrier lifts, through the counter that adds up the day's takings, the flip-flop that samples the vehicle sensor and the firmware's instructions, to an assembly function that totals the tolls under the calling convention, and finally the pipeline, branch predictor and out-of-order core that decide how fast it all runs.
+brief: |
+  This cluster built a computer from the bottom: logic gates, adders and the ALU, latches, registers and memory, the fetch-decode-execute cycle, the RISC-V instruction set, assembly programming, calling conventions and the stack, pipelining, hazards and branch prediction, and superscalar, out-of-order cores.
+
+  **The project.** A company that builds electronic toll readers for highway plazas has a field problem: at one busy plaza near Vadodara, the readers sometimes total the day's takings wrongly, and one lane's barrier occasionally stays down for an exempt ambulance. Each reader is a small board with a few gates of glue logic, a 16-bit counter, and a RISC-V microcontroller running firmware written partly in assembly. You have been asked to go through it layer by layer.
+
+  Each stage below is one layer of that machine. Every stage draws on one or more lessons of this cluster, and the skill being tested is following a behaviour of the whole system down to the hardware or instructions that cause it.
+language: asm
+starter: |
+  # Scratch space for the toll reader's firmware, in RISC-V assembly.
+  .data
+  fees: .word 65, 105, 220
+
+  .text
+  main:
+      la t0, fees
+      lw a0, 8(t0)        # the fee for class 2, a bus or truck
+      li a7, 1
+      ecall
+stages:
+  - title: When the barrier lifts
+    blocks:
+      - text: |
+          The barrier's glue logic has three input bits: V, the tag was read and is valid; B, the account balance covers the toll; and E, the vehicle is exempt, as ambulances and fire engines are. The barrier must lift when the tag is valid and either the balance covers the toll or the vehicle is exempt. The ambulance complaints began after a board revision.
+      - question:
+          id: barrier-logic
+          type: choice
+          system: s2
+          concepts: [h1.logic-gates]
+          prompt: |
+            Which circuit lifts the barrier exactly when it should?
+          options:
+            - "V AND (B OR E)"
+            - "(V AND B) OR E"
+            - "V AND B AND E"
+            - "V OR (B AND E)"
+          answer: 0
+          explanation: |
+            The tag must be valid in every case, and then either condition will do, so the OR sits inside the AND. (V AND B) OR E lifts for any vehicle marked exempt even without a valid tag; V AND B AND E would stop every paying car; and V OR (B AND E) lifts for any valid tag, whatever the balance.
+  - title: The counter that wraps
+    blocks:
+      - text: |
+          Each lane keeps the day's takings for cars in a 16-bit unsigned counter, in rupees, adding 65 for every car. The counter starts at 0 each morning. On busy days the total reported to head office is far too small.
+      - question:
+          id: counter-wrap
+          type: numeric
+          system: s2
+          concepts: [h1.adders-and-the-alu]
+          prompt: |
+            A 16-bit unsigned counter holds at most 65,535. Adding 65 for each car, which car's toll first makes the adder's carry out of the top bit 1, so that the total wraps?
+          answer: "1009"
+          explanation: |
+            1008 cars make 65,520, which still fits; the 1009th brings the true total to 65,585, more than 65,535, so the 16-bit adder carries out and keeps only 50. The carry flag was there to be checked, and nobody checked it.
+  - title: Sampling the loop sensor
+    blocks:
+      - text: |
+          A coil in the road tells the reader when a vehicle is over it. Its signal is noisy for a few microseconds as a vehicle arrives, flickering between 0 and 1. The old board fed it into a latch enabled for half of every clock cycle, and the firmware sometimes counted one vehicle twice.
+      - question:
+          id: sensor-sample
+          type: choice
+          system: s2
+          concepts: [h1.latches-registers-and-memory]
+          prompt: |
+            Why does replacing the latch with an edge-triggered D flip-flop help?
+          options:
+            - "The flip-flop takes one sample per clock edge and holds it for the whole cycle, so the logic after it sees a steady value"
+            - "A flip-flop filters out every value that changes"
+            - "A flip-flop stores two bits instead of one"
+            - "A flip-flop needs no clock"
+          answer: 0
+          explanation: |
+            A latch is transparent while enabled, so every flicker passes straight through to the logic behind it during that half-cycle. A flip-flop changes only at the edge, so the firmware reads one clean value per cycle; the remaining flicker between samples is then handled by requiring several equal samples in a row.
+  - title: Reading the firmware
+    blocks:
+      - text: |
+          The firmware is only available as a dump of 32-bit words from the controller's memory. In the loop that totals the tolls, the word at one address is 0x0004a503.
+      - question:
+          id: decode-word
+          type: choice
+          system: s2
+          concepts: [h1.an-instruction-set-risc-v, h1.the-fetch-decode-execute-cycle]
+          prompt: |
+            The low 7 bits are the opcode 0000011, a load; rd is bits 11 to 7, funct3 bits 14 to 12, rs1 bits 19 to 15, and the immediate bits 31 to 20. Which instruction is 0x0004a503?
+          options:
+            - "lw a0, 0(s1)"
+            - "lw s1, 0(a0)"
+            - "sw a0, 0(s1)"
+            - "lb a0, 0(s1)"
+          answer: 0
+          explanation: |
+            rd is 10, which is a0; funct3 is 2, a 4-byte word; rs1 is 9, which is s1; and the immediate is 0. A store would have opcode 0100011, and lb would have funct3 0.
+  - title: Totalling the tolls
+    blocks:
+      - text: |
+          The wrong totals come from the firmware function that adds up the fees of the vehicles in a batch. It calls a helper, `fee_for`, for each vehicle, and the person who wrote it kept their running values in t registers, which `fee_for` is entitled to change. You will rewrite it.
+      - question:
+          id: toll-total
+          type: code
+          mode: write
+          system: s2
+          language: asm
+          concepts: [h1.assembly-programming, h1.calling-conventions-and-the-stack]
+          prompt: |
+            Write `toll_total`, which walks the list of vehicle classes, calls `fee_for` for each of the first n, and returns the total, following the calling convention. The tests call it on other lists and check that it leaves sp and the s registers as it found them. The program should print 740.
+          starter: |
+            # toll_total(n) adds up the fees of the first n vehicles in the list at
+            # classes, calling fee_for once for each vehicle. fee_for is a function like
+            # any other: it may change any t or a register. toll_total must follow the
+            # calling convention too.
+            .data
+            count:   .word 6
+            classes: .word 0, 0, 2, 1, 0, 2, 0, 0, 0, 0
+            fees:    .word 65, 105, 220
+
+            .text
+            main:
+                lw a0, count
+                call toll_total
+                li a7, 1
+                ecall
+                li a7, 10
+                ecall
+
+            fee_for:
+                # a0 is a vehicle class, 0 for a car, 1 for a light commercial vehicle
+                # and 2 for a bus or truck. Returns that class's fee in a0.
+                la t0, fees
+                slli t1, a0, 2
+                add t0, t0, t1
+                lw a0, 0(t0)
+                li t1, 0
+                li t2, 0
+                ret
+
+            toll_total:
+                # Your code here.
+                li a0, 0
+                ret
+          solution: |
+            # toll_total(n) adds up the fees of the first n vehicles in the list at
+            # classes, calling fee_for once for each vehicle. fee_for is a function like
+            # any other: it may change any t or a register. toll_total must follow the
+            # calling convention too.
+            .data
+            count:   .word 6
+            classes: .word 0, 0, 2, 1, 0, 2, 0, 0, 0, 0
+            fees:    .word 65, 105, 220
+
+            .text
+            main:
+                lw a0, count
+                call toll_total
+                li a7, 1
+                ecall
+                li a7, 10
+                ecall
+
+            fee_for:
+                # a0 is a vehicle class, 0 for a car, 1 for a light commercial vehicle
+                # and 2 for a bus or truck. Returns that class's fee in a0.
+                la t0, fees
+                slli t1, a0, 2
+                add t0, t0, t1
+                lw a0, 0(t0)
+                li t1, 0
+                li t2, 0
+                ret
+
+            toll_total:
+                # Your code here.
+                addi sp, sp, -16
+                sw ra, 12(sp)
+                sw s0, 8(sp)
+                sw s1, 4(sp)
+                sw s2, 0(sp)
+                mv s0, a0           # s0: vehicles left
+                la s1, classes      # s1: address of the next vehicle's class
+                li s2, 0            # s2: running total
+            loop:
+                beqz s0, done
+                lw a0, 0(s1)
+                call fee_for
+                add s2, s2, a0
+                addi s1, s1, 4
+                addi s0, s0, -1
+                j loop
+            done:
+                mv a0, s2
+                lw s2, 0(sp)
+                lw s1, 4(sp)
+                lw s0, 8(sp)
+                lw ra, 12(sp)
+                addi sp, sp, 16
+                ret
+          tests: |
+            _fees = [65, 105, 220]
+            for _cls, _n in [([0, 0, 2, 1, 0, 2], 6), ([2], 1), ([1, 1, 1, 1], 4), ([0, 2, 0, 2, 0], 3), ([0, 1, 2], 0), ([2, 2, 2, 2, 2, 2, 2, 2, 2, 2], 10)]:
+                _c = call("toll_total", _n, words={"classes": _cls + [0] * (10 - len(_cls))})
+                _want = sum(_fees[_x] for _x in _cls[:_n])
+                assert _c.value == _want, "For the classes " + str(_cls[:_n]) + " toll_total should return " + str(_want) + ", not " + str(_c.value)
+                assert not _c.clobbered, "toll_total changed " + ", ".join(_c.clobbered) + " without restoring it"
+            assert output.strip() == "740", "The program should print 740"
+          wrong:
+            - |
+              # toll_total(n) adds up the fees of the first n vehicles in the list at
+              # classes, calling fee_for once for each vehicle. fee_for is a function like
+              # any other: it may change any t or a register. toll_total must follow the
+              # calling convention too.
+              .data
+              count:   .word 6
+              classes: .word 0, 0, 2, 1, 0, 2, 0, 0, 0, 0
+              fees:    .word 65, 105, 220
+
+              .text
+              main:
+                  lw a0, count
+                  call toll_total
+                  li a7, 1
+                  ecall
+                  li a7, 10
+                  ecall
+
+              fee_for:
+                  # a0 is a vehicle class, 0 for a car, 1 for a light commercial vehicle
+                  # and 2 for a bus or truck. Returns that class's fee in a0.
+                  la t0, fees
+                  slli t1, a0, 2
+                  add t0, t0, t1
+                  lw a0, 0(t0)
+                  li t1, 0
+                  li t2, 0
+                  ret
+
+              toll_total:
+                  # Your code here.
+                  addi sp, sp, -16
+                  sw ra, 12(sp)
+                  sw s0, 8(sp)
+                  sw s1, 4(sp)
+                  sw s2, 0(sp)
+                  mv s0, a0           # s0: vehicles left
+                  la t0, classes      # t0: address of the next vehicle's class
+                  li s2, 0            # s2: running total
+              loop:
+                  beqz s0, done
+                  lw a0, 0(t0)
+                  call fee_for
+                  add s2, s2, a0
+                  addi t0, t0, 4
+                  addi s0, s0, -1
+                  j loop
+              done:
+                  mv a0, s2
+                  lw s2, 0(sp)
+                  lw s1, 4(sp)
+                  lw s0, 8(sp)
+                  lw ra, 12(sp)
+                  addi sp, sp, 16
+                  ret
+            - |
+              # toll_total(n) adds up the fees of the first n vehicles in the list at
+              # classes, calling fee_for once for each vehicle. fee_for is a function like
+              # any other: it may change any t or a register. toll_total must follow the
+              # calling convention too.
+              .data
+              count:   .word 6
+              classes: .word 0, 0, 2, 1, 0, 2, 0, 0, 0, 0
+              fees:    .word 65, 105, 220
+
+              .text
+              main:
+                  lw a0, count
+                  call toll_total
+                  li a7, 1
+                  ecall
+                  li a7, 10
+                  ecall
+
+              fee_for:
+                  # a0 is a vehicle class, 0 for a car, 1 for a light commercial vehicle
+                  # and 2 for a bus or truck. Returns that class's fee in a0.
+                  la t0, fees
+                  slli t1, a0, 2
+                  add t0, t0, t1
+                  lw a0, 0(t0)
+                  li t1, 0
+                  li t2, 0
+                  ret
+
+              toll_total:
+                  # Your code here.
+                  addi sp, sp, -16
+                  sw ra, 12(sp)
+                  sw s0, 8(sp)
+                  sw s1, 4(sp)
+                  sw s2, 0(sp)
+                  mv s0, a0           # s0: vehicles left
+                  la s1, classes      # s1: address of the next vehicle's class
+                  li s2, 0            # s2: running total
+              loop:
+                  beqz s0, done
+                  lw a0, 0(s1)
+                  call fee_for
+                  add s2, s2, a0
+                  addi s1, s1, 4
+                  addi s0, s0, -1
+                  j loop
+              done:
+                  mv a0, s2
+                  lw s1, 4(sp)
+                  lw s0, 8(sp)
+                  lw ra, 12(sp)
+                  addi sp, sp, 16
+                  ret
+            - |
+              # toll_total(n) adds up the fees of the first n vehicles in the list at
+              # classes, calling fee_for once for each vehicle. fee_for is a function like
+              # any other: it may change any t or a register. toll_total must follow the
+              # calling convention too.
+              .data
+              count:   .word 6
+              classes: .word 0, 0, 2, 1, 0, 2, 0, 0, 0, 0
+              fees:    .word 65, 105, 220
+
+              .text
+              main:
+                  lw a0, count
+                  call toll_total
+                  li a7, 1
+                  ecall
+                  li a7, 10
+                  ecall
+
+              fee_for:
+                  # a0 is a vehicle class, 0 for a car, 1 for a light commercial vehicle
+                  # and 2 for a bus or truck. Returns that class's fee in a0.
+                  la t0, fees
+                  slli t1, a0, 2
+                  add t0, t0, t1
+                  lw a0, 0(t0)
+                  li t1, 0
+                  li t2, 0
+                  ret
+
+              toll_total:
+                  # Your code here.
+                  addi sp, sp, -16
+                  sw ra, 12(sp)
+                  sw s0, 8(sp)
+                  sw s1, 4(sp)
+                  sw s2, 0(sp)
+                  mv s0, a0           # s0: vehicles left
+                  la s1, classes      # s1: address of the next vehicle's class
+              loop:
+                  beqz s0, done
+                  lw a0, 0(s1)
+                  call fee_for
+                  add s2, zero, a0
+                  addi s1, s1, 4
+                  addi s0, s0, -1
+                  j loop
+              done:
+                  mv a0, s2
+                  lw s2, 0(sp)
+                  lw s1, 4(sp)
+                  lw s0, 8(sp)
+                  lw ra, 12(sp)
+                  addi sp, sp, 16
+                  ret
+          explanation: |
+            Make a frame, save ra and the s registers you use, keep the count, the pointer and the total in s registers, and call fee_for for each vehicle, moving the pointer on 4 bytes each time. Restore everything and return the total in a0. Keeping the pointer in t0 lets fee_for overwrite it; not restoring s2 breaks the caller's s2; and replacing the total with each fee instead of adding to it returns only the last vehicle's fee.
+  - title: How fast the firmware runs
+    blocks:
+      - text: |
+          The controller has a classic five-stage pipeline with forwarding. In the tag-checking loop, a fifth of instructions are branches, and the branch on the exempt flag is so irregular that the predictor guesses wrong on 30% of branches. A wrong guess costs 2 cycles. Nothing else stalls.
+      - question:
+          id: firmware-cpi
+          type: numeric
+          system: s2
+          concepts: [h1.pipelining, h1.hazards-and-branch-prediction]
+          prompt: |
+            What is the loop's average CPI?
+          answer: "1.12"
+          explanation: |
+            Mispredictions add 0.2 × 0.3 × 2 = 0.12 cycles per instruction to the ideal 1 of a pipeline. The short pipeline keeps the penalty small; on a deep pipeline the same branch would cost far more.
+  - title: A faster chip that is not faster
+    blocks:
+      - text: |
+          A new reader uses a 4-wide out-of-order core. Most of the firmware runs much faster on it, but the checksum over each tag's 96 data bits does not. The checksum loop updates one running value, where each step needs the result of the step before.
+      - question:
+          id: checksum-chain
+          type: choice
+          system: s2
+          concepts: [h1.superscalar-and-out-of-order-execution]
+          prompt: |
+            Why does the wide core not speed up the checksum loop?
+          options:
+            - "The loop is one chain of true dependences, so only one step can run at a time, whatever the width"
+            - "Out-of-order cores cannot run loops"
+            - "Register renaming makes the checksum wrong"
+            - "The reorder buffer retires only one instruction per cycle"
+          answer: 0
+          explanation: |
+            Width and out-of-order issue need independent instructions. A running checksum is a single read-after-write chain, its own critical path, which renaming cannot shorten; the fix is a checksum that can be computed in independent pieces and combined.
+review: |
+  The toll reader has been traced from its gates to its core, and each finding came from a lesson of this cluster:
+
+  - The barrier lifts on V AND (B OR E), a circuit from [[h1.logic-gates]].
+  - The day's takings wrap at the 1009th car because a 16-bit adder carries out, the overflow of [[h1.adders-and-the-alu]].
+  - The loop sensor is sampled by a flip-flop rather than a transparent latch, as [[h1.latches-registers-and-memory]] explains.
+  - The firmware word 0x0004a503 decodes to lw a0, 0(s1), by the formats of [[h1.an-instruction-set-risc-v]] and the decoding of [[h1.the-fetch-decode-execute-cycle]].
+  - The toll total keeps its running values in saved registers and calls fee_for for each vehicle, an [[h1.assembly-programming]] loop that follows [[h1.calling-conventions-and-the-stack]].
+  - Irregular branches cost the five-stage pipeline 0.12 cycles per instruction, the arithmetic of [[h1.pipelining]] and [[h1.hazards-and-branch-prediction]].
+  - The checksum is a chain of true dependences that no width can shorten, the dataflow limit of [[h1.superscalar-and-out-of-order-execution]].

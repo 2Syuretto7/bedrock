@@ -1,0 +1,685 @@
+concept: h1.adders-and-the-alu
+minutes: 85
+claim: You can build a half adder and a full adder from gates and chain full adders into a ripple-carry adder; work out how long its carry takes to ripple and how carry lookahead cuts that to a logarithm; subtract with the same adder by adding the two's complement; detect unsigned and signed overflow; set and read the zero, negative, carry and overflow flags; and describe how an arithmetic logic unit computes several operations at once and selects one.
+recalls: [h1.logic-gates]
+uses: [h0.binary-and-hexadecimal, h0.unsigned-integers-and-fixed-widths, h0.twos-complement-and-overflow, h0.bitwise-operations-and-masks, f2.boolean-algebra, s3.measuring-and-predicting-running-time]
+leads: [h1.latches-registers-and-memory]
+starter: |
+  # Scratch space. Adding two bits gives a sum bit and a carry bit.
+  for a in [0, 1]:
+      for b in [0, 1]:
+          print(a, "+", b, "-> sum", a ^ b, "carry", a & b)
+parts:
+  recall:
+    - text: |
+        [[h1.logic-gates]] built every Boolean function out of gates, and timed a circuit by its longest path. Nothing so far has done arithmetic, which is most of what a processor is asked to do. This lesson builds an adder from gates, then a subtractor from the same adder, then the unit that does all of a processor's arithmetic and logic. Three quick pulls first.
+  puzzle:
+    - text: |
+        An adder for 32-bit numbers can be built from 32 small one-bit adders in a row, each passing its carry to the next, the way you carry a 1 from column to column when adding on paper. Each one-bit adder takes 2 gate delays to produce its carry once its own carry in has arrived.
+
+        **In the worst case, how many gate delays pass before the carry out of the top bit is certain?**
+  intuition:
+    - text: |
+        Think of the old odometer on a scooter, a row of wheels each showing one digit. When the units wheel rolls from 9 to 0 it nudges the tens wheel on by one, and at 0999 to 1000 a single nudge passes along three wheels in turn before the thousands wheel moves. The wheels cannot all move at once, because each one waits to hear from its neighbour. Binary addition has the same shape. Each column adds two bits and a carry from the column to its right, and passes its own carry to the left.
+
+        The figure is a 4-bit adder made of four one-bit full adders, FA 0 for the lowest bit to FA 3 for the highest. Step A and B, and watch the carries pass from right to left. Then switch to subtract.
+    - figure: ripple-adder
+      props: { a: 9, b: 5, op: add }
+    - text: |
+        Two things to see. Adding 15 and 1 sends a carry through all four adders, the worst case; adding 9 and 5 needs fewer. And subtraction needs no new circuit at all: the adder adds A to NOT B with a carry in of 1, which is A plus the two's complement of B, so the same hardware gives A − B. Read the inputs as signed numbers and the overflow flag tells you when the true answer does not fit in four bits.
+  derivation:
+    - text: |
+        **The half adder.** Adding two bits gives a result from 0 to 2, so it needs two output bits: a **sum** bit, which is 1 when exactly one input is 1, and a **carry** bit, which is 1 when both are. Those are XOR and AND, so a **half adder** is one XOR gate and one AND gate.
+
+        **The full adder.** Every column except the lowest also receives a carry from the column below, so it adds three bits. A **full adder** gives sum = a XOR b XOR c, where c is the carry in, and carry out = (a AND b) OR (c AND (a XOR b)). Read the carry this way: the column produces a carry if both its own bits are 1, or if exactly one is and a carry came in. Put another way, the carry out is 1 when at least two of the three inputs are 1, the **majority** function. A full adder is two half adders and an OR gate.
+    - question:
+        id: derivation-full
+        type: choice
+        system: s2
+        prompt: |
+          A full adder has inputs a = 1, b = 0 and carry in 1. What are its sum and carry out?
+        options:
+          - "Sum 0, carry out 1"
+          - "Sum 1, carry out 0"
+          - "Sum 1, carry out 1"
+          - "Sum 0, carry out 0"
+        answer: 0
+        explanation: |
+          1 + 0 + 1 = 2, which is 10 in binary: sum bit 0 and carry 1. Two of the three inputs are 1, so the majority, the carry out, is 1.
+    - text: |
+        **Ripple carry.** Chain n full adders, the carry out of each feeding the carry in of the next, and you can add n-bit numbers. Each adder's carry out depends on its carry in, so in the worst case, such as 0111…1 + 1, a carry is born at bit 0 and has to pass through every adder in turn. If the carry takes 2 gate delays per bit, an n-bit **ripple-carry adder** takes about 2n gate delays to settle: its delay grows in proportion to n, a linear cost of exactly the kind [[s3.measuring-and-predicting-running-time]] taught you to look for. It is the smallest adder there is and the slowest.
+    - question:
+        id: derivation-ripple
+        type: numeric
+        system: s2
+        prompt: |
+          In an 8-bit ripple-carry adder, each full adder takes 2 gate delays to pass a carry on once its carry in arrives. Adding 1 to 255 sends a carry through every bit. After how many gate delays is the carry out of bit 7 certain?
+        answer: "16"
+        explanation: |
+          The carry passes through 8 full adders at 2 gate delays each, 16 in all.
+    - text: |
+        **Carry lookahead.** The fix is to work out the carries without waiting for them. For each bit define **generate**, g = a AND b, which means the bit makes a carry whatever comes in, and **propagate**, p = a XOR b, which means the bit passes on whatever carry comes in. Then the carry into bit i + 1 is g OR (p AND carry into bit i), and that rule can be unrolled: the carry into bit 2 is g₁ OR (p₁ AND g₀) OR (p₁ AND p₀ AND c₀). Every carry is now a formula in the inputs alone, all computed at once. Written out in full the formulas grow too large, so real adders combine the g and p signals of neighbouring blocks in a tree, two bits, then four, then eight, and the carries are known after about log₂ n levels. A 64-bit adder needs 6 levels instead of a 64-step ripple. That is the general trade of hardware design: more gates for less delay.
+    - text: |
+        **Subtraction for free.** From [[h0.twos-complement-and-overflow]], −b in n bits is NOT b + 1. So a − b = a + NOT b + 1, and an adder can subtract if each bit of b passes through an XOR gate with a **subtract** line, which leaves b alone when the line is 0 and flips every bit when it is 1, and if the same line feeds the carry into bit 0, which supplies the + 1. One adder, one row of XOR gates and one control wire give both operations, and the same bit patterns serve signed and unsigned numbers alike.
+    - question:
+        id: derivation-sub
+        type: order
+        system: s2
+        prompt: |
+          Put the steps the adder takes to work out a − b in order.
+        steps:
+          - "The subtract line is set to 1."
+          - "Each bit of b passes through an XOR gate with the subtract line, giving NOT b."
+          - "The subtract line also feeds a carry in of 1 into bit 0."
+          - "The full adders add a, NOT b and the carry in, the carry rippling upward."
+          - "The low n bits are kept as a − b, and the carry out is kept as a flag."
+        explanation: |
+          The XOR gates and the carry in together supply the two's complement of b, so the ordinary addition that follows computes a − b.
+    - text: |
+        **Overflow, two ways.** The adder does not know whether its inputs are signed or unsigned, so it reports both kinds of overflow and lets the program choose. For unsigned numbers the answer is too large exactly when there is a carry out of the top bit. For signed numbers the rule is different: overflow happens when the two operands have the same sign and the result has the other sign. Adding a positive and a negative number can never overflow, since the result lies between them. In 8 bits, 100 + 100 = 200 has no carry out, so it is fine unsigned, but 200 has its top bit set and reads as −56 signed, so it overflows signed. And −1 + −1, the bit patterns 255 + 255, carries out of the top bit, an unsigned overflow, yet gives the correct signed answer −2. An equivalent hardware rule: signed overflow happens when the carry into the top bit differs from the carry out of it, one XOR gate.
+    - question:
+        id: derivation-overflow
+        type: choice
+        system: s2
+        prompt: |
+          Which of these 4-bit signed additions overflows? Signed 4-bit numbers run from −8 to 7.
+        options:
+          - "5 + 4"
+          - "5 + (−4)"
+          - "−3 + (−4)"
+          - "7 + (−8)"
+        answer: 0
+        explanation: |
+          5 + 4 = 9, more than 7. In bits, 0101 + 0100 = 1001, which reads as −7: two positive operands gave a negative result. Operands of opposite sign never overflow, and −3 + −4 = −7 fits.
+    - text: |
+        **Flags.** Many processors record four facts about each result in **flags**: **Z**, the result is zero; **N**, its top bit is 1, so it is negative if signed; **C**, the carry out of the top bit; and **V**, signed overflow. A comparison is then just a subtraction whose result is thrown away. After a − b, Z = 1 means a = b; for unsigned numbers C = 1, no borrow, means a ≥ b; and for signed numbers a < b exactly when N differs from V. x86 and ARM keep flags in a special register for the next instruction to test. RISC-V, which you will meet in two lessons, keeps no flags and has instructions that compare two registers directly, which is simpler to pipeline.
+
+        **The ALU.** The **arithmetic logic unit** gathers the operations into one block. It computes them all at once, the adder's sum, AND, OR and XOR of the inputs, a comparison, and feeds them to a multiplexer whose select lines come from the instruction being run; only one result goes on. Shifts are done by a **barrel shifter**, log₂ n layers of muxes where layer k shifts by 2ᵏ or not, so any shift takes the same short time. Multiplication is shift and add, done by a large array of adders in parallel, taking a few cycles; division is slower still, often tens of cycles.
+    - question:
+        id: derivation-compare
+        type: choice
+        system: s2
+        prompt: |
+          A processor compares two unsigned bytes by computing a − b and looking at the flags. Which flag setting means a < b?
+        options:
+          - "C = 0, because subtracting a larger number needs a borrow"
+          - "N = 1, because the result is negative"
+          - "V = 1, because the subtraction overflowed"
+          - "Z = 1, because the result is zero"
+        answer: 0
+        explanation: |
+          For unsigned numbers the carry out of a + NOT b + 1 is 1 exactly when a ≥ b, so C = 0 means a < b. N alone is wrong for unsigned values: 200 − 10 = 190 has its top bit set although 200 > 10.
+  formal:
+    - text: |
+        **Half and full adders.** Half adder: sum = a XOR b, carry = a AND b. Full adder: sum = a XOR b XOR c, carry out = (a AND b) OR (c AND (a XOR b)), the majority of the three inputs.
+
+        **Ripple-carry adder.** n full adders in a chain; delay grows linearly in n.
+
+        **Carry lookahead.** With g = a AND b and p = a XOR b, the carry into bit i + 1 is g OR (p AND carry into bit i). Combining g and p in a tree gives every carry after about log₂ n levels.
+
+        **Subtraction.** a − b = a + NOT b + 1, using XOR gates on b and a carry in of 1.
+
+        **Overflow.** Unsigned: carry out of the top bit. Signed: operands of the same sign give a result of the other sign; equivalently, carry into the top bit differs from the carry out.
+
+        **Flags.** Z (zero), N (top bit), C (carry out), V (signed overflow). After a − b: unsigned a < b when C = 0; signed a < b when N ≠ V.
+
+        **ALU.** All operations computed in parallel, one selected by a mux; shifts by a barrel shifter of log₂ n mux layers.
+  drill:
+    - text: Seconds each. Add column by column, carrying as you go.
+    - question:
+        id: drill-half
+        type: choice
+        system: s1
+        prompt: |
+          Which two gates make a half adder?
+        options:
+          - "XOR for the sum and AND for the carry"
+          - "OR for the sum and AND for the carry"
+          - "AND for the sum and XOR for the carry"
+          - "XOR for the sum and OR for the carry"
+        answer: 0
+        explanation: The sum bit is 1 when exactly one input is 1, which is XOR; the carry is 1 when both are, which is AND.
+    - question:
+        id: drill-unsigned
+        type: choice
+        system: s1
+        prompt: |
+          An 8-bit addition of unsigned numbers sets the carry flag. What does that mean?
+        options:
+          - "The true sum was 256 or more, so the 8-bit result is wrong"
+          - "The result is negative"
+          - "The two operands had the same sign"
+          - "The result is zero"
+        answer: 0
+        explanation: A carry out of bit 7 is exactly an unsigned overflow.
+    - question:
+        id: predict-half
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          a, b = 1, 1
+          print(a ^ b, a & b)
+        output: "0 1"
+        explanation: 1 + 1 = 2, which is 10 in binary, so the sum bit is 0 and the carry is 1.
+    - question:
+        id: predict-subtract
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          a, b = 7, 3
+          print((a + (~b & 0xF) + 1) & 0xF)
+        output: "4"
+        explanation: In 4 bits NOT 3 is 12, and 7 + 12 + 1 = 20, which keeps 4 in the low four bits. Adding NOT b plus one subtracts b.
+    - question:
+        id: predict-wrap
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          x = (127 + 1) & 0xFF
+          print(x, x - 256 if x >= 128 else x)
+        output: "128 -128"
+        explanation: The 8-bit pattern is 10000000, which is 128 unsigned and −128 signed. The largest signed byte plus 1 overflows to the smallest.
+  work:
+    - text: Slower now. Each answer builds part of the arithmetic hardware, or checks its result.
+    - question:
+        id: write-ripple
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `full_adder` with bit operators, and `ripple_add`, which chains one full adder per bit. The program should print three 8-bit sums, including 200 + 100, which keeps 44 and carries 1 out.
+        starter: |
+          def full_adder(a, b, carry_in):
+              # Add three bits. Return (sum bit, carry out), using bit operators only.
+              return 0, 0
+
+
+          def ripple_add(a_bits, b_bits, carry_in):
+              # a_bits and b_bits hold the bits of two numbers, least significant
+              # first, and have the same length. Chain one full adder per bit, each
+              # taking the carry out of the one before. Return (sum bits, carry out).
+              return [0] * len(a_bits), 0
+
+
+          def to_bits(n, width):
+              return [(n >> i) & 1 for i in range(width)]
+
+
+          def from_bits(bits):
+              return sum(bit << i for i, bit in enumerate(bits))
+
+
+          for a, b in [(100, 55), (200, 100), (255, 1)]:
+              total, carry = ripple_add(to_bits(a, 8), to_bits(b, 8), 0)
+              print(a, "+", b, "=", from_bits(total), "carry", carry)
+        solution: |
+          def full_adder(a, b, carry_in):
+              # Add three bits. Return (sum bit, carry out), using bit operators only.
+              half = a ^ b
+              return half ^ carry_in, (a & b) | (half & carry_in)
+
+
+          def ripple_add(a_bits, b_bits, carry_in):
+              # a_bits and b_bits hold the bits of two numbers, least significant
+              # first, and have the same length. Chain one full adder per bit, each
+              # taking the carry out of the one before. Return (sum bits, carry out).
+              carry = carry_in
+              total = []
+              for a, b in zip(a_bits, b_bits):
+                  bit, carry = full_adder(a, b, carry)
+                  total.append(bit)
+              return total, carry
+
+
+          def to_bits(n, width):
+              return [(n >> i) & 1 for i in range(width)]
+
+
+          def from_bits(bits):
+              return sum(bit << i for i, bit in enumerate(bits))
+
+
+          for a, b in [(100, 55), (200, 100), (255, 1)]:
+              total, carry = ripple_add(to_bits(a, 8), to_bits(b, 8), 0)
+              print(a, "+", b, "=", from_bits(total), "carry", carry)
+        tests: |
+          import ast as _ast
+
+          for _node in _ast.walk(_ast.parse(source)):
+              if isinstance(_node, _ast.FunctionDef) and _node.name == "full_adder":
+                  for _inner in _ast.walk(_node):
+                      assert not (isinstance(_inner, _ast.BinOp) and isinstance(_inner.op, (_ast.Add, _ast.Sub, _ast.Mult, _ast.FloorDiv, _ast.Mod))), "full_adder should use bit operators such as &, | and ^, not arithmetic"
+          for _a in [0, 1]:
+              for _b in [0, 1]:
+                  for _c in [0, 1]:
+                      _want = ((_a + _b + _c) & 1, (_a + _b + _c) >> 1)
+                      _got = tuple(full_adder(_a, _b, _c))
+                      assert _got == _want, "full_adder(" + str(_a) + ", " + str(_b) + ", " + str(_c) + ") should be " + str(_want) + ", not " + str(_got)
+
+
+          def _bits(_n, _w):
+              return [(_n >> _i) & 1 for _i in range(_w)]
+
+
+          for _w, _x, _y, _cin in [(4, 9, 5, 0), (4, 15, 1, 0), (4, 7, 7, 1), (8, 200, 100, 0), (8, 255, 255, 1), (16, 40000, 30000, 0), (16, 12345, 1, 1)]:
+              _total, _carry = ripple_add(_bits(_x, _w), _bits(_y, _w), _cin)
+              _s = _x + _y + _cin
+              assert list(_total) == _bits(_s, _w) and _carry == _s >> _w, str(_w) + "-bit: " + str(_x) + " + " + str(_y) + " with carry in " + str(_cin) + " should give the bits of " + str(_s & ((1 << _w) - 1)) + " and carry " + str(_s >> _w)
+          _real = full_adder
+          _calls = [0]
+
+
+          def _counting(_a, _b, _c):
+              _calls[0] += 1
+              return _real(_a, _b, _c)
+
+
+          globals()["full_adder"] = _counting
+          ripple_add(_bits(77, 8), _bits(99, 8), 0)
+          globals()["full_adder"] = _real
+          assert _calls[0] == 8, "ripple_add should use one full adder per bit, 8 for 8 bits, but it used " + str(_calls[0])
+          assert output.splitlines() == ["100 + 55 = 155 carry 0", "200 + 100 = 44 carry 1", "255 + 1 = 0 carry 1"], "The program should print 155 carry 0, 44 carry 1 and 0 carry 1"
+        wrong:
+          - |
+            def full_adder(a, b, carry_in):
+                # Add three bits. Return (sum bit, carry out), using bit operators only.
+                half = a ^ b
+                return half ^ carry_in, a & b
+
+
+            def ripple_add(a_bits, b_bits, carry_in):
+                # a_bits and b_bits hold the bits of two numbers, least significant
+                # first, and have the same length. Chain one full adder per bit, each
+                # taking the carry out of the one before. Return (sum bits, carry out).
+                carry = carry_in
+                total = []
+                for a, b in zip(a_bits, b_bits):
+                    bit, carry = full_adder(a, b, carry)
+                    total.append(bit)
+                return total, carry
+
+
+            def to_bits(n, width):
+                return [(n >> i) & 1 for i in range(width)]
+
+
+            def from_bits(bits):
+                return sum(bit << i for i, bit in enumerate(bits))
+
+
+            for a, b in [(100, 55), (200, 100), (255, 1)]:
+                total, carry = ripple_add(to_bits(a, 8), to_bits(b, 8), 0)
+                print(a, "+", b, "=", from_bits(total), "carry", carry)
+          - |
+            def full_adder(a, b, carry_in):
+                # Add three bits. Return (sum bit, carry out), using bit operators only.
+                half = a ^ b
+                return half ^ carry_in, (a & b) | (half & carry_in)
+
+
+            def ripple_add(a_bits, b_bits, carry_in):
+                # a_bits and b_bits hold the bits of two numbers, least significant
+                # first, and have the same length. Chain one full adder per bit, each
+                # taking the carry out of the one before. Return (sum bits, carry out).
+                carry = carry_in
+                total = []
+                for a, b in zip(a_bits, b_bits):
+                    bit, carry = full_adder(a, b, carry_in)
+                    total.append(bit)
+                return total, carry
+
+
+            def to_bits(n, width):
+                return [(n >> i) & 1 for i in range(width)]
+
+
+            def from_bits(bits):
+                return sum(bit << i for i, bit in enumerate(bits))
+
+
+            for a, b in [(100, 55), (200, 100), (255, 1)]:
+                total, carry = ripple_add(to_bits(a, 8), to_bits(b, 8), 0)
+                print(a, "+", b, "=", from_bits(total), "carry", carry)
+          - |
+            def full_adder(a, b, carry_in):
+                # Add three bits. Return (sum bit, carry out), using bit operators only.
+                half = a ^ b
+                return half ^ carry_in, (a & b) | (half & carry_in)
+
+
+            def ripple_add(a_bits, b_bits, carry_in):
+                # a_bits and b_bits hold the bits of two numbers, least significant
+                # first, and have the same length. Chain one full adder per bit, each
+                # taking the carry out of the one before. Return (sum bits, carry out).
+                carry = carry_in
+                total = []
+                for a, b in zip(reversed(a_bits), reversed(b_bits)):
+                    bit, carry = full_adder(a, b, carry)
+                    total.insert(0, bit)
+                return total, carry
+
+
+            def to_bits(n, width):
+                return [(n >> i) & 1 for i in range(width)]
+
+
+            def from_bits(bits):
+                return sum(bit << i for i, bit in enumerate(bits))
+
+
+            for a, b in [(100, 55), (200, 100), (255, 1)]:
+                total, carry = ripple_add(to_bits(a, 8), to_bits(b, 8), 0)
+                print(a, "+", b, "=", from_bits(total), "carry", carry)
+        explanation: |
+          The full adder's sum is the XOR of all three bits, and its carry is a AND b, or the carry in AND exactly one of a and b. The ripple adder walks from the least significant bit, feeding each carry out into the next adder. A carry that ignores the carry in, a chain that gives every adder the original carry in, or a walk that starts from the most significant bit all add the wrong columns together.
+    - question:
+        id: write-alu
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write an 8-bit `alu` that adds, subtracts by adding the two's complement, ANDs and ORs, and sets the Z, N, C and V flags. The program should print five operations; the second, 100 + 100, should give 200 with N and V set.
+        starter: |
+          MASK = 0xFF
+
+
+          def alu(op, a, b):
+              # An 8-bit ALU. a and b are 0 to 255, and op is "add", "sub", "and" or "or".
+              # Subtract the way the hardware does, by adding: a + (NOT b) + 1.
+              # Return (result, flags). The result is 0 to 255. flags holds four bits:
+              # Z, the result is 0; N, the top bit of the result is 1; C, the carry
+              # out of bit 7; and V, signed overflow. For "and" and "or", C and V are 0.
+              return 0, {"Z": 0, "N": 0, "C": 0, "V": 0}
+
+
+          for op, a, b in [("add", 100, 27), ("add", 100, 100), ("sub", 5, 5), ("sub", 3, 5), ("and", 12, 10)]:
+              result, flags = alu(op, a, b)
+              print(op, a, b, "->", result, flags)
+        solution: |
+          MASK = 0xFF
+
+
+          def alu(op, a, b):
+              # An 8-bit ALU. a and b are 0 to 255, and op is "add", "sub", "and" or "or".
+              # Subtract the way the hardware does, by adding: a + (NOT b) + 1.
+              # Return (result, flags). The result is 0 to 255. flags holds four bits:
+              # Z, the result is 0; N, the top bit of the result is 1; C, the carry
+              # out of bit 7; and V, signed overflow. For "and" and "or", C and V are 0.
+              if op == "and" or op == "or":
+                  result = a & b if op == "and" else a | b
+                  return result, {"Z": int(result == 0), "N": result >> 7, "C": 0, "V": 0}
+              carry_in = 0
+              if op == "sub":
+                  b = ~b & MASK
+                  carry_in = 1
+              total = a + b + carry_in
+              result = total & MASK
+              same_signs = (a >> 7) == (b >> 7)
+              overflow = int(same_signs and (result >> 7) != (a >> 7))
+              return result, {"Z": int(result == 0), "N": result >> 7, "C": total >> 8, "V": overflow}
+
+
+          for op, a, b in [("add", 100, 27), ("add", 100, 100), ("sub", 5, 5), ("sub", 3, 5), ("and", 12, 10)]:
+              result, flags = alu(op, a, b)
+              print(op, a, b, "->", result, flags)
+        tests: |
+          def _ref(_op, _a, _b):
+              if _op in ("and", "or"):
+                  _r = _a & _b if _op == "and" else _a | _b
+                  return _r, {"Z": int(_r == 0), "N": _r >> 7, "C": 0, "V": 0}
+              _sa = _a - 256 if _a >= 128 else _a
+              _sb = _b - 256 if _b >= 128 else _b
+              if _op == "add":
+                  _t, _true = _a + _b, _sa + _sb
+              else:
+                  _t, _true = _a + (255 - _b) + 1, _sa - _sb
+              _r = _t & 255
+              return _r, {"Z": int(_r == 0), "N": _r >> 7, "C": _t >> 8, "V": int(not -128 <= _true <= 127)}
+
+
+          _cases = [(0, 0), (1, 1), (5, 5), (3, 5), (100, 27), (100, 100), (127, 1), (128, 128), (200, 100), (255, 1), (128, 1), (0, 128), (127, 255), (250, 3), (60, 200)]
+          for _op in ["add", "sub", "and", "or"]:
+              for _a, _b in _cases:
+                  _want = _ref(_op, _a, _b)
+                  _got = alu(_op, _a, _b)
+                  assert _got[0] == _want[0], "alu(" + repr(_op) + ", " + str(_a) + ", " + str(_b) + ") should give result " + str(_want[0]) + ", not " + str(_got[0])
+                  for _f in "ZNCV":
+                      assert _got[1][_f] == _want[1][_f], "alu(" + repr(_op) + ", " + str(_a) + ", " + str(_b) + ") should set " + _f + " to " + str(_want[1][_f]) + ", not " + str(_got[1][_f])
+          assert len(output.splitlines()) == 5 and output.splitlines()[1] == "add 100 100 -> 200 {'Z': 0, 'N': 1, 'C': 0, 'V': 1}", "The program should print five lines, the second showing 100 + 100 overflowing"
+        wrong:
+          - |
+            MASK = 0xFF
+
+
+            def alu(op, a, b):
+                # An 8-bit ALU. a and b are 0 to 255, and op is "add", "sub", "and" or "or".
+                # Subtract the way the hardware does, by adding: a + (NOT b) + 1.
+                # Return (result, flags). The result is 0 to 255. flags holds four bits:
+                # Z, the result is 0; N, the top bit of the result is 1; C, the carry
+                # out of bit 7; and V, signed overflow. For "and" and "or", C and V are 0.
+                if op == "and" or op == "or":
+                    result = a & b if op == "and" else a | b
+                    return result, {"Z": int(result == 0), "N": result >> 7, "C": 0, "V": 0}
+                carry_in = 0
+                if op == "sub":
+                    b = ~b & MASK
+                    carry_in = 0
+                total = a + b + carry_in
+                result = total & MASK
+                same_signs = (a >> 7) == (b >> 7)
+                overflow = int(same_signs and (result >> 7) != (a >> 7))
+                return result, {"Z": int(result == 0), "N": result >> 7, "C": total >> 8, "V": overflow}
+
+
+            for op, a, b in [("add", 100, 27), ("add", 100, 100), ("sub", 5, 5), ("sub", 3, 5), ("and", 12, 10)]:
+                result, flags = alu(op, a, b)
+                print(op, a, b, "->", result, flags)
+          - |
+            MASK = 0xFF
+
+
+            def alu(op, a, b):
+                # An 8-bit ALU. a and b are 0 to 255, and op is "add", "sub", "and" or "or".
+                # Subtract the way the hardware does, by adding: a + (NOT b) + 1.
+                # Return (result, flags). The result is 0 to 255. flags holds four bits:
+                # Z, the result is 0; N, the top bit of the result is 1; C, the carry
+                # out of bit 7; and V, signed overflow. For "and" and "or", C and V are 0.
+                if op == "and" or op == "or":
+                    result = a & b if op == "and" else a | b
+                    return result, {"Z": int(result == 0), "N": result >> 7, "C": 0, "V": 0}
+                carry_in = 0
+                if op == "sub":
+                    b = ~b & MASK
+                    carry_in = 1
+                total = a + b + carry_in
+                result = total & MASK
+                same_signs = (a >> 7) == (b >> 7)
+                overflow = int(same_signs and (result >> 7) != (a >> 7))
+                return result, {"Z": int(result == 0), "N": result >> 7, "C": total >> 8, "V": total >> 8}
+
+
+            for op, a, b in [("add", 100, 27), ("add", 100, 100), ("sub", 5, 5), ("sub", 3, 5), ("and", 12, 10)]:
+                result, flags = alu(op, a, b)
+                print(op, a, b, "->", result, flags)
+          - |
+            MASK = 0xFF
+
+
+            def alu(op, a, b):
+                # An 8-bit ALU. a and b are 0 to 255, and op is "add", "sub", "and" or "or".
+                # Subtract the way the hardware does, by adding: a + (NOT b) + 1.
+                # Return (result, flags). The result is 0 to 255. flags holds four bits:
+                # Z, the result is 0; N, the top bit of the result is 1; C, the carry
+                # out of bit 7; and V, signed overflow. For "and" and "or", C and V are 0.
+                if op == "and" or op == "or":
+                    result = a & b if op == "and" else a | b
+                    return result, {"Z": int(result == 0), "N": result >> 7, "C": 0, "V": 0}
+                carry_in = 0
+                if op == "sub":
+                    b = ~b & MASK
+                    carry_in = 1
+                total = a + b + carry_in
+                result = total & MASK
+                overflow = int(result >> 7 != a >> 7)
+                return result, {"Z": int(result == 0), "N": result >> 7, "C": total >> 8, "V": overflow}
+
+
+            for op, a, b in [("add", 100, 27), ("add", 100, 100), ("sub", 5, 5), ("sub", 3, 5), ("and", 12, 10)]:
+                result, flags = alu(op, a, b)
+                print(op, a, b, "->", result, flags)
+        explanation: |
+          For subtraction, flip b's bits within 8 bits and add with a carry in of 1. Keep the low 8 bits as the result and the bit above them as C. Signed overflow happens only when the two numbers being added, a and the possibly flipped b, share a sign and the result's sign differs. Forgetting the carry in subtracts one too many; using the carry as the overflow flag mixes up unsigned and signed overflow; and calling any change of sign overflow flags additions of opposite signs, which can never overflow.
+    - question:
+        id: fix-overflow
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          `add_signed8` should report signed overflow, which here happens for 100 + 100 and for −100 + −100 only. Instead it misses 100 + 100 and wrongly flags −1 + −1. Find the fault and fix it.
+        starter: |
+          def to_unsigned(x):
+              return x & 0xFF
+
+
+          def to_signed(u):
+              return u - 256 if u >= 128 else u
+
+
+          def add_signed8(a, b):
+              # Add two signed 8-bit numbers, -128 to 127, as the hardware does: add
+              # their bit patterns and keep the low 8 bits. Return the signed result
+              # and whether signed overflow happened.
+              total = to_unsigned(a) + to_unsigned(b)
+              result = to_signed(total & 0xFF)
+              overflow = total > 0xFF
+              return result, overflow
+
+
+          for a, b in [(100, 27), (100, 100), (-1, -1), (-100, -100)]:
+              print(a, "+", b, "->", add_signed8(a, b))
+        solution: |
+          def to_unsigned(x):
+              return x & 0xFF
+
+
+          def to_signed(u):
+              return u - 256 if u >= 128 else u
+
+
+          def add_signed8(a, b):
+              # Add two signed 8-bit numbers, -128 to 127, as the hardware does: add
+              # their bit patterns and keep the low 8 bits. Return the signed result
+              # and whether signed overflow happened.
+              total = to_unsigned(a) + to_unsigned(b)
+              result = to_signed(total & 0xFF)
+              overflow = (a < 0) == (b < 0) and (result < 0) != (a < 0)
+              return result, overflow
+
+
+          for a, b in [(100, 27), (100, 100), (-1, -1), (-100, -100)]:
+              print(a, "+", b, "->", add_signed8(a, b))
+        tests: |
+          for _a in range(-128, 128, 7):
+              for _b in [-128, -100, -64, -1, 0, 1, 27, 64, 100, 127]:
+                  _true = _a + _b
+                  _want = (((_true + 128) % 256) - 128, not -128 <= _true <= 127)
+                  _got = add_signed8(_a, _b)
+                  assert tuple(_got) == _want, "add_signed8(" + str(_a) + ", " + str(_b) + ") should be " + str(_want) + ", not " + str(tuple(_got))
+          assert output.splitlines() == ["100 + 27 -> (127, False)", "100 + 100 -> (-56, True)", "-1 + -1 -> (-2, False)", "-100 + -100 -> (56, True)"], "The program should report overflow for 100 + 100 and -100 + -100 only"
+        wrong:
+          - |
+            def to_unsigned(x):
+                return x & 0xFF
+
+
+            def to_signed(u):
+                return u - 256 if u >= 128 else u
+
+
+            def add_signed8(a, b):
+                # Add two signed 8-bit numbers, -128 to 127, as the hardware does: add
+                # their bit patterns and keep the low 8 bits. Return the signed result
+                # and whether signed overflow happened.
+                total = to_unsigned(a) + to_unsigned(b)
+                result = to_signed(total & 0xFF)
+                overflow = (a < 0) != (b < 0) and (result < 0) != (a < 0)
+                return result, overflow
+
+
+            for a, b in [(100, 27), (100, 100), (-1, -1), (-100, -100)]:
+                print(a, "+", b, "->", add_signed8(a, b))
+          - |
+            def to_unsigned(x):
+                return x & 0xFF
+
+
+            def to_signed(u):
+                return u - 256 if u >= 128 else u
+
+
+            def add_signed8(a, b):
+                # Add two signed 8-bit numbers, -128 to 127, as the hardware does: add
+                # their bit patterns and keep the low 8 bits. Return the signed result
+                # and whether signed overflow happened.
+                total = to_unsigned(a) + to_unsigned(b)
+                result = to_signed(total & 0xFF)
+                overflow = a > 0 and b > 0 and result < 0
+                return result, overflow
+
+
+            for a, b in [(100, 27), (100, 100), (-1, -1), (-100, -100)]:
+                print(a, "+", b, "->", add_signed8(a, b))
+          - |
+            def to_unsigned(x):
+                return x & 0xFF
+
+
+            def to_signed(u):
+                return u - 256 if u >= 128 else u
+
+
+            def add_signed8(a, b):
+                # Add two signed 8-bit numbers, -128 to 127, as the hardware does: add
+                # their bit patterns and keep the low 8 bits. Return the signed result
+                # and whether signed overflow happened.
+                total = to_unsigned(a) + to_unsigned(b)
+                result = to_signed(total & 0xFF)
+                overflow = total > 0xFF or result < 0
+                return result, overflow
+
+
+            for a, b in [(100, 27), (100, 100), (-1, -1), (-100, -100)]:
+                print(a, "+", b, "->", add_signed8(a, b))
+        explanation: |
+          A carry out of the top bit is unsigned overflow, not signed. Signed overflow happens when both operands have the same sign and the result's sign is different. Testing for opposite signs gets it backwards; checking only two positives misses −100 + −100; and treating every negative result as overflow flags ordinary sums such as −128 + 0.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. A 32-bit ripple-carry adder takes 2 gate delays per bit to pass a carry. In the worst case, after how many gate delays is the carry out of the top bit certain?
+        answer: "64"
+        explanation: |
+          The carry may have to pass through all 32 full adders, at 2 gate delays each.
+    - question:
+        id: work-lookahead
+        type: choice
+        system: s2
+        prompt: |
+          Why does a fast 64-bit processor not use a ripple-carry adder?
+        options:
+          - "Its delay grows in proportion to the width, while carry lookahead finds every carry in about log₂ 64 = 6 levels"
+          - "A ripple-carry adder cannot add negative numbers"
+          - "A ripple-carry adder needs more gates than carry lookahead"
+          - "A ripple-carry adder cannot report a carry out"
+        answer: 0
+        explanation: |
+          Ripple carry is the smallest adder, but its worst-case delay is 64 carry steps. Lookahead spends more gates to compute carries in a tree, so delay grows with the logarithm of the width instead.
+  connections:
+    - text: |
+        64. The carry may have to pass through all 32 adders, 2 gate delays each. At a few picoseconds per gate that is still fast, but a processor adds in a fraction of one clock cycle, so real adders use carry lookahead and settle in a dozen or so gate delays instead.
+
+        Gates and adders compute, but they forget: change the inputs and the old answer is gone. A processor must hold numbers from one instruction to the next. [[h1.latches-registers-and-memory]] adds feedback to gates so that they remember, and builds registers and memory from them.
