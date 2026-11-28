@@ -4,7 +4,7 @@ import { useEffect, useImperativeHandle, useRef } from "react";
 import { defaultKeymap, history, historyKeymap, indentWithTab, redo, undo } from "@codemirror/commands";
 import { python } from "@codemirror/lang-python";
 import { bracketMatching, indentOnInput, indentUnit, syntaxHighlighting } from "@codemirror/language";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view";
 import { classHighlighter } from "@lezer/highlight";
 
@@ -14,9 +14,12 @@ export type EditorHandle = {
   redo: () => void;
   move: (by: -1 | 1) => void;
   focus: () => void;
-  /** Swap the whole document, for example when a code question is opened. */
-  replace: (text: string) => void;
+  /** Swap the whole document, for example when a code question is opened, and the language it is in. */
+  replace: (text: string, language?: "python" | "asm") => void;
 };
+
+/** Python is highlighted; assembly is shown as plain text, since its columns already make it easy to read. */
+const grammar = (language: "python" | "asm") => (language === "asm" ? [] : python());
 
 const theme = EditorView.theme({
   "&": { height: "100%", fontSize: "14px", backgroundColor: "transparent", color: "var(--text)" },
@@ -32,12 +35,14 @@ const theme = EditorView.theme({
 
 export function CodeEditor({
   initial,
+  language = "python",
   onChange,
   onRun,
   label,
   ref,
 }: {
   initial: string;
+  language?: "python" | "asm";
   onChange: (code: string) => void;
   onRun: () => void;
   label: string;
@@ -45,6 +50,7 @@ export function CodeEditor({
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
+  const languageSlot = useRef(new Compartment());
   const callbacks = useRef({ onChange, onRun });
   useEffect(() => {
     callbacks.current = { onChange, onRun };
@@ -65,7 +71,7 @@ export function CodeEditor({
           bracketMatching(),
           indentUnit.of("    "),
           EditorState.tabSize.of(4),
-          python(),
+          languageSlot.current.of(grammar(language)),
           syntaxHighlighting(classHighlighter),
           theme,
           keymap.of([
@@ -109,10 +115,14 @@ export function CodeEditor({
       editor.focus();
     },
     focus: () => view.current?.focus(),
-    replace(text) {
+    replace(text, next = "python") {
       const editor = view.current;
       if (!editor) return;
-      editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: text }, selection: { anchor: 0 } });
+      editor.dispatch({
+        changes: { from: 0, to: editor.state.doc.length, insert: text },
+        selection: { anchor: 0 },
+        effects: languageSlot.current.reconfigure(grammar(next)),
+      });
     },
   }));
 

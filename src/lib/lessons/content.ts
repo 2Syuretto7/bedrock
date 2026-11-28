@@ -52,6 +52,8 @@ export type QuestionView = {
   unit?: string;
   items?: string[];
   code?: string;
+  /** Set only for code that is not Python. */
+  language?: "asm";
   mode?: "write" | "find-bug";
   starter?: string;
   /** The time limit in seconds. Only System One questions have one. */
@@ -72,6 +74,7 @@ export function questionView(conceptId: string, q: Question, number: number, sol
     unit: q.type === "numeric" ? q.unit : undefined,
     items: source && order.map((i) => inlineHtml(source[i])),
     code: q.type === "predict" ? q.code : undefined,
+    language: (q.type === "predict" || q.type === "code") && q.language === "asm" ? "asm" : undefined,
     mode: q.type === "code" ? q.mode : undefined,
     starter: q.type === "code" ? q.starter : undefined,
     seconds: secondsFor(q) ?? undefined,

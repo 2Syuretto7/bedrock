@@ -22,7 +22,7 @@ export type WorkspaceApi = {
   attend: (questionId: string) => void;
   /** The code question whose answer is in the editor, if any. */
   active: string | null;
-  open: (question: { id: string; number: number; starter: string }) => void;
+  open: (question: { id: string; number: number; starter: string; language?: "asm" }) => void;
   check: () => void;
   busy: boolean;
   verdicts: Readonly<Record<string, CodeVerdict>>;

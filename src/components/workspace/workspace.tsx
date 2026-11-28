@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { codeTests, reportCode, saveCode, type AnswerResult } from "@/lib/learning/actions";
-import { checkProgram, explainFailure } from "@/lib/lessons/harness";
+import { checkProgram, explainFailure, runProgram, type Language } from "@/lib/lessons/harness";
 import { PythonRunner, type RunResult } from "@/lib/python/runner";
 import { WorkspaceContext, type CodeVerdict, type WorkspaceApi } from "./context";
 import { ThemeToggle } from "../theme";
@@ -35,7 +35,7 @@ const writeTutor = (open: boolean) => {
   tutorListeners.forEach((listener) => listener());
 };
 type Snapshots = Record<string, { code: string; at: number }>;
-type Doc = { key: string; starter: string; question: { id: string; number: number } | null };
+type Doc = { key: string; starter: string; language: Language; question: { id: string; number: number } | null };
 
 /** The newer of this device's copy and the copy saved to the account. */
 function load(key: string, fallback: string, snapshots: Snapshots) {
@@ -54,6 +54,7 @@ export function Workspace({
   id,
   breadcrumb,
   starterCode,
+  language = "python",
   snapshots = {},
   lesson,
   tutor,
@@ -62,12 +63,14 @@ export function Workspace({
   id: string;
   breadcrumb: string[];
   starterCode: string;
+  /** The language of the scratch editor's starter. */
+  language?: Language;
   snapshots?: Snapshots;
   lesson?: { total: number; solved: string[]; complete: boolean; held?: boolean };
   tutor: TutorSetup;
   children: React.ReactNode;
 }) {
-  const [scratch] = useState<Doc>(() => ({ key: `bedrock-code:${id}`, starter: starterCode, question: null }));
+  const [scratch] = useState<Doc>(() => ({ key: `bedrock-code:${id}`, starter: starterCode, language, question: null }));
   const [doc, setDoc] = useState<Doc>(scratch);
   const docRef = useRef(doc);
   const [pane, setPane] = useState<Pane>("lesson");
@@ -149,7 +152,7 @@ export function Workspace({
       setResult(null);
       const text = load(next.key, next.starter, snapshots);
       code.current = text;
-      editor.current?.replace(text);
+      editor.current?.replace(text, next.language);
     },
     [persist, snapshots],
   );
@@ -158,7 +161,11 @@ export function Workspace({
     if (!runner.current || running) return;
     setRunning(true);
     setPane("code");
-    setResult(await runner.current.run(code.current));
+    const language = docRef.current.language;
+    const ran = await runner.current.run(runProgram(code.current, language));
+    // An assembly error is about the learner's program, not the Python that runs it, so only its message is shown.
+    if (language === "asm" && ran.error) ran.error = explainFailure(ran.error, "asm").detail ?? ran.error;
+    setResult(ran);
     setRunning(false);
   }, [running]);
 
@@ -192,12 +199,13 @@ export function Workspace({
     let outcome: CodeVerdict;
     try {
       if (!tests.current.has(question.id)) tests.current.set(question.id, await codeTests(id, question.id));
-      const ran = await runner.current.run(checkProgram(submitted, tests.current.get(question.id)!));
+      const language = docRef.current.language;
+      const ran = await runner.current.run(checkProgram(submitted, tests.current.get(question.id)!, language));
       if (ran.error === null) {
         setResult({ ...ran, out: [{ stream: "out", text: "All checks passed." }] });
         outcome = { correct: true };
       } else {
-        const { note, detail } = explainFailure(ran.error);
+        const { note, detail } = explainFailure(ran.error, language);
         setResult({ ...ran, out: [], error: detail ? `${note}\n\n${detail}` : note });
         outcome = { correct: false, note };
       }
@@ -215,9 +223,14 @@ export function Workspace({
   }, [id, running, settle]);
 
   const open = useCallback(
-    (question: { id: string; number: number; starter: string }) => {
+    (question: { id: string; number: number; starter: string; language?: "asm" }) => {
       attending.current = question.id;
-      show({ key: `bedrock-code:${id}:${question.id}`, starter: question.starter, question: { id: question.id, number: question.number } });
+      show({
+        key: `bedrock-code:${id}:${question.id}`,
+        starter: question.starter,
+        language: question.language ?? "python",
+        question: { id: question.id, number: question.number },
+      });
       setPane("code");
       editor.current?.focus();
     },
@@ -337,7 +350,7 @@ export function Workspace({
         <section className="ws-pane ws-code" aria-label="Code">
           <div className="ws-toolbar">
             <span className="label" data-testid="doc-name">
-              {doc.question ? `Question ${doc.question.number}` : "Python"}
+              {doc.question ? `Question ${doc.question.number}` : doc.language === "asm" ? "Assembly" : "Python"}
             </span>
             <div className="ml-auto flex items-center gap-2">
               {doc.question ? (
@@ -372,7 +385,7 @@ export function Workspace({
             </div>
           </div>
           <div className="ws-editor">
-            <CodeEditor ref={editor} initial={initial} onChange={onChange} onRun={run} label="Python code editor" />
+            <CodeEditor ref={editor} initial={initial} language={scratch.language} onChange={onChange} onRun={run} label="Code editor" />
           </div>
           <SymbolBar editor={editor} />
           <div className="ws-output" role="region" aria-label="Output" aria-live="polite" tabIndex={0}>

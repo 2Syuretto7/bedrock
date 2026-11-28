@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { block, type Question } from "../lessons/schema";
+import { block, language, type Question } from "../lessons/schema";
 
 /**
  * A mini-capstone closes a cluster. It is one small project, built in stages,
@@ -15,6 +15,8 @@ export const capstone = z.strictObject({
   /** The project as a whole, before any stage: what is being built and why it needs the cluster. */
   brief: z.string().min(1),
   starter: z.string().optional(),
+  /** The language of the starter, the code the scratch editor opens with. */
+  language,
   stages: z
     .array(z.strictObject({ title: z.string().min(1), blocks: z.array(block).min(1) }))
     .min(3)

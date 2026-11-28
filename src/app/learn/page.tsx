@@ -87,6 +87,7 @@ async function Lesson() {
         id={id}
         breadcrumb={[TRACKS[cluster.track], cluster.title, "Mini-capstone"]}
         starterCode={capstone.starter ?? "# Scratch space. Try things here.\n"}
+        language={capstone.language}
         snapshots={snapshots}
         lesson={{ total: ids.length, solved: ids.filter((q) => solved.has(q)), complete: false }}
         tutor={tutor}
@@ -122,6 +123,7 @@ async function Lesson() {
       id={concept.id}
       breadcrumb={[TRACKS[concept.track], graph.clusters.get(concept.cluster)!.title, concept.title]}
       starterCode={lesson.starter ?? "# Scratch space. Try things here.\n"}
+      language={lesson.language}
       snapshots={snapshots}
       lesson={{ total: ids.length, solved: ids.filter((id) => solved.has(id)), complete: false, held }}
       tutor={tutor}

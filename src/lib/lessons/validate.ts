@@ -2,7 +2,7 @@ import { ancestors, type Graph } from "../graph/load";
 import { teachingPath } from "../learning/next";
 import { figurePropsProblem } from "./figure-props";
 import { normaliseOutput } from "./grade";
-import { checkProgram, featureProgram } from "./harness";
+import { checkProgram, featureProgram, runProgram, type Language } from "./harness";
 import type { LessonFile } from "./load";
 import type { RunPython } from "./node-python";
 import { parseRational } from "./number";
@@ -145,7 +145,7 @@ export async function validateLessons(options: ValidateOptions): Promise<Issue[]
     const seen = new Set<string>();
     const questions: Question[] = [];
     let prose = 0;
-    if (lesson.starter) await checkCode("starter", lesson.starter);
+    if (lesson.starter) await checkCode("starter", lesson.starter, "", lesson.language);
     for (const [id, text] of Object.entries(lesson.bridges ?? {})) {
       const where = `bridges.${id}`;
       if (words(text) > BRIDGE_MAX_WORDS) add(where, `A bridge is short: ${words(text)} words, and the most is ${BRIDGE_MAX_WORDS}`);
@@ -196,7 +196,7 @@ export async function validateLessons(options: ValidateOptions): Promise<Issue[]
 }
 
 export type Checks = {
-  checkCode: (where: string, code: string, context?: string) => Promise<boolean>;
+  checkCode: (where: string, code: string, context?: string, language?: Language) => Promise<boolean>;
   checkText: (where: string, text: string, inline?: boolean) => Promise<void>;
 };
 
@@ -221,12 +221,13 @@ export function textChecks({
   /** How the complaint about a concept that may not be named ends. */
   stray?: string;
 }): Checks {
-  const checkCode = async (where: string, code: string, context = "") => {
-    const result = await run(featureProgram(code, context));
+  const checkCode = async (where: string, code: string, context = "", language: Language = "python") => {
+    const result = await run(featureProgram(code, context, language));
     const listed = result.out.trim();
     if (result.error || listed === "syntax-error") return false;
     const beyond = (JSON.parse(listed) as string[]).filter((feature) => !allowedPython.has(feature));
-    if (beyond.length > 0) add(where, `Uses Python the learner has not been taught yet: ${beyond.join(", ")}`);
+    const what = language === "asm" ? "assembly" : "Python";
+    if (beyond.length > 0) add(where, `Uses ${what} the learner has not been taught yet: ${beyond.join(", ")}`);
     return true;
   };
   const checkText = async (where: string, text: string, inline = false) => {
@@ -253,9 +254,15 @@ export function textChecks({
     for (const code of pythonExamples(text)) {
       if (!(await checkCode(where, code, shown))) add(where, "A Python example in the text does not parse");
     }
+    for (const code of asmExamples(text)) {
+      if (!(await checkCode(where, code, "", "asm"))) add(where, "An assembly example in the text does not assemble");
+    }
   };
   return { checkCode, checkText };
 }
+
+/** The assembly examples in a passage, which must each assemble on their own. */
+export const asmExamples = (text: string) => [...text.matchAll(/```asm\n([\s\S]*?)```/g)].map(([, code]) => code);
 
 /** The Python examples in a passage. A method shown on its own, indented as it would be in its class, is moved to the margin. */
 export const pythonExamples = (text: string) =>
@@ -270,10 +277,11 @@ export async function checkQuestion(
   at: string,
   add: (where: string, message: string) => void,
   run: RunPython,
-  checkCode: (where: string, code: string, context?: string) => Promise<boolean>,
+  checkCode: (where: string, code: string, context?: string, language?: Language) => Promise<boolean>,
   checkText: (where: string, text: string, inline?: boolean) => Promise<void>,
 ) {
-  const passes = async (code: string) => (await run(checkProgram(code, (q as { tests: string }).tests))).error === null;
+  const language: Language = (q.type === "code" || q.type === "predict" ? q.language : undefined) ?? "python";
+  const passes = async (code: string) => (await run(checkProgram(code, (q as { tests: string }).tests, language))).error === null;
   switch (q.type) {
     case "numeric": {
       const answer = parseRational(q.answer);
@@ -291,8 +299,8 @@ export async function checkQuestion(
       for (const step of q.steps) await checkText(at, step, true);
       break;
     case "predict": {
-      if (!(await checkCode(at, q.code))) add(at, "The code does not parse");
-      const result = await run(q.code);
+      if (!(await checkCode(at, q.code, "", language))) add(at, "The code does not parse");
+      const result = await run(runProgram(q.code, language, false));
       if (result.error) add(at, `The code fails when run: ${result.error.trim().split("\n").at(-1)}`);
       else if (normaliseOutput(result.out) !== normaliseOutput(q.output)) {
         add(at, `Stated output is wrong. The code really prints: ${JSON.stringify(normaliseOutput(result.out))}`);
@@ -300,9 +308,9 @@ export async function checkQuestion(
       break;
     }
     case "code": {
-      if (!(await checkCode(at, q.solution))) add(at, "The reference solution does not parse");
+      if (!(await checkCode(at, q.solution, "", language))) add(at, "The reference solution does not parse");
       // The starter may already call what the learner is asked to define.
-      const starterParses = await checkCode(at, q.starter, q.solution);
+      const starterParses = await checkCode(at, q.starter, q.solution, language);
       if (q.mode === "write" && !starterParses) add(at, "The starter does not parse");
       if (!(await passes(q.solution))) add(at, "The reference solution fails its own tests");
       if (await passes(q.starter)) add(at, "The starter already passes the tests");

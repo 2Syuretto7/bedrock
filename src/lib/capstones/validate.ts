@@ -81,7 +81,7 @@ export async function validateCapstones(options: ValidateCapstonesOptions): Prom
     await checkText("claim", capstone.claim, true);
     await checkText("brief", capstone.brief);
     await checkText("review", capstone.review);
-    if (capstone.starter) await checkCode("starter", capstone.starter);
+    if (capstone.starter) await checkCode("starter", capstone.starter, "", capstone.language);
 
     const seen = new Set<string>();
     const exercised = new Set<string>();

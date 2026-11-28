@@ -46,6 +46,40 @@ describe("lesson validation", () => {
     expect(await messages("s0.printing", (l) => (question(l, "fix-sum").starter = "print(9)\n"))).toContain("starter already passes");
   });
 
+  it("checks assembly questions on the RISC-V machine and holds them to the instructions taught", async () => {
+    const asm = (l: Raw, extra: Raw) =>
+      (l.parts.work as Raw[]).push({
+        question: {
+          id: "asm-double",
+          type: "code",
+          language: "asm",
+          mode: "write",
+          system: "s2",
+          prompt: "Write double.",
+          explanation: "Add a0 to itself.",
+          starter: "double:\n    ret\n",
+          solution: "double:\n    add a0, a0, a0\n    ret\n",
+          tests: 'assert call("double", 21).value == 42, "double(21) should be 42"',
+          wrong: ["double:\n    addi a0, a0, 2\n    ret\n"],
+          ...extra,
+        },
+      });
+    const untaught = await messages("s0.printing", (l) => asm(l, {}));
+    expect(untaught).toContain("Uses assembly the learner has not been taught yet: asm:add, asm:ret");
+    expect(untaught).not.toContain("fails its own tests");
+    expect(untaught).not.toContain("too weak");
+    expect(await messages("s0.printing", (l) => asm(l, { wrong: ["double:\n    slli a0, a0, 1\n    ret\n"] }))).toContain("Wrong solution 1 passes the tests");
+    expect(await messages("s0.printing", (l) => asm(l, { solution: "double:\n    ad a0, a0, a0\n    ret\n" }))).toContain(
+      "The reference solution does not parse",
+    );
+    const predict = await messages("s0.printing", (l) =>
+      (l.parts.drill as Raw[]).push({
+        question: { id: "asm-print", type: "predict", language: "asm", system: "s1", prompt: "What does it print?", explanation: "It prints 7.", code: "li a0, 7\nli a7, 1\necall\n", output: "8" },
+      }),
+    );
+    expect(predict).toContain('Stated output is wrong. The code really prints: "7"');
+  });
+
   it("refuses a figure that does not exist, a prop it does not take, a prop of the wrong type, and one that cannot be drawn", async () => {
     const figureAt = (l: Raw, name: string): Raw => (Object.values(l.parts as Record<string, Raw[]>).flat().find((block) => block.figure === name) as Raw);
     expect(await messages("f0.counting", (l) => (figureAt(l, "venn").figure = "venn-diagram"))).toContain("No figure named venn-diagram");
