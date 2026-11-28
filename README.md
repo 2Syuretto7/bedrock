@@ -37,7 +37,7 @@ npm run dev
 | --- | --- |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | TypeScript |
-| `npm run lessons` | Checks every lesson and mini-capstone: bridges, answers, predicted outputs, reference solutions and hidden tests, run under the same Python the browser uses, and every figure's props against its schema, with the figure rendered once |
+| `npm run lessons` | Checks every lesson and mini-capstone: bridges, answers, predicted outputs, reference solutions and hidden tests, run under the same Python the browser uses (assembly questions run on a RISC-V machine written in that Python), and every figure's props against its schema, with the figure rendered once |
 | `npm test` | Unit and database tests (Vitest) |
 | `npm run e2e` | Builds the app and runs browser tests at laptop, tablet and phone sizes |
 | `LIVE_URL=... npm run e2e` | Read-only smoke test of the deployed site |

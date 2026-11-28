@@ -12,9 +12,15 @@
  * returns the resulting namespace (including `output`). That lets a test try
  * several inputs before the learner has been taught how to write functions.
  */
+import { RV32 } from "@/lib/asm/rv32";
+
 const py = (text: string) => JSON.stringify(text);
 
-export function checkProgram(code: string, tests: string): string {
+/** The languages a code question can be written in. Assembly runs on the RISC-V machine in `RV32`. */
+export type Language = "python" | "asm";
+
+export function checkProgram(code: string, tests: string, language: Language = "python"): string {
+  if (language === "asm") return asmCheckProgram(code, tests);
   return `import io as _io, contextlib as _ctx, re as _re
 _src = ${py(code)}
 def _run(_source):
@@ -38,13 +44,62 @@ exec(compile(${py(tests)}, "<tests>", "exec"), _ns)
 }
 
 /**
+ * Checks assembly. The program is assembled and run once from main; the tests then see `output`, `steps`,
+ * `exit_code` and `source`, read registers and memory after that run with `reg(name)`, `word(label, i)`,
+ * `byte(label, i)` and `string(label)`, and can run it again with `run(words={label: [...]}, regs={...})`
+ * or call one function with `call(label, *args, words=...)`. Both return a run with `output`, `steps`,
+ * `reg`, `word`, `byte` and `string`; a call adds `value`, a0 as a signed number, and `clobbered`,
+ * the registers a caller expects kept, sp and s0 to s11, that the function changed and did not restore.
+ */
+function asmCheckProgram(code: string, tests: string): string {
+  return `${RV32}
+_src = ${py(code)}
+_first = run_program(_src)
+_ns = {"__name__": "__main__", "source": _src, "output": _first.output, "steps": _first.steps,
+       "exit_code": _first.exit_code, "reg": _first.reg, "word": _first.word, "byte": _first.byte,
+       "string": _first.string, "AssemblyError": AssemblyError,
+       "run": lambda words=None, regs=None: run_program(_src, words, regs),
+       "call": lambda _label, *_args, words=None: call_function(_src, _label, _args, words)}
+exec(compile(${py(tests)}, "<tests>", "exec"), _ns)
+`;
+}
+
+/**
+ * The program the Run button runs. Python runs as written. Assembly is assembled and run, its output
+ * printed, and then, if `registers` is set, a line listing the registers the run changed.
+ */
+export function runProgram(code: string, language: Language = "python", registers = true): string {
+  if (language !== "asm") return code;
+  return `${RV32}
+_machine = Machine(Program(${py(code)}))
+_start = list(_machine.regs)
+try:
+    _machine.run()
+finally:
+    # Output is passed on a line at a time, so a last line without a newline is ended here.
+    if _machine.output:
+        print(_machine.output, end="" if _machine.output.endswith("\\n") else "\\n")
+    if ${registers ? "True" : "False"}:
+        _changed = []
+        for _i, _name in enumerate(_ABI):
+            if _machine.regs[_i] != _start[_i]:
+                _v = _signed(_machine.regs[_i])
+                _changed.append(_name + " = " + (hex(_machine.regs[_i]) if abs(_v) >= 0x10000 else str(_v)))
+        print("After " + format(_machine.steps, ",") + " instructions: " + (", ".join(_changed) if _changed else "no register changed") + ".")
+`;
+}
+
+/**
  * Turns a failed check into something the learner can act on: one line, and
  * for an error in their own code, the part of the traceback about that code.
  * Test messages are written never to contain the answer.
  */
-export function explainFailure(error: string): { note: string; detail: string | null } {
+export function explainFailure(error: string, language: Language = "python"): { note: string; detail: string | null } {
   const lines = error.trim().split("\n");
   const last = lines.at(-1) ?? "";
+  if (language === "asm" && last.startsWith("AssemblyError")) {
+    return { note: "Your assembly stopped with an error.", detail: last.replace(/^AssemblyError:\s*/, "") };
+  }
   if (/^Stopped/.test(last)) return { note: last, detail: null };
   if (last.startsWith("AssertionError") && error.includes('File "<tests>"')) {
     return { note: last.replace(/^AssertionError:?\s*/, "") || "Not yet. One of the checks did not pass.", detail: null };
@@ -63,7 +118,16 @@ export function explainFailure(error: string): { note: string; detail: string | 
  * field it assigns such as self.x, is not a feature of Python and is not
  * listed. context is other code shown alongside, whose definitions count too.
  */
-export function featureProgram(code: string, context = ""): string {
+export function featureProgram(code: string, context = "", language: Language = "python"): string {
+  if (language === "asm") {
+    return `${RV32}
+import json as _json
+try:
+    print(_json.dumps(sorted("asm:" + _m for _m in Program(${py(code)}).mnemonics)))
+except AssemblyError:
+    print("syntax-error")
+`;
+  }
   return `import ast as _ast, builtins as _b, json as _json
 _STRUCT = {"If","IfExp","For","While","Break","Continue","FunctionDef","Return","Lambda","ClassDef","List","Tuple",
   "Dict","Set","Subscript","Slice","ListComp","DictComp","SetComp","GeneratorExp","Try","Raise","Assert","With",

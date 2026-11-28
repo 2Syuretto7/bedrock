@@ -24,9 +24,13 @@ export const choiceQuestion = z.strictObject({
   options: z.array(z.string().min(1)).min(3).max(6),
   answer: z.number().int().min(0),
 });
+/** The language of a question's code. Python unless it says otherwise; asm is RISC-V assembly. */
+export const language = z.enum(["python", "asm"]).optional();
+
 export const predictQuestion = z.strictObject({
   ...base,
   type: z.literal("predict"),
+  language,
   code: z.string().min(1),
   /** Exactly what the code prints. Checked against a real run before merge. */
   output: z.string().min(1),
@@ -40,6 +44,7 @@ export const orderQuestion = z.strictObject({
 export const codeQuestion = z.strictObject({
   ...base,
   type: z.literal("code"),
+  language,
   /** find-bug questions start from broken code; write questions from a stub. */
   mode: z.enum(["write", "find-bug"]),
   starter: z.string(),
@@ -84,6 +89,8 @@ export const lesson = z.strictObject({
    */
   bridges: z.record(z.string(), z.string().min(1)).optional(),
   starter: z.string().optional(),
+  /** The language of the starter, the code the scratch editor opens with. */
+  language,
   parts: z.strictObject(Object.fromEntries(PARTS.map((part) => [part, z.array(block).min(1)])) as Record<(typeof PARTS)[number], z.ZodArray<typeof block>>),
 });
 export type Lesson = z.infer<typeof lesson>;

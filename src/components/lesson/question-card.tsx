@@ -50,7 +50,7 @@ export function QuestionCard({ view }: { view: QuestionView }) {
       setFeedback(null);
       timer.begin();
       // A timed code question is answered in the editor, so starting it opens it there.
-      if (view.type === "code") ws.open({ id: view.id, number: view.number, starter: view.starter ?? "" });
+      if (view.type === "code") ws.open({ id: view.id, number: view.number, starter: view.starter ?? "", language: view.language });
     });
   };
 
@@ -235,7 +235,7 @@ export function QuestionCard({ view }: { view: QuestionView }) {
             <button
               type="button"
               className={`btn btn-small ${solved ? "btn-secondary" : "btn-primary"}`}
-              onClick={() => ws.open({ id: view.id, number: view.number, starter: view.starter ?? "" })}
+              onClick={() => ws.open({ id: view.id, number: view.number, starter: view.starter ?? "", language: view.language })}
             >
               {view.mode === "find-bug" ? "Open the broken code" : "Open in the editor"}
             </button>
