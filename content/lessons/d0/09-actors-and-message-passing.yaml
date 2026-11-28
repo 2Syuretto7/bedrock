@@ -1,0 +1,1220 @@
+concept: d0.actors-and-message-passing
+minutes: 85
+claim: You can explain the actor model, in which each piece of state has one owner that handles one message at a time, so the state needs no locks; write an actor's behaviour that changes its state and replies by message; predict the orders in which messages from several senders can arrive; compare actor mailboxes with the channels of communicating sequential processes; see why messages must be copied or immutable; work out how fast an unbounded mailbox grows when messages arrive faster than they are handled, and bound it; recognise the deadlock of two actors waiting for each other's replies; and supervise actors so that a crash restarts the actor from a clean state without retrying the message that crashed it.
+recalls: [d0.event-loops-and-asynchronous-i-o]
+uses: [d0.locks-and-mutual-exclusion, d0.deadlock, d0.condition-variables-and-semaphores, d0.thread-pools-and-work-queues, d0.interleavings-and-race-conditions, s1.exceptions, s1.classes-and-objects, s2.stacks-and-queues]
+leads: [d0.testing-concurrent-code-deterministically]
+starter: |
+  # Scratch space. An account actor works through its mailbox one message
+  # at a time, so no two withdrawals are ever checked at once.
+  balance = 1000
+  mailbox = [700, 500, 200]
+  for amount in mailbox:
+      if amount <= balance:
+          balance -= amount
+          print("ok", amount, "leaves", balance)
+      else:
+          print("refused", amount)
+parts:
+  recall:
+    - text: |
+        [[d0.event-loops-and-asynchronous-i-o]] needed no locks, because all of a loop's state belongs to one thread and tasks change it only between awaits. The price was that everything ran on that one thread. This lesson keeps the rule, one owner for each piece of state, and lets there be as many owners as you like, each handling its own messages. Three quick pulls first.
+  puzzle:
+    - text: |
+        A delivery app's order-tracking actor can handle 200 messages a second. Three restaurant feeds each send it 100 status updates a second, and its mailbox has no limit.
+
+        **After one minute, how many messages are waiting in its mailbox?**
+  intuition:
+    - text: |
+        In a tehsil office, the land records for a village are kept by one clerk, and nobody else opens the register. To change an entry you put an application in the clerk's tray, and the clerk works through the tray one application at a time, sending each reply back by post. Two applications can never scribble on the same page at once, because only one person ever holds the pen. The cost is the tray: if applications arrive faster than the clerk can deal with them, the pile grows, and every new one waits behind all the others.
+
+        An **actor** is that clerk, and its **mailbox** is the tray. The figure feeds an actor that handles 200 messages a second from senders that send 100 a second each.
+    - figure: actor-mailbox
+      props: { senders: 3, mailbox: unbounded }
+    - text: |
+        With one or two senders the actor keeps up. With three, the mailbox grows by the difference every second and never shrinks, though nothing has failed and every message will eventually be handled; the messages simply wait longer and longer. Bounding the mailbox caps the wait by turning messages away, which tells the senders about the overload instead of hiding it.
+  derivation:
+    - text: |
+        **Actors.** The actor model, proposed by Carl Hewitt in 1973, builds a program from actors. An actor has private state, a mailbox and a behaviour. It handles one message at a time, and in response it may do three things: change its own state, send messages to actors whose addresses it knows, and create new actors. Nothing outside the actor can read or write its state, so the state needs no locks. The only structure shared between threads is the mailbox, and the runtime makes that one safe. Sending is asynchronous: the sender drops the message in the mailbox and carries on.
+
+        A runtime can keep millions of actors on a few threads, because an actor with an empty mailbox costs only its memory. Whenever an actor has messages, the runtime schedules it on a thread pool, the machinery of the last two lessons. Erlang, built for telephone exchanges and later used for WhatsApp's servers, works this way, as do Akka on the JVM, Microsoft Orleans and Ray's actors in machine learning.
+    - question:
+        id: derivation-one-at-a-time
+        type: choice
+        system: s2
+        prompt: |
+          Two people send withdrawals to the same account actor at the same instant, and only one can be covered. Why can both not pass the balance check?
+        options:
+          - "The actor handles one message at a time, so the second withdrawal is checked against the balance the first left behind"
+          - "The mailbox locks the balance while a message waits"
+          - "The second withdrawal is thrown away"
+          - "They can both pass; actors need a lock for this"
+        answer: 0
+        explanation: |
+          The check and the deduction happen inside one message's handling, and the next message is not handled until that finishes, so check-then-act cannot interleave.
+    - text: |
+        **Replies and order.** A message that wants an answer carries the sender's address, often with a tag to match the reply to the request, and the reply is just another message. Order is guaranteed only partly. Erlang promises that messages from one actor to another arrive in the order they were sent, but messages from different senders interleave in any order, and there is no global order across the system. An actor can **wait** for a reply, which is convenient, but two actors each waiting for the other's reply never handle another message: the deadlock of two locks, rebuilt from messages.
+
+        One rule keeps the model honest. A message must be **immutable** or a **copy**. If an actor sends a reference to its own list and then keeps changing the list, two actors share mutable state again, and every race the model was meant to remove comes back. Erlang copies every message and its data cannot be changed; in Python or Java it is a discipline you keep yourself.
+    - question:
+        id: derivation-orders
+        type: numeric
+        system: s2
+        prompt: |
+          Actor A sends B three messages and actor C sends B two, at the same time. Each sender's messages arrive in the order they were sent. In how many different orders can B receive the five messages?
+        answer: "10"
+        explanation: |
+          An order is fixed by which two of the five positions hold C's messages: C(5, 2) = 10, the interleaving count from the first lesson of this cluster.
+    - text: |
+        **Channels.** A second tradition, Tony Hoare's communicating sequential processes of 1978, names the channels instead of the processes. Processes are anonymous and talk over channels that can be passed around. An **unbuffered** channel is a rendezvous: a send waits until a receiver takes the value. A **buffered** channel holds up to k values, the bounded buffer built with condition variables earlier in this cluster. Go is built on this, with the proverb "do not communicate by sharing memory; instead, share memory by communicating", and a `select` statement that waits on several channels at once. An actor has one mailbox and an address; a process may read many channels. In both, ownership of the data passes with the message.
+    - question:
+        id: derivation-unbuffered
+        type: choice
+        system: s2
+        prompt: |
+          A Go program sends a value on an unbuffered channel that no goroutine ever reads. What happens to the sender?
+        options:
+          - "It waits for ever, because an unbuffered send completes only when a receiver takes the value"
+          - "The value is dropped and the sender carries on"
+          - "The value waits in the channel and the sender carries on"
+          - "The program raises an error at once"
+        answer: 0
+        explanation: |
+          An unbuffered channel has no room to hold a value, so a send is a meeting between two goroutines. With nobody to meet, the sender blocks.
+    - text: |
+        **Overload.** An unbounded mailbox hides overload rather than handling it. When messages arrive faster than the actor handles them, the backlog grows at the difference between the rates, memory fills, and a new message waits the backlog divided by the handling rate. A bounded mailbox caps both, and then something must give: the sender blocks, which is backpressure, or the message is refused, which is load shedding. Watching mailbox lengths is how actor systems are monitored. And with arrivals that come at random rather than evenly, queues build up well before the arrival rate reaches the handling rate, a story for the queueing models of the next cluster.
+
+        **Let it crash.** Because an actor's state is private, a crash damages nothing outside it, and Erlang turns this into a method. Rather than guarding against every strange input, let the actor crash, and have a **supervisor**, itself an actor, restart it from a known clean state; its half-updated state is thrown away. Supervisors form a tree, and each limits how often it will restart a child: a child that keeps crashing is stopped and the failure passed up to the supervisor's own supervisor. A message that crashes an actor every time, a **poison message**, must not be retried for ever; it is dropped or set aside in a dead-letter queue for a person to look at. Finally, an actor's address can just as well name an actor on another machine, so the same program spreads across a cluster. Then messages can be lost or delayed, which is where the distributed systems clusters begin.
+    - question:
+        id: derivation-poison
+        type: choice
+        system: s2
+        prompt: |
+          A supervisor restarts a crashed actor and hands it again the message it was handling, which crashes it again, and again. What should the supervisor do with that message?
+        options:
+          - "Set it aside, for example in a dead-letter queue, and carry on with the next message"
+          - "Keep retrying it until it works"
+          - "Retry it with a longer timeout"
+          - "Restart every other actor as well"
+        answer: 0
+        explanation: |
+          A message that crashes the actor every time will never succeed by retrying, and retrying blocks every message behind it. Setting it aside keeps the actor serving while someone investigates.
+  formal:
+    - text: |
+        **Actor.** Private state, a mailbox and a behaviour. One message at a time; in response it may change its state, send messages and create actors. No other code touches its state, so no locks. Send is asynchronous.
+
+        **Messages.** A reply is a message to the address the request carried. From one sender to one receiver, order is kept; across senders it interleaves; there is no global order. Messages must be immutable or copied. Two actors waiting for each other's replies deadlock.
+
+        **Channels.** CSP: anonymous processes, named channels. Unbuffered send waits for a receiver; a buffered channel of k is a bounded buffer.
+
+        **Overload.** Arrivals faster than handling grow the backlog at the difference of the rates; a new message waits backlog / handling rate. Bound the mailbox and block or refuse.
+
+        **Supervision.** On a crash, discard the state and restart from a clean copy; limit restarts and stop and escalate beyond the limit; never retry a poison message for ever.
+  drill:
+    - text: Seconds each. Ask who owns the state, and what is waiting in the mailbox.
+    - question:
+        id: drill-may
+        type: choice
+        system: s1
+        prompt: |
+          Which of these may an actor do while it handles a message?
+        options:
+          - "Change its own state, send messages and create new actors"
+          - "Read another actor's state directly"
+          - "Edit messages waiting in another actor's mailbox"
+          - "Handle a second message at the same time"
+        answer: 0
+        explanation: Everything else would let two pieces of code touch one piece of state at once, which is what actors exist to prevent.
+    - question:
+        id: drill-share
+        type: choice
+        system: s1
+        prompt: |
+          An actor sends its own list of pending orders to another actor and then keeps appending to the list. What is wrong?
+        options:
+          - "Both actors now share one mutable list, so the receiver sees changes made after the message was sent"
+          - "Nothing; the message was already delivered"
+          - "Lists cannot be sent in messages"
+          - "The receiver must lock the mailbox"
+        answer: 0
+        explanation: Sending a reference shares the list. Send a copy, or a value that cannot change.
+    - question:
+        id: predict-backlog
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          arriving, handled, seconds = 250, 200, 30
+          backlog = (arriving - handled) * seconds
+          print(backlog, backlog / handled)
+        output: "1500 7.5"
+        explanation: Fifty messages a second pile up, 1500 in half a minute, and the newest waits 7.5 s for the actor to reach it.
+    - question:
+        id: predict-mailbox
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          balance = 100
+          replies = []
+          for kind, amount in [("withdraw", 70), ("withdraw", 50), ("deposit", 20)]:
+              if kind == "deposit":
+                  balance += amount
+              elif amount <= balance:
+                  balance -= amount
+                  replies.append("ok")
+              else:
+                  replies.append("refused")
+          print(replies, balance)
+        output: "['ok', 'refused'] 50"
+        explanation: The second withdrawal is checked against the 30 the first left, and the deposit comes after it in the mailbox.
+    - question:
+        id: predict-alias
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          initial = {"count": 0}
+          state = initial
+          state["count"] += 5
+          state = initial
+          print(state)
+        output: "{'count': 5}"
+        explanation: state and initial are one dictionary, so the restart hands back the very state it meant to discard. Restart from dict(initial).
+  work:
+    - text: Slower now. Each answer is part of how actors own, share and recover their state.
+    - question:
+        id: write-account
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `account`, the behaviour of a bank account actor: it changes its balance only through its own messages and answers by sending replies. The program should print `[('ok', 'rent')] [('refused', 'fees'), ('balance', 'joint', 500)] 500`.
+        starter: |
+          class System:
+              # Runs actors. Each has a handler, a state and a mailbox. The system
+              # hands each actor its oldest message, one actor after another, and the
+              # handler returns the actor's new state.
+              def __init__(self):
+                  self.actors = {}
+
+              def spawn(self, name, handler, state):
+                  self.actors[name] = [handler, state, []]
+
+              def send(self, to, message):
+                  self.actors[to][2].append(message)
+
+              def run(self):
+                  busy = True
+                  while busy:
+                      busy = False
+                      for name in list(self.actors):
+                          handler, state, mailbox = self.actors[name]
+                          if mailbox:
+                              busy = True
+                              self.actors[name][1] = handler(self, name, state, mailbox.pop(0))
+
+              def state(self, name):
+                  return self.actors[name][1]
+
+
+          def account(system, me, balance, message):
+              # A bank account actor; its state is the balance in rupees.
+              #   ("deposit", amount)                 adds to the balance
+              #   ("withdraw", amount, reply_to, tag)  takes the money if the balance
+              #       covers it and replies ("ok", tag), else replies ("refused", tag)
+              #   ("balance", reply_to)               replies ("balance", me, balance)
+              # Replies are sent to the actor named reply_to. Return the new balance.
+              return balance
+
+
+          def person(system, me, heard, message):
+              # Remembers every reply it receives.
+              return heard + [message]
+
+
+          s = System()
+          s.spawn("joint", account, 1000)
+          s.spawn("asha", person, [])
+          s.spawn("ravi", person, [])
+          s.send("joint", ("withdraw", 700, "asha", "rent"))
+          s.send("joint", ("withdraw", 500, "ravi", "fees"))
+          s.send("joint", ("deposit", 200))
+          s.send("joint", ("balance", "ravi"))
+          s.run()
+          print(s.state("asha"), s.state("ravi"), s.state("joint"))
+        solution: |
+          class System:
+              # Runs actors. Each has a handler, a state and a mailbox. The system
+              # hands each actor its oldest message, one actor after another, and the
+              # handler returns the actor's new state.
+              def __init__(self):
+                  self.actors = {}
+
+              def spawn(self, name, handler, state):
+                  self.actors[name] = [handler, state, []]
+
+              def send(self, to, message):
+                  self.actors[to][2].append(message)
+
+              def run(self):
+                  busy = True
+                  while busy:
+                      busy = False
+                      for name in list(self.actors):
+                          handler, state, mailbox = self.actors[name]
+                          if mailbox:
+                              busy = True
+                              self.actors[name][1] = handler(self, name, state, mailbox.pop(0))
+
+              def state(self, name):
+                  return self.actors[name][1]
+
+
+          def account(system, me, balance, message):
+              # A bank account actor; its state is the balance in rupees.
+              #   ("deposit", amount)                 adds to the balance
+              #   ("withdraw", amount, reply_to, tag)  takes the money if the balance
+              #       covers it and replies ("ok", tag), else replies ("refused", tag)
+              #   ("balance", reply_to)               replies ("balance", me, balance)
+              # Replies are sent to the actor named reply_to. Return the new balance.
+              kind = message[0]
+              if kind == "deposit":
+                  return balance + message[1]
+              if kind == "withdraw":
+                  amount, reply_to, tag = message[1], message[2], message[3]
+                  if amount <= balance:
+                      system.send(reply_to, ("ok", tag))
+                      return balance - amount
+                  system.send(reply_to, ("refused", tag))
+                  return balance
+              if kind == "balance":
+                  system.send(message[1], ("balance", me, balance))
+              return balance
+
+
+          def person(system, me, heard, message):
+              # Remembers every reply it receives.
+              return heard + [message]
+
+
+          s = System()
+          s.spawn("joint", account, 1000)
+          s.spawn("asha", person, [])
+          s.spawn("ravi", person, [])
+          s.send("joint", ("withdraw", 700, "asha", "rent"))
+          s.send("joint", ("withdraw", 500, "ravi", "fees"))
+          s.send("joint", ("deposit", 200))
+          s.send("joint", ("balance", "ravi"))
+          s.run()
+          print(s.state("asha"), s.state("ravi"), s.state("joint"))
+        tests: |
+          _s = System()
+          _s.spawn("joint", account, 1000)
+          for _i in range(10):
+              _s.spawn("p" + str(_i), person, [])
+              _s.send("joint", ("withdraw", 300, "p" + str(_i), "w" + str(_i)))
+          _s.run()
+          _replies = [_s.state("p" + str(_i)) for _i in range(10)]
+          assert _s.state("joint") == 100, "ten withdrawals of 300 from 1000 should leave 100, since only three fit, not " + str(_s.state("joint"))
+          assert _replies == [[("ok", "w0")], [("ok", "w1")], [("ok", "w2")]] + [[("refused", "w" + str(_i))] for _i in range(3, 10)], "the first three withdrawals should be told ok and the other seven refused, each person hearing only about their own, but they heard " + repr(_replies)
+          _s = System()
+          _s.spawn("a", account, 50)
+          _s.spawn("b", account, 70)
+          _s.spawn("teller", person, [])
+          _s.send("a", ("deposit", 25))
+          _s.send("b", ("withdraw", 70, "teller", "all"))
+          _s.send("a", ("balance", "teller"))
+          _s.send("b", ("balance", "teller"))
+          _s.send("a", ("deposit", 5))
+          _s.run()
+          assert _s.state("a") == 80 and _s.state("b") == 0, "account a should end at 80 and b at 0, each changed only by its own messages, not " + repr(_s.state("a")) + " and " + repr(_s.state("b"))
+          assert sorted(_s.state("teller")) == [("balance", "a", 75), ("balance", "b", 0), ("ok", "all")], "the teller should hear ok for the withdrawal and the balances 75 and 0, not " + repr(_s.state("teller"))
+          assert output.splitlines() == ["[('ok', 'rent')] [('refused', 'fees'), ('balance', 'joint', 500)] 500"], "The program should print [('ok', 'rent')] [('refused', 'fees'), ('balance', 'joint', 500)] 500"
+        wrong:
+          - |
+            class System:
+                # Runs actors. Each has a handler, a state and a mailbox. The system
+                # hands each actor its oldest message, one actor after another, and the
+                # handler returns the actor's new state.
+                def __init__(self):
+                    self.actors = {}
+
+                def spawn(self, name, handler, state):
+                    self.actors[name] = [handler, state, []]
+
+                def send(self, to, message):
+                    self.actors[to][2].append(message)
+
+                def run(self):
+                    busy = True
+                    while busy:
+                        busy = False
+                        for name in list(self.actors):
+                            handler, state, mailbox = self.actors[name]
+                            if mailbox:
+                                busy = True
+                                self.actors[name][1] = handler(self, name, state, mailbox.pop(0))
+
+                def state(self, name):
+                    return self.actors[name][1]
+
+
+            def account(system, me, balance, message):
+                # A bank account actor; its state is the balance in rupees.
+                #   ("deposit", amount)                 adds to the balance
+                #   ("withdraw", amount, reply_to, tag)  takes the money if the balance
+                #       covers it and replies ("ok", tag), else replies ("refused", tag)
+                #   ("balance", reply_to)               replies ("balance", me, balance)
+                # Replies are sent to the actor named reply_to. Return the new balance.
+                kind = message[0]
+                if kind == "deposit":
+                    return balance + message[1]
+                if kind == "withdraw":
+                    amount, reply_to, tag = message[1], message[2], message[3]
+                    if amount <= balance:
+                        system.send(me, ("ok", tag))
+                        return balance - amount
+                    system.send(me, ("refused", tag))
+                    return balance
+                if kind == "balance":
+                    system.send(message[1], ("balance", me, balance))
+                return balance
+
+
+            def person(system, me, heard, message):
+                # Remembers every reply it receives.
+                return heard + [message]
+
+
+            s = System()
+            s.spawn("joint", account, 1000)
+            s.spawn("asha", person, [])
+            s.spawn("ravi", person, [])
+            s.send("joint", ("withdraw", 700, "asha", "rent"))
+            s.send("joint", ("withdraw", 500, "ravi", "fees"))
+            s.send("joint", ("deposit", 200))
+            s.send("joint", ("balance", "ravi"))
+            s.run()
+            print(s.state("asha"), s.state("ravi"), s.state("joint"))
+          - |
+            class System:
+                # Runs actors. Each has a handler, a state and a mailbox. The system
+                # hands each actor its oldest message, one actor after another, and the
+                # handler returns the actor's new state.
+                def __init__(self):
+                    self.actors = {}
+
+                def spawn(self, name, handler, state):
+                    self.actors[name] = [handler, state, []]
+
+                def send(self, to, message):
+                    self.actors[to][2].append(message)
+
+                def run(self):
+                    busy = True
+                    while busy:
+                        busy = False
+                        for name in list(self.actors):
+                            handler, state, mailbox = self.actors[name]
+                            if mailbox:
+                                busy = True
+                                self.actors[name][1] = handler(self, name, state, mailbox.pop(0))
+
+                def state(self, name):
+                    return self.actors[name][1]
+
+
+            def account(system, me, balance, message):
+                # A bank account actor; its state is the balance in rupees.
+                #   ("deposit", amount)                 adds to the balance
+                #   ("withdraw", amount, reply_to, tag)  takes the money if the balance
+                #       covers it and replies ("ok", tag), else replies ("refused", tag)
+                #   ("balance", reply_to)               replies ("balance", me, balance)
+                # Replies are sent to the actor named reply_to. Return the new balance.
+                kind = message[0]
+                if kind == "deposit":
+                    return balance + message[1]
+                if kind == "withdraw":
+                    amount, reply_to, tag = message[1], message[2], message[3]
+                    balance = balance - amount
+                    if balance >= 0:
+                        system.send(reply_to, ("ok", tag))
+                    else:
+                        system.send(reply_to, ("refused", tag))
+                    return balance
+                if kind == "balance":
+                    system.send(message[1], ("balance", me, balance))
+                return balance
+
+
+            def person(system, me, heard, message):
+                # Remembers every reply it receives.
+                return heard + [message]
+
+
+            s = System()
+            s.spawn("joint", account, 1000)
+            s.spawn("asha", person, [])
+            s.spawn("ravi", person, [])
+            s.send("joint", ("withdraw", 700, "asha", "rent"))
+            s.send("joint", ("withdraw", 500, "ravi", "fees"))
+            s.send("joint", ("deposit", 200))
+            s.send("joint", ("balance", "ravi"))
+            s.run()
+            print(s.state("asha"), s.state("ravi"), s.state("joint"))
+          - |
+            class System:
+                # Runs actors. Each has a handler, a state and a mailbox. The system
+                # hands each actor its oldest message, one actor after another, and the
+                # handler returns the actor's new state.
+                def __init__(self):
+                    self.actors = {}
+
+                def spawn(self, name, handler, state):
+                    self.actors[name] = [handler, state, []]
+
+                def send(self, to, message):
+                    self.actors[to][2].append(message)
+
+                def run(self):
+                    busy = True
+                    while busy:
+                        busy = False
+                        for name in list(self.actors):
+                            handler, state, mailbox = self.actors[name]
+                            if mailbox:
+                                busy = True
+                                self.actors[name][1] = handler(self, name, state, mailbox.pop(0))
+
+                def state(self, name):
+                    return self.actors[name][1]
+
+
+            def account(system, me, balance, message):
+                # A bank account actor; its state is the balance in rupees.
+                #   ("deposit", amount)                 adds to the balance
+                #   ("withdraw", amount, reply_to, tag)  takes the money if the balance
+                #       covers it and replies ("ok", tag), else replies ("refused", tag)
+                #   ("balance", reply_to)               replies ("balance", me, balance)
+                # Replies are sent to the actor named reply_to. Return the new balance.
+                kind = message[0]
+                if kind == "deposit":
+                    return balance + message[1]
+                if kind == "withdraw":
+                    amount, reply_to, tag = message[1], message[2], message[3]
+                    if amount <= balance:
+                        system.send(reply_to, ("ok", tag))
+                        return balance - amount
+                    system.send(reply_to, ("refused", tag))
+                    return balance
+                if kind == "balance":
+                    system.send(message[1], ("balance", me, balance))
+                    return
+                return balance
+
+
+            def person(system, me, heard, message):
+                # Remembers every reply it receives.
+                return heard + [message]
+
+
+            s = System()
+            s.spawn("joint", account, 1000)
+            s.spawn("asha", person, [])
+            s.spawn("ravi", person, [])
+            s.send("joint", ("withdraw", 700, "asha", "rent"))
+            s.send("joint", ("withdraw", 500, "ravi", "fees"))
+            s.send("joint", ("deposit", 200))
+            s.send("joint", ("balance", "ravi"))
+            s.run()
+            print(s.state("asha"), s.state("ravi"), s.state("joint"))
+        explanation: |
+          Look at the message's kind. A deposit returns the balance plus the amount. A withdrawal that the balance covers replies ok to reply_to and returns the reduced balance; otherwise it replies refused and returns the balance unchanged. A balance request replies with the actor's name and balance and returns the balance. Replying to the account itself leaves the customers hearing nothing; deducting before checking leaves refused withdrawals still taken; and returning nothing from one branch loses the state.
+    - question:
+        id: write-supervisor
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `deliver`, the supervisor's part of the actor system: a crash discards the actor's state and restarts it from a fresh copy, up to a limit, after which the actor is stopped. The program should print `[('till', 'restarted')] {'orders': 2, 'total': 80} {'tickets': 5}`.
+        starter: |
+          class System:
+              # Runs actors as before, now with a supervisor: deliver decides what
+              # happens when a handler crashes.
+              def __init__(self, max_restarts):
+                  self.actors = {}
+                  self.log = []
+                  self.max_restarts = max_restarts
+
+              def spawn(self, name, handler, initial):
+                  self.actors[name] = {"handler": handler, "initial": initial, "state": dict(initial),
+                                       "mailbox": [], "restarts": 0, "stopped": False}
+
+              def send(self, to, message):
+                  if not self.actors[to]["stopped"]:
+                      self.actors[to]["mailbox"].append(message)
+
+              def run(self):
+                  busy = True
+                  while busy:
+                      busy = False
+                      for name in list(self.actors):
+                          actor = self.actors[name]
+                          if actor["mailbox"]:
+                              busy = True
+                              self.deliver(name, actor["mailbox"].pop(0))
+
+              def deliver(self, name, message):
+                  # Hand message to the actor's handler and keep the state it returns.
+                  # If the handler raises an exception, the state may be half-updated,
+                  # so throw it away. Restart the actor with a fresh copy of its initial
+                  # state, log (name, "restarted") and carry on with its next message;
+                  # the message that crashed it is not tried again. An actor that has
+                  # already been restarted max_restarts times is stopped instead: log
+                  # (name, "stopped") and empty its mailbox.
+                  actor = self.actors[name]
+                  try:
+                      actor["state"] = actor["handler"](self, name, actor["state"], message)
+                  except Exception:
+                      pass
+
+
+          def till(system, me, state, message):
+              # The billing till at a canteen: counts orders and adds up their totals.
+              state["orders"] += 1
+              state["total"] += int(message)    # crashes on a garbled amount
+              return state
+
+
+          def kitchen(system, me, state, message):
+              state["tickets"] += 1
+              return state
+
+
+          s = System(2)
+          s.spawn("till", till, {"orders": 0, "total": 0})
+          s.spawn("kitchen", kitchen, {"tickets": 0})
+          for amount in ["120", "80", "8o", "50", "30"]:
+              s.send("till", amount)
+              s.send("kitchen", amount)
+          s.run()
+          print(s.log, s.actors["till"]["state"], s.actors["kitchen"]["state"])
+        solution: |
+          class System:
+              # Runs actors as before, now with a supervisor: deliver decides what
+              # happens when a handler crashes.
+              def __init__(self, max_restarts):
+                  self.actors = {}
+                  self.log = []
+                  self.max_restarts = max_restarts
+
+              def spawn(self, name, handler, initial):
+                  self.actors[name] = {"handler": handler, "initial": initial, "state": dict(initial),
+                                       "mailbox": [], "restarts": 0, "stopped": False}
+
+              def send(self, to, message):
+                  if not self.actors[to]["stopped"]:
+                      self.actors[to]["mailbox"].append(message)
+
+              def run(self):
+                  busy = True
+                  while busy:
+                      busy = False
+                      for name in list(self.actors):
+                          actor = self.actors[name]
+                          if actor["mailbox"]:
+                              busy = True
+                              self.deliver(name, actor["mailbox"].pop(0))
+
+              def deliver(self, name, message):
+                  # Hand message to the actor's handler and keep the state it returns.
+                  # If the handler raises an exception, the state may be half-updated,
+                  # so throw it away. Restart the actor with a fresh copy of its initial
+                  # state, log (name, "restarted") and carry on with its next message;
+                  # the message that crashed it is not tried again. An actor that has
+                  # already been restarted max_restarts times is stopped instead: log
+                  # (name, "stopped") and empty its mailbox.
+                  actor = self.actors[name]
+                  try:
+                      actor["state"] = actor["handler"](self, name, actor["state"], message)
+                  except Exception:
+                      if actor["restarts"] == self.max_restarts:
+                          actor["stopped"] = True
+                          actor["mailbox"] = []
+                          self.log.append((name, "stopped"))
+                      else:
+                          actor["restarts"] += 1
+                          actor["state"] = dict(actor["initial"])
+                          self.log.append((name, "restarted"))
+
+
+          def till(system, me, state, message):
+              # The billing till at a canteen: counts orders and adds up their totals.
+              state["orders"] += 1
+              state["total"] += int(message)    # crashes on a garbled amount
+              return state
+
+
+          def kitchen(system, me, state, message):
+              state["tickets"] += 1
+              return state
+
+
+          s = System(2)
+          s.spawn("till", till, {"orders": 0, "total": 0})
+          s.spawn("kitchen", kitchen, {"tickets": 0})
+          for amount in ["120", "80", "8o", "50", "30"]:
+              s.send("till", amount)
+              s.send("kitchen", amount)
+          s.run()
+          print(s.log, s.actors["till"]["state"], s.actors["kitchen"]["state"])
+        tests: |
+          def _fragile(system, me, state, message):
+              state["seen"] += 1
+              return 1 // 0
+
+
+          _s = System(2)
+          _s.spawn("a", _fragile, {"seen": 0})
+          for _m in ["m1", "m2", "m3", "m4"]:
+              _s.send("a", _m)
+          _s.run()
+          _s.send("a", "m5")
+          assert _s.log == [("a", "restarted"), ("a", "restarted"), ("a", "stopped")], "an actor that crashes on every message, allowed 2 restarts, should be restarted twice and then stopped, not " + repr(_s.log)
+          assert _s.actors["a"]["mailbox"] == [], "a stopped actor's mailbox should be emptied, and later messages dropped, but it holds " + repr(_s.actors["a"]["mailbox"])
+          _s = System(3)
+          _s.spawn("till", till, {"orders": 0, "total": 0})
+          for _m in ["10", "x", "20", "y", "5"]:
+              _s.send("till", _m)
+          _s.run()
+          assert _s.log == [("till", "restarted"), ("till", "restarted")], "two garbled amounts should restart the till twice, not " + repr(_s.log)
+          assert _s.actors["till"]["state"] == {"orders": 1, "total": 5}, "after its second restart the till should start again from nothing and count only the 5, giving {'orders': 1, 'total': 5}, not " + repr(_s.actors["till"]["state"])
+          _s = System(0)
+          _s.spawn("till", till, {"orders": 0, "total": 0})
+          _s.spawn("kitchen", kitchen, {"tickets": 0})
+          for _m in ["oops", "40"]:
+              _s.send("till", _m)
+              _s.send("kitchen", _m)
+          _s.run()
+          assert _s.log == [("till", "stopped")] and _s.actors["kitchen"]["state"] == {"tickets": 2}, "with no restarts allowed, the till should be stopped by its first crash while the kitchen carries on, not " + repr(_s.log) + " " + repr(_s.actors["kitchen"]["state"])
+          assert output.splitlines() == ["[('till', 'restarted')] {'orders': 2, 'total': 80} {'tickets': 5}"], "The program should print [('till', 'restarted')] {'orders': 2, 'total': 80} {'tickets': 5}"
+        wrong:
+          - |
+            class System:
+                # Runs actors as before, now with a supervisor: deliver decides what
+                # happens when a handler crashes.
+                def __init__(self, max_restarts):
+                    self.actors = {}
+                    self.log = []
+                    self.max_restarts = max_restarts
+
+                def spawn(self, name, handler, initial):
+                    self.actors[name] = {"handler": handler, "initial": initial, "state": dict(initial),
+                                         "mailbox": [], "restarts": 0, "stopped": False}
+
+                def send(self, to, message):
+                    if not self.actors[to]["stopped"]:
+                        self.actors[to]["mailbox"].append(message)
+
+                def run(self):
+                    busy = True
+                    while busy:
+                        busy = False
+                        for name in list(self.actors):
+                            actor = self.actors[name]
+                            if actor["mailbox"]:
+                                busy = True
+                                self.deliver(name, actor["mailbox"].pop(0))
+
+                def deliver(self, name, message):
+                    # Hand message to the actor's handler and keep the state it returns.
+                    # If the handler raises an exception, the state may be half-updated,
+                    # so throw it away. Restart the actor with a fresh copy of its initial
+                    # state, log (name, "restarted") and carry on with its next message;
+                    # the message that crashed it is not tried again. An actor that has
+                    # already been restarted max_restarts times is stopped instead: log
+                    # (name, "stopped") and empty its mailbox.
+                    actor = self.actors[name]
+                    try:
+                        actor["state"] = actor["handler"](self, name, actor["state"], message)
+                    except Exception:
+                        if actor["restarts"] == self.max_restarts:
+                            actor["stopped"] = True
+                            actor["mailbox"] = []
+                            self.log.append((name, "stopped"))
+                        else:
+                            actor["restarts"] += 1
+                            self.log.append((name, "restarted"))
+
+
+            def till(system, me, state, message):
+                # The billing till at a canteen: counts orders and adds up their totals.
+                state["orders"] += 1
+                state["total"] += int(message)    # crashes on a garbled amount
+                return state
+
+
+            def kitchen(system, me, state, message):
+                state["tickets"] += 1
+                return state
+
+
+            s = System(2)
+            s.spawn("till", till, {"orders": 0, "total": 0})
+            s.spawn("kitchen", kitchen, {"tickets": 0})
+            for amount in ["120", "80", "8o", "50", "30"]:
+                s.send("till", amount)
+                s.send("kitchen", amount)
+            s.run()
+            print(s.log, s.actors["till"]["state"], s.actors["kitchen"]["state"])
+          - |
+            class System:
+                # Runs actors as before, now with a supervisor: deliver decides what
+                # happens when a handler crashes.
+                def __init__(self, max_restarts):
+                    self.actors = {}
+                    self.log = []
+                    self.max_restarts = max_restarts
+
+                def spawn(self, name, handler, initial):
+                    self.actors[name] = {"handler": handler, "initial": initial, "state": dict(initial),
+                                         "mailbox": [], "restarts": 0, "stopped": False}
+
+                def send(self, to, message):
+                    if not self.actors[to]["stopped"]:
+                        self.actors[to]["mailbox"].append(message)
+
+                def run(self):
+                    busy = True
+                    while busy:
+                        busy = False
+                        for name in list(self.actors):
+                            actor = self.actors[name]
+                            if actor["mailbox"]:
+                                busy = True
+                                self.deliver(name, actor["mailbox"].pop(0))
+
+                def deliver(self, name, message):
+                    # Hand message to the actor's handler and keep the state it returns.
+                    # If the handler raises an exception, the state may be half-updated,
+                    # so throw it away. Restart the actor with a fresh copy of its initial
+                    # state, log (name, "restarted") and carry on with its next message;
+                    # the message that crashed it is not tried again. An actor that has
+                    # already been restarted max_restarts times is stopped instead: log
+                    # (name, "stopped") and empty its mailbox.
+                    actor = self.actors[name]
+                    try:
+                        actor["state"] = actor["handler"](self, name, actor["state"], message)
+                    except Exception:
+                        if actor["restarts"] == self.max_restarts:
+                            actor["stopped"] = True
+                            actor["mailbox"] = []
+                            self.log.append((name, "stopped"))
+                        else:
+                            actor["restarts"] += 1
+                            actor["state"] = dict(actor["initial"])
+                            self.log.append((name, "restarted"))
+                            actor["mailbox"].insert(0, message)
+
+
+            def till(system, me, state, message):
+                # The billing till at a canteen: counts orders and adds up their totals.
+                state["orders"] += 1
+                state["total"] += int(message)    # crashes on a garbled amount
+                return state
+
+
+            def kitchen(system, me, state, message):
+                state["tickets"] += 1
+                return state
+
+
+            s = System(2)
+            s.spawn("till", till, {"orders": 0, "total": 0})
+            s.spawn("kitchen", kitchen, {"tickets": 0})
+            for amount in ["120", "80", "8o", "50", "30"]:
+                s.send("till", amount)
+                s.send("kitchen", amount)
+            s.run()
+            print(s.log, s.actors["till"]["state"], s.actors["kitchen"]["state"])
+          - |
+            class System:
+                # Runs actors as before, now with a supervisor: deliver decides what
+                # happens when a handler crashes.
+                def __init__(self, max_restarts):
+                    self.actors = {}
+                    self.log = []
+                    self.max_restarts = max_restarts
+
+                def spawn(self, name, handler, initial):
+                    self.actors[name] = {"handler": handler, "initial": initial, "state": dict(initial),
+                                         "mailbox": [], "restarts": 0, "stopped": False}
+
+                def send(self, to, message):
+                    if not self.actors[to]["stopped"]:
+                        self.actors[to]["mailbox"].append(message)
+
+                def run(self):
+                    busy = True
+                    while busy:
+                        busy = False
+                        for name in list(self.actors):
+                            actor = self.actors[name]
+                            if actor["mailbox"]:
+                                busy = True
+                                self.deliver(name, actor["mailbox"].pop(0))
+
+                def deliver(self, name, message):
+                    # Hand message to the actor's handler and keep the state it returns.
+                    # If the handler raises an exception, the state may be half-updated,
+                    # so throw it away. Restart the actor with a fresh copy of its initial
+                    # state, log (name, "restarted") and carry on with its next message;
+                    # the message that crashed it is not tried again. An actor that has
+                    # already been restarted max_restarts times is stopped instead: log
+                    # (name, "stopped") and empty its mailbox.
+                    actor = self.actors[name]
+                    try:
+                        actor["state"] = actor["handler"](self, name, actor["state"], message)
+                    except Exception:
+                        if actor["restarts"] == self.max_restarts:
+                            actor["stopped"] = True
+                            actor["mailbox"] = []
+                            self.log.append((name, "stopped"))
+                        else:
+                            actor["restarts"] += 1
+                            actor["state"] = actor["initial"]
+                            self.log.append((name, "restarted"))
+
+
+            def till(system, me, state, message):
+                # The billing till at a canteen: counts orders and adds up their totals.
+                state["orders"] += 1
+                state["total"] += int(message)    # crashes on a garbled amount
+                return state
+
+
+            def kitchen(system, me, state, message):
+                state["tickets"] += 1
+                return state
+
+
+            s = System(2)
+            s.spawn("till", till, {"orders": 0, "total": 0})
+            s.spawn("kitchen", kitchen, {"tickets": 0})
+            for amount in ["120", "80", "8o", "50", "30"]:
+                s.send("till", amount)
+                s.send("kitchen", amount)
+            s.run()
+            print(s.log, s.actors["till"]["state"], s.actors["kitchen"]["state"])
+        explanation: |
+          Call the handler inside try and keep the state it returns. On an exception, if the actor has used all its restarts, mark it stopped, empty its mailbox and log it; otherwise count the restart, give it dict(initial) as its state and log it, without putting the message back. Keeping the half-updated state counts an order that has no amount; putting the message back retries a poison message until the actor is stopped; and assigning initial itself, not a copy, lets the next messages change what later restarts start from.
+    - question:
+        id: fix-shared-snapshot
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The price chart shows every snapshot with the latest prices, as if prices had never moved. The program should print `{'onion': 30}`, then `{'onion': 30, 'tomato': 20}`, then `{'onion': 35, 'tomato': 20}`. Find the fault and fix it.
+        starter: |
+          class System:
+              # Runs actors: each has a handler, a state and a mailbox, and gets its
+              # oldest message on its turn.
+              def __init__(self):
+                  self.actors = {}
+
+              def spawn(self, name, handler, state):
+                  self.actors[name] = [handler, state, []]
+
+              def send(self, to, message):
+                  self.actors[to][2].append(message)
+
+              def run(self):
+                  busy = True
+                  while busy:
+                      busy = False
+                      for name in list(self.actors):
+                          handler, state, mailbox = self.actors[name]
+                          if mailbox:
+                              busy = True
+                              self.actors[name][1] = handler(self, name, state, mailbox.pop(0))
+
+
+          def board(system, me, state, message):
+              # The price board at the Vashi wholesale market. A message is a list of
+              # (item, price) updates; after each update the board sends every
+              # subscriber ("prices", snapshot) with all the current prices.
+              for item, price in message:
+                  state["prices"][item] = price
+                  for sub in state["subscribers"]:
+                      system.send(sub, ("prices", state["prices"]))
+              return state
+
+
+          def chart(system, me, history, message):
+              # Keeps every snapshot it is sent, to draw how prices moved.
+              kind, prices = message
+              return history + [prices]
+
+
+          s = System()
+          s.spawn("board", board, {"prices": {}, "subscribers": ["chart"]})
+          s.spawn("chart", chart, [])
+          s.send("board", [("onion", 30), ("tomato", 20)])
+          s.send("board", [("onion", 35)])
+          s.run()
+          for snapshot in s.actors["chart"][1]:
+              print(snapshot)
+        solution: |
+          class System:
+              # Runs actors: each has a handler, a state and a mailbox, and gets its
+              # oldest message on its turn.
+              def __init__(self):
+                  self.actors = {}
+
+              def spawn(self, name, handler, state):
+                  self.actors[name] = [handler, state, []]
+
+              def send(self, to, message):
+                  self.actors[to][2].append(message)
+
+              def run(self):
+                  busy = True
+                  while busy:
+                      busy = False
+                      for name in list(self.actors):
+                          handler, state, mailbox = self.actors[name]
+                          if mailbox:
+                              busy = True
+                              self.actors[name][1] = handler(self, name, state, mailbox.pop(0))
+
+
+          def board(system, me, state, message):
+              # The price board at the Vashi wholesale market. A message is a list of
+              # (item, price) updates; after each update the board sends every
+              # subscriber ("prices", snapshot) with all the current prices.
+              for item, price in message:
+                  state["prices"][item] = price
+                  for sub in state["subscribers"]:
+                      system.send(sub, ("prices", dict(state["prices"])))
+              return state
+
+
+          def chart(system, me, history, message):
+              # Keeps every snapshot it is sent, to draw how prices moved.
+              kind, prices = message
+              return history + [prices]
+
+
+          s = System()
+          s.spawn("board", board, {"prices": {}, "subscribers": ["chart"]})
+          s.spawn("chart", chart, [])
+          s.send("board", [("onion", 30), ("tomato", 20)])
+          s.send("board", [("onion", 35)])
+          s.run()
+          for snapshot in s.actors["chart"][1]:
+              print(snapshot)
+        tests: |
+          def _scribble(system, me, count, message):
+              kind, prices = message
+              prices["checked"] = 1
+              return count + 1
+
+
+          _s = System()
+          _s.spawn("board", board, {"prices": {}, "subscribers": ["c1", "c2"]})
+          _s.spawn("c1", chart, [])
+          _s.spawn("c2", chart, [])
+          _s.send("board", [("rice", 40), ("dal", 90), ("rice", 42)])
+          _s.run()
+          _want = [{"rice": 40}, {"rice": 40, "dal": 90}, {"rice": 42, "dal": 90}]
+          assert _s.actors["c1"][1] == _want and _s.actors["c2"][1] == _want, "each subscriber should keep the three snapshots " + repr(_want) + ", not " + repr(_s.actors["c1"][1])
+          _s.send("board", [("dal", 95)])
+          _s.run()
+          assert _s.actors["c1"][1][:3] == _want, "a later update must not change snapshots a subscriber already holds, but they became " + repr(_s.actors["c1"][1][:3])
+          _s = System()
+          _s.spawn("board", board, {"prices": {}, "subscribers": ["scribbler"]})
+          _s.spawn("scribbler", _scribble, 0)
+          _s.send("board", [("onion", 30)])
+          _s.run()
+          assert _s.actors["board"][1]["prices"] == {"onion": 30}, "a subscriber writing on its snapshot must not change the board's own prices, but they became " + repr(_s.actors["board"][1]["prices"])
+          assert output.splitlines() == ["{'onion': 30}", "{'onion': 30, 'tomato': 20}", "{'onion': 35, 'tomato': 20}"], "The program should print {'onion': 30}, then {'onion': 30, 'tomato': 20}, then {'onion': 35, 'tomato': 20}"
+        wrong:
+          - |
+            class System:
+                # Runs actors: each has a handler, a state and a mailbox, and gets its
+                # oldest message on its turn.
+                def __init__(self):
+                    self.actors = {}
+
+                def spawn(self, name, handler, state):
+                    self.actors[name] = [handler, state, []]
+
+                def send(self, to, message):
+                    self.actors[to][2].append(message)
+
+                def run(self):
+                    busy = True
+                    while busy:
+                        busy = False
+                        for name in list(self.actors):
+                            handler, state, mailbox = self.actors[name]
+                            if mailbox:
+                                busy = True
+                                self.actors[name][1] = handler(self, name, state, mailbox.pop(0))
+
+
+            def board(system, me, state, message):
+                # The price board at the Vashi wholesale market. A message is a list of
+                # (item, price) updates; after each update the board sends every
+                # subscriber ("prices", snapshot) with all the current prices.
+                for item, price in message:
+                    state["prices"][item] = price
+                    for sub in state["subscribers"]:
+                        system.send(sub, ("prices", state["prices"]))
+                return state
+
+
+            def chart(system, me, history, message):
+                # Keeps every snapshot it is sent, to draw how prices moved.
+                kind, prices = message
+                return history + [dict(prices)]
+
+
+            s = System()
+            s.spawn("board", board, {"prices": {}, "subscribers": ["chart"]})
+            s.spawn("chart", chart, [])
+            s.send("board", [("onion", 30), ("tomato", 20)])
+            s.send("board", [("onion", 35)])
+            s.run()
+            for snapshot in s.actors["chart"][1]:
+                print(snapshot)
+          - |
+            class System:
+                # Runs actors: each has a handler, a state and a mailbox, and gets its
+                # oldest message on its turn.
+                def __init__(self):
+                    self.actors = {}
+
+                def spawn(self, name, handler, state):
+                    self.actors[name] = [handler, state, []]
+
+                def send(self, to, message):
+                    self.actors[to][2].append(message)
+
+                def run(self):
+                    busy = True
+                    while busy:
+                        busy = False
+                        for name in list(self.actors):
+                            handler, state, mailbox = self.actors[name]
+                            if mailbox:
+                                busy = True
+                                self.actors[name][1] = handler(self, name, state, mailbox.pop(0))
+
+
+            def board(system, me, state, message):
+                # The price board at the Vashi wholesale market. A message is a list of
+                # (item, price) updates; after each update the board sends every
+                # subscriber ("prices", snapshot) with all the current prices.
+                snapshot = dict(state["prices"])
+                for item, price in message:
+                    state["prices"][item] = price
+                    for sub in state["subscribers"]:
+                        system.send(sub, ("prices", snapshot))
+                return state
+
+
+            def chart(system, me, history, message):
+                # Keeps every snapshot it is sent, to draw how prices moved.
+                kind, prices = message
+                return history + [prices]
+
+
+            s = System()
+            s.spawn("board", board, {"prices": {}, "subscribers": ["chart"]})
+            s.spawn("chart", chart, [])
+            s.send("board", [("onion", 30), ("tomato", 20)])
+            s.send("board", [("onion", 35)])
+            s.run()
+            for snapshot in s.actors["chart"][1]:
+                print(snapshot)
+          - |
+            class System:
+                # Runs actors: each has a handler, a state and a mailbox, and gets its
+                # oldest message on its turn.
+                def __init__(self):
+                    self.actors = {}
+
+                def spawn(self, name, handler, state):
+                    self.actors[name] = [handler, state, []]
+
+                def send(self, to, message):
+                    self.actors[to][2].append(message)
+
+                def run(self):
+                    busy = True
+                    while busy:
+                        busy = False
+                        for name in list(self.actors):
+                            handler, state, mailbox = self.actors[name]
+                            if mailbox:
+                                busy = True
+                                self.actors[name][1] = handler(self, name, state, mailbox.pop(0))
+
+
+            def board(system, me, state, message):
+                # The price board at the Vashi wholesale market. A message is a list of
+                # (item, price) updates; after each update the board sends every
+                # subscriber ("prices", snapshot) with all the current prices.
+                for item, price in message:
+                    state["prices"][item] = price
+                    for sub in state["subscribers"]:
+                        system.send(sub, ("prices", {item: price}))
+                return state
+
+
+            def chart(system, me, history, message):
+                # Keeps every snapshot it is sent, to draw how prices moved.
+                kind, prices = message
+                return history + [prices]
+
+
+            s = System()
+            s.spawn("board", board, {"prices": {}, "subscribers": ["chart"]})
+            s.spawn("chart", chart, [])
+            s.send("board", [("onion", 30), ("tomato", 20)])
+            s.send("board", [("onion", 35)])
+            s.run()
+            for snapshot in s.actors["chart"][1]:
+                print(snapshot)
+        explanation: |
+          The board sends its own prices dictionary in every message and then keeps changing it, so every snapshot is the same dictionary, shared by two actors. Send dict(state["prices"]), a copy taken at the moment of sending. Copying on receipt is too late, because the board may already have changed the dictionary before the chart handles the message; copying once before the updates sends one stale snapshot over and over; and sending only the changed item is not a snapshot of all the prices.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. Three feeds each send 100 messages a second to an actor that handles 200 a second, with no limit on its mailbox. How many messages are waiting after one minute?
+        answer: "6000"
+        explanation: |
+          300 arrive and 200 are handled each second, so 100 a second pile up: 100 × 60 = 6000 after a minute.
+    - question:
+        id: work-ask-deadlock
+        type: choice
+        system: s2
+        prompt: |
+          While handling a message, the order actor asks the payment actor for a charge and waits for the reply. The payment actor, while handling that request, asks the order actor for the order's total and waits. What happens, and what is the fix?
+        options:
+          - "Both wait for ever; do not block inside a handler, but send the request and handle the reply as a later message"
+          - "The payment actor times out and the order completes"
+          - "Messages are handled out of order, so it completes"
+          - "Add a lock around the two actors"
+        answer: 0
+        explanation: |
+          Each actor is busy waiting, so neither handles the message that would free the other: a deadlock made of replies. Handling replies as ordinary messages keeps both actors free to serve.
+  connections:
+    - text: |
+        6000. Three feeds send 300 messages a second and the actor handles 200, so 100 a second pile up, 6000 after a minute, and a message arriving then waits 30 s to be handled. Nothing has crashed and every message will be handled in time, which is exactly what makes an unbounded mailbox dangerous: the overload shows up as slowness, not as an error.
+
+        Threads with locks, loops with awaits and actors with mailboxes share one difficulty. A bug shows itself only in some orders of events, and the order changes from run to run, so a test can pass a thousand times and fail in production. [[d0.testing-concurrent-code-deterministically]] takes the order into the test's own hands, so that every interleaving can be tried and every failure replayed.

@@ -1,0 +1,818 @@
+concept: d0.thread-pools-and-work-queues
+minutes: 85
+claim: You can explain why a server runs a fixed pool of worker threads fed from a queue rather than a thread per task; simulate a pool and see how a shared queue balances uneven tasks where a fixed split does not; size a pool for work that computes and work that waits; describe work stealing, with owners working from the bottom of their own deque and thieves taking from the top; choose what a full queue should do, block, reject or run in the caller, so that overload pushes back instead of piling up; avoid the deadlock of tasks waiting for tasks in the same pool; and shut a pool down so that every task finishes and every worker exits.
+recalls: [d0.memory-models-and-happens-before, s2.stacks-and-queues]
+uses: [d0.condition-variables-and-semaphores, d0.locks-and-mutual-exclusion, h2.threads-in-the-kernel, h2.scheduling, s3.greedy-algorithms, s1.generators-and-context-managers, s1.classes-and-objects]
+leads: [d0.event-loops-and-asynchronous-i-o]
+bridges:
+  s2.stacks-and-queues: The data structures cluster built stacks, which take and give from one end, queues, which add at one end and remove from the other, and the double-ended queue, or deque, which can do both at both ends. A thread pool is a queue of tasks with workers taking from the front. Work stealing gives each worker a deque used as a stack by its owner and as a queue by thieves, and this lesson uses Python lists for both, appending at the end and popping from either end.
+starter: |
+  # Scratch space. Eight tasks, two workers, one shared queue: each free
+  # worker takes the next task.
+  tasks = [6, 1, 1, 1, 5, 1, 1, 2]
+  free_at = [0, 0]
+  for length in tasks:
+      w = 0 if free_at[0] <= free_at[1] else 1
+      free_at[w] += length
+  print(free_at)
+parts:
+  recall:
+    - text: |
+        [[d0.memory-models-and-happens-before]] showed that handing data between threads safely needs a release on one side and an acquire on the other, and a queue protected by a lock provides exactly that. [[s2.stacks-and-queues]] built the queue itself. Put the two together and you have the engine of nearly every server: a queue of tasks and a fixed set of threads taking from it. Three quick pulls first.
+  puzzle:
+    - text: |
+        A booking service runs on a machine with 8 cores. Each request computes for 10 ms, then waits 90 ms for the database to reply, during which its thread does nothing. Requests arrive steadily, faster than the service can handle them.
+
+        **About how many worker threads does the pool need to keep all 8 cores busy?**
+  intuition:
+    - text: |
+        A call centre in Gurugram does not hire a new agent for every call and send them home after it. It keeps a fixed team, and calls wait in one queue; whenever an agent hangs up, they take the next caller. The team's size is set by how much work there is, not by how many calls happen to arrive in a burst; the queue absorbs the burst. And because everyone takes from one queue, a long call does not hold up the callers behind it.
+
+        A **thread pool** is that team. The figure runs eight tasks of uneven length, two of them long, through a pool that takes from one shared queue, and through the alternative of splitting the tasks among the workers in advance.
+    - figure: work-queue
+      props: { mode: shared, workers: 2 }
+    - text: |
+        With a shared queue, whichever worker is free takes the next task, so the short tasks flow around the long ones and the workers finish close together. Splitting in advance can hand both long tasks to one worker while another sits idle. Adding workers helps until there are as many as there is parallel work, and after that it only adds idle time.
+  derivation:
+    - text: |
+        **Why not a thread per task.** Creating a kernel thread costs tens of microseconds and a stack; a thread per request is fine at ten requests a second and ruinous at ten thousand. Worse, under a burst the number of threads is unbounded: thousands of threads thrash the scheduler and the caches, and eventually the machine runs out of memory and stops serving anyone. A **thread pool** creates a fixed number of **workers** once. Each runs a loop: take a task from the **work queue**, which blocks while it is empty, run it, repeat. Submitting a task just puts it on the queue.
+
+        **Futures.** A caller usually wants the task's result. `submit` returns a **future**, an object that will hold the result; `future.result()` waits until the worker has stored it. Inside, a future is a value, a done flag and a condition variable. The queue and the future also supply happens-before: putting a task on the queue happens before a worker takes it, and the worker storing the result happens before `result()` returns, so no extra locking is needed for the task's inputs and outputs.
+    - question:
+        id: derivation-future
+        type: choice
+        system: s2
+        prompt: |
+          A caller submits a task that fills a list, and then calls future.result() and reads the list. Why is reading the list safe without a lock?
+        options:
+          - "The worker's completion happens before result() returns, so every write the task made is visible to the caller"
+          - "Lists are thread-safe in every language"
+          - "The worker copies the list for the caller"
+          - "It is not safe; a lock is still needed"
+        answer: 0
+        explanation: |
+          The future's internal lock or condition variable is released by the worker when it stores the result and acquired by the caller in result(), which chains the task's writes before the caller's reads.
+    - text: |
+        **How many workers.** For tasks that only compute, more workers than cores just take turns, so a pool of about the number of cores is right. For tasks that wait, a worker blocked on a database or a disk leaves its core idle, so you need more workers than cores. If each task computes for C and waits for W, each worker keeps a core busy for a fraction C / (C + W) of the time, so keeping k cores busy needs about k × (1 + W / C) workers. The estimate assumes the thing being waited for can take that much load; if the database can only handle 20 queries at once, 80 workers only queue up inside it. In the end, measure: raise the pool until throughput stops improving and latency starts to climb.
+    - question:
+        id: derivation-size
+        type: numeric
+        system: s2
+        prompt: |
+          Tasks compute for 20 ms and then wait 60 ms for a remote service. How many workers keep 4 cores busy?
+        answer: "16"
+        explanation: |
+          Each worker computes a quarter of the time, 20 out of 80 ms, so each keeps a quarter of a core busy: 4 × (1 + 60 / 20) = 16.
+    - text: |
+        **Sharing the work.** One shared queue balances load automatically, but every worker takes its lock for every task, and with dozens of cores and tiny tasks that lock becomes the bottleneck of the previous lessons. The alternative is a queue per worker, which is fast but leaves some workers idle while others have a backlog. **Work stealing** combines the two. Each worker has its own **deque**. It pushes the tasks it creates onto the bottom and pops from the bottom, newest first, which keeps related data warm in its cache. A worker whose deque is empty becomes a **thief**: it picks a victim and steals from the **top** of the victim's deque, the oldest task, which in divide-and-conquer work tends to be the biggest. Owner and thief work at opposite ends, so they rarely collide. Java's fork-join pool, Go's scheduler, Rust's Rayon and Tokio, and Intel's TBB all work this way.
+    - question:
+        id: derivation-steal
+        type: choice
+        system: s2
+        prompt: |
+          In a work-stealing pool, why does a thief take the oldest task, from the top of the victim's deque?
+        options:
+          - "It is the end the owner is not using, and in recursive work the oldest task is usually the largest, so one steal moves a lot of work"
+          - "The oldest task is always the shortest"
+          - "Stealing from the bottom is impossible"
+          - "So that tasks finish in the order they were created"
+        answer: 0
+        explanation: |
+          The owner pushes and pops at the bottom, so the top is free of contention, and a task created early in a divide-and-conquer split still contains most of the work to be divided.
+    - text: |
+        **When the queue is full.** A pool's queue must be **bounded**, for the reason met with the bounded buffer: an unbounded queue in front of an overloaded pool grows until memory runs out, and every request in it waits longer and longer, so the server is technically up and useless. When the bounded queue is full, the pool needs a **rejection policy**. It can **block** the submitter, pushing the slowdown back to the caller, which is right inside a pipeline. It can **reject** the task, so a web server answers 503 at once and the client can retry elsewhere. It can make the **caller run** the task itself, which slows submission to the pool's pace. Or it can **drop** the oldest task, for data that goes stale, such as sensor readings. Each is a decision about overload, and making none of them is choosing the unbounded queue.
+
+        **Pools can deadlock.** If tasks in a pool of 4 each submit a subtask to the same pool and wait for its result, then 4 such tasks occupy every worker, the subtasks sit in the queue, and nothing runs again: **thread starvation deadlock**. Fork-join pools avoid it by having a waiting worker run other tasks while it waits; otherwise, never block a pool's worker on work queued to the same pool.
+
+        **Shutting down.** A pool shuts down in order: stop accepting new tasks, let the workers finish what is queued, then let each exit, and wait for them all, which is called joining. A common way to tell workers to exit is a **poison pill**, a special task that means "stop", queued after the real tasks, one for each worker, since each worker that takes one exits and takes no more.
+    - question:
+        id: derivation-reject
+        type: choice
+        system: s2
+        prompt: |
+          A web server's pool queue is full during a spike. Which policy keeps response times bounded for the requests it accepts?
+        options:
+          - "Reject new requests at once with an error, such as 503, so clients can back off or retry elsewhere"
+          - "Grow the queue without limit"
+          - "Start a new thread for every request that does not fit"
+          - "Accept everything and process it eventually"
+        answer: 0
+        explanation: |
+          Rejecting quickly keeps the queue, and so the wait, bounded for everyone admitted. Growing the queue or the threads hides the overload until latency and memory explode.
+  formal:
+    - text: |
+        **Thread pool.** A fixed set of workers, each looping: take a task from the work queue (blocking when empty), run it. submit returns a future; result() waits for it. Queue and future give happens-before from submitter to worker to caller.
+
+        **Sizing.** Compute-only: about one worker per core. Compute C and wait W: about cores × (1 + W / C), limited by what is waited on. Measure.
+
+        **Balancing.** A shared queue balances but contends; per-worker queues are fast but unbalanced. Work stealing: owners push and pop at the bottom of their own deque (LIFO); thieves steal from the top of a victim's (FIFO, the oldest).
+
+        **Overload.** Bound the queue and pick a policy for a full one: block, reject, caller runs, or drop the oldest.
+
+        **Hazards and shutdown.** Never block a worker waiting for a task queued to the same pool. Shut down by refusing new work, draining the queue, one poison pill per worker, then joining.
+  drill:
+    - text: Seconds each. Ask what each worker is doing, and what the queue holds.
+    - question:
+        id: drill-cpu
+        type: choice
+        system: s1
+        prompt: |
+          A pool runs only image resizing, which never waits on I/O, on a 16-core machine. Roughly how many workers?
+        options:
+          - "16"
+          - "160"
+          - "1"
+          - "One per image"
+        answer: 0
+        explanation: Compute-only work can use at most one core per worker; more workers only take turns.
+    - question:
+        id: drill-pills
+        type: choice
+        system: s1
+        prompt: |
+          A pool of 5 workers shuts down with poison pills. How many pills must be queued?
+        options:
+          - "5, one for each worker"
+          - "1"
+          - "As many as there are tasks"
+          - "None; workers exit when the queue is empty"
+        answer: 0
+        explanation: Each worker exits on the first pill it takes, so each needs its own. An empty queue only means no work right now.
+    - question:
+        id: predict-size
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          cores, compute, wait = 8, 5, 45
+          print(cores * (1 + wait // compute))
+        output: "80"
+        explanation: Each worker keeps a core busy a tenth of the time, so 8 cores need 80 workers.
+    - question:
+        id: predict-deque
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          deque = ["t1", "t2", "t3", "t4"]
+          owner = deque.pop()
+          thief = deque.pop(0)
+          print(owner, thief, deque)
+        output: "t4 t1 ['t2', 't3']"
+        explanation: The owner takes its newest task from the bottom; the thief takes the oldest from the top.
+    - question:
+        id: predict-split
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          tasks = [9, 1, 9, 1]
+          loads = [0, 0]
+          for i in range(len(tasks)):
+              loads[i % 2] += tasks[i]
+          print(loads)
+        output: "[18, 2]"
+        explanation: Splitting by position hands both long tasks to worker 0, which finishes at 18 while worker 1 is done at 2.
+  work:
+    - text: Slower now. Each answer is part of how a pool shares and ends its work.
+    - question:
+        id: write-run-pool
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `run_pool`, which simulates a pool of workers taking tasks from one shared queue and returns when the last task finishes and which worker ran what. The program should print `(10, [[0, 5, 6, 7], [1, 2, 3, 4]])` and `13 6 6`.
+        starter: |
+          def run_pool(durations, workers):
+              # Tasks wait in one shared queue, in order; durations[i] is task i's
+              # length in ms. Whenever a worker is free it takes the next task; if
+              # several are free at once, the lowest-numbered goes first. Return the
+              # time at which the last task finishes, and for each worker the list of
+              # task numbers it ran.
+              return 0, [[] for w in range(workers)]
+
+          def fixed_split(durations, workers):
+              # For comparison: task i is handed to worker i % workers in advance.
+              free_at = [0] * workers
+              for task in range(len(durations)):
+                  free_at[task % workers] += durations[task]
+              return max(free_at)
+
+
+          tasks = [6, 1, 1, 1, 5, 1, 1, 2]
+          print(run_pool(tasks, 2))
+          print(fixed_split(tasks, 2), run_pool(tasks, 3)[0], run_pool(tasks, 8)[0])
+        solution: |
+          def run_pool(durations, workers):
+              # Tasks wait in one shared queue, in order; durations[i] is task i's
+              # length in ms. Whenever a worker is free it takes the next task; if
+              # several are free at once, the lowest-numbered goes first. Return the
+              # time at which the last task finishes, and for each worker the list of
+              # task numbers it ran.
+              free_at = [0] * workers
+              ran = [[] for w in range(workers)]
+              for task in range(len(durations)):
+                  best = 0
+                  for w in range(workers):
+                      if free_at[w] < free_at[best]:
+                          best = w
+                  ran[best].append(task)
+                  free_at[best] += durations[task]
+              return max(free_at), ran
+
+
+          def fixed_split(durations, workers):
+              # For comparison: task i is handed to worker i % workers in advance.
+              free_at = [0] * workers
+              for task in range(len(durations)):
+                  free_at[task % workers] += durations[task]
+              return max(free_at)
+
+
+          tasks = [6, 1, 1, 1, 5, 1, 1, 2]
+          print(run_pool(tasks, 2))
+          print(fixed_split(tasks, 2), run_pool(tasks, 3)[0], run_pool(tasks, 8)[0])
+        tests: |
+          assert run_pool([], 3) == (0, [[], [], []]), "no tasks finish at time 0 with nobody running anything"
+          assert run_pool([4, 4, 4], 1) == (12, [[0, 1, 2]]), "one worker runs everything in order, finishing at 12"
+          assert run_pool([5, 5], 4) == (5, [[0], [1], [], []]), "two tasks on four workers go to workers 0 and 1 and finish at 5"
+          _t, _r = run_pool([7, 2, 2, 2, 2], 2)
+          assert _t == 8 and _r == [[0], [1, 2, 3, 4]], "while worker 0 runs the 7 ms task, worker 1 takes all four short ones, finishing at 8, not " + repr((_t, _r))
+          _t, _r = run_pool([3, 3, 3, 3, 3, 3, 3], 3)
+          assert _t == 9 and _r == [[0, 3, 6], [1, 4], [2, 5]], "seven equal tasks on three workers: ties go to the lowest-numbered free worker, finishing at 9, not " + repr((_t, _r))
+          _t, _r = run_pool([1, 9, 1, 1, 1, 1], 2)
+          assert _t == 9 and _r == [[0, 2, 3, 4, 5], [1]], "the shared queue routes short tasks around the long one, finishing at 9, not " + repr((_t, _r))
+          assert output.splitlines() == ["(10, [[0, 5, 6, 7], [1, 2, 3, 4]])", "13 6 6"], "The program should print (10, [[0, 5, 6, 7], [1, 2, 3, 4]]) and 13 6 6"
+        wrong:
+          - |
+            def run_pool(durations, workers):
+                # Tasks wait in one shared queue, in order; durations[i] is task i's
+                # length in ms. Whenever a worker is free it takes the next task; if
+                # several are free at once, the lowest-numbered goes first. Return the
+                # time at which the last task finishes, and for each worker the list of
+                # task numbers it ran.
+                free_at = [0] * workers
+                ran = [[] for w in range(workers)]
+                for task in range(len(durations)):
+                    best = 0
+                    for w in range(workers):
+                        if free_at[w] > free_at[best]:
+                            best = w
+                    ran[best].append(task)
+                    free_at[best] += durations[task]
+                return max(free_at), ran
+
+
+            def fixed_split(durations, workers):
+                # For comparison: task i is handed to worker i % workers in advance.
+                free_at = [0] * workers
+                for task in range(len(durations)):
+                    free_at[task % workers] += durations[task]
+                return max(free_at)
+
+
+            tasks = [6, 1, 1, 1, 5, 1, 1, 2]
+            print(run_pool(tasks, 2))
+            print(fixed_split(tasks, 2), run_pool(tasks, 3)[0], run_pool(tasks, 8)[0])
+          - |
+            def run_pool(durations, workers):
+                # Tasks wait in one shared queue, in order; durations[i] is task i's
+                # length in ms. Whenever a worker is free it takes the next task; if
+                # several are free at once, the lowest-numbered goes first. Return the
+                # time at which the last task finishes, and for each worker the list of
+                # task numbers it ran.
+                free_at = [0] * workers
+                ran = [[] for w in range(workers)]
+                for task in range(len(durations)):
+                    best = task % workers
+                    ran[best].append(task)
+                    free_at[best] += durations[task]
+                return max(free_at), ran
+
+
+            def fixed_split(durations, workers):
+                # For comparison: task i is handed to worker i % workers in advance.
+                free_at = [0] * workers
+                for task in range(len(durations)):
+                    free_at[task % workers] += durations[task]
+                return max(free_at)
+
+
+            tasks = [6, 1, 1, 1, 5, 1, 1, 2]
+            print(run_pool(tasks, 2))
+            print(fixed_split(tasks, 2), run_pool(tasks, 3)[0], run_pool(tasks, 8)[0])
+          - |
+            def run_pool(durations, workers):
+                # Tasks wait in one shared queue, in order; durations[i] is task i's
+                # length in ms. Whenever a worker is free it takes the next task; if
+                # several are free at once, the lowest-numbered goes first. Return the
+                # time at which the last task finishes, and for each worker the list of
+                # task numbers it ran.
+                free_at = [0] * workers
+                ran = [[] for w in range(workers)]
+                for task in range(len(durations)):
+                    best = 0
+                    for w in range(workers):
+                        if free_at[w] < free_at[best]:
+                            best = w
+                    ran[best].append(task)
+                    free_at[best] += durations[task]
+                return sum(durations) // workers, ran
+
+
+            def fixed_split(durations, workers):
+                # For comparison: task i is handed to worker i % workers in advance.
+                free_at = [0] * workers
+                for task in range(len(durations)):
+                    free_at[task % workers] += durations[task]
+                return max(free_at)
+
+
+            tasks = [6, 1, 1, 1, 5, 1, 1, 2]
+            print(run_pool(tasks, 2))
+            print(fixed_split(tasks, 2), run_pool(tasks, 3)[0], run_pool(tasks, 8)[0])
+        explanation: |
+          Keep the time at which each worker becomes free. For each task in queue order, give it to the worker free earliest, the lowest-numbered on a tie, and move that worker's free time on by the task's length; the answer is the latest free time. Choosing the worker free latest piles everything on one worker; assigning by position is the fixed split again; and dividing the total work by the workers gives a time no real schedule may reach.
+    - question:
+        id: write-stealing
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `run_stealing`, which runs workers with a deque each: owners pop from the bottom, and idle workers steal from the top of the fullest deque. The program should print `[['a6', 'a5', 'a4'], ['a1', 'a2'], ['c1', 'a3']]`.
+        starter: |
+          def run_stealing(deques):
+              # Each worker has its own deque of tasks, a list whose end is the
+              # bottom. In every round, each worker in turn runs one task: the one at
+              # the bottom of its own deque, the task it pushed most recently. If its
+              # deque is empty it steals from the top (the oldest task) of the deque
+              # with the most tasks left, the lowest-numbered on a tie, and runs that.
+              # Stop when every deque is empty. Return each worker's tasks in the
+              # order it ran them.
+              return [[] for d in deques]
+
+          deques = [["a1", "a2", "a3", "a4", "a5", "a6"], [], ["c1"]]
+          print(run_stealing(deques))
+        solution: |
+          def run_stealing(deques):
+              # Each worker has its own deque of tasks, a list whose end is the
+              # bottom. In every round, each worker in turn runs one task: the one at
+              # the bottom of its own deque, the task it pushed most recently. If its
+              # deque is empty it steals from the top (the oldest task) of the deque
+              # with the most tasks left, the lowest-numbered on a tie, and runs that.
+              # Stop when every deque is empty. Return each worker's tasks in the
+              # order it ran them.
+              ran = [[] for d in deques]
+              while any(deques):
+                  for w in range(len(deques)):
+                      if deques[w]:
+                          ran[w].append(deques[w].pop())
+                      else:
+                          victim = 0
+                          for v in range(len(deques)):
+                              if len(deques[v]) > len(deques[victim]):
+                                  victim = v
+                          if deques[victim]:
+                              ran[w].append(deques[victim].pop(0))
+              return ran
+
+
+          deques = [["a1", "a2", "a3", "a4", "a5", "a6"], [], ["c1"]]
+          print(run_stealing(deques))
+        tests: |
+          assert run_stealing([[], []]) == [[], []], "with no tasks nobody runs anything"
+          assert run_stealing([["t1", "t2", "t3"]]) == [["t3", "t2", "t1"]], "a worker alone runs its own tasks from the bottom, newest first"
+          _r = run_stealing([["a1", "a2", "a3", "a4"], []])
+          assert _r == [["a4", "a3"], ["a1", "a2"]], "the owner works from the bottom while the thief steals from the top, the oldest first, not " + repr(_r)
+          _r = run_stealing([[], ["p1", "p2"], ["q1", "q2", "q3", "q4"]])
+          assert _r[0][0] == "q1", "an idle worker steals from the deque with the most tasks left, so worker 0 first steals q1, not " + repr(_r[0][:1])
+          assert sorted(_r[0] + _r[1] + _r[2]) == ["p1", "p2", "q1", "q2", "q3", "q4"], "every task runs exactly once"
+          _r = run_stealing([["x1", "x2"], ["y1", "y2"], []])
+          assert _r[2][0] == "x1", "on a tie the thief picks the lowest-numbered worker's deque, so it steals x1, not " + repr(_r[2][:1])
+          assert output.splitlines() == ["[['a6', 'a5', 'a4'], ['a1', 'a2'], ['c1', 'a3']]"], "The program should print [['a6', 'a5', 'a4'], ['a1', 'a2'], ['c1', 'a3']]"
+        wrong:
+          - |
+            def run_stealing(deques):
+                # Each worker has its own deque of tasks, a list whose end is the
+                # bottom. In every round, each worker in turn runs one task: the one at
+                # the bottom of its own deque, the task it pushed most recently. If its
+                # deque is empty it steals from the top (the oldest task) of the deque
+                # with the most tasks left, the lowest-numbered on a tie, and runs that.
+                # Stop when every deque is empty. Return each worker's tasks in the
+                # order it ran them.
+                ran = [[] for d in deques]
+                while any(deques):
+                    for w in range(len(deques)):
+                        if deques[w]:
+                            ran[w].append(deques[w].pop(0))
+                        else:
+                            victim = 0
+                            for v in range(len(deques)):
+                                if len(deques[v]) > len(deques[victim]):
+                                    victim = v
+                            if deques[victim]:
+                                ran[w].append(deques[victim].pop(0))
+                return ran
+
+
+            deques = [["a1", "a2", "a3", "a4", "a5", "a6"], [], ["c1"]]
+            print(run_stealing(deques))
+          - |
+            def run_stealing(deques):
+                # Each worker has its own deque of tasks, a list whose end is the
+                # bottom. In every round, each worker in turn runs one task: the one at
+                # the bottom of its own deque, the task it pushed most recently. If its
+                # deque is empty it steals from the top (the oldest task) of the deque
+                # with the most tasks left, the lowest-numbered on a tie, and runs that.
+                # Stop when every deque is empty. Return each worker's tasks in the
+                # order it ran them.
+                ran = [[] for d in deques]
+                while any(deques):
+                    for w in range(len(deques)):
+                        if deques[w]:
+                            ran[w].append(deques[w].pop())
+                        else:
+                            victim = 0
+                            for v in range(len(deques)):
+                                if len(deques[v]) > len(deques[victim]):
+                                    victim = v
+                            if deques[victim]:
+                                ran[w].append(deques[victim].pop())
+                return ran
+
+
+            deques = [["a1", "a2", "a3", "a4", "a5", "a6"], [], ["c1"]]
+            print(run_stealing(deques))
+          - |
+            def run_stealing(deques):
+                # Each worker has its own deque of tasks, a list whose end is the
+                # bottom. In every round, each worker in turn runs one task: the one at
+                # the bottom of its own deque, the task it pushed most recently. If its
+                # deque is empty it steals from the top (the oldest task) of the deque
+                # with the most tasks left, the lowest-numbered on a tie, and runs that.
+                # Stop when every deque is empty. Return each worker's tasks in the
+                # order it ran them.
+                ran = [[] for d in deques]
+                while any(deques):
+                    for w in range(len(deques)):
+                        if deques[w]:
+                            ran[w].append(deques[w].pop())
+                        else:
+                            victim = 0
+                            for v in range(len(deques)):
+                                if deques[v] and not deques[victim]:
+                                    victim = v
+                            if deques[victim]:
+                                ran[w].append(deques[victim].pop(0))
+                return ran
+
+
+            deques = [["a1", "a2", "a3", "a4", "a5", "a6"], [], ["c1"]]
+            print(run_stealing(deques))
+        explanation: |
+          While any deque has tasks, give each worker a turn: pop from the end of its own list, or, if it is empty, find the longest deque, the first on a tie, and take from its front. An owner taking from the front works oldest first, losing the cache benefit and colliding with thieves; a thief taking from the end fights the owner for its newest task; and stealing from the first non-empty deque ignores where the work actually is.
+    - question:
+        id: fix-poison-pills
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A batch job's pool finishes every task, but the job never exits. The program should print `finished ['fare-a', 'fare-b', 'fare-c', 'fare-d'] []`. Find the fault and fix it.
+        starter: |
+          class Queue:
+              # A blocking queue: get waits while the queue is empty.
+              def __init__(self):
+                  self.items = []
+
+              def put(self, item):
+                  self.items.append(item)
+
+              def get(self, out):
+                  while not self.items:
+                      yield "waiting"
+                  out.append(self.items.pop(0))
+
+
+          STOP = "stop"  # the poison pill: a worker that takes it exits
+
+
+          def worker(name, queue, done):
+              while True:
+                  got = []
+                  yield from queue.get(got)
+                  task = got[0]
+                  if task == STOP:
+                      return
+                  yield "working on " + task
+                  done.append((name, task))
+
+
+          def submitter(queue, tasks, workers):
+              # Hands in the tasks a little at a time, then shuts the pool down.
+              for task in tasks:
+                  queue.put(task)
+                  yield "submitted"
+              queue.put(STOP)
+
+
+          def run(threads):
+              while threads:
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "finished"
+
+
+          q = Queue()
+          done = []
+          names = ["w1", "w2", "w3"]
+          result = run([worker(n, q, done) for n in names] + [submitter(q, ["fare-a", "fare-b", "fare-c", "fare-d"], len(names))])
+          print(result, sorted(task for name, task in done), q.items)
+        solution: |
+          class Queue:
+              # A blocking queue: get waits while the queue is empty.
+              def __init__(self):
+                  self.items = []
+
+              def put(self, item):
+                  self.items.append(item)
+
+              def get(self, out):
+                  while not self.items:
+                      yield "waiting"
+                  out.append(self.items.pop(0))
+
+
+          STOP = "stop"  # the poison pill: a worker that takes it exits
+
+
+          def worker(name, queue, done):
+              while True:
+                  got = []
+                  yield from queue.get(got)
+                  task = got[0]
+                  if task == STOP:
+                      return
+                  yield "working on " + task
+                  done.append((name, task))
+
+
+          def submitter(queue, tasks, workers):
+              # Hands in the tasks a little at a time, then shuts the pool down.
+              for task in tasks:
+                  queue.put(task)
+                  yield "submitted"
+              for i in range(workers):
+                  queue.put(STOP)
+
+
+          def run(threads):
+              while threads:
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "finished"
+
+
+          q = Queue()
+          done = []
+          names = ["w1", "w2", "w3"]
+          result = run([worker(n, q, done) for n in names] + [submitter(q, ["fare-a", "fare-b", "fare-c", "fare-d"], len(names))])
+          print(result, sorted(task for name, task in done), q.items)
+        tests: |
+          for _n, _tasks in [(1, ["a", "b"]), (2, ["a", "b", "c", "d", "e"]), (4, ["a"]), (3, [])]:
+              _q = Queue()
+              _done = []
+              _who = str(_n) + (" worker" if _n == 1 else " workers")
+              _r = run([worker("w" + str(_i), _q, _done) for _i in range(_n)] + [submitter(_q, _tasks, _n)])
+              assert _r == "finished", "with " + _who + " every worker should exit after shutdown, but the run was " + _r
+              assert sorted(_t for _w, _t in _done) == sorted(_tasks), "with " + _who + " every task should be done exactly once, not " + repr(sorted(_t for _w, _t in _done))
+              assert _q.items == [], "nothing should be left in the queue after shutdown, but it holds " + repr(_q.items)
+          _q = Queue()
+          _done = []
+          def _slow_submitter():
+              yield "starting up"
+              yield "starting up"
+              yield from submitter(_q, ["late"], 2)
+          _r = run([worker("w0", _q, _done), worker("w1", _q, _done), _slow_submitter()])
+          assert _r == "finished" and [_t for _w, _t in _done] == ["late"], "workers must wait for tasks that arrive late, not exit while the queue is briefly empty: " + _r + " " + repr(_done)
+          assert output.splitlines() == ["finished ['fare-a', 'fare-b', 'fare-c', 'fare-d'] []"], "The program should print finished ['fare-a', 'fare-b', 'fare-c', 'fare-d'] []"
+        wrong:
+          - |
+            class Queue:
+                # A blocking queue: get waits while the queue is empty.
+                def __init__(self):
+                    self.items = []
+
+                def put(self, item):
+                    self.items.append(item)
+
+                def get(self, out):
+                    while not self.items:
+                        yield "waiting"
+                    out.append(self.items.pop(0))
+
+
+            STOP = "stop"  # the poison pill: a worker that takes it exits
+
+
+            def worker(name, queue, done):
+                while True:
+                    got = []
+                    yield from queue.get(got)
+                    task = got[0]
+                    if task == STOP:
+                        return
+                    yield "working on " + task
+                    done.append((name, task))
+
+
+            def submitter(queue, tasks, workers):
+                # Hands in the tasks a little at a time, then shuts the pool down.
+                for i in range(workers):
+                    queue.put(STOP)
+                for task in tasks:
+                    queue.put(task)
+                    yield "submitted"
+
+
+            def run(threads):
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            q = Queue()
+            done = []
+            names = ["w1", "w2", "w3"]
+            result = run([worker(n, q, done) for n in names] + [submitter(q, ["fare-a", "fare-b", "fare-c", "fare-d"], len(names))])
+            print(result, sorted(task for name, task in done), q.items)
+          - |
+            class Queue:
+                # A blocking queue: get waits while the queue is empty.
+                def __init__(self):
+                    self.items = []
+
+                def put(self, item):
+                    self.items.append(item)
+
+                def get(self, out):
+                    while not self.items:
+                        yield "waiting"
+                    out.append(self.items.pop(0))
+
+
+            STOP = "stop"  # the poison pill: a worker that takes it exits
+
+
+            def worker(name, queue, done):
+                while True:
+                    got = []
+                    yield from queue.get(got)
+                    task = got[0]
+                    if task == STOP:
+                        continue
+                    yield "working on " + task
+                    done.append((name, task))
+
+
+            def submitter(queue, tasks, workers):
+                # Hands in the tasks a little at a time, then shuts the pool down.
+                for task in tasks:
+                    queue.put(task)
+                    yield "submitted"
+                queue.put(STOP)
+
+
+            def run(threads):
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            q = Queue()
+            done = []
+            names = ["w1", "w2", "w3"]
+            result = run([worker(n, q, done) for n in names] + [submitter(q, ["fare-a", "fare-b", "fare-c", "fare-d"], len(names))])
+            print(result, sorted(task for name, task in done), q.items)
+          - |
+            class Queue:
+                # A blocking queue: get waits while the queue is empty.
+                def __init__(self):
+                    self.items = []
+
+                def put(self, item):
+                    self.items.append(item)
+
+                def get(self, out):
+                    while not self.items:
+                        yield "waiting"
+                    out.append(self.items.pop(0))
+
+
+            STOP = "stop"  # the poison pill: a worker that takes it exits
+
+
+            def worker(name, queue, done):
+                while True:
+                    if not queue.items:
+                        return
+                    got = []
+                    yield from queue.get(got)
+                    task = got[0]
+                    if task == STOP:
+                        return
+                    yield "working on " + task
+                    done.append((name, task))
+
+
+            def submitter(queue, tasks, workers):
+                # Hands in the tasks a little at a time, then shuts the pool down.
+                for task in tasks:
+                    queue.put(task)
+                    yield "submitted"
+                queue.put(STOP)
+
+
+            def run(threads):
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            q = Queue()
+            done = []
+            names = ["w1", "w2", "w3"]
+            result = run([worker(n, q, done) for n in names] + [submitter(q, ["fare-a", "fare-b", "fare-c", "fare-d"], len(names))])
+            print(result, sorted(task for name, task in done), q.items)
+        explanation: |
+          Shutdown queues a single pill for three workers: one exits and the other two wait for ever on an empty queue. Queue one pill per worker, after the tasks. Queueing the pills first makes every worker exit before any task runs; skipping past a pill instead of returning keeps every worker alive; and exiting whenever the queue looks empty quits before tasks that are on their way have arrived.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. Requests compute for 10 ms and wait 90 ms for the database, on 8 cores. About how many workers keep all the cores busy?
+        answer: "80"
+        explanation: |
+          Each worker uses its core only 10 ms in every 100, a tenth of the time, so it takes ten workers per core: 8 × (1 + 90 / 10) = 80, provided the database can serve that many queries at once.
+    - question:
+        id: work-nested
+        type: choice
+        system: s2
+        prompt: |
+          A report service has a pool of 8 workers. Each report task submits 3 chart tasks to the same pool and waits for them. Under load the service freezes with all 8 workers waiting. What is the fix?
+        options:
+          - "Run the chart tasks on a separate pool, or use a fork-join pool whose waiting workers run queued tasks while they wait"
+          - "Add a timeout to the chart tasks"
+          - "Make the queue unbounded"
+          - "Use 9 workers"
+        answer: 0
+        explanation: |
+          This is thread starvation deadlock: every worker holds a report waiting for charts that no free worker can run. A separate pool or a pool whose waiters help out breaks the cycle; one more worker only moves the point at which it freezes.
+  connections:
+    - text: |
+        About 80. A worker keeps its core busy only during the 10 ms it computes out of every 100 ms, so each core needs ten workers taking turns. With fewer, the cores idle while every thread waits for the database; with many more, the threads only queue at the database and use memory.
+
+        Eighty threads to keep eight cores busy is mostly threads that are asleep, waiting. With ten thousand open connections, each mostly idle, even a pool becomes heavy. The alternative is to stop dedicating a thread to each wait: one thread asks the kernel which of its connections are ready and serves whichever are. [[d0.event-loops-and-asynchronous-i-o]] builds that event loop, and the async and await that make it readable.

@@ -1,0 +1,1092 @@
+concept: d0.locks-and-mutual-exclusion
+minutes: 85
+claim: You can protect a critical section with a lock so that one thread at a time runs it, and state what a correct lock must guarantee; see why a lock built from an ordinary flag fails, and build one that works from Peterson's algorithm and from an atomic test-and-set; write a lock for generator threads whose test and take are one step; release a lock on every path out of a function; compare spinning with sleeping and coarse locks with fine ones; and work out the throughput ceiling that a lock's hold time puts on a whole server.
+recalls: [d0.interleavings-and-race-conditions]
+uses: [h2.threads-in-the-kernel, h2.scheduling, h1.superscalar-and-out-of-order-execution, s1.generators-and-context-managers, s1.exceptions, s1.classes-and-objects, s0.dictionaries-and-sets]
+leads: [d0.deadlock]
+starter: |
+  # Scratch space. A lock is a holder and a rule: take it only when free.
+  holder = None
+  for name in ["A", "B"]:
+      if holder is None:
+          holder = name
+          print(name, "takes the lock")
+      else:
+          print(name, "must wait for", holder)
+parts:
+  recall:
+    - text: |
+        [[d0.interleavings-and-race-conditions]] ended with a race fixed by rearranging code so that the check and the action fell in one step. Real threads can be interrupted between any two instructions, so they need a tool that makes a whole stretch of code behave as one step to every other thread. That tool is the lock. Three quick pulls first.
+  puzzle:
+    - text: |
+        A ticketing server runs on 32 cores with 64 threads. Each request takes 10 ms of work in all. For 2 ms of that, the thread holds one global lock while it updates the shared seat map; the other 8 ms run without any lock.
+
+        **However many cores and threads you add, what is the most requests per second this server can complete?**
+  intuition:
+    - text: |
+        A railway waiting room in Jhansi has one washroom and one key, kept on a hook at the counter. Whoever wants the washroom takes the key; whoever finds the hook empty waits. Nobody needs to watch the door or know who is inside: the single key is the whole mechanism, and it works because taking the key is one indivisible act. Two people cannot both take it.
+
+        A **lock** is that key. A thread **acquires** it before a **critical section**, the code that touches shared data, and **releases** it after. The figure shows threads that each do some work, a short critical section that increments a shared count, and a little more work, with and without a lock.
+    - figure: lock-timeline
+      props: { mode: lock, threads: 3 }
+    - text: |
+        Without the lock, everything finishes sooner, and the count is wrong. With it, the critical sections run one after another, the count is right, and each extra thread waits a little longer. The lock turns the critical section into a single lane of traffic. However many threads arrive, they go through that lane one at a time, which is the puzzle's limit.
+  derivation:
+    - text: |
+        **What a lock must guarantee.** A correct lock gives **mutual exclusion**: at most one thread is in the critical section at any time. It must also give **progress**: if the section is free and some threads want it, one of them gets in, so the threads cannot all wait for ever. And a good lock gives **bounded waiting**, or fairness: a thread that wants the lock gets it after a bounded number of others have gone ahead, so it does not starve. The critical section then behaves like one atomic step to every thread that also uses the lock. Threads that ignore the lock get no protection, so a lock protects data only by agreement: every access to the shared data must hold it.
+
+        **A flag is not a lock.** The obvious lock is a variable `busy`: wait while it is true, then set it to true and enter. But waiting until `busy` is false and then setting it is check-then-act, the very race the lock was meant to cure. Two threads both see false, both set true, and both enter. A lock needs the test and the set to be one indivisible step.
+    - question:
+        id: derivation-flag
+        type: choice
+        system: s2
+        prompt: |
+          Two threads use `while busy: pass` followed by `busy = True` as a lock. Why can both enter?
+        options:
+          - "Both can see busy false before either sets it, because the test and the set are separate steps"
+          - "The while loop never ends"
+          - "busy is a local variable in each thread"
+          - "Setting a boolean is not atomic"
+        answer: 0
+        explanation: |
+          Each step is fine on its own; the gap between the test and the set lets the other thread do its test too. The fix is an instruction that tests and sets in one step.
+    - text: |
+        **Peterson's algorithm.** With only loads and stores, and sequential consistency, a lock for two threads is still possible. Each thread has a flag saying "I want to enter", and there is one shared variable `turn`. Thread i raises its flag, then politely sets `turn` to the other thread, then waits while the other's flag is raised and it is the other's turn. If both want in at once, both write `turn`, and whoever wrote it last loses: `turn` names the other thread, so the other goes first. Mutual exclusion holds, and so do progress and bounded waiting. The order of the two writes matters: set `turn` before the flag and there are schedules in which both enter. Peterson's algorithm is mainly of teaching value now, because real processors reorder stores and loads, which breaks it unless fences are added, as the memory models lesson explains.
+
+        **Hardware does it in one step.** Every modern processor has **atomic read-modify-write** instructions. **Test-and-set**, or atomic exchange, writes 1 to a location and returns the old value in one indivisible step. A **spinlock** is then a loop: exchange 1 into the lock word; if the old value was 0, you have the lock; if it was 1, someone else has it, so try again. Release is a store of 0. On x86 this is `xchg`; RISC-V has `amoswap`, and its load-reserved and store-conditional pair builds the same thing.
+    - question:
+        id: derivation-tas
+        type: choice
+        system: s2
+        prompt: |
+          A spinlock word is 1. Thread A runs test-and-set on it and gets back 1. What does that tell A?
+        options:
+          - "Another thread holds the lock, so A must try again"
+          - "A now holds the lock"
+          - "The lock was free and A released it"
+          - "The test-and-set failed and must be undone"
+        answer: 0
+        explanation: |
+          Test-and-set returns the old value. An old value of 1 means the lock was already taken; writing 1 again changed nothing, so A loops and tries again.
+    - text: |
+        **Spinning or sleeping.** A spinlock burns its core while it waits, which is wasteful if the holder is going to hold the lock for a long time or has been preempted. A **blocking** lock, or **mutex**, asks the kernel to put the waiting thread to sleep and wakes it on release. Sleeping and waking cost a system call and a context switch, a few microseconds, which is wasteful for a lock held for 50 nanoseconds. Real mutexes combine the two: spin briefly, then sleep. Linux's **futex** makes the uncontended case cost no system call at all: the lock word lives in user memory, and the kernel is involved only when there is a waiter to put to sleep or wake.
+
+        **The cost of contention.** An uncontended lock costs a few tens of nanoseconds. A contended one costs much more: threads wait, the cache line holding the lock word bounces between cores, and sleeping threads must be woken. Worse, the critical section is now serial. If every request holds one lock for h seconds, the lock can be passed on at most 1/h times a second, whatever the hardware: this is Amdahl's law, met in the tools cluster, applied to a lock. Add threads and they only queue for longer.
+    - question:
+        id: derivation-ceiling
+        type: numeric
+        system: s2
+        prompt: |
+          Every request holds a global lock for 0.5 ms. What is the most requests per second the program can complete, however many cores it has?
+        answer: "2000"
+        explanation: |
+          One request at a time can hold the lock, for 0.5 ms each, so at most 1 / 0.0005 = 2,000 requests a second get through, however many threads are waiting.
+    - text: |
+        **Granularity.** One lock for everything, a **coarse-grained** lock, is simple and safe and serialises everything. **Fine-grained** locking gives each piece of data its own lock: one per account, one per hash table bucket, one per seat block. Transfers between unrelated accounts then run in parallel. The price is complexity: an operation that touches two accounts needs two locks, which is how the next lesson's deadlocks are born. A middle road is **lock striping**: a fixed set of, say, 16 locks, with each item guarded by lock number hash(item) mod 16.
+
+        **Rules that keep locks safe.** Hold a lock for as short a time as possible, and never across slow operations such as network calls or disk reads. Release it on every path out of the critical section, including returns and exceptions: in Python, write `with lock:`, which releases even when an exception escapes, or use `try` and `finally`. Name what each lock protects, the invariant that holds whenever nobody holds it, such as "the balances add up to the bank's total". And beware calling unknown code, such as a callback, while holding a lock, since it may try to take the same lock. A **reentrant** lock lets the thread that holds it acquire it again; Python's `threading.RLock` is one.
+    - question:
+        id: derivation-grain
+        type: choice
+        system: s2
+        prompt: |
+          A bank keeps 10 million accounts behind one lock, and transfers queue for it. What is the usual fix?
+        options:
+          - "A lock per account, or a fixed set of striped locks, so transfers between unrelated accounts run in parallel"
+          - "More threads, so more transfers are waiting at once"
+          - "Remove the lock, since transfers rarely touch the same account"
+          - "A faster processor"
+        answer: 0
+        explanation: |
+          The work is limited by one serial lane, so the fix is more lanes. Removing the lock brings back races on the accounts that do collide, and more threads only lengthen the queue.
+  formal:
+    - text: |
+        **Lock.** acquire before the critical section, release after. Guarantees: mutual exclusion (at most one inside), progress (if free and wanted, someone enters), bounded waiting (nobody starves).
+
+        **Building one.** A flag fails: its test and set are separate steps. Peterson's algorithm works for two threads with loads and stores under sequential consistency: raise your flag, give the turn away, wait while the other wants in and it is their turn. Hardware atomic exchange (test-and-set) gives a spinlock: exchange 1 in; an old 0 means you have it.
+
+        **Spinning and sleeping.** Spin for very short holds; sleep for long ones; real mutexes spin briefly, then sleep, and futexes keep the uncontended case in user space.
+
+        **Throughput.** A lock held for h per operation allows at most 1/h operations a second.
+
+        **Practice.** Hold briefly, never across I/O; release on every path (with, or try and finally); choose granularity, coarse, fine or striped; write down the invariant each lock protects.
+  drill:
+    - text: Seconds each. Look for the gap between test and set, and for the path that keeps the lock.
+    - question:
+        id: drill-mutex
+        type: choice
+        system: s1
+        prompt: |
+          Which guarantee does mutual exclusion give?
+        options:
+          - "At most one thread is inside the critical section at any time"
+          - "Every thread eventually gets in"
+          - "Threads enter in the order they arrived"
+          - "The critical section runs faster"
+        answer: 0
+        explanation: Mutual exclusion is only about safety; progress and fairness are separate guarantees.
+    - question:
+        id: drill-with
+        type: choice
+        system: s1
+        prompt: |
+          Why is `with lock:` better than calling acquire and release by hand?
+        options:
+          - "It releases the lock however the block ends, including by an exception or a return"
+          - "It makes the critical section run in parallel"
+          - "It prevents deadlock"
+          - "It is faster than release"
+        answer: 0
+        explanation: The context manager's exit runs on every way out of the block, so the lock is never left held by accident.
+    - question:
+        id: predict-ceiling
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          hold_ms = 4
+          print(1000 // hold_ms, "a second at most")
+        output: "250 a second at most"
+        explanation: One holder at a time for 4 ms each lets at most 250 through a second.
+    - question:
+        id: predict-tas
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          word = {"lock": 0}
+
+          def test_and_set():
+              old = word["lock"]
+              word["lock"] = 1
+              return old
+
+          print(test_and_set(), test_and_set(), word["lock"])
+        output: "0 1 1"
+        explanation: The first call finds the lock free and takes it, returning 0; the second finds it taken, returning 1; the word stays 1.
+    - question:
+        id: predict-stripe
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          locks = 16
+          accounts = [5, 21, 37, 8]
+          print([a % locks for a in accounts])
+        output: "[5, 5, 5, 8]"
+        explanation: With 16 striped locks, accounts 5, 21 and 37 share lock 5, and account 8 has lock 8 to itself.
+  work:
+    - text: Slower now. Each answer is part of a lock, or of using one safely.
+    - question:
+        id: write-lock
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write the `acquire` and `release` methods of a lock for generator threads. The program should print `600 None True`.
+        starter: |
+          class Lock:
+              # A lock for threads written as generators. A thread takes it with
+              # `yield from lock.acquire(name)`: while another thread holds it, the
+              # thread yields "waiting" and tries again on its next turn. Code between
+              # two yields runs as one step, so testing and taking the lock in the
+              # same step is atomic. release(name) frees it, and raises RuntimeError
+              # if name does not hold it.
+              def __init__(self):
+                  self.holder = None
+                  self.waits = 0
+
+              def acquire(self, name):
+                  yield "waiting"
+
+              def release(self, name):
+                  pass
+
+
+          def deposit(name, lock, account):
+              for i in range(2):
+                  yield from lock.acquire(name)
+                  balance = account["balance"]
+                  yield "preempted inside the critical section"
+                  account["balance"] = balance + 100
+                  lock.release(name)
+                  yield "outside"
+
+
+          def run(threads):
+              while threads:
+                  for t in list(threads):
+                      try:
+                          next(t)
+                      except StopIteration:
+                          threads.remove(t)
+
+
+          lock = Lock()
+          account = {"balance": 0}
+          run([deposit(n, lock, account) for n in ["A", "B", "C"]])
+          print(account["balance"], lock.holder, lock.waits > 0)
+        solution: |
+          class Lock:
+              # A lock for threads written as generators. A thread takes it with
+              # `yield from lock.acquire(name)`: while another thread holds it, the
+              # thread yields "waiting" and tries again on its next turn. Code between
+              # two yields runs as one step, so testing and taking the lock in the
+              # same step is atomic. release(name) frees it, and raises RuntimeError
+              # if name does not hold it.
+              def __init__(self):
+                  self.holder = None
+                  self.waits = 0
+
+              def acquire(self, name):
+                  while self.holder is not None:
+                      self.waits += 1
+                      yield "waiting"
+                  self.holder = name
+
+              def release(self, name):
+                  if self.holder != name:
+                      raise RuntimeError(name + " released a lock it does not hold")
+                  self.holder = None
+
+
+          def deposit(name, lock, account):
+              for i in range(2):
+                  yield from lock.acquire(name)
+                  balance = account["balance"]
+                  yield "preempted inside the critical section"
+                  account["balance"] = balance + 100
+                  lock.release(name)
+                  yield "outside"
+
+
+          def run(threads):
+              while threads:
+                  for t in list(threads):
+                      try:
+                          next(t)
+                      except StopIteration:
+                          threads.remove(t)
+
+
+          lock = Lock()
+          account = {"balance": 0}
+          run([deposit(n, lock, account) for n in ["A", "B", "C"]])
+          print(account["balance"], lock.holder, lock.waits > 0)
+        tests: |
+          _l = Lock()
+          assert _l.holder is None, "a new lock is free"
+          for _x in _l.acquire("A"):
+              raise AssertionError("acquiring a free lock should not wait")
+          assert _l.holder == "A", "after acquire, A holds the lock"
+          _g = _l.acquire("B")
+          assert next(_g) == "waiting" and _l.holder == "A", "while A holds the lock, B's acquire should yield waiting"
+          assert next(_g) == "waiting", "B keeps waiting while A holds the lock"
+          try:
+              _l.release("B")
+              raise AssertionError("release by a thread that does not hold the lock should raise RuntimeError")
+          except RuntimeError:
+              pass
+          assert _l.holder == "A", "a refused release must leave the holder unchanged"
+          _l.release("A")
+          assert _l.holder is None, "release frees the lock"
+          _done = False
+          try:
+              next(_g)
+          except StopIteration:
+              _done = True
+          assert _done and _l.holder == "B", "once A releases, B's next try takes the lock without waiting again"
+          _l2 = Lock()
+          _acct = {"balance": 0}
+          _inside = []
+          def _worker(_name):
+              for _i in range(3):
+                  yield from _l2.acquire(_name)
+                  _inside.append(_name)
+                  assert len(_inside) == 1, "two threads were inside the critical section at once: " + repr(_inside)
+                  _b = _acct["balance"]
+                  yield "inside"
+                  _acct["balance"] = _b + 10
+                  _inside.remove(_name)
+                  _l2.release(_name)
+                  yield "outside"
+          run([_worker(_n) for _n in ["p", "q", "r", "s"]])
+          assert _acct["balance"] == 120, "four threads adding 10 three times each should leave 120, not " + str(_acct["balance"])
+          assert _l2.holder is None, "the lock is free at the end"
+          assert output.splitlines() == ["600 None True"], "The program should print 600 None True"
+        wrong:
+          - |
+            class Lock:
+                # A lock for threads written as generators. A thread takes it with
+                # `yield from lock.acquire(name)`: while another thread holds it, the
+                # thread yields "waiting" and tries again on its next turn. Code between
+                # two yields runs as one step, so testing and taking the lock in the
+                # same step is atomic. release(name) frees it, and raises RuntimeError
+                # if name does not hold it.
+                def __init__(self):
+                    self.holder = None
+                    self.waits = 0
+
+                def acquire(self, name):
+                    if self.holder is not None:
+                        self.waits += 1
+                        yield "waiting"
+                    self.holder = name
+
+                def release(self, name):
+                    if self.holder != name:
+                        raise RuntimeError(name + " released a lock it does not hold")
+                    self.holder = None
+
+
+            def deposit(name, lock, account):
+                for i in range(2):
+                    yield from lock.acquire(name)
+                    balance = account["balance"]
+                    yield "preempted inside the critical section"
+                    account["balance"] = balance + 100
+                    lock.release(name)
+                    yield "outside"
+
+
+            def run(threads):
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+
+
+            lock = Lock()
+            account = {"balance": 0}
+            run([deposit(n, lock, account) for n in ["A", "B", "C"]])
+            print(account["balance"], lock.holder, lock.waits > 0)
+          - |
+            class Lock:
+                # A lock for threads written as generators. A thread takes it with
+                # `yield from lock.acquire(name)`: while another thread holds it, the
+                # thread yields "waiting" and tries again on its next turn. Code between
+                # two yields runs as one step, so testing and taking the lock in the
+                # same step is atomic. release(name) frees it, and raises RuntimeError
+                # if name does not hold it.
+                def __init__(self):
+                    self.holder = None
+                    self.waits = 0
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        self.waits += 1
+                        yield "waiting"
+                    yield "about to take the lock"
+                    self.holder = name
+
+                def release(self, name):
+                    if self.holder != name:
+                        raise RuntimeError(name + " released a lock it does not hold")
+                    self.holder = None
+
+
+            def deposit(name, lock, account):
+                for i in range(2):
+                    yield from lock.acquire(name)
+                    balance = account["balance"]
+                    yield "preempted inside the critical section"
+                    account["balance"] = balance + 100
+                    lock.release(name)
+                    yield "outside"
+
+
+            def run(threads):
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+
+
+            lock = Lock()
+            account = {"balance": 0}
+            run([deposit(n, lock, account) for n in ["A", "B", "C"]])
+            print(account["balance"], lock.holder, lock.waits > 0)
+          - |
+            class Lock:
+                # A lock for threads written as generators. A thread takes it with
+                # `yield from lock.acquire(name)`: while another thread holds it, the
+                # thread yields "waiting" and tries again on its next turn. Code between
+                # two yields runs as one step, so testing and taking the lock in the
+                # same step is atomic. release(name) frees it, and raises RuntimeError
+                # if name does not hold it.
+                def __init__(self):
+                    self.holder = None
+                    self.waits = 0
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        self.waits += 1
+                        yield "waiting"
+                    self.holder = name
+
+                def release(self, name):
+                    self.holder = None
+
+
+            def deposit(name, lock, account):
+                for i in range(2):
+                    yield from lock.acquire(name)
+                    balance = account["balance"]
+                    yield "preempted inside the critical section"
+                    account["balance"] = balance + 100
+                    lock.release(name)
+                    yield "outside"
+
+
+            def run(threads):
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+
+
+            lock = Lock()
+            account = {"balance": 0}
+            run([deposit(n, lock, account) for n in ["A", "B", "C"]])
+            print(account["balance"], lock.holder, lock.waits > 0)
+        explanation: |
+          acquire loops while the lock is held, counting a wait and yielding each time, and takes it in the same step as the test that finds it free; release checks the holder and clears it. Testing once with if lets a thread take the lock after one wait even if another thread took it first; yielding between the test and the take reopens the gap that makes a flag fail; and a release that never checks the holder lets one thread free a lock another thread holds.
+    - question:
+        id: write-peterson
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `enter` and `leave` for Peterson's algorithm, and let the program check every schedule of 12 steps. It should print `0 of 4096 schedules break mutual exclusion` and `both finish taking turns: True`.
+        starter: |
+          def enter(i, shared):
+              # Peterson's algorithm: thread i (0 or 1) waits until it may enter the
+              # critical section. Each write to shared memory is one step, so yield
+              # after it; the test in the while loop is one step too. shared["flag"]
+              # is a list of two booleans and shared["turn"] is 0 or 1.
+              yield
+
+
+          def leave(i, shared):
+              # Thread i leaves the critical section.
+              yield
+
+
+          def thread(i, shared, inside):
+              yield from enter(i, shared)
+              inside.append(i)
+              yield
+              inside.remove(i)
+              yield from leave(i, shared)
+
+
+          def run(choices):
+              # Run both threads, letting choices pick who moves at each step (the
+              # other thread moves when the chosen one has finished). Return whether
+              # both were ever inside at once, and whether both finished.
+              shared = {"flag": [False, False], "turn": 0}
+              inside = []
+              threads = {0: thread(0, shared, inside), 1: thread(1, shared, inside)}
+              clash = False
+              for c in choices:
+                  if not threads:
+                      break
+                  if c not in threads:
+                      c = 1 - c
+                  try:
+                      next(threads[c])
+                  except StopIteration:
+                      del threads[c]
+                  if len(inside) == 2:
+                      clash = True
+              return clash, not threads
+
+
+          schedules = [[(n >> k) & 1 for k in range(12)] for n in range(2 ** 12)]
+          clashes = sum(1 for s in schedules if run(s)[0])
+          print(clashes, "of", len(schedules), "schedules break mutual exclusion")
+          print("both finish taking turns:", run([0, 1] * 20)[1])
+        solution: |
+          def enter(i, shared):
+              # Peterson's algorithm: thread i (0 or 1) waits until it may enter the
+              # critical section. Each write to shared memory is one step, so yield
+              # after it; the test in the while loop is one step too. shared["flag"]
+              # is a list of two booleans and shared["turn"] is 0 or 1.
+              other = 1 - i
+              shared["flag"][i] = True
+              yield
+              shared["turn"] = other
+              yield
+              while shared["flag"][other] and shared["turn"] == other:
+                  yield
+
+
+          def leave(i, shared):
+              # Thread i leaves the critical section.
+              shared["flag"][i] = False
+              yield
+
+
+          def thread(i, shared, inside):
+              yield from enter(i, shared)
+              inside.append(i)
+              yield
+              inside.remove(i)
+              yield from leave(i, shared)
+
+
+          def run(choices):
+              # Run both threads, letting choices pick who moves at each step (the
+              # other thread moves when the chosen one has finished). Return whether
+              # both were ever inside at once, and whether both finished.
+              shared = {"flag": [False, False], "turn": 0}
+              inside = []
+              threads = {0: thread(0, shared, inside), 1: thread(1, shared, inside)}
+              clash = False
+              for c in choices:
+                  if not threads:
+                      break
+                  if c not in threads:
+                      c = 1 - c
+                  try:
+                      next(threads[c])
+                  except StopIteration:
+                      del threads[c]
+                  if len(inside) == 2:
+                      clash = True
+              return clash, not threads
+
+
+          schedules = [[(n >> k) & 1 for k in range(12)] for n in range(2 ** 12)]
+          clashes = sum(1 for s in schedules if run(s)[0])
+          print(clashes, "of", len(schedules), "schedules break mutual exclusion")
+          print("both finish taking turns:", run([0, 1] * 20)[1])
+        tests: |
+          _bad = [_n for _n in range(2 ** 11) if run([(_n >> _k) & 1 for _k in range(11)])[0]]
+          assert not _bad, "both threads were inside the critical section at once under the schedule " + repr([(_bad[0] >> _k) & 1 for _k in range(11)])
+          assert run([0, 1] * 20)[1], "taking turns one step at a time, both threads should get in and finish"
+          assert run([0] * 20)[1] and run([1] * 20)[1], "one thread running alone should get in at once and finish, and then the other"
+          assert run([0, 0, 1, 1, 1] + [0, 1] * 10)[1], "when both want to enter, the one that set turn last waits and the other goes first; both should finish"
+          _sh = {"flag": [False, False], "turn": 0}
+          for _x in enter(1, _sh):
+              pass
+          assert _sh["flag"][1] and _sh["turn"] == 0, "thread 1 entering alone should raise its flag and give the turn to thread 0"
+          for _x in leave(1, _sh):
+              pass
+          assert _sh["flag"] == [False, False], "leaving lowers the thread's flag"
+          assert output.splitlines() == ["0 of 4096 schedules break mutual exclusion", "both finish taking turns: True"], "The program should print 0 of 4096 schedules break mutual exclusion and both finish taking turns: True"
+        wrong:
+          - |
+            def enter(i, shared):
+                # Peterson's algorithm: thread i (0 or 1) waits until it may enter the
+                # critical section. Each write to shared memory is one step, so yield
+                # after it; the test in the while loop is one step too. shared["flag"]
+                # is a list of two booleans and shared["turn"] is 0 or 1.
+                other = 1 - i
+                shared["turn"] = other
+                yield
+                shared["flag"][i] = True
+                yield
+                while shared["flag"][other] and shared["turn"] == other:
+                    yield
+
+
+            def leave(i, shared):
+                # Thread i leaves the critical section.
+                shared["flag"][i] = False
+                yield
+
+
+            def thread(i, shared, inside):
+                yield from enter(i, shared)
+                inside.append(i)
+                yield
+                inside.remove(i)
+                yield from leave(i, shared)
+
+
+            def run(choices):
+                # Run both threads, letting choices pick who moves at each step (the
+                # other thread moves when the chosen one has finished). Return whether
+                # both were ever inside at once, and whether both finished.
+                shared = {"flag": [False, False], "turn": 0}
+                inside = []
+                threads = {0: thread(0, shared, inside), 1: thread(1, shared, inside)}
+                clash = False
+                for c in choices:
+                    if not threads:
+                        break
+                    if c not in threads:
+                        c = 1 - c
+                    try:
+                        next(threads[c])
+                    except StopIteration:
+                        del threads[c]
+                    if len(inside) == 2:
+                        clash = True
+                return clash, not threads
+
+
+            schedules = [[(n >> k) & 1 for k in range(12)] for n in range(2 ** 12)]
+            clashes = sum(1 for s in schedules if run(s)[0])
+            print(clashes, "of", len(schedules), "schedules break mutual exclusion")
+            print("both finish taking turns:", run([0, 1] * 20)[1])
+          - |
+            def enter(i, shared):
+                # Peterson's algorithm: thread i (0 or 1) waits until it may enter the
+                # critical section. Each write to shared memory is one step, so yield
+                # after it; the test in the while loop is one step too. shared["flag"]
+                # is a list of two booleans and shared["turn"] is 0 or 1.
+                other = 1 - i
+                shared["flag"][i] = True
+                yield
+                shared["turn"] = other
+                yield
+                while shared["flag"][other] or shared["turn"] == other:
+                    yield
+
+
+            def leave(i, shared):
+                # Thread i leaves the critical section.
+                shared["flag"][i] = False
+                yield
+
+
+            def thread(i, shared, inside):
+                yield from enter(i, shared)
+                inside.append(i)
+                yield
+                inside.remove(i)
+                yield from leave(i, shared)
+
+
+            def run(choices):
+                # Run both threads, letting choices pick who moves at each step (the
+                # other thread moves when the chosen one has finished). Return whether
+                # both were ever inside at once, and whether both finished.
+                shared = {"flag": [False, False], "turn": 0}
+                inside = []
+                threads = {0: thread(0, shared, inside), 1: thread(1, shared, inside)}
+                clash = False
+                for c in choices:
+                    if not threads:
+                        break
+                    if c not in threads:
+                        c = 1 - c
+                    try:
+                        next(threads[c])
+                    except StopIteration:
+                        del threads[c]
+                    if len(inside) == 2:
+                        clash = True
+                return clash, not threads
+
+
+            schedules = [[(n >> k) & 1 for k in range(12)] for n in range(2 ** 12)]
+            clashes = sum(1 for s in schedules if run(s)[0])
+            print(clashes, "of", len(schedules), "schedules break mutual exclusion")
+            print("both finish taking turns:", run([0, 1] * 20)[1])
+          - |
+            def enter(i, shared):
+                # Peterson's algorithm: thread i (0 or 1) waits until it may enter the
+                # critical section. Each write to shared memory is one step, so yield
+                # after it; the test in the while loop is one step too. shared["flag"]
+                # is a list of two booleans and shared["turn"] is 0 or 1.
+                other = 1 - i
+                shared["flag"][i] = True
+                yield
+                shared["turn"] = i
+                yield
+                while shared["flag"][other] and shared["turn"] == other:
+                    yield
+
+
+            def leave(i, shared):
+                # Thread i leaves the critical section.
+                shared["flag"][i] = False
+                yield
+
+
+            def thread(i, shared, inside):
+                yield from enter(i, shared)
+                inside.append(i)
+                yield
+                inside.remove(i)
+                yield from leave(i, shared)
+
+
+            def run(choices):
+                # Run both threads, letting choices pick who moves at each step (the
+                # other thread moves when the chosen one has finished). Return whether
+                # both were ever inside at once, and whether both finished.
+                shared = {"flag": [False, False], "turn": 0}
+                inside = []
+                threads = {0: thread(0, shared, inside), 1: thread(1, shared, inside)}
+                clash = False
+                for c in choices:
+                    if not threads:
+                        break
+                    if c not in threads:
+                        c = 1 - c
+                    try:
+                        next(threads[c])
+                    except StopIteration:
+                        del threads[c]
+                    if len(inside) == 2:
+                        clash = True
+                return clash, not threads
+
+
+            schedules = [[(n >> k) & 1 for k in range(12)] for n in range(2 ** 12)]
+            clashes = sum(1 for s in schedules if run(s)[0])
+            print(clashes, "of", len(schedules), "schedules break mutual exclusion")
+            print("both finish taking turns:", run([0, 1] * 20)[1])
+        explanation: |
+          Raise your flag, give the turn to the other thread, then wait while the other's flag is up and it is the other's turn; to leave, lower your flag. Giving the turn away before raising the flag lets both threads slip in; waiting while either condition holds, with or, makes both wait for ever when both want in; and taking the turn for yourself rather than giving it away lets both decide it is their turn.
+    - question:
+        id: fix-held-lock
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A payments service sometimes stops processing transfers altogether after a refusal. The program should print `['t1 refused', 't2 done'] {'asha': 300, 'ravi': 300} finished`. Find the fault and fix it.
+        starter: |
+          class Lock:
+              def __init__(self):
+                  self.holder = None
+
+              def acquire(self, name):
+                  while self.holder is not None:
+                      yield "waiting"
+                  self.holder = name
+
+              def release(self, name):
+                  if self.holder != name:
+                      raise RuntimeError(name + " released a lock it does not hold")
+                  self.holder = None
+
+
+          def transfer(name, lock, accounts, src, dst, amount, log):
+              # Move amount from src to dst. One lock guards all the accounts: while a
+              # thread holds it, no other thread may read or change any balance.
+              yield from lock.acquire(name)
+              if accounts[src] < amount:
+                  log.append(name + " refused")
+                  return
+              accounts[src] -= amount
+              yield "writing the ledger"
+              accounts[dst] += amount
+              log.append(name + " done")
+              lock.release(name)
+
+
+          def run(threads):
+              # Round robin. If a whole round passes in which every thread was only
+              # waiting, nothing can ever change, so the threads are stuck.
+              while threads:
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "finished"
+
+
+          lock = Lock()
+          accounts = {"asha": 500, "ravi": 100}
+          log = []
+          result = run([
+              transfer("t1", lock, accounts, "ravi", "asha", 300, log),
+              transfer("t2", lock, accounts, "asha", "ravi", 200, log),
+          ])
+          print(log, accounts, result)
+        solution: |
+          class Lock:
+              def __init__(self):
+                  self.holder = None
+
+              def acquire(self, name):
+                  while self.holder is not None:
+                      yield "waiting"
+                  self.holder = name
+
+              def release(self, name):
+                  if self.holder != name:
+                      raise RuntimeError(name + " released a lock it does not hold")
+                  self.holder = None
+
+
+          def transfer(name, lock, accounts, src, dst, amount, log):
+              # Move amount from src to dst. One lock guards all the accounts: while a
+              # thread holds it, no other thread may read or change any balance.
+              yield from lock.acquire(name)
+              if accounts[src] < amount:
+                  log.append(name + " refused")
+                  lock.release(name)
+                  return
+              accounts[src] -= amount
+              yield "writing the ledger"
+              accounts[dst] += amount
+              log.append(name + " done")
+              lock.release(name)
+
+
+          def run(threads):
+              # Round robin. If a whole round passes in which every thread was only
+              # waiting, nothing can ever change, so the threads are stuck.
+              while threads:
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "finished"
+
+
+          lock = Lock()
+          accounts = {"asha": 500, "ravi": 100}
+          log = []
+          result = run([
+              transfer("t1", lock, accounts, "ravi", "asha", 300, log),
+              transfer("t2", lock, accounts, "asha", "ravi", 200, log),
+          ])
+          print(log, accounts, result)
+        tests: |
+          _lk = Lock()
+          _acc = {"a": 100, "b": 0, "c": 0, "d": 50}
+          _log = []
+          _r = run([transfer("z", _lk, _acc, "d", "c", 10, _log), transfer("x", _lk, _acc, "a", "b", 80, _log), transfer("y", _lk, _acc, "a", "c", 80, _log)])
+          assert _acc["a"] >= 0, "while z held the lock, x and y both wanted 80 from a's 100; the balance must be checked while holding the lock, but a ended at " + str(_acc["a"])
+          assert _r == "finished" and _acc == {"a": 20, "b": 80, "c": 10, "d": 40}, "z moves 10 from d to c, x moves 80 from a to b, and y is refused, giving {'a': 20, 'b': 80, 'c': 10, 'd': 40}, not " + repr(_acc)
+          _lk = Lock()
+          _acc = {"a": 10, "b": 10}
+          _log = []
+          _r = run([transfer("t" + str(_i), _lk, _acc, "a", "b", 50, _log) for _i in range(3)] + [transfer("ok", _lk, _acc, "b", "a", 5, _log)])
+          assert _r == "finished" and _log == ["t0 refused", "t1 refused", "t2 refused", "ok done"], "after refusals the lock must be free for the next transfer: " + repr(_log) + " " + _r
+          assert _lk.holder is None, "the lock must be free when every transfer has ended"
+          _lk = Lock()
+          _acc = {"a": 300, "b": 300}
+          _log = []
+          _seen = []
+          def _audit():
+              for _i in range(4):
+                  yield from _lk.acquire("audit")
+                  _seen.append(_acc["a"] + _acc["b"])
+                  _lk.release("audit")
+                  yield "outside"
+          run([transfer("m", _lk, _acc, "a", "b", 100, _log), _audit(), transfer("n", _lk, _acc, "b", "a", 50, _log)])
+          assert all(_t == 600 for _t in _seen), "an auditor holding the lock should always see 600 in total, but saw " + repr(_seen) + ": money was visible in flight"
+          assert output.splitlines() == ["['t1 refused', 't2 done'] {'asha': 300, 'ravi': 300} finished"], "The program should print ['t1 refused', 't2 done'] {'asha': 300, 'ravi': 300} finished"
+        wrong:
+          - |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        yield "waiting"
+                    self.holder = name
+
+                def release(self, name):
+                    if self.holder != name:
+                        raise RuntimeError(name + " released a lock it does not hold")
+                    self.holder = None
+
+
+            def transfer(name, lock, accounts, src, dst, amount, log):
+                # Move amount from src to dst. One lock guards all the accounts: while a
+                # thread holds it, no other thread may read or change any balance.
+                if accounts[src] < amount:
+                    log.append(name + " refused")
+                    return
+                yield from lock.acquire(name)
+                accounts[src] -= amount
+                yield "writing the ledger"
+                accounts[dst] += amount
+                log.append(name + " done")
+                lock.release(name)
+
+
+            def run(threads):
+                # Round robin. If a whole round passes in which every thread was only
+                # waiting, nothing can ever change, so the threads are stuck.
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            lock = Lock()
+            accounts = {"asha": 500, "ravi": 100}
+            log = []
+            result = run([
+                transfer("t1", lock, accounts, "ravi", "asha", 300, log),
+                transfer("t2", lock, accounts, "asha", "ravi", 200, log),
+            ])
+            print(log, accounts, result)
+          - |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        yield "waiting"
+                    self.holder = name
+
+                def release(self, name):
+                    if self.holder != name:
+                        raise RuntimeError(name + " released a lock it does not hold")
+                    self.holder = None
+
+
+            def transfer(name, lock, accounts, src, dst, amount, log):
+                # Move amount from src to dst. One lock guards all the accounts: while a
+                # thread holds it, no other thread may read or change any balance.
+                yield from lock.acquire(name)
+                if accounts[src] < amount:
+                    log.append(name + " refused")
+                    lock.release(name)
+                    return
+                accounts[src] -= amount
+                lock.release(name)
+                yield "writing the ledger"
+                accounts[dst] += amount
+                log.append(name + " done")
+
+
+            def run(threads):
+                # Round robin. If a whole round passes in which every thread was only
+                # waiting, nothing can ever change, so the threads are stuck.
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            lock = Lock()
+            accounts = {"asha": 500, "ravi": 100}
+            log = []
+            result = run([
+                transfer("t1", lock, accounts, "ravi", "asha", 300, log),
+                transfer("t2", lock, accounts, "asha", "ravi", 200, log),
+            ])
+            print(log, accounts, result)
+          - |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        yield "waiting"
+                    self.holder = name
+
+                def release(self, name):
+                    if self.holder != name:
+                        raise RuntimeError(name + " released a lock it does not hold")
+                    self.holder = None
+
+
+            def transfer(name, lock, accounts, src, dst, amount, log):
+                # Move amount from src to dst. One lock guards all the accounts: while a
+                # thread holds it, no other thread may read or change any balance.
+                yield from lock.acquire(name)
+                if accounts[src] < amount:
+                    log.append(name + " refused")
+                    lock.release(name)
+                accounts[src] -= amount
+                yield "writing the ledger"
+                accounts[dst] += amount
+                log.append(name + " done")
+                lock.release(name)
+
+
+            def run(threads):
+                # Round robin. If a whole round passes in which every thread was only
+                # waiting, nothing can ever change, so the threads are stuck.
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            lock = Lock()
+            accounts = {"asha": 500, "ravi": 100}
+            log = []
+            result = run([
+                transfer("t1", lock, accounts, "ravi", "asha", 300, log),
+                transfer("t2", lock, accounts, "asha", "ravi", 200, log),
+            ])
+            print(log, accounts, result)
+        explanation: |
+          The refusal returns while still holding the lock, so every later transfer waits for ever. Release it before returning; with real threads, `with lock:` or `try` and `finally` would do this on every path. Checking the balance before taking the lock lets two transfers both pass the check; releasing before the ledger write lets others see money in flight; and releasing on refusal without returning goes on to make the transfer anyway and then releases a lock it no longer holds.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. Each request holds one global lock for 2 ms. What is the most requests per second the server can complete, however many cores and threads it has?
+        answer: "500"
+        explanation: |
+          Only one thread can hold the lock, for 2 ms per request, so at most 1 / 0.002 = 500 requests a second pass through it. With 64 threads each taking 10 ms the server could otherwise reach 6,400 a second; the lock caps it at 500.
+    - question:
+        id: work-fix-ceiling
+        type: choice
+        system: s2
+        prompt: |
+          The team wants 5,000 requests a second from the ticketing server. Which change can get there?
+        options:
+          - "Split the seat map so each block of seats has its own lock, so requests for different blocks hold different locks"
+          - "Raise the thread count from 64 to 640"
+          - "Move to a machine with 128 cores"
+          - "Use a spinlock instead of a sleeping mutex"
+        answer: 0
+        explanation: |
+          The ceiling is set by one serial lane, 2 ms per request. More threads or cores only lengthen the queue, and a spinlock changes the cost of waiting, not the length of the critical section. With ten or more independent seat blocks, requests spread over many locks and the ceiling rises in proportion.
+  connections:
+    - text: |
+        500 requests a second. Each request occupies the lock for 2 ms, and only one can occupy it at a time, so the lock passes on at most 500 times a second. Adding threads only makes the queue for the lock longer, and the 30 idle cores do not help. To go faster, hold the lock for less time, or split it.
+
+        Splitting is where the trouble starts. A transfer between two accounts, each with its own lock, must hold both, and two transfers that take the same two locks in opposite orders can each hold one and wait for ever for the other. [[d0.deadlock]] studies that standoff, how to detect it, and the simple rule that prevents it.

@@ -1,0 +1,1258 @@
+concept: d0.testing-concurrent-code-deterministically
+minutes: 85
+claim: You can explain why ordinary tests of concurrent code pass while the bug survives, and what race detectors such as ThreadSanitizer add; take the schedule into the test by running threads as tasks with a yield before every shared step; count the interleavings a test faces and see how fast they grow; explore every schedule by depth-first search with replay from fresh state; cut the search with preemption bounding and partial-order reduction; hunt rarer bugs with seeded random schedules that replay exactly from the seed; describe deterministic simulation of whole systems; and choose what a test should check, invariants, the absence of deadlock and linearisability.
+recalls: [d0.actors-and-message-passing]
+uses: [s6.deterministic-tests-seeds-clocks-and-fakes, s6.flaky-tests-and-their-causes, s6.oracles-and-invariants, s4.dependency-injection-and-testable-code, s3.breadth-first-and-depth-first-search, f3.permutations-and-combinations, d0.interleavings-and-race-conditions, d0.memory-models-and-happens-before, d0.deadlock]
+leads: [f6.arrivals-and-the-poisson-process, r6.deterministic-simulation-testing]
+starter: |
+  # Scratch space. Every interleaving of two threads of two steps each,
+  # written as strings of A and B.
+  def schedules(a, b):
+      if a == 0 and b == 0:
+          return [""]
+      out = []
+      if a > 0:
+          out = out + ["A" + s for s in schedules(a - 1, b)]
+      if b > 0:
+          out = out + ["B" + s for s in schedules(a, b - 1)]
+      return out
+
+  print(schedules(2, 2))
+parts:
+  recall:
+    - text: |
+        [[d0.actors-and-message-passing]] ended with the difficulty that threads, event loops and actors all share: a bug that shows itself only in some orders of events, while the order changes from run to run. Every exercise in this cluster has quietly avoided it, because each one ran its threads as generators under a scheduler the exercise controlled. This lesson makes that trick the method. Three quick pulls first.
+  puzzle:
+    - text: |
+        A test starts two threads, and each runs 10 atomic steps. The scheduler may switch between them after any step.
+
+        **How many different interleavings could the test see?**
+  intuition:
+    - text: |
+        Nobody checks the signalling at a busy railway junction by watching real trains and waiting for two to arrive at the same moment. The engineers drive the interlocking from a simulator in which they decide when every train, signal and set of points moves, so they can try every order in which things can happen, and when one order goes wrong they can play exactly that order again, as many times as they like. Signalling systems on Indian and European railways are checked this way, by exhaustive search over the orders of events.
+
+        A concurrent test can do the same. If each thread stops before every step that touches shared data, the test decides who goes next, and a schedule becomes a list of choices. The figure draws every schedule of two threads as a path through a grid: a step right is a step of thread A, a step up is a step of thread B.
+    - figure: schedule-explorer
+      props: { steps: 3, schedule: 6 }
+    - text: |
+        Every path from corner to corner is one schedule, so counting schedules is counting paths, and the count grows fast as the threads get longer. Most of those paths zigzag, switching threads again and again. The paths that switch only once or twice are few, and many real bugs need no more than that, which is the key to searching them in practice.
+  derivation:
+    - text: |
+        **Why ordinary tests miss these bugs.** In an ordinary test, the operating system's scheduler chooses the interleaving, from timing that depends on other load, on cache misses and on the machine. A bug that needs one schedule in ten thousand passes almost every run, and when it does fail, running it again usually passes: the flaky test of the testing cluster. Stress testing, with many threads and thousands of repetitions on many cores, raises the odds but proves nothing and cannot replay a failure. Adding print statements or a debugger changes the timing, so the bug may vanish while you look, which is why such bugs are called heisenbugs.
+
+        Tools that watch real runs help in a different way. **ThreadSanitizer** records, for every memory access, which accesses it is ordered after by happens-before, and reports two accesses to the same location from different threads that are not ordered, at least one a write. That is a data race, and it is reported even in a run whose final answer happened to be right.
+    - question:
+        id: derivation-passes
+        type: choice
+        system: s2
+        prompt: |
+          A test of a lock-free queue passes 10 000 times in a row on a developer's laptop. What has it shown?
+        options:
+          - "Only that the schedules this machine happened to produce were fine; a rarer interleaving may still fail"
+          - "That the queue is free of races"
+          - "That the queue is free of races on this kind of processor"
+          - "That one more run will also pass"
+        answer: 0
+        explanation: |
+          The test never chose the schedules, so it sampled whichever ones the laptop's timing favoured. A bug in an interleaving that machine rarely produces is untouched.
+    - text: |
+        **Taking control of the schedule.** Make the scheduler part of the test. Run each thread as a task that pauses before every step touching shared state, as a generator does at each yield, and let a test scheduler decide which runs next. A schedule is now a list of thread numbers, and running the same list again reproduces the run exactly. Microsoft's CHESS did this for .NET, Loom does it for Rust, and Lincheck for Kotlin and Java. In asynchronous code the awaits are already the only switching points, so a test event loop with a fake clock gets the same control.
+
+        **Counting.** A schedule of two threads of k steps chooses which k of the 2k positions belong to the first thread, so there are C(2k, k) schedules, which grows roughly like 4 to the power k. For n threads of k steps each the count is (nk)! / (k!)^n, the multinomial coefficient.
+    - question:
+        id: derivation-three
+        type: numeric
+        system: s2
+        prompt: |
+          Three threads each run 2 atomic steps. How many different schedules are there?
+        answer: "90"
+        explanation: |
+          Six steps in all, of which each thread's two must stay in order: 6! / (2! × 2! × 2!) = 720 / 8 = 90.
+    - text: |
+        **Exploring every schedule.** Search the schedules depth-first. At each point, every unfinished thread is a possible next step; try each in turn, and at the end of a complete schedule check the result. Saving and restoring a real program's state is hard, so explorers usually replay instead: to try a schedule, build fresh state and threads and run the chosen steps from the start. This is **stateless model checking**. Each replay must start from genuinely fresh state; anything left over from an earlier run makes the explorer report nonsense.
+
+        Two ideas keep the search affordable. **Preemption bounding**: a preemption is a switch away from a thread that still has steps to run, and CHESS found that many real bugs show up with only one or two preemptions, while the number of schedules with at most c preemptions grows only polynomially with the number of steps. So explore those exhaustively first. **Partial-order reduction**: two steps that touch different data leave the same state in either order, so only one order needs trying. Only conflicting steps, two accesses to the same location with at least one a write, or two operations on the same lock, create real choices.
+    - question:
+        id: derivation-independent
+        type: choice
+        system: s2
+        prompt: |
+          Thread A's next step writes x and thread B's next step writes y, and nothing else is shared. Why does an explorer need to try only one order of these two steps?
+        options:
+          - "The steps touch different data, so either order leaves the same state"
+          - "Writes are always atomic"
+          - "Thread A always runs first"
+          - "Writes to different variables cannot race, so the program has no bugs"
+        answer: 0
+        explanation: |
+          Swapping independent steps cannot change the outcome, so the two orders are the same schedule as far as the result goes. Partial-order reduction prunes one of them.
+    - text: |
+        **Random schedules with a seed.** When the schedules are too many to try, sample them. At each point choose the next thread with a random generator built from a seed, run thousands of seeds, and record the seed of any failure: the same seed makes the same choices, so it replays the failing schedule exactly. That is the discipline of deterministic tests, seeds, clocks and fakes, applied to the scheduler. Choosing uniformly at random rarely produces a long run of one thread followed by a switch at just the wrong moment, so better samplers exist: **probabilistic concurrency testing** gives the threads random priorities and changes them at a few random points, which gives a guaranteed chance of finding any bug that needs only a few events in a particular order.
+
+        **Deterministic simulation.** The same idea scales to whole systems. FoundationDB and TigerBeetle run an entire distributed database in one thread, with the network, the disks and the clocks simulated, and every choice, from which message arrives next to when a disk fails, drawn from one seeded generator. Millions of seeds run every night, and any failure replays exactly from its seed on any developer's machine. The reliability cluster returns to this as deterministic simulation testing.
+    - question:
+        id: derivation-seed
+        type: choice
+        system: s2
+        prompt: |
+          A seeded random scheduler finds a failure with seed 4817 on the CI machine. What does a developer need to reproduce it on a laptop?
+        options:
+          - "The same code and the seed 4817, since the seed fixes every scheduling choice"
+          - "The same laptop as the CI machine"
+          - "A recording of the CI machine's timing"
+          - "Luck; random failures cannot be reproduced"
+        answer: 0
+        explanation: |
+          Under the test's own scheduler, nothing about the run depends on the machine's timing; the seed determines the whole schedule.
+    - text: |
+        **What to check.** An exploration is only as good as its check. **Invariants** say what must always hold: no money created or lost, at most one holder of a lock, every scanned pass counted. **Deadlock** is checked by noticing a state in which every unfinished thread is blocked, and reporting the schedule that led there. For a concurrent data structure, the strongest common check is **linearisability**: the results of the operations must match some one-at-a-time order of them that respects which operations finished before others began, which a checker establishes by searching for such an order. And all of this depends on the code being testable: inject the scheduler, the clock and the random generator, as the dependency injection lesson did, so that production runs on real threads and the test runs the same code under its own control.
+  formal:
+    - text: |
+        **Why ordinary tests fail.** The OS scheduler picks the interleaving; rare schedules escape, failures do not replay, and observing changes timing. ThreadSanitizer reports accesses not ordered by happens-before, at least one a write.
+
+        **Controlled scheduling.** Threads pause before each shared step; a test scheduler chooses who runs; a schedule is a list of thread numbers and replays exactly.
+
+        **Counts.** Two threads of k steps: C(2k, k). n threads of k steps: (nk)! / (k!)^n.
+
+        **Systematic search.** Depth-first over unfinished threads, replaying each schedule from fresh state; check at the end. Preemption bounding explores schedules with few preemptions first; partial-order reduction tries one order of independent steps.
+
+        **Sampling.** Seeded random choices; the seed replays the failure. PCT samples cleverly. Deterministic simulation drives a whole system, network, disk and clock, from one seed.
+
+        **Checks.** Invariants, deadlock (every unfinished thread blocked), linearisability. Inject scheduler, clock and randomness.
+  drill:
+    - text: Seconds each. Ask who chose the schedule, and whether it can be played again.
+    - question:
+        id: drill-flaky
+        type: choice
+        system: s1
+        prompt: |
+          A concurrency test fails about once in 2000 runs on CI and never on a laptop. What should change first?
+        options:
+          - "Control the schedule in the test, by exploring or by seeded random choices, so the failing order can be found and replayed"
+          - "Retry the test up to three times"
+          - "Add sleep calls to spread the threads apart"
+          - "Run it on a faster machine"
+        answer: 0
+        explanation: Retries and sleeps hide the bug; a controlled scheduler finds the interleaving and replays it on demand.
+    - question:
+        id: drill-tsan
+        type: choice
+        system: s1
+        prompt: |
+          ThreadSanitizer reports a data race on a counter in a run whose final total was correct. Is the report real?
+        options:
+          - "Yes: two accesses, one a write, were not ordered by happens-before, so another run may lose an update"
+          - "No; the total was right, so there was no race"
+          - "Only if the program crashed"
+          - "No; ThreadSanitizer reports only races that changed the result"
+        answer: 0
+        explanation: A race detector reasons about ordering, not about this run's luck. The same unordered accesses can interleave badly next time.
+    - question:
+        id: predict-counts
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import math
+          print(math.comb(4, 2), math.comb(6, 3), math.comb(8, 4))
+        output: "6 20 70"
+        explanation: Two threads of 2, 3 and 4 steps; each extra step per thread multiplies the schedules by about four.
+    - question:
+        id: predict-replay
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import random
+          a = random.Random(7)
+          b = random.Random(7)
+          print([a.choice([0, 1]) for i in range(8)] == [b.choice([0, 1]) for i in range(8)])
+        output: "True"
+        explanation: Two generators built from the same seed make the same choices, which is what lets a seed replay a schedule.
+    - question:
+        id: predict-switches
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          schedule = "AABABB"
+          switches = 0
+          for i in range(1, len(schedule)):
+              if schedule[i] != schedule[i - 1]:
+                  switches += 1
+          print(switches)
+        output: "3"
+        explanation: A to B, B to A, and A to B again. The last switch comes after A has finished, so only two of the three are preemptions.
+  work:
+    - text: Slower now. Each answer is part of a test that chooses its own schedules.
+    - question:
+        id: write-explore
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `explore`, which tries every schedule of the given threads by depth-first search, replaying each from fresh state, and reports the schedules whose result fails the check. The program should print `6 [[0, 1, 0, 1], [0, 1, 1, 0], [1, 0, 0, 1], [1, 0, 1, 0]]`, then `(2, [])`, then `90 84`.
+        starter: |
+          def replay(make, choices):
+              # make() builds fresh shared state and threads. A thread is a generator
+              # that yields just before each of its steps, so each next runs exactly
+              # one step. Runs the steps named by choices, a list of thread numbers,
+              # and returns the state and the numbers of the threads not yet finished.
+              state, threads = make()
+              for t in threads:
+                  next(t)
+              alive = list(range(len(threads)))
+              for c in choices:
+                  try:
+                      next(threads[c])
+                  except StopIteration:
+                      alive.remove(c)
+              return state, alive
+
+
+          def explore(make, check):
+              # Tries every schedule: at each point, any unfinished thread may run
+              # next. Return how many complete schedules there are, and the list of
+              # schedules, as lists of thread numbers, whose final state fails check.
+              return 0, []
+
+
+          def incrementer(state):
+              yield
+              seen = state["count"]           # step 1: read
+              yield
+              state["count"] = seen + 1       # step 2: write
+
+
+          def locked_incrementer(state):
+              yield
+              state["count"] += 1             # one atomic step
+
+
+          def make_two():
+              state = {"count": 0}
+              return state, [incrementer(state), incrementer(state)]
+
+
+          def make_locked():
+              state = {"count": 0}
+              return state, [locked_incrementer(state), locked_incrementer(state)]
+
+
+          def make_three():
+              state = {"count": 0}
+              return state, [incrementer(state), incrementer(state), incrementer(state)]
+
+
+          count, failures = explore(make_two, lambda s: s["count"] == 2)
+          print(count, failures)
+          print(explore(make_locked, lambda s: s["count"] == 2))
+          count, failures = explore(make_three, lambda s: s["count"] == 3)
+          print(count, len(failures))
+        solution: |
+          def replay(make, choices):
+              # make() builds fresh shared state and threads. A thread is a generator
+              # that yields just before each of its steps, so each next runs exactly
+              # one step. Runs the steps named by choices, a list of thread numbers,
+              # and returns the state and the numbers of the threads not yet finished.
+              state, threads = make()
+              for t in threads:
+                  next(t)
+              alive = list(range(len(threads)))
+              for c in choices:
+                  try:
+                      next(threads[c])
+                  except StopIteration:
+                      alive.remove(c)
+              return state, alive
+
+
+          def explore(make, check):
+              # Tries every schedule: at each point, any unfinished thread may run
+              # next. Return how many complete schedules there are, and the list of
+              # schedules, as lists of thread numbers, whose final state fails check.
+              count = 0
+              failures = []
+
+              def visit(choices):
+                  nonlocal count
+                  state, alive = replay(make, choices)
+                  if not alive:
+                      count += 1
+                      if not check(state):
+                          failures.append(choices)
+                      return
+                  for t in alive:
+                      visit(choices + [t])
+
+              visit([])
+              return count, failures
+
+
+          def incrementer(state):
+              yield
+              seen = state["count"]           # step 1: read
+              yield
+              state["count"] = seen + 1       # step 2: write
+
+
+          def locked_incrementer(state):
+              yield
+              state["count"] += 1             # one atomic step
+
+
+          def make_two():
+              state = {"count": 0}
+              return state, [incrementer(state), incrementer(state)]
+
+
+          def make_locked():
+              state = {"count": 0}
+              return state, [locked_incrementer(state), locked_incrementer(state)]
+
+
+          def make_three():
+              state = {"count": 0}
+              return state, [incrementer(state), incrementer(state), incrementer(state)]
+
+
+          count, failures = explore(make_two, lambda s: s["count"] == 2)
+          print(count, failures)
+          print(explore(make_locked, lambda s: s["count"] == 2))
+          count, failures = explore(make_three, lambda s: s["count"] == 3)
+          print(count, len(failures))
+        tests: |
+          def _worker(state, name, steps):
+              for _i in range(steps):
+                  yield
+                  state["log"].append(name)
+
+
+          def _make(sizes):
+              def make():
+                  state = {"log": []}
+                  return state, [_worker(state, "t" + str(_j), sizes[_j]) for _j in range(len(sizes))]
+              return make
+
+
+          _c, _f = explore(_make([2, 2]), lambda s: True)
+          assert _c == 6 and _f == [], "two threads of 2 steps have 6 schedules, C(4, 2), and a check that always passes finds no failures, not " + repr((_c, _f))
+          _c, _f = explore(_make([3, 3]), lambda s: len(s["log"]) < 2 or s["log"][0] == s["log"][1])
+          assert _c == 20, "two threads of 3 steps have 20 schedules, not " + str(_c)
+          assert sorted(_f) == sorted([_x for _x in [[0, 1, 0, 0, 1, 1], [0, 1, 0, 1, 0, 1], [0, 1, 0, 1, 1, 0], [0, 1, 1, 0, 0, 1], [0, 1, 1, 0, 1, 0], [0, 1, 1, 1, 0, 0], [1, 0, 0, 0, 1, 1], [1, 0, 0, 1, 0, 1], [1, 0, 0, 1, 1, 0], [1, 0, 1, 0, 0, 1], [1, 0, 1, 0, 1, 0], [1, 0, 1, 1, 0, 0]]]), "the schedules whose first two steps come from different threads should be reported, and only complete schedules, but the failures were " + repr(_f)
+          _c, _f = explore(_make([1, 1, 1, 1]), lambda s: s["log"] != ["t3", "t2", "t1", "t0"])
+          assert _c == 24 and _f == [[3, 2, 1, 0]], "four one-step threads have 24 schedules, and exactly one runs them in reverse, but got " + repr((_c, _f))
+          _c, _f = explore(_make([4]), lambda s: len(s["log"]) == 4)
+          assert (_c, _f) == (1, []), "a single thread has exactly one schedule, not " + repr((_c, _f))
+          assert output.splitlines() == ["6 [[0, 1, 0, 1], [0, 1, 1, 0], [1, 0, 0, 1], [1, 0, 1, 0]]", "(2, [])", "90 84"], "The program should print 6 [[0, 1, 0, 1], [0, 1, 1, 0], [1, 0, 0, 1], [1, 0, 1, 0]], then (2, []), then 90 84"
+        wrong:
+          - |
+            def replay(make, choices):
+                # make() builds fresh shared state and threads. A thread is a generator
+                # that yields just before each of its steps, so each next runs exactly
+                # one step. Runs the steps named by choices, a list of thread numbers,
+                # and returns the state and the numbers of the threads not yet finished.
+                state, threads = make()
+                for t in threads:
+                    next(t)
+                alive = list(range(len(threads)))
+                for c in choices:
+                    try:
+                        next(threads[c])
+                    except StopIteration:
+                        alive.remove(c)
+                return state, alive
+
+
+            def explore(make, check):
+                # Tries every schedule: at each point, any unfinished thread may run
+                # next. Return how many complete schedules there are, and the list of
+                # schedules, as lists of thread numbers, whose final state fails check.
+                count = 0
+                failures = []
+
+                def visit(choices):
+                    nonlocal count
+                    state, alive = replay(make, choices)
+                    if not alive:
+                        count += 1
+                        if not check(state):
+                            failures.append(choices)
+                        return
+                    if choices and choices[-1] in alive:
+                        visit(choices + [choices[-1]])
+                        return
+                    for t in alive:
+                        visit(choices + [t])
+
+                visit([])
+                return count, failures
+
+
+            def incrementer(state):
+                yield
+                seen = state["count"]           # step 1: read
+                yield
+                state["count"] = seen + 1       # step 2: write
+
+
+            def locked_incrementer(state):
+                yield
+                state["count"] += 1             # one atomic step
+
+
+            def make_two():
+                state = {"count": 0}
+                return state, [incrementer(state), incrementer(state)]
+
+
+            def make_locked():
+                state = {"count": 0}
+                return state, [locked_incrementer(state), locked_incrementer(state)]
+
+
+            def make_three():
+                state = {"count": 0}
+                return state, [incrementer(state), incrementer(state), incrementer(state)]
+
+
+            count, failures = explore(make_two, lambda s: s["count"] == 2)
+            print(count, failures)
+            print(explore(make_locked, lambda s: s["count"] == 2))
+            count, failures = explore(make_three, lambda s: s["count"] == 3)
+            print(count, len(failures))
+          - |
+            def replay(make, choices):
+                # make() builds fresh shared state and threads. A thread is a generator
+                # that yields just before each of its steps, so each next runs exactly
+                # one step. Runs the steps named by choices, a list of thread numbers,
+                # and returns the state and the numbers of the threads not yet finished.
+                state, threads = make()
+                for t in threads:
+                    next(t)
+                alive = list(range(len(threads)))
+                for c in choices:
+                    try:
+                        next(threads[c])
+                    except StopIteration:
+                        alive.remove(c)
+                return state, alive
+
+
+            def explore(make, check):
+                # Tries every schedule: at each point, any unfinished thread may run
+                # next. Return how many complete schedules there are, and the list of
+                # schedules, as lists of thread numbers, whose final state fails check.
+                count = 0
+                failures = []
+
+                def visit(choices):
+                    nonlocal count
+                    state, alive = replay(make, choices)
+                    count += 1
+                    if not alive:
+                        if not check(state):
+                            failures.append(choices)
+                        return
+                    for t in alive:
+                        visit(choices + [t])
+
+                visit([])
+                return count, failures
+
+
+            def incrementer(state):
+                yield
+                seen = state["count"]           # step 1: read
+                yield
+                state["count"] = seen + 1       # step 2: write
+
+
+            def locked_incrementer(state):
+                yield
+                state["count"] += 1             # one atomic step
+
+
+            def make_two():
+                state = {"count": 0}
+                return state, [incrementer(state), incrementer(state)]
+
+
+            def make_locked():
+                state = {"count": 0}
+                return state, [locked_incrementer(state), locked_incrementer(state)]
+
+
+            def make_three():
+                state = {"count": 0}
+                return state, [incrementer(state), incrementer(state), incrementer(state)]
+
+
+            count, failures = explore(make_two, lambda s: s["count"] == 2)
+            print(count, failures)
+            print(explore(make_locked, lambda s: s["count"] == 2))
+            count, failures = explore(make_three, lambda s: s["count"] == 3)
+            print(count, len(failures))
+          - |
+            def replay(make, choices):
+                # make() builds fresh shared state and threads. A thread is a generator
+                # that yields just before each of its steps, so each next runs exactly
+                # one step. Runs the steps named by choices, a list of thread numbers,
+                # and returns the state and the numbers of the threads not yet finished.
+                state, threads = make()
+                for t in threads:
+                    next(t)
+                alive = list(range(len(threads)))
+                for c in choices:
+                    try:
+                        next(threads[c])
+                    except StopIteration:
+                        alive.remove(c)
+                return state, alive
+
+
+            def explore(make, check):
+                # Tries every schedule: at each point, any unfinished thread may run
+                # next. Return how many complete schedules there are, and the list of
+                # schedules, as lists of thread numbers, whose final state fails check.
+                count = 0
+                failures = []
+
+                def visit(choices):
+                    nonlocal count
+                    state, alive = replay(make, choices)
+                    if not check(state):
+                        failures.append(choices)
+                    if not alive:
+                        count += 1
+                        return
+                    for t in alive:
+                        visit(choices + [t])
+
+                visit([])
+                return count, failures
+
+
+            def incrementer(state):
+                yield
+                seen = state["count"]           # step 1: read
+                yield
+                state["count"] = seen + 1       # step 2: write
+
+
+            def locked_incrementer(state):
+                yield
+                state["count"] += 1             # one atomic step
+
+
+            def make_two():
+                state = {"count": 0}
+                return state, [incrementer(state), incrementer(state)]
+
+
+            def make_locked():
+                state = {"count": 0}
+                return state, [locked_incrementer(state), locked_incrementer(state)]
+
+
+            def make_three():
+                state = {"count": 0}
+                return state, [incrementer(state), incrementer(state), incrementer(state)]
+
+
+            count, failures = explore(make_two, lambda s: s["count"] == 2)
+            print(count, failures)
+            print(explore(make_locked, lambda s: s["count"] == 2))
+            count, failures = explore(make_three, lambda s: s["count"] == 3)
+            print(count, len(failures))
+        explanation: |
+          Visit a list of choices: replay it, and if no thread is left the schedule is complete, so count it and record it if the check fails. Otherwise visit the choices extended by each unfinished thread in turn. Switching only when a thread finishes explores just the orders without preemption, which never interleave the read and the write; counting every partial schedule counts tree nodes, not schedules; and checking partial states reports failures that are only steps not yet taken.
+    - question:
+        id: write-seeded
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `run_random`, which runs the threads under a scheduler driven by one seed and records the schedule, and `hunt`, which tries seeds in order until a run fails. The program should print `(344, [1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0])`, then the oversold state twice.
+        starter: |
+          import random
+
+
+          def replay(make, choices):
+              # As before: fresh state and threads, then the steps named by choices.
+              state, threads = make()
+              for t in threads:
+                  next(t)
+              alive = list(range(len(threads)))
+              for c in choices:
+                  try:
+                      next(threads[c])
+                  except StopIteration:
+                      alive.remove(c)
+              return state, alive
+
+
+          def run_random(make, seed):
+              # Runs every thread to the end, choosing which unfinished thread takes
+              # each step with random.Random(seed). Return the final state and the
+              # schedule: the thread numbers in the order their steps ran.
+              state, threads = make()
+              return state, []
+
+
+          def hunt(make, check, seeds):
+              # Tries seeds 0, 1, 2 and so on, below seeds. Return (seed, schedule) for
+              # the first run whose final state fails check, or None if none fails.
+              return None
+
+
+          def seller(state, name, chores):
+              # Sells the last seat if it is still free, after some unrelated chores.
+              for i in range(chores):
+                  yield                          # a chore: logging, metrics
+              yield
+              if state["seats"] > 0:             # check
+                  yield
+                  state["seats"] -= 1            # then sell
+                  state["sold"].append(name)
+
+
+          def make_sellers():
+              state = {"seats": 1, "sold": []}
+              return state, [seller(state, "counter", 0), seller(state, "app", 8)]
+
+
+          found = hunt(make_sellers, lambda s: len(s["sold"]) <= 1, 1000)
+          print(found)
+          if found:
+              print(replay(make_sellers, found[1])[0], run_random(make_sellers, found[0])[0])
+        solution: |
+          import random
+
+
+          def replay(make, choices):
+              # As before: fresh state and threads, then the steps named by choices.
+              state, threads = make()
+              for t in threads:
+                  next(t)
+              alive = list(range(len(threads)))
+              for c in choices:
+                  try:
+                      next(threads[c])
+                  except StopIteration:
+                      alive.remove(c)
+              return state, alive
+
+
+          def run_random(make, seed):
+              # Runs every thread to the end, choosing which unfinished thread takes
+              # each step with random.Random(seed). Return the final state and the
+              # schedule: the thread numbers in the order their steps ran.
+              rng = random.Random(seed)
+              state, threads = make()
+              for t in threads:
+                  next(t)
+              alive = list(range(len(threads)))
+              schedule = []
+              while alive:
+                  t = rng.choice(alive)
+                  schedule.append(t)
+                  try:
+                      next(threads[t])
+                  except StopIteration:
+                      alive.remove(t)
+              return state, schedule
+
+
+          def hunt(make, check, seeds):
+              # Tries seeds 0, 1, 2 and so on, below seeds. Return (seed, schedule) for
+              # the first run whose final state fails check, or None if none fails.
+              for seed in range(seeds):
+                  state, schedule = run_random(make, seed)
+                  if not check(state):
+                      return seed, schedule
+              return None
+
+
+          def seller(state, name, chores):
+              # Sells the last seat if it is still free, after some unrelated chores.
+              for i in range(chores):
+                  yield                          # a chore: logging, metrics
+              yield
+              if state["seats"] > 0:             # check
+                  yield
+                  state["seats"] -= 1            # then sell
+                  state["sold"].append(name)
+
+
+          def make_sellers():
+              state = {"seats": 1, "sold": []}
+              return state, [seller(state, "counter", 0), seller(state, "app", 8)]
+
+
+          found = hunt(make_sellers, lambda s: len(s["sold"]) <= 1, 1000)
+          print(found)
+          if found:
+              print(replay(make_sellers, found[1])[0], run_random(make_sellers, found[0])[0])
+        tests: |
+          def _make3():
+              state = {"log": []}
+
+              def worker(name, steps):
+                  for _i in range(steps):
+                      yield
+                      state["log"].append(name)
+
+              return state, [worker("a", 1), worker("b", 4), worker("c", 4)]
+
+
+          for _seed in [1, 2, 3, 4, 5]:
+              _first = run_random(_make3, _seed)
+              _again = run_random(_make3, _seed)
+              assert _first == _again, "the same seed must give the same schedule every time, but seed " + str(_seed) + " gave " + repr(_first[1]) + " and then " + repr(_again[1])
+              _state, _sched = _first
+              assert sorted(_sched) == [0, 1, 1, 1, 1, 2, 2, 2, 2], "a schedule should name each thread once per step, by its thread number, but seed " + str(_seed) + " gave " + repr(_sched)
+              assert replay(_make3, _sched)[0] == _state, "replaying the recorded schedule must rebuild the same state, but seed " + str(_seed) + " gave " + repr(_state) + " and its replay " + repr(replay(_make3, _sched)[0])
+          _seen = set()
+          for _seed in range(20):
+              _seen.add(tuple(run_random(_make3, _seed)[1]))
+          assert len(_seen) >= 5, "different seeds should explore different schedules, but 20 seeds gave only " + str(len(_seen))
+          assert hunt(_make3, lambda s: True, 50) is None, "when no run fails, hunt should return None"
+          _r = hunt(_make3, lambda s: s["log"][0] != "a", 50)
+          assert _r is not None and _r[1][0] == 0 and _r[0] == min(_sd for _sd in range(50) if run_random(_make3, _sd)[1][0] == 0), "hunt should return the first seed whose run fails, with its schedule, not " + repr(_r)
+          assert output.splitlines() == ["(344, [1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0])", "{'seats': -1, 'sold': ['app', 'counter']} {'seats': -1, 'sold': ['app', 'counter']}"], "The program should print (344, [1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0]), then the oversold state twice"
+        wrong:
+          - |
+            import random
+
+
+            def replay(make, choices):
+                # As before: fresh state and threads, then the steps named by choices.
+                state, threads = make()
+                for t in threads:
+                    next(t)
+                alive = list(range(len(threads)))
+                for c in choices:
+                    try:
+                        next(threads[c])
+                    except StopIteration:
+                        alive.remove(c)
+                return state, alive
+
+
+            def run_random(make, seed):
+                # Runs every thread to the end, choosing which unfinished thread takes
+                # each step with random.Random(seed). Return the final state and the
+                # schedule: the thread numbers in the order their steps ran.
+                state, threads = make()
+                for t in threads:
+                    next(t)
+                alive = list(range(len(threads)))
+                schedule = []
+                while alive:
+                    t = random.choice(alive)
+                    schedule.append(t)
+                    try:
+                        next(threads[t])
+                    except StopIteration:
+                        alive.remove(t)
+                return state, schedule
+
+
+            def hunt(make, check, seeds):
+                # Tries seeds 0, 1, 2 and so on, below seeds. Return (seed, schedule) for
+                # the first run whose final state fails check, or None if none fails.
+                for seed in range(seeds):
+                    state, schedule = run_random(make, seed)
+                    if not check(state):
+                        return seed, schedule
+                return None
+
+
+            def seller(state, name, chores):
+                # Sells the last seat if it is still free, after some unrelated chores.
+                for i in range(chores):
+                    yield                          # a chore: logging, metrics
+                yield
+                if state["seats"] > 0:             # check
+                    yield
+                    state["seats"] -= 1            # then sell
+                    state["sold"].append(name)
+
+
+            def make_sellers():
+                state = {"seats": 1, "sold": []}
+                return state, [seller(state, "counter", 0), seller(state, "app", 8)]
+
+
+            found = hunt(make_sellers, lambda s: len(s["sold"]) <= 1, 1000)
+            print(found)
+            if found:
+                print(replay(make_sellers, found[1])[0], run_random(make_sellers, found[0])[0])
+          - |
+            import random
+
+
+            def replay(make, choices):
+                # As before: fresh state and threads, then the steps named by choices.
+                state, threads = make()
+                for t in threads:
+                    next(t)
+                alive = list(range(len(threads)))
+                for c in choices:
+                    try:
+                        next(threads[c])
+                    except StopIteration:
+                        alive.remove(c)
+                return state, alive
+
+
+            def run_random(make, seed):
+                # Runs every thread to the end, choosing which unfinished thread takes
+                # each step with random.Random(seed). Return the final state and the
+                # schedule: the thread numbers in the order their steps ran.
+                state, threads = make()
+                for t in threads:
+                    next(t)
+                alive = list(range(len(threads)))
+                schedule = []
+                while alive:
+                    t = random.Random(seed).choice(alive)
+                    schedule.append(t)
+                    try:
+                        next(threads[t])
+                    except StopIteration:
+                        alive.remove(t)
+                return state, schedule
+
+
+            def hunt(make, check, seeds):
+                # Tries seeds 0, 1, 2 and so on, below seeds. Return (seed, schedule) for
+                # the first run whose final state fails check, or None if none fails.
+                for seed in range(seeds):
+                    state, schedule = run_random(make, seed)
+                    if not check(state):
+                        return seed, schedule
+                return None
+
+
+            def seller(state, name, chores):
+                # Sells the last seat if it is still free, after some unrelated chores.
+                for i in range(chores):
+                    yield                          # a chore: logging, metrics
+                yield
+                if state["seats"] > 0:             # check
+                    yield
+                    state["seats"] -= 1            # then sell
+                    state["sold"].append(name)
+
+
+            def make_sellers():
+                state = {"seats": 1, "sold": []}
+                return state, [seller(state, "counter", 0), seller(state, "app", 8)]
+
+
+            found = hunt(make_sellers, lambda s: len(s["sold"]) <= 1, 1000)
+            print(found)
+            if found:
+                print(replay(make_sellers, found[1])[0], run_random(make_sellers, found[0])[0])
+          - |
+            import random
+
+
+            def replay(make, choices):
+                # As before: fresh state and threads, then the steps named by choices.
+                state, threads = make()
+                for t in threads:
+                    next(t)
+                alive = list(range(len(threads)))
+                for c in choices:
+                    try:
+                        next(threads[c])
+                    except StopIteration:
+                        alive.remove(c)
+                return state, alive
+
+
+            def run_random(make, seed):
+                # Runs every thread to the end, choosing which unfinished thread takes
+                # each step with random.Random(seed). Return the final state and the
+                # schedule: the thread numbers in the order their steps ran.
+                rng = random.Random(seed)
+                state, threads = make()
+                for t in threads:
+                    next(t)
+                alive = list(range(len(threads)))
+                schedule = []
+                while alive:
+                    i = rng.randint(0, len(alive) - 1)
+                    schedule.append(i)
+                    t = alive[i]
+                    try:
+                        next(threads[t])
+                    except StopIteration:
+                        alive.remove(t)
+                return state, schedule
+
+
+            def hunt(make, check, seeds):
+                # Tries seeds 0, 1, 2 and so on, below seeds. Return (seed, schedule) for
+                # the first run whose final state fails check, or None if none fails.
+                for seed in range(seeds):
+                    state, schedule = run_random(make, seed)
+                    if not check(state):
+                        return seed, schedule
+                return None
+
+
+            def seller(state, name, chores):
+                # Sells the last seat if it is still free, after some unrelated chores.
+                for i in range(chores):
+                    yield                          # a chore: logging, metrics
+                yield
+                if state["seats"] > 0:             # check
+                    yield
+                    state["seats"] -= 1            # then sell
+                    state["sold"].append(name)
+
+
+            def make_sellers():
+                state = {"seats": 1, "sold": []}
+                return state, [seller(state, "counter", 0), seller(state, "app", 8)]
+
+
+            found = hunt(make_sellers, lambda s: len(s["sold"]) <= 1, 1000)
+            print(found)
+            if found:
+                print(replay(make_sellers, found[1])[0], run_random(make_sellers, found[0])[0])
+        explanation: |
+          Build one random.Random(seed) for the whole run. While threads remain, choose one of the unfinished threads with it, record its number, and step it, dropping it when it finishes; hunt runs seeds from 0 and returns the first failing seed with its schedule. The shared random module gives a different schedule each time for the same seed; a new generator for every step makes the same choice at every step; and recording the position in the list of unfinished threads, instead of the thread's number, gives a schedule that replays differently.
+    - question:
+        id: fix-shared-fixture
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The explorer reports that scanning at gate g2 and then at gate g1, one after the other, loses a pass, which cannot be right. The program should print `6 [[0, 1, 0, 1], [0, 1, 1, 0], [1, 0, 0, 1], [1, 0, 1, 0]]`. Find the fault and fix it.
+        starter: |
+          def replay(make, choices):
+              state, threads = make()
+              for t in threads:
+                  next(t)
+              alive = list(range(len(threads)))
+              for c in choices:
+                  try:
+                      next(threads[c])
+                  except StopIteration:
+                      alive.remove(c)
+              return state, alive
+
+
+          def explore(make, check):
+              count = 0
+              failures = []
+
+              def visit(choices):
+                  nonlocal count
+                  state, alive = replay(make, choices)
+                  if not alive:
+                      count += 1
+                      if not check(state):
+                          failures.append(choices)
+                      return
+                  for t in alive:
+                      visit(choices + [t])
+
+              visit([])
+              return count, failures
+
+
+          def scanner(state, gate):
+              # Counts a pass scanned at a metro gate: read, then write.
+              yield
+              seen = state["count"]
+              yield
+              state["count"] = seen + 1
+              state["log"].append(gate)
+
+
+          ledger = {"count": 0, "log": []}
+
+
+          def make():
+              # Every schedule must start from its own fresh state.
+              return ledger, [scanner(ledger, "g1"), scanner(ledger, "g2")]
+
+
+          def every_pass_counted(state):
+              return state["count"] == len(state["log"])
+
+
+          count, failures = explore(make, every_pass_counted)
+          print(count, failures)
+        solution: |
+          def replay(make, choices):
+              state, threads = make()
+              for t in threads:
+                  next(t)
+              alive = list(range(len(threads)))
+              for c in choices:
+                  try:
+                      next(threads[c])
+                  except StopIteration:
+                      alive.remove(c)
+              return state, alive
+
+
+          def explore(make, check):
+              count = 0
+              failures = []
+
+              def visit(choices):
+                  nonlocal count
+                  state, alive = replay(make, choices)
+                  if not alive:
+                      count += 1
+                      if not check(state):
+                          failures.append(choices)
+                      return
+                  for t in alive:
+                      visit(choices + [t])
+
+              visit([])
+              return count, failures
+
+
+          def scanner(state, gate):
+              # Counts a pass scanned at a metro gate: read, then write.
+              yield
+              seen = state["count"]
+              yield
+              state["count"] = seen + 1
+              state["log"].append(gate)
+
+
+          def make():
+              # Every schedule must start from its own fresh state.
+              ledger = {"count": 0, "log": []}
+              return ledger, [scanner(ledger, "g1"), scanner(ledger, "g2")]
+
+
+          def every_pass_counted(state):
+              return state["count"] == len(state["log"])
+
+
+          count, failures = explore(make, every_pass_counted)
+          print(count, failures)
+        tests: |
+          _a = make()[0]
+          _a["count"] = 5
+          _a["log"].append("g9")
+          _b = make()[0]
+          assert _b == {"count": 0, "log": []}, "each call of make should hand back a fresh ledger, untouched by earlier runs, but after one run was changed the next started with count " + str(_b["count"]) + " and " + str(len(_b["log"])) + " passes already logged"
+          assert not every_pass_counted({"count": 1, "log": ["g1", "g2"]}), "two passes logged but only one counted is the lost update the check exists to catch"
+          assert every_pass_counted({"count": 2, "log": ["g2", "g1"]}), "two passes logged and two counted should pass the check"
+          _first = explore(make, every_pass_counted)
+          _second = explore(make, every_pass_counted)
+          assert _first == _second, "exploring twice should give the same answer, but gave " + repr(_first) + " and then " + repr(_second)
+          assert [0, 0, 1, 1] not in _first[1] and [1, 1, 0, 0] not in _first[1], "running the gates one after the other cannot lose a pass, so neither order should be reported"
+          assert output.splitlines() == ["6 [[0, 1, 0, 1], [0, 1, 1, 0], [1, 0, 0, 1], [1, 0, 1, 0]]"], "The program should print 6 [[0, 1, 0, 1], [0, 1, 1, 0], [1, 0, 0, 1], [1, 0, 1, 0]]"
+        wrong:
+          - |
+            def replay(make, choices):
+                state, threads = make()
+                for t in threads:
+                    next(t)
+                alive = list(range(len(threads)))
+                for c in choices:
+                    try:
+                        next(threads[c])
+                    except StopIteration:
+                        alive.remove(c)
+                return state, alive
+
+
+            def explore(make, check):
+                count = 0
+                failures = []
+
+                def visit(choices):
+                    nonlocal count
+                    state, alive = replay(make, choices)
+                    if not alive:
+                        count += 1
+                        if not check(state):
+                            failures.append(choices)
+                        return
+                    for t in alive:
+                        visit(choices + [t])
+
+                visit([])
+                return count, failures
+
+
+            def scanner(state, gate):
+                # Counts a pass scanned at a metro gate: read, then write.
+                yield
+                seen = state["count"]
+                yield
+                state["count"] = seen + 1
+                state["log"].append(gate)
+
+
+            ledger = {"count": 0, "log": []}
+
+
+            def make():
+                # Every schedule must start from its own fresh state.
+                ledger["count"] = 0
+                return ledger, [scanner(ledger, "g1"), scanner(ledger, "g2")]
+
+
+            def every_pass_counted(state):
+                return state["count"] == len(state["log"])
+
+
+            count, failures = explore(make, every_pass_counted)
+            print(count, failures)
+          - |
+            def replay(make, choices):
+                state, threads = make()
+                for t in threads:
+                    next(t)
+                alive = list(range(len(threads)))
+                for c in choices:
+                    try:
+                        next(threads[c])
+                    except StopIteration:
+                        alive.remove(c)
+                return state, alive
+
+
+            def explore(make, check):
+                count = 0
+                failures = []
+
+                def visit(choices):
+                    nonlocal count
+                    state, alive = replay(make, choices)
+                    if not alive:
+                        count += 1
+                        if not check(state):
+                            failures.append(choices)
+                        return
+                    for t in alive:
+                        visit(choices + [t])
+
+                visit([])
+                return count, failures
+
+
+            def scanner(state, gate):
+                # Counts a pass scanned at a metro gate: read, then write.
+                yield
+                seen = state["count"]
+                yield
+                state["count"] = seen + 1
+                state["log"].append(gate)
+
+
+            ledger = {"count": 0, "log": []}
+
+
+            def make():
+                # Every schedule must start from its own fresh state.
+                fresh = dict(ledger)
+                return fresh, [scanner(fresh, "g1"), scanner(fresh, "g2")]
+
+
+            def every_pass_counted(state):
+                return state["count"] == len(state["log"])
+
+
+            count, failures = explore(make, every_pass_counted)
+            print(count, failures)
+          - |
+            def replay(make, choices):
+                state, threads = make()
+                for t in threads:
+                    next(t)
+                alive = list(range(len(threads)))
+                for c in choices:
+                    try:
+                        next(threads[c])
+                    except StopIteration:
+                        alive.remove(c)
+                return state, alive
+
+
+            def explore(make, check):
+                count = 0
+                failures = []
+
+                def visit(choices):
+                    nonlocal count
+                    state, alive = replay(make, choices)
+                    if not alive:
+                        count += 1
+                        if not check(state):
+                            failures.append(choices)
+                        return
+                    for t in alive:
+                        visit(choices + [t])
+
+                visit([])
+                return count, failures
+
+
+            def scanner(state, gate):
+                # Counts a pass scanned at a metro gate: read, then write.
+                yield
+                seen = state["count"]
+                yield
+                state["count"] = seen + 1
+                state["log"].append(gate)
+
+
+            def make():
+                # Every schedule must start from its own fresh state.
+                ledger = {"count": 0, "log": []}
+                return ledger, [scanner(ledger, "g1"), scanner(ledger, "g2")]
+
+
+            def every_pass_counted(state):
+                return state["count"] >= 1
+
+
+            count, failures = explore(make, every_pass_counted)
+            print(count, failures)
+        explanation: |
+          make returns the same ledger every time, so each replay starts from whatever the previous replays left, and the lost updates of one schedule are blamed on the next. Build the ledger inside make so every replay gets a new one. Resetting only the count leaves the old log; dict(ledger) copies the dictionary but still shares the log list inside it; and weakening the check to pass hides the real lost updates along with the false ones.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. Two threads each run 10 atomic steps. How many different interleavings are there?
+        answer: "184756"
+        explanation: |
+          A schedule is fixed by which 10 of the 20 positions belong to the first thread: C(20, 10) = 1,84,756.
+    - question:
+        id: work-bound
+        type: choice
+        system: s2
+        prompt: |
+          An explorer for three threads of 20 steps each would need far more schedules than it could ever run. What is the most effective plan?
+        options:
+          - "Explore every schedule with at most two preemptions, then sample the rest with seeded random schedules"
+          - "Run the test without a scheduler many times overnight"
+          - "Explore only the six orders that run each thread to the end"
+          - "Reduce the threads to one"
+        answer: 0
+        explanation: |
+          Bounded preemptions cover, exhaustively, the small schedules where many real bugs live, and seeded sampling reaches further while keeping every failure replayable. The six sequential orders contain no interleaving at all.
+  connections:
+    - text: |
+        1,84,756, which is C(20, 10): a schedule is fixed by choosing which 10 of the 20 steps belong to the first thread. With 20 steps each it would be about 13,785 crore, which is why real explorers bound preemptions, prune independent steps and sample with seeds.
+
+        Every schedule in this lesson was chosen by the test. Real systems do not choose: requests arrive whenever people press buttons, and how long the queue in front of a pool, an event loop or an actor grows depends on how those arrivals bunch up. [[f6.arrivals-and-the-poisson-process]] begins the queueing cluster with a model of random arrivals, the starting point for predicting waits instead of discovering them in production.

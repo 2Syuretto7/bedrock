@@ -1,0 +1,888 @@
+cluster: D0
+title: The ticket service of a cricket stadium
+minutes: 100
+claim: You will have taken apart the ticket service of a cricket stadium, from the last seat sold twice, through the lock that held up every booking, the seat swap that froze, the payment gateway's limit, the live counter and the seat map that readers saw half-built, the pool and the event loop that waited in the wrong places and the mailbox that fell a quarter of a minute behind, to a schedule explorer that finds the oversell and the deadlock before the customers do.
+brief: |
+  This cluster was about concurrency: interleavings and race conditions, locks and mutual exclusion, deadlock, condition variables and semaphores, atomic operations and compare-and-swap, memory models and happens-before, thread pools and work queues, event loops and asynchronous I/O, actors and message passing, and testing concurrent code deterministically.
+
+  **The project.** A cricket stadium in Ahmedabad sells tickets for its matches through one booking service, and the final of a tournament sells more than a lakh of seats in under an hour. Every season the service has been rewritten in a hurry, and every big sale has found a new way for it to fail. You have been asked to go through last season's incidents and explain each one.
+
+  Each stage below is one of those incidents. Every stage draws on one or more lessons of this cluster, and the skill being tested is finding the order of events, or the waiting, that produced a failure you can only see from outside.
+language: python
+starter: |
+  # Scratch space for the ticket service. The six orders in which two
+  # threads, A and B, can run two steps each.
+  orders = ["A1 A2 B1 B2", "A1 B1 A2 B2", "A1 B1 B2 A2",
+            "B1 A1 A2 B2", "B1 A1 B2 A2", "B1 B2 A1 A2"]
+  for order in orders:
+      print(order)
+stages:
+  - title: The last seat, sold twice
+    blocks:
+      - text: |
+          In the first version, each booking thread sold a seat in two steps: first it read `left`, the number of seats still free, and then, if that was above zero, it wrote back one less and recorded the sale. At the end of the first big sale, more tickets had been sold for some blocks than the blocks have seats.
+      - question:
+          id: last-seat
+          type: numeric
+          system: s2
+          concepts: [d0.interleavings-and-race-conditions]
+          prompt: |
+            Two threads book the last free seat in a block, each running the two steps above, and the scheduler may switch between them after any step. Of the 6 possible interleavings, in how many do both threads sell the seat?
+          answer: "4"
+          explanation: |
+            Both sell whenever both reads come before either write: A1 B1 A2 B2, A1 B1 B2 A2, B1 A1 A2 B2 and B1 A1 B2 A2. Only the two orders in which one thread finishes before the other starts are correct. The bug is a check-then-act race, and it needs no unusual timing at all; most of the interleavings are wrong.
+  - title: The lock around everything
+    blocks:
+      - text: |
+          The fix put one lock around the whole booking: take the lock, check and update `left`, call the payment gateway, record the sale, release the lock. The overselling stopped. So did most of the sales: the payment gateway takes 250 ms to answer, and on the morning of the next sale the queue of customers grew without end, however many threads the service ran.
+      - question:
+          id: big-lock
+          type: numeric
+          system: s2
+          concepts: [d0.locks-and-mutual-exclusion]
+          prompt: |
+            At most how many bookings a second can the service complete with this lock, whatever the number of threads?
+          answer: "4"
+          explanation: |
+            Only one thread can hold the lock, and each holds it for at least the 250 ms of the payment call, so at most 1000 / 250 = 4 bookings finish each second. A lock should protect the shared state and nothing more: hold the seat under the lock, release it, pay outside, and give the seat back if the payment fails. The critical section then lasts microseconds, not a quarter of a second.
+  - title: The seat swap that froze
+    blocks:
+      - text: |
+          A feature lets a group move seats from one block to another. The code locks the source block, then the destination block, moves the seat, and releases both. During the semi-final sale, the service stopped answering. Thread dumps showed two threads: one holding block N's lock and waiting for block P's, the other holding block P's lock and waiting for block N's.
+      - question:
+          id: seat-swap
+          type: choice
+          system: s2
+          concepts: [d0.deadlock]
+          prompt: |
+            Which change makes this deadlock impossible?
+          options:
+            - "Always take the two blocks' locks in one fixed order, such as by block name, whichever is the source"
+            - "Release the first lock if the second is not free within 5 seconds, and try again at once"
+            - "Give the thread that started first priority for both locks"
+            - "Use a separate thread for each block"
+          answer: 0
+          explanation: |
+            The two threads took the same two locks in opposite orders, which closes a cycle in the wait-for graph. If every thread takes locks in one global order, no cycle can form, so no deadlock can either. Timing out and retrying at once can turn the deadlock into a livelock, with both threads backing off and colliding again.
+  - title: The payment gateway's limit
+    blocks:
+      - text: |
+          The bank's contract allows the service at most 20 payment requests in flight at once; beyond that the gateway answers with errors, and enough errors suspend the account. The service runs 200 booking threads, and during a sale most of them want to call the gateway at the same moment.
+      - question:
+          id: gateway-limit
+          type: choice
+          system: s2
+          concepts: [d0.condition-variables-and-semaphores]
+          prompt: |
+            What keeps the service within the limit?
+          options:
+            - "A semaphore with 20 permits: each thread acquires a permit before calling the gateway and releases it afterwards, in a finally block"
+            - "A lock around the gateway call, so only one call runs at a time"
+            - "Retry each failed call after a short sleep"
+            - "Reduce the pool to 20 threads"
+          answer: 0
+          explanation: |
+            A counting semaphore admits up to 20 holders and makes the 21st wait until a permit is released, which is exactly the contract. A lock allows only one call and wastes nineteen-twentieths of the gateway. Retrying keeps sending over-limit requests. Shrinking the pool limits everything else the threads do as well. Releasing in finally matters: a call that raises must still return its permit, or the permits leak away one failure at a time.
+  - title: The live counter and the seat map
+    blocks:
+      - text: |
+          The sale page shows a live count of tickets sold. It is updated without a lock: each thread reads the count, computes one more and writes it with compare-and-swap, retrying from a fresh read if another thread got there first.
+      - question:
+          id: cas-attempts
+          type: numeric
+          system: s2
+          concepts: [d0.atomic-operations-and-compare-and-swap]
+          prompt: |
+            Four threads each add one sale at the same moment. In the worst case, where every thread still trying reads the counter at the same instant each round, how many compare-and-swap attempts do they make in all?
+          answer: "10"
+          explanation: |
+            Each round exactly one compare-and-swap succeeds and the rest fail and retry: 4 attempts, then 3, 2 and 1, so 10 in all. Every thread finishes, which is what makes the loop lock-free, but under heavy contention the wasted attempts grow with the square of the number of threads, which is why counters that many threads hit are often split into one per core and added up when read.
+      - text: |
+          The seat map is rebuilt every few seconds by a background thread, which fills in a new map and then sets `map_ready = True`, an ordinary boolean field. After the service moved to ARM servers, readers occasionally found `map_ready` true and the new map still empty, and showed customers a stadium with no seats.
+      - question:
+          id: map-ready
+          type: choice
+          system: s2
+          concepts: [d0.memory-models-and-happens-before]
+          prompt: |
+            What is the fix?
+          options:
+            - "Make map_ready an atomic, written with a release store after filling the map and read with an acquire load, so the map's writes happen before any reader that sees true"
+            - "Set map_ready twice to be sure"
+            - "Have readers sleep for a millisecond after seeing map_ready"
+            - "Move the service back to x86 servers"
+          answer: 0
+          explanation: |
+            With a plain field there is no happens-before edge between the writer and the readers, so the processor and compiler may make the flag visible before the map's contents, and ARM really does. A release store paired with an acquire load creates the edge: everything written before the release is visible to a thread whose acquire reads the value it stored. Moving back to x86 only hides the bug, and a compiler can still reorder the writes.
+  - title: The workers that waited
+    blocks:
+      - text: |
+          The booking API runs on 16 cores with a pool of worker threads. Each request computes for 4 ms and then waits 36 ms for the database. During the last sale the cores sat mostly idle while requests queued up for a free worker.
+      - question:
+          id: pool-size
+          type: numeric
+          system: s2
+          concepts: [d0.thread-pools-and-work-queues]
+          prompt: |
+            About how many workers does the pool need to keep all 16 cores busy, assuming the database can take the load?
+          answer: "160"
+          explanation: |
+            Each worker uses its core for 4 ms out of every 40, a tenth of the time, so each core needs ten workers taking turns: 16 × (1 + 36 / 4) = 160. Beyond that the extra threads only queue at the database and use memory, so the estimate is a starting point to measure from, not a target to exceed.
+      - text: |
+          Booking confirmations are sent by a separate notification service, an asyncio event loop that handles thousands of messages a second. Last season a new SMS library was added, and the service's throughput fell to about three messages a second, while its timers for retrying failed emails stopped firing on time. The library's send function takes about 300 ms and is an ordinary function, not a coroutine.
+      - question:
+          id: blocking-sms
+          type: choice
+          system: s2
+          concepts: [d0.event-loops-and-asynchronous-i-o]
+          prompt: |
+            What went wrong, and what is the fix?
+          options:
+            - "Each send blocks the loop's only thread for 300 ms, stalling every task and timer; run it on a thread pool with asyncio.to_thread and await the result, or use an asynchronous client"
+            - "The loop needs more coroutines; wrap the call in async def"
+            - "The SMS provider is slow; nothing can be done in the service"
+            - "Timers in asyncio are unreliable under load; replace them with threads"
+          answer: 0
+          explanation: |
+            A blocking call inside a coroutine holds the thread that is the event loop, so nothing else runs: 300 ms per message is about three a second. Wrapping it in async def changes nothing, since it still never awaits. Moving the blocking call to a thread pool lets the loop await its completion while serving everything else.
+  - title: The seat map's mailbox
+    blocks:
+      - text: |
+          The current version gives the seat map to a single actor, which owns it and handles one request at a time, so no locks are needed. It handles 2000 requests a second. When the final's sale opened, requests arrived at 5000 a second for the first 10 seconds, and the actor's mailbox has no limit.
+      - question:
+          id: mailbox-wait
+          type: numeric
+          system: s2
+          concepts: [d0.actors-and-message-passing]
+          prompt: |
+            How long does a request that arrives at the 10-second mark wait before the actor reaches it, in seconds?
+          answer: "15"
+          unit: "s"
+          explanation: |
+            The backlog grows by 5000 − 2000 = 3000 a second, so after 10 seconds 30,000 requests are waiting, and at 2000 a second the actor takes 15 s to get through them. Nothing failed, but the newest customers waited a quarter of a minute. A bounded mailbox that refuses requests beyond, say, two seconds' worth would tell customers at once to try again, and sharding the map into one actor per stand would multiply the rate.
+  - title: Proving the fixes
+    blocks:
+      - text: |
+          The oversell of the first stage and the deadlock of the third were found by customers, not by tests, because both depend on the order of events and ordinary tests never chose the order. The team now wants a test that tries every schedule. Threads are written as generators that yield before each step; a step that takes a lock yields ("acquire", lock) first, so the scheduler knows not to run it until the lock is free.
+      - question:
+          id: check-all
+          type: code
+          mode: write
+          system: s2
+          concepts: [d0.testing-concurrent-code-deterministically, d0.deadlock, d0.locks-and-mutual-exclusion]
+          prompt: |
+            Write `check_all`, which explores every schedule depth-first, running only threads that can run, and reports the first deadlock or broken result it finds. The program should print `('broken', [0, 1, 0, 1])`, `('ok', 2)`, `('deadlock', [0, 1])` and `('ok', 2)`.
+          starter: |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+
+
+            def acquire(lock, me):
+                # The next step takes lock; a scheduler may run it only once the lock
+                # is free.
+                yield ("acquire", lock)
+                lock.holder = me
+
+
+            def release(lock):
+                lock.holder = None
+
+
+            def can_run(request):
+                # request is what a thread yielded before its next step: None for an
+                # ordinary step, or ("acquire", lock).
+                return request is None or request[1].holder is None
+
+
+            def replay(make, choices):
+                # Fresh state and threads, then the steps named by choices. Returns the
+                # state, the unfinished threads, and what each one yielded last.
+                state, threads = make()
+                pending = {}
+                for t in range(len(threads)):
+                    pending[t] = next(threads[t])
+                alive = list(range(len(threads)))
+                for c in choices:
+                    try:
+                        pending[c] = next(threads[c])
+                    except StopIteration:
+                        alive.remove(c)
+                return state, alive, pending
+
+
+            def check_all(make, ok):
+                # Explore every schedule depth-first, trying runnable threads in number
+                # order. Return ("deadlock", schedule) for the first schedule that
+                # reaches a point where threads are unfinished but none can run;
+                # ("broken", schedule) for the first complete schedule whose state
+                # fails ok; or ("ok", n), with n the number of complete schedules.
+                return "ok", 0
+
+
+            def buyer(state, name):
+                yield
+                left = state["left"]
+                if left > 0:
+                    yield
+                    state["left"] = left - 1
+                    state["sold"].append(name)
+
+
+            def locked_buyer(state, lock, name):
+                yield from acquire(lock, name)
+                yield
+                left = state["left"]
+                if left > 0:
+                    yield
+                    state["left"] = left - 1
+                    state["sold"].append(name)
+                yield
+                release(lock)
+
+
+            def mover(blocks, locks, name, first, second, src, dst):
+                # Moves one seat from block src to block dst, holding both blocks' locks.
+                yield from acquire(locks[first], name)
+                yield from acquire(locks[second], name)
+                yield
+                blocks[src] -= 1
+                blocks[dst] += 1
+                yield
+                release(locks[second])
+                yield
+                release(locks[first])
+
+
+            def make_unlocked():
+                state = {"left": 1, "sold": []}
+                return state, [buyer(state, "asha"), buyer(state, "ravi")]
+
+
+            def make_locked():
+                state = {"left": 1, "sold": []}
+                lock = Lock()
+                return state, [locked_buyer(state, lock, "asha"), locked_buyer(state, lock, "ravi")]
+
+
+            def make_swap():
+                blocks = {"A": 10, "B": 10}
+                locks = {"A": Lock(), "B": Lock()}
+                return blocks, [mover(blocks, locks, "m1", "A", "B", "A", "B"),
+                                mover(blocks, locks, "m2", "B", "A", "B", "A")]
+
+
+            def make_ordered_swap():
+                blocks = {"A": 10, "B": 10}
+                locks = {"A": Lock(), "B": Lock()}
+                return blocks, [mover(blocks, locks, "m1", "A", "B", "A", "B"),
+                                mover(blocks, locks, "m2", "A", "B", "B", "A")]
+
+
+            def seats_ok(state):
+                return state["left"] + len(state["sold"]) == 1
+
+
+            def blocks_ok(blocks):
+                return blocks["A"] + blocks["B"] == 20
+
+
+            print(check_all(make_unlocked, seats_ok))
+            print(check_all(make_locked, seats_ok))
+            print(check_all(make_swap, blocks_ok))
+            print(check_all(make_ordered_swap, blocks_ok))
+          solution: |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+
+
+            def acquire(lock, me):
+                # The next step takes lock; a scheduler may run it only once the lock
+                # is free.
+                yield ("acquire", lock)
+                lock.holder = me
+
+
+            def release(lock):
+                lock.holder = None
+
+
+            def can_run(request):
+                # request is what a thread yielded before its next step: None for an
+                # ordinary step, or ("acquire", lock).
+                return request is None or request[1].holder is None
+
+
+            def replay(make, choices):
+                # Fresh state and threads, then the steps named by choices. Returns the
+                # state, the unfinished threads, and what each one yielded last.
+                state, threads = make()
+                pending = {}
+                for t in range(len(threads)):
+                    pending[t] = next(threads[t])
+                alive = list(range(len(threads)))
+                for c in choices:
+                    try:
+                        pending[c] = next(threads[c])
+                    except StopIteration:
+                        alive.remove(c)
+                return state, alive, pending
+
+
+            def check_all(make, ok):
+                # Explore every schedule depth-first, trying runnable threads in number
+                # order. Return ("deadlock", schedule) for the first schedule that
+                # reaches a point where threads are unfinished but none can run;
+                # ("broken", schedule) for the first complete schedule whose state
+                # fails ok; or ("ok", n), with n the number of complete schedules.
+                count = 0
+                stack = [[]]
+                while stack:
+                    choices = stack.pop()
+                    state, alive, pending = replay(make, choices)
+                    if not alive:
+                        if not ok(state):
+                            return "broken", choices
+                        count += 1
+                        continue
+                    runnable = [t for t in alive if can_run(pending[t])]
+                    if not runnable:
+                        return "deadlock", choices
+                    for t in runnable[::-1]:
+                        stack.append(choices + [t])
+                return "ok", count
+
+
+            def buyer(state, name):
+                yield
+                left = state["left"]
+                if left > 0:
+                    yield
+                    state["left"] = left - 1
+                    state["sold"].append(name)
+
+
+            def locked_buyer(state, lock, name):
+                yield from acquire(lock, name)
+                yield
+                left = state["left"]
+                if left > 0:
+                    yield
+                    state["left"] = left - 1
+                    state["sold"].append(name)
+                yield
+                release(lock)
+
+
+            def mover(blocks, locks, name, first, second, src, dst):
+                # Moves one seat from block src to block dst, holding both blocks' locks.
+                yield from acquire(locks[first], name)
+                yield from acquire(locks[second], name)
+                yield
+                blocks[src] -= 1
+                blocks[dst] += 1
+                yield
+                release(locks[second])
+                yield
+                release(locks[first])
+
+
+            def make_unlocked():
+                state = {"left": 1, "sold": []}
+                return state, [buyer(state, "asha"), buyer(state, "ravi")]
+
+
+            def make_locked():
+                state = {"left": 1, "sold": []}
+                lock = Lock()
+                return state, [locked_buyer(state, lock, "asha"), locked_buyer(state, lock, "ravi")]
+
+
+            def make_swap():
+                blocks = {"A": 10, "B": 10}
+                locks = {"A": Lock(), "B": Lock()}
+                return blocks, [mover(blocks, locks, "m1", "A", "B", "A", "B"),
+                                mover(blocks, locks, "m2", "B", "A", "B", "A")]
+
+
+            def make_ordered_swap():
+                blocks = {"A": 10, "B": 10}
+                locks = {"A": Lock(), "B": Lock()}
+                return blocks, [mover(blocks, locks, "m1", "A", "B", "A", "B"),
+                                mover(blocks, locks, "m2", "A", "B", "B", "A")]
+
+
+            def seats_ok(state):
+                return state["left"] + len(state["sold"]) == 1
+
+
+            def blocks_ok(blocks):
+                return blocks["A"] + blocks["B"] == 20
+
+
+            print(check_all(make_unlocked, seats_ok))
+            print(check_all(make_locked, seats_ok))
+            print(check_all(make_swap, blocks_ok))
+            print(check_all(make_ordered_swap, blocks_ok))
+          tests: |
+            def _three():
+                state = {"left": 2, "sold": []}
+                lock = Lock()
+                return state, [locked_buyer(state, lock, "p" + str(_i)) for _i in range(3)]
+
+
+            def _three_unlocked():
+                state = {"left": 2, "sold": []}
+                return state, [buyer(state, "p" + str(_i)) for _i in range(3)]
+
+
+            def _ok2(state):
+                return state["left"] >= 0 and state["left"] + len(state["sold"]) == 2
+
+
+            assert check_all(_three, _ok2) == ("ok", 6), "three buyers behind one lock can only take turns, in 6 orders, and none oversells, but got " + repr(check_all(_three, _ok2))
+            _r = check_all(_three_unlocked, _ok2)
+            assert _r == ("broken", [0, 0, 1, 2, 1, 2]), "three unlocked buyers for two seats can oversell, and the first such schedule found depth-first is [0, 0, 1, 2, 1, 2], but got " + repr(_r)
+            _state, _alive, _pending = replay(_three_unlocked, _r[1])
+            assert not _alive and not _ok2(_state), "the schedule reported as broken should replay to a broken state"
+
+
+            def _ring():
+                blocks = {"A": 5, "B": 5, "C": 5}
+                locks = {"A": Lock(), "B": Lock(), "C": Lock()}
+                return blocks, [mover(blocks, locks, "m1", "A", "B", "A", "B"),
+                                mover(blocks, locks, "m2", "B", "C", "B", "C"),
+                                mover(blocks, locks, "m3", "C", "A", "C", "A")]
+
+
+            _r = check_all(_ring, lambda b: True)
+            assert _r == ("deadlock", [0, 1, 2]), "three movers each holding one lock and wanting the next form a cycle, first reached by the schedule [0, 1, 2], but got " + repr(_r)
+
+
+            def _single():
+                blocks = {"A": 5, "B": 5}
+                locks = {"A": Lock(), "B": Lock()}
+                return blocks, [mover(blocks, locks, "m1", "A", "B", "A", "B")]
+
+
+            assert check_all(_single, lambda b: b["A"] == 4 and b["B"] == 6) == ("ok", 1), "a single mover has one schedule and cannot deadlock"
+            assert output.splitlines() == ["('broken', [0, 1, 0, 1])", "('ok', 2)", "('deadlock', [0, 1])", "('ok', 2)"], "The program should print ('broken', [0, 1, 0, 1]), ('ok', 2), ('deadlock', [0, 1]) and ('ok', 2)"
+          wrong:
+            - |
+              class Lock:
+                  def __init__(self):
+                      self.holder = None
+
+
+              def acquire(lock, me):
+                  # The next step takes lock; a scheduler may run it only once the lock
+                  # is free.
+                  yield ("acquire", lock)
+                  lock.holder = me
+
+
+              def release(lock):
+                  lock.holder = None
+
+
+              def can_run(request):
+                  # request is what a thread yielded before its next step: None for an
+                  # ordinary step, or ("acquire", lock).
+                  return request is None or request[1].holder is None
+
+
+              def replay(make, choices):
+                  # Fresh state and threads, then the steps named by choices. Returns the
+                  # state, the unfinished threads, and what each one yielded last.
+                  state, threads = make()
+                  pending = {}
+                  for t in range(len(threads)):
+                      pending[t] = next(threads[t])
+                  alive = list(range(len(threads)))
+                  for c in choices:
+                      try:
+                          pending[c] = next(threads[c])
+                      except StopIteration:
+                          alive.remove(c)
+                  return state, alive, pending
+
+
+              def check_all(make, ok):
+                  # Explore every schedule depth-first, trying runnable threads in number
+                  # order. Return ("deadlock", schedule) for the first schedule that
+                  # reaches a point where threads are unfinished but none can run;
+                  # ("broken", schedule) for the first complete schedule whose state
+                  # fails ok; or ("ok", n), with n the number of complete schedules.
+                  count = 0
+                  stack = [[]]
+                  while stack:
+                      choices = stack.pop()
+                      state, alive, pending = replay(make, choices)
+                      if not alive:
+                          if not ok(state):
+                              return "broken", choices
+                          count += 1
+                          continue
+                      runnable = alive
+                      if not runnable:
+                          return "deadlock", choices
+                      for t in runnable[::-1]:
+                          stack.append(choices + [t])
+                  return "ok", count
+
+
+              def buyer(state, name):
+                  yield
+                  left = state["left"]
+                  if left > 0:
+                      yield
+                      state["left"] = left - 1
+                      state["sold"].append(name)
+
+
+              def locked_buyer(state, lock, name):
+                  yield from acquire(lock, name)
+                  yield
+                  left = state["left"]
+                  if left > 0:
+                      yield
+                      state["left"] = left - 1
+                      state["sold"].append(name)
+                  yield
+                  release(lock)
+
+
+              def mover(blocks, locks, name, first, second, src, dst):
+                  # Moves one seat from block src to block dst, holding both blocks' locks.
+                  yield from acquire(locks[first], name)
+                  yield from acquire(locks[second], name)
+                  yield
+                  blocks[src] -= 1
+                  blocks[dst] += 1
+                  yield
+                  release(locks[second])
+                  yield
+                  release(locks[first])
+
+
+              def make_unlocked():
+                  state = {"left": 1, "sold": []}
+                  return state, [buyer(state, "asha"), buyer(state, "ravi")]
+
+
+              def make_locked():
+                  state = {"left": 1, "sold": []}
+                  lock = Lock()
+                  return state, [locked_buyer(state, lock, "asha"), locked_buyer(state, lock, "ravi")]
+
+
+              def make_swap():
+                  blocks = {"A": 10, "B": 10}
+                  locks = {"A": Lock(), "B": Lock()}
+                  return blocks, [mover(blocks, locks, "m1", "A", "B", "A", "B"),
+                                  mover(blocks, locks, "m2", "B", "A", "B", "A")]
+
+
+              def make_ordered_swap():
+                  blocks = {"A": 10, "B": 10}
+                  locks = {"A": Lock(), "B": Lock()}
+                  return blocks, [mover(blocks, locks, "m1", "A", "B", "A", "B"),
+                                  mover(blocks, locks, "m2", "A", "B", "B", "A")]
+
+
+              def seats_ok(state):
+                  return state["left"] + len(state["sold"]) == 1
+
+
+              def blocks_ok(blocks):
+                  return blocks["A"] + blocks["B"] == 20
+
+
+              print(check_all(make_unlocked, seats_ok))
+              print(check_all(make_locked, seats_ok))
+              print(check_all(make_swap, blocks_ok))
+              print(check_all(make_ordered_swap, blocks_ok))
+            - |
+              class Lock:
+                  def __init__(self):
+                      self.holder = None
+
+
+              def acquire(lock, me):
+                  # The next step takes lock; a scheduler may run it only once the lock
+                  # is free.
+                  yield ("acquire", lock)
+                  lock.holder = me
+
+
+              def release(lock):
+                  lock.holder = None
+
+
+              def can_run(request):
+                  # request is what a thread yielded before its next step: None for an
+                  # ordinary step, or ("acquire", lock).
+                  return request is None or request[1].holder is None
+
+
+              def replay(make, choices):
+                  # Fresh state and threads, then the steps named by choices. Returns the
+                  # state, the unfinished threads, and what each one yielded last.
+                  state, threads = make()
+                  pending = {}
+                  for t in range(len(threads)):
+                      pending[t] = next(threads[t])
+                  alive = list(range(len(threads)))
+                  for c in choices:
+                      try:
+                          pending[c] = next(threads[c])
+                      except StopIteration:
+                          alive.remove(c)
+                  return state, alive, pending
+
+
+              def check_all(make, ok):
+                  # Explore every schedule depth-first, trying runnable threads in number
+                  # order. Return ("deadlock", schedule) for the first schedule that
+                  # reaches a point where threads are unfinished but none can run;
+                  # ("broken", schedule) for the first complete schedule whose state
+                  # fails ok; or ("ok", n), with n the number of complete schedules.
+                  count = 0
+                  stack = [[]]
+                  while stack:
+                      choices = stack.pop()
+                      state, alive, pending = replay(make, choices)
+                      if not alive:
+                          if not ok(state):
+                              return "broken", choices
+                          count += 1
+                          continue
+                      runnable = [t for t in alive if can_run(pending[t])]
+                      if len(runnable) < len(alive):
+                          return "deadlock", choices
+                      for t in runnable[::-1]:
+                          stack.append(choices + [t])
+                  return "ok", count
+
+
+              def buyer(state, name):
+                  yield
+                  left = state["left"]
+                  if left > 0:
+                      yield
+                      state["left"] = left - 1
+                      state["sold"].append(name)
+
+
+              def locked_buyer(state, lock, name):
+                  yield from acquire(lock, name)
+                  yield
+                  left = state["left"]
+                  if left > 0:
+                      yield
+                      state["left"] = left - 1
+                      state["sold"].append(name)
+                  yield
+                  release(lock)
+
+
+              def mover(blocks, locks, name, first, second, src, dst):
+                  # Moves one seat from block src to block dst, holding both blocks' locks.
+                  yield from acquire(locks[first], name)
+                  yield from acquire(locks[second], name)
+                  yield
+                  blocks[src] -= 1
+                  blocks[dst] += 1
+                  yield
+                  release(locks[second])
+                  yield
+                  release(locks[first])
+
+
+              def make_unlocked():
+                  state = {"left": 1, "sold": []}
+                  return state, [buyer(state, "asha"), buyer(state, "ravi")]
+
+
+              def make_locked():
+                  state = {"left": 1, "sold": []}
+                  lock = Lock()
+                  return state, [locked_buyer(state, lock, "asha"), locked_buyer(state, lock, "ravi")]
+
+
+              def make_swap():
+                  blocks = {"A": 10, "B": 10}
+                  locks = {"A": Lock(), "B": Lock()}
+                  return blocks, [mover(blocks, locks, "m1", "A", "B", "A", "B"),
+                                  mover(blocks, locks, "m2", "B", "A", "B", "A")]
+
+
+              def make_ordered_swap():
+                  blocks = {"A": 10, "B": 10}
+                  locks = {"A": Lock(), "B": Lock()}
+                  return blocks, [mover(blocks, locks, "m1", "A", "B", "A", "B"),
+                                  mover(blocks, locks, "m2", "A", "B", "B", "A")]
+
+
+              def seats_ok(state):
+                  return state["left"] + len(state["sold"]) == 1
+
+
+              def blocks_ok(blocks):
+                  return blocks["A"] + blocks["B"] == 20
+
+
+              print(check_all(make_unlocked, seats_ok))
+              print(check_all(make_locked, seats_ok))
+              print(check_all(make_swap, blocks_ok))
+              print(check_all(make_ordered_swap, blocks_ok))
+            - |
+              class Lock:
+                  def __init__(self):
+                      self.holder = None
+
+
+              def acquire(lock, me):
+                  # The next step takes lock; a scheduler may run it only once the lock
+                  # is free.
+                  yield ("acquire", lock)
+                  lock.holder = me
+
+
+              def release(lock):
+                  lock.holder = None
+
+
+              def can_run(request):
+                  # request is what a thread yielded before its next step: None for an
+                  # ordinary step, or ("acquire", lock).
+                  return request is None or request[1].holder is None
+
+
+              def replay(make, choices):
+                  # Fresh state and threads, then the steps named by choices. Returns the
+                  # state, the unfinished threads, and what each one yielded last.
+                  state, threads = make()
+                  pending = {}
+                  for t in range(len(threads)):
+                      pending[t] = next(threads[t])
+                  alive = list(range(len(threads)))
+                  for c in choices:
+                      try:
+                          pending[c] = next(threads[c])
+                      except StopIteration:
+                          alive.remove(c)
+                  return state, alive, pending
+
+
+              def check_all(make, ok):
+                  # Explore every schedule depth-first, trying runnable threads in number
+                  # order. Return ("deadlock", schedule) for the first schedule that
+                  # reaches a point where threads are unfinished but none can run;
+                  # ("broken", schedule) for the first complete schedule whose state
+                  # fails ok; or ("ok", n), with n the number of complete schedules.
+                  count = 0
+                  stack = [[]]
+                  while stack:
+                      choices = stack.pop()
+                      state, alive, pending = replay(make, choices)
+                      if not alive:
+                          if not ok(state):
+                              return "broken", choices
+                          count += 1
+                          continue
+                      runnable = [t for t in alive if can_run(pending[t])]
+                      if not runnable:
+                          continue
+                      for t in runnable[::-1]:
+                          stack.append(choices + [t])
+                  return "ok", count
+
+
+              def buyer(state, name):
+                  yield
+                  left = state["left"]
+                  if left > 0:
+                      yield
+                      state["left"] = left - 1
+                      state["sold"].append(name)
+
+
+              def locked_buyer(state, lock, name):
+                  yield from acquire(lock, name)
+                  yield
+                  left = state["left"]
+                  if left > 0:
+                      yield
+                      state["left"] = left - 1
+                      state["sold"].append(name)
+                  yield
+                  release(lock)
+
+
+              def mover(blocks, locks, name, first, second, src, dst):
+                  # Moves one seat from block src to block dst, holding both blocks' locks.
+                  yield from acquire(locks[first], name)
+                  yield from acquire(locks[second], name)
+                  yield
+                  blocks[src] -= 1
+                  blocks[dst] += 1
+                  yield
+                  release(locks[second])
+                  yield
+                  release(locks[first])
+
+
+              def make_unlocked():
+                  state = {"left": 1, "sold": []}
+                  return state, [buyer(state, "asha"), buyer(state, "ravi")]
+
+
+              def make_locked():
+                  state = {"left": 1, "sold": []}
+                  lock = Lock()
+                  return state, [locked_buyer(state, lock, "asha"), locked_buyer(state, lock, "ravi")]
+
+
+              def make_swap():
+                  blocks = {"A": 10, "B": 10}
+                  locks = {"A": Lock(), "B": Lock()}
+                  return blocks, [mover(blocks, locks, "m1", "A", "B", "A", "B"),
+                                  mover(blocks, locks, "m2", "B", "A", "B", "A")]
+
+
+              def make_ordered_swap():
+                  blocks = {"A": 10, "B": 10}
+                  locks = {"A": Lock(), "B": Lock()}
+                  return blocks, [mover(blocks, locks, "m1", "A", "B", "A", "B"),
+                                  mover(blocks, locks, "m2", "A", "B", "B", "A")]
+
+
+              def seats_ok(state):
+                  return state["left"] + len(state["sold"]) == 1
+
+
+              def blocks_ok(blocks):
+                  return blocks["A"] + blocks["B"] == 20
+
+
+              print(check_all(make_unlocked, seats_ok))
+              print(check_all(make_locked, seats_ok))
+              print(check_all(make_swap, blocks_ok))
+              print(check_all(make_ordered_swap, blocks_ok))
+          explanation: |
+            Keep a stack of schedules to try, starting with the empty one. Replay each from fresh state. If no thread is left it is complete: return broken if the check fails, otherwise count it. If threads are left but none can run, it is a deadlock. Otherwise push the schedule extended by each runnable thread, in reverse so that lower numbers are tried first. Running threads that are waiting for a lock lets two hold it at once; calling it a deadlock when only some threads are waiting flags every lock that is ever contended; and treating a stuck state as finished passes the very deadlock the test exists to find.
+review: |
+  Each incident at the stadium came from something this cluster taught:
+
+  - The last seat sold twice in 4 of the 6 interleavings, because check-then-act across two steps is a race, as [[d0.interleavings-and-race-conditions]] showed.
+  - A lock held across a 250 ms payment allows only 4 bookings a second; a critical section should cover the shared state and nothing more, the lesson of [[d0.locks-and-mutual-exclusion]].
+  - Two seat swaps that took the same locks in opposite orders closed a cycle, which a single lock order prevents, from [[d0.deadlock]].
+  - A semaphore of 20 permits keeps the service within the gateway's limit, the counting tool of [[d0.condition-variables-and-semaphores]].
+  - Four threads racing on a compare-and-swap counter make up to 10 attempts, the cost of contention in [[d0.atomic-operations-and-compare-and-swap]].
+  - The seat map looked empty because a plain flag gives no happens-before; a release store and an acquire load publish it safely, from [[d0.memory-models-and-happens-before]].
+  - Work that computes a tenth of the time needs ten workers per core, 160 on 16 cores, as [[d0.thread-pools-and-work-queues]] sizes pools.
+  - A blocking SMS call froze the notification loop, which must hand such work to a thread pool, from [[d0.event-loops-and-asynchronous-i-o]].
+  - The seat-map actor fell 15 s behind when requests arrived faster than it could handle them, the mailbox arithmetic of [[d0.actors-and-message-passing]].
+  - Exploring every schedule finds the oversell and the deadlock before the customers do, the method of [[d0.testing-concurrent-code-deterministically]].

@@ -1267,3 +1267,108 @@ test("every ending passes through the zombie state, and the shell sees how it en
   for (let i = 0; i < 8; i++) await figure.getByRole("button", { name: "Increase step" }).click();
   await expect(figure).toContainText("init, which waits for any child in a loop, reaps it. In the end: exit status 0, collected by init.");
 });
+
+test("most interleavings of load, add and store lose an update, and an atomic step loses none", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="thread-interleaving"]').first().getByRole("figure");
+  await expect(figure).toContainText("Schedule 1 of 20: A load, A add, A store, B load, B add, B store. The count ends at 2, which is right. 18 of the 20 schedules lose an update.");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase schedule" }).click();
+  await expect(figure).toContainText("Schedule 4 of 20: A load, A add, B load, B add, B store, A store. The count ends at 1");
+  await figure.getByRole("button", { name: "one atomic step", exact: true }).click();
+  await expect(figure).toContainText("None of the 2 schedules loses an update.");
+});
+
+test("a lock makes threads take turns at the critical section, and without it increments are lost", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="lock-timeline"]').first().getByRole("figure");
+  await expect(figure).toContainText("With the lock, 3 threads on 3 cores finish in 9 time units, against 5 without it, and the count is 3, correct.");
+  await figure.getByRole("button", { name: "no lock", exact: true }).click();
+  await expect(figure).toContainText("so all store 1 and the count is 1: 2 increments lost.");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase threads" }).click();
+  await expect(figure).toContainText("the count is 1: 4 increments lost.");
+});
+
+test("locks taken in opposite orders deadlock, and one order cannot", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="deadlock-graph"]').first().getByRole("figure");
+  await expect(figure).toContainText("Step 1 of 5: T1 will move money from A to B and takes A first");
+  for (let i = 0; i < 4; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("the graph has a cycle, and neither thread can ever move. Deadlock.");
+  await figure.getByRole("button", { name: "same order", exact: true }).click();
+  for (let i = 0; i < 6; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Step 7 of 7: T2 takes lock B, makes its transfer and releases both. A thread waiting for A holds nothing, so no cycle can form: no deadlock.");
+});
+
+test("a bigger buffer lets the faster side run ahead but the slower side sets the pace", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="bounded-buffer"]').first().getByRole("figure");
+  await expect(figure).toContainText("All 8 items are used by time 18. The producer spends 4 units waiting for space and is finished at time 12");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase capacity" }).click();
+  await expect(figure).toContainText("The producer spends 0 units waiting for space and is finished at time 8");
+  await figure.getByRole("button", { name: "slow producer", exact: true }).click();
+  await expect(figure).toContainText("the consumer spends 10 units waiting for items. The consumer is always waiting for the next item");
+});
+
+test("a compare-and-swap loop wastes attempts under contention, and fetch-and-add wastes none", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="cas-retry"]').first().getByRole("figure");
+  await expect(figure).toContainText("4 increments take 10 attempts, 6 of them wasted, and the last thread needs 4");
+  await figure.getByRole("button", { name: "fetch-and-add", exact: true }).click();
+  await expect(figure).toContainText("A gets 0, B gets 1, C gets 2, D gets 3. 4 increments take 4 attempts, none wasted");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Decrease threads" }).click();
+  await expect(figure).toContainText("One thread adds 1 with one indivisible fetch-and-add and gets back 0. 1 increment takes 1 attempt, none wasted.");
+});
+
+test("store buffers let both cores read 0, and fences forbid it", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="store-buffer"]').first().getByRole("figure");
+  await expect(figure).toContainText("Step 1 of 6: x and y start at 0 in memory, and both store buffers are empty.");
+  for (let i = 0; i < 5; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Yet both cores read 0, which no interleaving of the two programs allows");
+  await figure.getByRole("button", { name: "with fences", exact: true }).click();
+  for (let i = 0; i < 6; i++) await figure.getByRole("button", { name: "Increase step" }).click();
+  await expect(figure).toContainText("Step 7 of 7: Core 2 runs r2 = x and reads 1. With fences, each core's store reaches memory before its own load runs");
+});
+
+test("a shared queue balances uneven tasks where a fixed split does not", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="work-queue"]').first().getByRole("figure");
+  await expect(figure).toContainText("With one shared queue, 2 workers finish all 8 tasks at 10 ms.");
+  await figure.getByRole("button", { name: "fixed split", exact: true }).click();
+  await expect(figure).toContainText("Handing task i to worker i mod 2 in advance finishes at 13 ms");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase workers" }).click();
+  await expect(figure).toContainText("finishes at 11 ms: worker 0 was given 11 ms of work while the others ran out early. The tasks need 18 ms of work in all, and the workers spend 26 ms idle");
+});
+
+test("an event loop overlaps the waits that blocking calls take in turn", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="event-loop"]').first().getByRole("figure");
+  await expect(figure).toContainText("the last reply is ready at 100 + 3 × 20 = 160 ms.");
+  await figure.getByRole("button", { name: "blocking", exact: true }).click();
+  await expect(figure).toContainText("so 3 requests take 3 × 120 = 360 ms, and the thread spends 300 ms of that doing nothing.");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase requests" }).click();
+  await expect(figure).toContainText("so 6 requests take 6 × 120 = 720 ms");
+  await figure.getByRole("button", { name: "event loop", exact: true }).click();
+  await expect(figure).toContainText("the last reply is ready at 100 + 6 × 20 = 220 ms.");
+});
+
+test("an actor's mailbox grows when messages arrive faster than it handles them, unless it is bounded", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="actor-mailbox"]').first().getByRole("figure");
+  await expect(figure).toContainText("The mailbox grows by 100 a second, to 6,000 after a minute, and a message arriving then waits 30 s before the actor reaches it.");
+  await figure.getByRole("button", { name: "bounded at 1,000", exact: true }).click();
+  await expect(figure).toContainText("The mailbox fills to 1,000 after 10 s; from then on the actor turns away 100 messages a second, 5,000 in the minute, and no message waits more than 5 s.");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Decrease senders" }).click();
+  await expect(figure).toContainText("One sender sends 100 messages a second to an actor that handles 200. The actor keeps up");
+});
+
+test("every interleaving of two threads is a path through a grid, and few preempt more than twice", async ({ page }) => {
+  await page.goto("/gallery");
+  const figure = page.locator('.gallery-item[data-figure="schedule-explorer"]').first().getByRole("figure");
+  await expect(figure).toContainText("Two threads of 3 steps each can interleave in C(6, 3) = 20 ways, one for each path through the grid. Schedule 6 runs A B A B A B and preempts a thread 4 times. 14 of the 20 schedules preempt at most twice.");
+  for (let i = 0; i < 2; i++) await figure.getByRole("button", { name: "Increase schedule" }).click();
+  await expect(figure).toContainText("Schedule 8 runs A B B A A B and preempts a thread 2 times.");
+  for (let i = 0; i < 3; i++) await figure.getByRole("button", { name: "Increase steps each" }).click();
+  await expect(figure).toContainText("C(12, 6) = 924 ways");
+  await expect(figure).toContainText("62 of the 924 schedules preempt at most twice.");
+});
