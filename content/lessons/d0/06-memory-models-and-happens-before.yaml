@@ -1,0 +1,1155 @@
+concept: d0.memory-models-and-happens-before
+minutes: 90
+claim: You can say what sequential consistency promises and why real processors and compilers break it, with store buffers, out-of-order execution and optimisations; run litmus tests such as store buffering and message passing on a model of a machine with store buffers and list the outcomes it allows; restore order with fences, and with release and acquire; define happens-before from program order and synchronisation, and a data race as two conflicting accesses it does not order; detect races with vector clocks as ThreadSanitizer does; state the data-race-free guarantee; and publish an object safely, which double-checked locking famously failed to do.
+recalls: [d0.atomic-operations-and-compare-and-swap]
+uses: [d0.interleavings-and-race-conditions, d0.locks-and-mutual-exclusion, h1.superscalar-and-out-of-order-execution, h1.latches-registers-and-memory, h2.threads-in-the-kernel, s1.recursion, s0.dictionaries-and-sets]
+leads: [d0.thread-pools-and-work-queues]
+starter: |
+  # Scratch space. A store buffer: core 1's write waits in a queue while
+  # core 1 reads on.
+  memory = {"x": 0, "y": 0}
+  buffer1 = [("x", 1)]          # core 1 has run x = 1
+  buffer2 = [("y", 1)]          # core 2 has run y = 1
+  r1 = memory["y"]              # core 1 reads y: not in its buffer
+  r2 = memory["x"]              # core 2 reads x
+  print(r1, r2)
+parts:
+  recall:
+    - text: |
+        [[d0.atomic-operations-and-compare-and-swap]] took for granted that once one core writes a word, other cores see the writes in the order they were made. Every lesson so far assumed the same thing: that a run is one interleaving of the threads' steps. That assumption has a name, sequential consistency, and real machines do not keep it. Three quick pulls first.
+  puzzle:
+    - text: |
+        Two threads run on two cores of an x86 laptop. x and y both start at 0, and there are no locks or fences.
+
+        ```
+        thread 1:  x = 1;  r1 = y
+        thread 2:  y = 1;  r2 = x
+        ```
+
+        Under any interleaving of these four steps, at least one store comes before both loads, so (r1, r2) can be (0, 1), (1, 0) or (1, 1), but never (0, 0).
+
+        **Of the four pairs (0, 0), (0, 1), (1, 0) and (1, 1), how many can the laptop actually produce?**
+  intuition:
+    - text: |
+        Two colleagues in a Hyderabad office share a notice board. Each writes a note, "I am taking the meeting room", and drops it in their own out-tray for the office boy to pin up later, then immediately glances at the board to see whether the other has claimed the room. Both see an empty board, both go to the meeting room, and the notes are pinned up afterwards. Each colleague did their two steps in order; it is the out-tray, the delay between writing and publishing, that let them both miss each other.
+
+        A processor's **store buffer** is that out-tray. A core puts its stores in a queue and carries on, reading memory while the stores wait to drain. The figure runs the puzzle's two programs on two cores with store buffers, without and then with fences.
+    - figure: store-buffer
+      props: { fence: false, step: 0 }
+    - text: |
+        Without fences, each core's load ran while its own store was still in its buffer, invisible to the other core, so both read 0. With a fence between the store and the load, each core waits for its buffer to drain before reading, and the forbidden outcome disappears. The program text was the same; what changed was what the machine promised about the order in which other cores see its operations. That promise is the **memory model**.
+  derivation:
+    - text: |
+        **Sequential consistency.** Lamport defined it in 1979: a run is sequentially consistent if its result is the same as if all the threads' operations were executed in some single order, with each thread's operations in program order. It is the interleaving model of this whole cluster, and it is what programmers imagine. It is also expensive, because it forbids almost every trick that makes memory fast.
+
+        **Why machines break it.** Stores are slow, so cores put them in a **store buffer** and let later loads run first. Out-of-order cores, from the computer architecture cluster, execute independent loads early. Caches, write combining and speculation reorder further. Compilers reorder too: they keep variables in registers, move loads out of loops, and merge or remove stores, all perfectly valid for a single thread. A loop `while not done: pass` may be compiled to read `done` once, before the loop, and spin for ever. None of this changes what one thread sees of its own operations. It changes what **other** threads see.
+    - question:
+        id: derivation-compiler
+        type: choice
+        system: s2
+        prompt: |
+          A C program spins on `while (!ready) {}` where `ready` is an ordinary global set by another thread. With optimisation on, it never stops. Why?
+        options:
+          - "The compiler may read ready once and keep it in a register, since nothing in the loop changes it as far as a single thread can see"
+          - "The other thread's store never reaches memory"
+          - "The processor's cache is broken"
+          - "Global variables cannot be shared between threads"
+        answer: 0
+        explanation: |
+          With no synchronisation, the compiler may assume no other thread changes ready, so hoisting the load is legal. Declaring ready atomic, or reading it under a lock, tells the compiler it must look again each time.
+    - text: |
+        **Litmus tests.** Memory models are described by tiny programs and the outcomes they allow. **Store buffering** (SB) is the puzzle: each thread stores to one variable and loads the other. Allowing (0, 0) means a load can pass an earlier store. **Message passing** (MP): thread 1 writes `data = 42` then `flag = 1`; thread 2 reads `flag` then `data`. If thread 2 can see flag 1 and data 0, stores can pass stores, or loads can pass loads, and publishing data through a flag is broken.
+
+        **Real models.** x86 and SPARC follow **total store order** (TSO): the only reordering visible to other cores is a load passing an earlier store, through the store buffer, so SB allows (0, 0) but MP is safe. ARM, POWER and RISC-V are **weakly ordered**: almost any two independent memory operations may be reordered, so even MP can fail without help. Every architecture provides **fences**, instructions that stop reordering across them: x86's `mfence`, ARM's `dmb`, RISC-V's `fence rw,rw`. Fences are slow, tens to hundreds of cycles, which is why the hardware does not fence everything.
+    - question:
+        id: derivation-mp
+        type: choice
+        system: s2
+        prompt: |
+          Thread 1 writes data = 42 then flag = 1. Thread 2 reads flag, then data. On which machines can thread 2 see flag = 1 and data = 0 with no fences?
+        options:
+          - "On weakly ordered machines such as ARM and RISC-V, but not on x86"
+          - "On every machine"
+          - "On none, since the stores are in program order"
+          - "Only on x86"
+        answer: 0
+        explanation: |
+          x86's store buffer drains in order and its loads are not visibly reordered with each other, so message passing works there. Weak models may reorder the two stores or the two loads.
+    - text: |
+        **Happens-before.** Programs should not be written against one processor's quirks. Java in 2004 and C and C++ in 2011 defined memory models for the language instead, built on the **happens-before** relation. Within one thread, each operation happens before the next one in program order. Across threads, an operation that **releases**, such as unlocking a mutex or a release store to an atomic, **synchronises with** an operation that **acquires** and observes it, such as the next lock of that mutex or an acquire load that reads the stored value; starting a thread and joining one do the same. Happens-before is then the transitive closure: A happens before C if A happens before B and B before C. If A happens before B, B is guaranteed to see A's effects.
+
+        **Data races and DRF-SC.** Two accesses **conflict** if they touch the same location and at least one writes. A **data race** is a pair of conflicting accesses from different threads not ordered by happens-before. The central promise of these memory models is **DRF-SC**: if no sequentially consistent run of a program has a data race, then every run behaves sequentially consistently. Write race-free programs, with every shared access protected by a lock or made atomic, and the interleaving model of this cluster is exactly right. In C and C++, a program with a data race has undefined behaviour; Java bounds the damage but still gives surprising results.
+    - question:
+        id: derivation-hb
+        type: choice
+        system: s2
+        prompt: |
+          Thread A writes total = 5 and then unlocks m. Thread B then locks m and reads total. Why must B see 5?
+        options:
+          - "A's write happens before its unlock, the unlock synchronises with B's lock, and B's lock happens before its read, so the write happens before the read"
+          - "Because B ran later in time"
+          - "Because locks flush every cache in the machine"
+          - "It need not; B may still see an old value"
+        answer: 0
+        explanation: |
+          Happens-before chains program order and synchronisation. Running later on the clock guarantees nothing by itself; the release and acquire through m are what order the two accesses.
+    - text: |
+        **Acquire and release.** Atomics let you choose the ordering you need. A **release** store guarantees that every memory operation before it in its thread becomes visible before the store does. An **acquire** load guarantees that no later operation in its thread moves before it. Together they give message passing: write the data normally, then store the flag with release; read the flag with acquire, and if it is set, read the data. That is cheaper than a full fence, and on x86 it costs nothing extra, since TSO already provides it. **Sequentially consistent** atomics, the default in C++ and Java's volatile, add a single global order of all such operations, which is what store buffering needs. **Relaxed** atomics only promise atomicity, enough for a statistics counter.
+
+        **Finding races with vector clocks.** ThreadSanitizer, built into Clang, GCC and Go's race detector, checks happens-before as a program runs. Each thread keeps a **vector clock**: for every thread, how many of its events are known to have happened before now. A thread ticks its own entry at each event. A release leaves a copy of the thread's clock on the lock; an acquire takes the maximum of its clock and that copy, entry by entry. An earlier access by thread u, at u's count n, happens before the current event exactly when the current thread's clock has entry u at least n. Every access is checked against the last write and the recent reads of its location, and an unordered conflicting pair is reported. The same vector clocks reappear in distributed systems, to order events across machines.
+    - question:
+        id: derivation-clock
+        type: numeric
+        system: s2
+        prompt: |
+          Thread A's clock is {A: 3, B: 1} and thread B's is {A: 1, B: 5}. B acquires a lock that A just released with clock {A: 3, B: 1}, and then ticks its own entry for the acquire. What is B's entry for A afterwards?
+        answer: "3"
+        explanation: |
+          Acquiring merges by taking the larger value entry by entry: A becomes max(1, 3) = 3 and B stays 5 before ticking to 6. B now knows about A's first three events, so they all happen before B's next one.
+    - text: |
+        **Publishing safely.** The classic failure is **double-checked locking**: to create a shared object lazily without locking on every call, check whether it exists; if not, take a lock, check again, create it and store the pointer. Readers that find the pointer set skip the lock. But nothing orders the object's construction before the pointer store in the reader's view: the compiler or the processor may make the pointer visible first, and a reader that skips the lock sees a half-built object. The fix is to publish with a release store and read with an acquire load, Java's `volatile`, or to let the language do it once, with C++'s static initialisation or Java's holder class. The rule underneath: build the object completely, then publish it in one store that other threads read with acquire.
+
+        **And in Python?** CPython's global interpreter lock runs one bytecode at a time and acts as a full barrier at each switch, so pure Python threads see a sequentially consistent memory, though `x += 1` is still several bytecodes and still races. The free-threaded builds of CPython keep the built-in types internally consistent with fine-grained locks. Either way, the safe habits are the same: protect shared state with locks or queues, and publish objects only once they are complete.
+    - question:
+        id: derivation-publish
+        type: order
+        system: s2
+        prompt: |
+          Put the steps of publishing a lazily built fare table safely in order.
+        steps:
+          - "Check, without a lock, whether the shared pointer is set, reading it with acquire."
+          - "If it is not, take the lock and check again."
+          - "Build the whole table in a local variable."
+          - "Store the pointer to the finished table with release, then unlock."
+        explanation: |
+          The unlocked first check keeps readers fast once the table exists, the second check under the lock stops two threads building it, and building fully before a release store means any reader that sees the pointer sees a complete table.
+  formal:
+    - text: |
+        **Sequential consistency.** The result of some single interleaving that keeps each thread's program order.
+
+        **Breaking it.** Store buffers (a load passes an earlier store), out-of-order execution, caches and compiler optimisations. One thread always sees its own operations in order.
+
+        **Litmus tests.** SB: store then load another variable; (0, 0) means loads pass stores. MP: data then flag, read flag then data; flag 1 and data 0 means stores or loads reorder. x86 is TSO: SB allows (0, 0), MP is safe. ARM, POWER and RISC-V are weak. Fences forbid reordering across them.
+
+        **Happens-before.** Program order, plus release synchronising with the acquire that observes it (unlock to lock, release store to acquire load, thread start and join), closed under transitivity.
+
+        **Data race.** Conflicting accesses (same location, one a write) from different threads, unordered by happens-before. DRF-SC: race-free programs behave sequentially consistently.
+
+        **Orderings.** Relaxed (atomicity only), acquire and release (message passing), sequentially consistent (one global order). Vector clocks detect races. Publish complete objects with a release store; read with acquire.
+  drill:
+    - text: Seconds each. Ask what each thread is promised about the other's writes.
+    - question:
+        id: drill-own
+        type: choice
+        system: s1
+        prompt: |
+          A thread writes x = 7 and then reads x, with no other thread writing x. What does it read?
+        options:
+          - "7, always, because a thread sees its own operations in program order"
+          - "7 or the old value, depending on the store buffer"
+          - "The old value, until a fence runs"
+          - "It depends on the processor"
+        answer: 0
+        explanation: Store buffers forward a core's own stores to its own loads; reordering is only visible to other threads.
+    - question:
+        id: drill-drf
+        type: choice
+        system: s1
+        prompt: |
+          What does the DRF-SC guarantee promise?
+        options:
+          - "A program with no data races behaves as if sequentially consistent"
+          - "Every program behaves as if sequentially consistent"
+          - "Data races are reported at run time"
+          - "Locks are never needed"
+        answer: 0
+        explanation: Remove every data race, with locks or atomics, and the interleaving model is exact.
+    - question:
+        id: predict-forward
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          memory = {"x": 0}
+          buffer = [("x", 1), ("x", 2)]
+          value = memory["x"]
+          for var, v in buffer:
+              if var == "x":
+                  value = v
+          print(value, memory["x"])
+        output: "2 0"
+        explanation: The core's own load takes the newest store still in its buffer, 2, while memory, which other cores read, still holds 0.
+    - question:
+        id: predict-merge
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          mine = {"A": 1, "B": 4}
+          lock = {"A": 3, "B": 2}
+          merged = {t: max(mine[t], lock[t]) for t in mine}
+          print(merged)
+        output: "{'A': 3, 'B': 4}"
+        explanation: An acquire merges the lock's clock into the thread's by taking the larger count for each thread.
+    - question:
+        id: predict-before
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          clock_b = {"A": 2, "B": 7}
+          write_by_a = 3
+          print(clock_b["A"] >= write_by_a)
+        output: "False"
+        explanation: B only knows about A's first two events, so A's third event, the write, did not happen before B's current one. If B now touches the same variable, that is a race.
+  work:
+    - text: Slower now. Each answer makes the order between threads something you can compute.
+    - question:
+        id: write-race-detector
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `races`, a race detector that keeps a vector clock per thread and per lock, as ThreadSanitizer does. The program should print `['count']` and `['x']`.
+        starter: |
+          def races(trace):
+              # trace is a list of (thread, op, target) events in the order they ran,
+              # where op is "read", "write", "acquire" or "release" and target is a
+              # variable or a lock. Each thread keeps a vector clock: how many events
+              # of each thread are known to have happened before its current one.
+              # Releasing a lock leaves a copy of the thread's clock on the lock, and
+              # acquiring it merges that copy in. Two accesses to one variable, at
+              # least one a write, from different threads, race unless the earlier
+              # one happened before the later. Return the racing variables, sorted.
+              return []
+
+          locked = [
+              ("main", "write", "fare"),
+              ("main", "release", "L"),
+              ("worker", "acquire", "L"),
+              ("worker", "read", "fare"),
+              ("main", "write", "count"),
+              ("worker", "write", "count"),
+          ]
+          print(races(locked))
+          print(races([("a", "read", "x"), ("b", "write", "x"), ("b", "read", "y")]))
+        solution: |
+          def races(trace):
+              # trace is a list of (thread, op, target) events in the order they ran,
+              # where op is "read", "write", "acquire" or "release" and target is a
+              # variable or a lock. Each thread keeps a vector clock: how many events
+              # of each thread are known to have happened before its current one.
+              # Releasing a lock leaves a copy of the thread's clock on the lock, and
+              # acquiring it merges that copy in. Two accesses to one variable, at
+              # least one a write, from different threads, race unless the earlier
+              # one happened before the later. Return the racing variables, sorted.
+              clock = {}
+              lock_clock = {}
+              last_write = {}
+              reads = {}
+              found = []
+              for thread, op, target in trace:
+                  if thread not in clock:
+                      clock[thread] = {}
+                  c = clock[thread]
+                  c[thread] = c.get(thread, 0) + 1
+                  if op == "acquire":
+                      for other, n in lock_clock.get(target, {}).items():
+                          c[other] = max(c.get(other, 0), n)
+                  elif op == "release":
+                      lock_clock[target] = dict(c)
+                  else:
+                      earlier = []
+                      if target in last_write:
+                          earlier.append(last_write[target])
+                      if op == "write":
+                          earlier = earlier + list(reads.get(target, {}).items())
+                      for other, n in earlier:
+                          if other != thread and c.get(other, 0) < n:
+                              found.append(target)
+                      if op == "write":
+                          last_write[target] = (thread, c[thread])
+                          reads[target] = {}
+                      else:
+                          if target not in reads:
+                              reads[target] = {}
+                          reads[target][thread] = c[thread]
+              return sorted(set(found))
+
+
+          locked = [
+              ("main", "write", "fare"),
+              ("main", "release", "L"),
+              ("worker", "acquire", "L"),
+              ("worker", "read", "fare"),
+              ("main", "write", "count"),
+              ("worker", "write", "count"),
+          ]
+          print(races(locked))
+          print(races([("a", "read", "x"), ("b", "write", "x"), ("b", "read", "y")]))
+        tests: |
+          assert races([]) == [], "an empty trace has no races"
+          assert races([("a", "write", "x"), ("a", "read", "x"), ("a", "write", "x")]) == [], "one thread alone never races with itself"
+          assert races([("a", "read", "x"), ("b", "read", "x")]) == [], "two reads never race"
+          assert races([("a", "write", "x"), ("b", "write", "x")]) == ["x"], "two unordered writes from different threads race"
+          assert races([("a", "read", "x"), ("b", "write", "x")]) == ["x"], "a read and a later unordered write race"
+          assert races([("a", "write", "x"), ("b", "read", "x")]) == ["x"], "a write and a later unordered read race"
+          _t = [("a", "write", "x"), ("a", "release", "m"), ("b", "acquire", "m"), ("b", "write", "x")]
+          assert races(_t) == [], "a write, a release, an acquire of the same lock and another write are ordered: no race"
+          _t = [("a", "write", "x"), ("a", "release", "m"), ("b", "acquire", "n"), ("b", "write", "x")]
+          assert races(_t) == ["x"], "releasing one lock and acquiring a different one orders nothing"
+          _t = [("a", "release", "m"), ("a", "write", "v"), ("b", "acquire", "m"), ("b", "write", "v")]
+          assert races(_t) == ["v"], "a's write came after its release, so b's acquire does not order it: the lock must keep a copy of a's clock as it was at the release"
+          _t = [("a", "write", "x"), ("a", "release", "m"), ("b", "acquire", "m"), ("b", "release", "n"), ("c", "acquire", "n"), ("c", "read", "x")]
+          assert races(_t) == [], "happens-before is transitive: a before b through m, b before c through n"
+          _t = [("a", "read", "x"), ("a", "read", "y"), ("b", "write", "y"), ("c", "write", "z"), ("c", "write", "z")]
+          assert races(_t) == ["y"], "only y has conflicting unordered accesses"
+          assert output.splitlines() == ["['count']", "['x']"], "The program should print ['count'] and ['x']"
+        wrong:
+          - |
+            def races(trace):
+                # trace is a list of (thread, op, target) events in the order they ran,
+                # where op is "read", "write", "acquire" or "release" and target is a
+                # variable or a lock. Each thread keeps a vector clock: how many events
+                # of each thread are known to have happened before its current one.
+                # Releasing a lock leaves a copy of the thread's clock on the lock, and
+                # acquiring it merges that copy in. Two accesses to one variable, at
+                # least one a write, from different threads, race unless the earlier
+                # one happened before the later. Return the racing variables, sorted.
+                clock = {}
+                lock_clock = {}
+                last_write = {}
+                reads = {}
+                found = []
+                for thread, op, target in trace:
+                    if thread not in clock:
+                        clock[thread] = {}
+                    c = clock[thread]
+                    c[thread] = c.get(thread, 0) + 1
+                    if op == "acquire":
+                        pass
+                    elif op == "release":
+                        lock_clock[target] = dict(c)
+                    else:
+                        earlier = []
+                        if target in last_write:
+                            earlier.append(last_write[target])
+                        if op == "write":
+                            earlier = earlier + list(reads.get(target, {}).items())
+                        for other, n in earlier:
+                            if other != thread and c.get(other, 0) < n:
+                                found.append(target)
+                        if op == "write":
+                            last_write[target] = (thread, c[thread])
+                            reads[target] = {}
+                        else:
+                            if target not in reads:
+                                reads[target] = {}
+                            reads[target][thread] = c[thread]
+                return sorted(set(found))
+
+
+            locked = [
+                ("main", "write", "fare"),
+                ("main", "release", "L"),
+                ("worker", "acquire", "L"),
+                ("worker", "read", "fare"),
+                ("main", "write", "count"),
+                ("worker", "write", "count"),
+            ]
+            print(races(locked))
+            print(races([("a", "read", "x"), ("b", "write", "x"), ("b", "read", "y")]))
+          - |
+            def races(trace):
+                # trace is a list of (thread, op, target) events in the order they ran,
+                # where op is "read", "write", "acquire" or "release" and target is a
+                # variable or a lock. Each thread keeps a vector clock: how many events
+                # of each thread are known to have happened before its current one.
+                # Releasing a lock leaves a copy of the thread's clock on the lock, and
+                # acquiring it merges that copy in. Two accesses to one variable, at
+                # least one a write, from different threads, race unless the earlier
+                # one happened before the later. Return the racing variables, sorted.
+                clock = {}
+                lock_clock = {}
+                last_write = {}
+                reads = {}
+                found = []
+                for thread, op, target in trace:
+                    if thread not in clock:
+                        clock[thread] = {}
+                    c = clock[thread]
+                    c[thread] = c.get(thread, 0) + 1
+                    if op == "acquire":
+                        for other, n in lock_clock.get(target, {}).items():
+                            c[other] = max(c.get(other, 0), n)
+                    elif op == "release":
+                        lock_clock[target] = c
+                    else:
+                        earlier = []
+                        if target in last_write:
+                            earlier.append(last_write[target])
+                        if op == "write":
+                            earlier = earlier + list(reads.get(target, {}).items())
+                        for other, n in earlier:
+                            if other != thread and c.get(other, 0) < n:
+                                found.append(target)
+                        if op == "write":
+                            last_write[target] = (thread, c[thread])
+                            reads[target] = {}
+                        else:
+                            if target not in reads:
+                                reads[target] = {}
+                            reads[target][thread] = c[thread]
+                return sorted(set(found))
+
+
+            locked = [
+                ("main", "write", "fare"),
+                ("main", "release", "L"),
+                ("worker", "acquire", "L"),
+                ("worker", "read", "fare"),
+                ("main", "write", "count"),
+                ("worker", "write", "count"),
+            ]
+            print(races(locked))
+            print(races([("a", "read", "x"), ("b", "write", "x"), ("b", "read", "y")]))
+          - |
+            def races(trace):
+                # trace is a list of (thread, op, target) events in the order they ran,
+                # where op is "read", "write", "acquire" or "release" and target is a
+                # variable or a lock. Each thread keeps a vector clock: how many events
+                # of each thread are known to have happened before its current one.
+                # Releasing a lock leaves a copy of the thread's clock on the lock, and
+                # acquiring it merges that copy in. Two accesses to one variable, at
+                # least one a write, from different threads, race unless the earlier
+                # one happened before the later. Return the racing variables, sorted.
+                clock = {}
+                lock_clock = {}
+                last_write = {}
+                reads = {}
+                found = []
+                for thread, op, target in trace:
+                    if thread not in clock:
+                        clock[thread] = {}
+                    c = clock[thread]
+                    c[thread] = c.get(thread, 0) + 1
+                    if op == "acquire":
+                        for other, n in lock_clock.get(target, {}).items():
+                            c[other] = max(c.get(other, 0), n)
+                    elif op == "release":
+                        lock_clock[target] = dict(c)
+                    else:
+                        earlier = []
+                        if target in last_write:
+                            earlier.append(last_write[target])
+                        for other, n in earlier:
+                            if other != thread and c.get(other, 0) < n:
+                                found.append(target)
+                        if op == "write":
+                            last_write[target] = (thread, c[thread])
+                            reads[target] = {}
+                        else:
+                            if target not in reads:
+                                reads[target] = {}
+                            reads[target][thread] = c[thread]
+                return sorted(set(found))
+
+
+            locked = [
+                ("main", "write", "fare"),
+                ("main", "release", "L"),
+                ("worker", "acquire", "L"),
+                ("worker", "read", "fare"),
+                ("main", "write", "count"),
+                ("worker", "write", "count"),
+            ]
+            print(races(locked))
+            print(races([("a", "read", "x"), ("b", "write", "x"), ("b", "read", "y")]))
+        explanation: |
+          Tick the thread's own entry at every event. On release, store a copy of the clock on the lock; on acquire, merge the lock's copy in. For a read, check the last write; for a write, check the last write and every read since; an earlier access by another thread races if the current clock's entry for that thread is below the access's count. Ignoring acquires orders nothing across threads, so every lock-protected access looks racy; storing the clock itself rather than a copy lets the lock see the releasing thread's later events; and never checking reads against a later write misses read-write races.
+    - question:
+        id: write-store-buffers
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `run_tso`, which runs two threads on a machine with a store buffer per core under a given schedule. The program then tries every schedule and should print the outcomes of store buffering, the same test with fences, and message passing.
+        starter: |
+          def run_tso(threads, schedule):
+              # A machine with a store buffer per core. threads holds two lists of
+              # operations: ("store", var, value), ("load", var, register), ("fence",).
+              # schedule is a list of actions: ("step", i) runs thread i's next
+              # operation; ("drain", i) moves the oldest store in core i's buffer to
+              # memory. A store goes into its core's buffer; a load takes the newest
+              # value for that variable in its own buffer if there is one, otherwise
+              # memory (where every variable starts at 0); a fence may only run when
+              # its core's buffer is empty. Return the registers as a dictionary, or
+              # None if the schedule is impossible or leaves anything unfinished.
+              return None
+
+          def orderings(actions):
+              # Every distinct ordering of a list of actions.
+              if not actions:
+                  return [[]]
+              result = []
+              for a in sorted(set(actions)):
+                  rest = list(actions)
+                  rest.remove(a)
+                  for tail in orderings(rest):
+                      result.append([a] + tail)
+              return result
+
+
+          def outcomes(threads):
+              actions = []
+              for i in range(2):
+                  for op in threads[i]:
+                      actions.append(("step", i))
+                      if op[0] == "store":
+                          actions.append(("drain", i))
+              found = set()
+              for schedule in orderings(actions):
+                  registers = run_tso(threads, schedule)
+                  if registers is not None:
+                      found.add(" ".join(r + "=" + str(registers[r]) for r in sorted(registers)))
+              return sorted(found)
+
+
+          store_buffering = [[("store", "x", 1), ("load", "y", "r1")], [("store", "y", 1), ("load", "x", "r2")]]
+          fenced = [[("store", "x", 1), ("fence",), ("load", "y", "r1")], [("store", "y", 1), ("fence",), ("load", "x", "r2")]]
+          message = [[("store", "data", 42), ("store", "flag", 1)], [("load", "flag", "r1"), ("load", "data", "r2")]]
+          print(outcomes(store_buffering))
+          print(outcomes(fenced))
+          print(outcomes(message))
+        solution: |
+          def run_tso(threads, schedule):
+              # A machine with a store buffer per core. threads holds two lists of
+              # operations: ("store", var, value), ("load", var, register), ("fence",).
+              # schedule is a list of actions: ("step", i) runs thread i's next
+              # operation; ("drain", i) moves the oldest store in core i's buffer to
+              # memory. A store goes into its core's buffer; a load takes the newest
+              # value for that variable in its own buffer if there is one, otherwise
+              # memory (where every variable starts at 0); a fence may only run when
+              # its core's buffer is empty. Return the registers as a dictionary, or
+              # None if the schedule is impossible or leaves anything unfinished.
+              memory = {}
+              buffers = [[], []]
+              pc = [0, 0]
+              registers = {}
+              for kind, i in schedule:
+                  if kind == "drain":
+                      if not buffers[i]:
+                          return None
+                      var, value = buffers[i].pop(0)
+                      memory[var] = value
+                      continue
+                  if pc[i] >= len(threads[i]):
+                      return None
+                  op = threads[i][pc[i]]
+                  if op[0] == "store":
+                      buffers[i].append((op[1], op[2]))
+                  elif op[0] == "load":
+                      value = memory.get(op[1], 0)
+                      for var, v in buffers[i]:
+                          if var == op[1]:
+                              value = v
+                      registers[op[2]] = value
+                  elif buffers[i]:
+                      return None
+                  pc[i] += 1
+              if pc != [len(threads[0]), len(threads[1])] or buffers != [[], []]:
+                  return None
+              return registers
+
+
+          def orderings(actions):
+              # Every distinct ordering of a list of actions.
+              if not actions:
+                  return [[]]
+              result = []
+              for a in sorted(set(actions)):
+                  rest = list(actions)
+                  rest.remove(a)
+                  for tail in orderings(rest):
+                      result.append([a] + tail)
+              return result
+
+
+          def outcomes(threads):
+              actions = []
+              for i in range(2):
+                  for op in threads[i]:
+                      actions.append(("step", i))
+                      if op[0] == "store":
+                          actions.append(("drain", i))
+              found = set()
+              for schedule in orderings(actions):
+                  registers = run_tso(threads, schedule)
+                  if registers is not None:
+                      found.add(" ".join(r + "=" + str(registers[r]) for r in sorted(registers)))
+              return sorted(found)
+
+
+          store_buffering = [[("store", "x", 1), ("load", "y", "r1")], [("store", "y", 1), ("load", "x", "r2")]]
+          fenced = [[("store", "x", 1), ("fence",), ("load", "y", "r1")], [("store", "y", 1), ("fence",), ("load", "x", "r2")]]
+          message = [[("store", "data", 42), ("store", "flag", 1)], [("load", "flag", "r1"), ("load", "data", "r2")]]
+          print(outcomes(store_buffering))
+          print(outcomes(fenced))
+          print(outcomes(message))
+        tests: |
+          _own = [[("store", "x", 5), ("load", "x", "a")], []]
+          assert run_tso(_own, [("step", 0), ("step", 0), ("drain", 0)]) == {"a": 5}, "a core must see its own store, from its buffer, even before it reaches memory"
+          assert run_tso(_own, [("step", 0), ("drain", 0), ("step", 0)]) == {"a": 5}, "after the store drains, the load finds it in memory"
+          assert run_tso(_own, [("step", 0), ("step", 0)]) is None, "a schedule that leaves a store in a buffer is unfinished: None"
+          assert run_tso(_own, [("drain", 0), ("step", 0), ("step", 0)]) is None, "draining an empty buffer is impossible: None"
+          _sb = [[("store", "x", 1), ("load", "y", "r1")], [("store", "y", 1), ("load", "x", "r2")]]
+          assert run_tso(_sb, [("step", 0), ("step", 1), ("step", 0), ("step", 1), ("drain", 0), ("drain", 1)]) == {"r1": 0, "r2": 0}, "with both stores still in buffers, both loads read 0 from memory"
+          _two = [[("store", "x", 1), ("store", "x", 2), ("load", "x", "a")], [("load", "x", "b")]]
+          assert run_tso(_two, [("step", 0), ("step", 0), ("step", 0), ("drain", 0), ("step", 1), ("drain", 0)]) == {"a": 2, "b": 1}, "a load takes the newest buffered value of its own core, 2; the buffer drains oldest first, so after one drain memory holds 1"
+          _fence = [[("store", "x", 1), ("fence",), ("load", "y", "r1")], [("store", "y", 1), ("load", "x", "r2")]]
+          assert run_tso(_fence, [("step", 0), ("step", 0), ("drain", 0), ("step", 0), ("step", 1), ("step", 1), ("drain", 1)]) is None, "a fence cannot run while its core's buffer still holds a store: None"
+          assert outcomes(_sb) == ["r1=0 r2=0", "r1=0 r2=1", "r1=1 r2=0", "r1=1 r2=1"], "store buffering allows all four outcomes on this machine, not " + repr(outcomes(_sb))
+          _mp = [[("store", "d", 7), ("store", "f", 1)], [("load", "f", "r1"), ("load", "d", "r2")]]
+          assert "r1=1 r2=0" not in outcomes(_mp), "buffers drain in order, so a reader that sees the flag must see the data"
+          _ff = [[("store", "a", 1), ("fence",), ("load", "b", "r1")], [("store", "b", 1), ("fence",), ("load", "a", "r2")]]
+          assert "r1=0 r2=0" not in outcomes(_ff), "with fences, both loads cannot read 0"
+          assert output.splitlines() == ["['r1=0 r2=0', 'r1=0 r2=1', 'r1=1 r2=0', 'r1=1 r2=1']", "['r1=0 r2=1', 'r1=1 r2=0', 'r1=1 r2=1']", "['r1=0 r2=0', 'r1=0 r2=42', 'r1=1 r2=42']"], "The program should print the outcomes of the three tests"
+        wrong:
+          - |
+            def run_tso(threads, schedule):
+                # A machine with a store buffer per core. threads holds two lists of
+                # operations: ("store", var, value), ("load", var, register), ("fence",).
+                # schedule is a list of actions: ("step", i) runs thread i's next
+                # operation; ("drain", i) moves the oldest store in core i's buffer to
+                # memory. A store goes into its core's buffer; a load takes the newest
+                # value for that variable in its own buffer if there is one, otherwise
+                # memory (where every variable starts at 0); a fence may only run when
+                # its core's buffer is empty. Return the registers as a dictionary, or
+                # None if the schedule is impossible or leaves anything unfinished.
+                memory = {}
+                buffers = [[], []]
+                pc = [0, 0]
+                registers = {}
+                for kind, i in schedule:
+                    if kind == "drain":
+                        if not buffers[i]:
+                            return None
+                        var, value = buffers[i].pop(0)
+                        memory[var] = value
+                        continue
+                    if pc[i] >= len(threads[i]):
+                        return None
+                    op = threads[i][pc[i]]
+                    if op[0] == "store":
+                        buffers[i].append((op[1], op[2]))
+                    elif op[0] == "load":
+                        value = memory.get(op[1], 0)
+                        registers[op[2]] = value
+                    elif buffers[i]:
+                        return None
+                    pc[i] += 1
+                if pc != [len(threads[0]), len(threads[1])] or buffers != [[], []]:
+                    return None
+                return registers
+
+
+            def orderings(actions):
+                # Every distinct ordering of a list of actions.
+                if not actions:
+                    return [[]]
+                result = []
+                for a in sorted(set(actions)):
+                    rest = list(actions)
+                    rest.remove(a)
+                    for tail in orderings(rest):
+                        result.append([a] + tail)
+                return result
+
+
+            def outcomes(threads):
+                actions = []
+                for i in range(2):
+                    for op in threads[i]:
+                        actions.append(("step", i))
+                        if op[0] == "store":
+                            actions.append(("drain", i))
+                found = set()
+                for schedule in orderings(actions):
+                    registers = run_tso(threads, schedule)
+                    if registers is not None:
+                        found.add(" ".join(r + "=" + str(registers[r]) for r in sorted(registers)))
+                return sorted(found)
+
+
+            store_buffering = [[("store", "x", 1), ("load", "y", "r1")], [("store", "y", 1), ("load", "x", "r2")]]
+            fenced = [[("store", "x", 1), ("fence",), ("load", "y", "r1")], [("store", "y", 1), ("fence",), ("load", "x", "r2")]]
+            message = [[("store", "data", 42), ("store", "flag", 1)], [("load", "flag", "r1"), ("load", "data", "r2")]]
+            print(outcomes(store_buffering))
+            print(outcomes(fenced))
+            print(outcomes(message))
+          - |
+            def run_tso(threads, schedule):
+                # A machine with a store buffer per core. threads holds two lists of
+                # operations: ("store", var, value), ("load", var, register), ("fence",).
+                # schedule is a list of actions: ("step", i) runs thread i's next
+                # operation; ("drain", i) moves the oldest store in core i's buffer to
+                # memory. A store goes into its core's buffer; a load takes the newest
+                # value for that variable in its own buffer if there is one, otherwise
+                # memory (where every variable starts at 0); a fence may only run when
+                # its core's buffer is empty. Return the registers as a dictionary, or
+                # None if the schedule is impossible or leaves anything unfinished.
+                memory = {}
+                buffers = [[], []]
+                pc = [0, 0]
+                registers = {}
+                for kind, i in schedule:
+                    if kind == "drain":
+                        if not buffers[i]:
+                            return None
+                        var, value = buffers[i].pop()
+                        memory[var] = value
+                        continue
+                    if pc[i] >= len(threads[i]):
+                        return None
+                    op = threads[i][pc[i]]
+                    if op[0] == "store":
+                        buffers[i].append((op[1], op[2]))
+                    elif op[0] == "load":
+                        value = memory.get(op[1], 0)
+                        for var, v in buffers[i]:
+                            if var == op[1]:
+                                value = v
+                        registers[op[2]] = value
+                    elif buffers[i]:
+                        return None
+                    pc[i] += 1
+                if pc != [len(threads[0]), len(threads[1])] or buffers != [[], []]:
+                    return None
+                return registers
+
+
+            def orderings(actions):
+                # Every distinct ordering of a list of actions.
+                if not actions:
+                    return [[]]
+                result = []
+                for a in sorted(set(actions)):
+                    rest = list(actions)
+                    rest.remove(a)
+                    for tail in orderings(rest):
+                        result.append([a] + tail)
+                return result
+
+
+            def outcomes(threads):
+                actions = []
+                for i in range(2):
+                    for op in threads[i]:
+                        actions.append(("step", i))
+                        if op[0] == "store":
+                            actions.append(("drain", i))
+                found = set()
+                for schedule in orderings(actions):
+                    registers = run_tso(threads, schedule)
+                    if registers is not None:
+                        found.add(" ".join(r + "=" + str(registers[r]) for r in sorted(registers)))
+                return sorted(found)
+
+
+            store_buffering = [[("store", "x", 1), ("load", "y", "r1")], [("store", "y", 1), ("load", "x", "r2")]]
+            fenced = [[("store", "x", 1), ("fence",), ("load", "y", "r1")], [("store", "y", 1), ("fence",), ("load", "x", "r2")]]
+            message = [[("store", "data", 42), ("store", "flag", 1)], [("load", "flag", "r1"), ("load", "data", "r2")]]
+            print(outcomes(store_buffering))
+            print(outcomes(fenced))
+            print(outcomes(message))
+          - |
+            def run_tso(threads, schedule):
+                # A machine with a store buffer per core. threads holds two lists of
+                # operations: ("store", var, value), ("load", var, register), ("fence",).
+                # schedule is a list of actions: ("step", i) runs thread i's next
+                # operation; ("drain", i) moves the oldest store in core i's buffer to
+                # memory. A store goes into its core's buffer; a load takes the newest
+                # value for that variable in its own buffer if there is one, otherwise
+                # memory (where every variable starts at 0); a fence may only run when
+                # its core's buffer is empty. Return the registers as a dictionary, or
+                # None if the schedule is impossible or leaves anything unfinished.
+                memory = {}
+                buffers = [[], []]
+                pc = [0, 0]
+                registers = {}
+                for kind, i in schedule:
+                    if kind == "drain":
+                        if not buffers[i]:
+                            return None
+                        var, value = buffers[i].pop(0)
+                        memory[var] = value
+                        continue
+                    if pc[i] >= len(threads[i]):
+                        return None
+                    op = threads[i][pc[i]]
+                    if op[0] == "store":
+                        buffers[i].append((op[1], op[2]))
+                    elif op[0] == "load":
+                        value = memory.get(op[1], 0)
+                        for var, v in buffers[i]:
+                            if var == op[1]:
+                                value = v
+                        registers[op[2]] = value
+                    pc[i] += 1
+                if pc != [len(threads[0]), len(threads[1])] or buffers != [[], []]:
+                    return None
+                return registers
+
+
+            def orderings(actions):
+                # Every distinct ordering of a list of actions.
+                if not actions:
+                    return [[]]
+                result = []
+                for a in sorted(set(actions)):
+                    rest = list(actions)
+                    rest.remove(a)
+                    for tail in orderings(rest):
+                        result.append([a] + tail)
+                return result
+
+
+            def outcomes(threads):
+                actions = []
+                for i in range(2):
+                    for op in threads[i]:
+                        actions.append(("step", i))
+                        if op[0] == "store":
+                            actions.append(("drain", i))
+                found = set()
+                for schedule in orderings(actions):
+                    registers = run_tso(threads, schedule)
+                    if registers is not None:
+                        found.add(" ".join(r + "=" + str(registers[r]) for r in sorted(registers)))
+                return sorted(found)
+
+
+            store_buffering = [[("store", "x", 1), ("load", "y", "r1")], [("store", "y", 1), ("load", "x", "r2")]]
+            fenced = [[("store", "x", 1), ("fence",), ("load", "y", "r1")], [("store", "y", 1), ("fence",), ("load", "x", "r2")]]
+            message = [[("store", "data", 42), ("store", "flag", 1)], [("load", "flag", "r1"), ("load", "data", "r2")]]
+            print(outcomes(store_buffering))
+            print(outcomes(fenced))
+            print(outcomes(message))
+        explanation: |
+          A drain moves the oldest buffered store to memory; a store joins its core's buffer; a load takes memory's value unless its own buffer has a newer one for the same variable; a fence is only possible on an empty buffer. Anything left unfinished, or an impossible action, gives None. Ignoring the core's own buffer makes a thread miss its own writes; draining the newest store first lets stores overtake each other, which breaks message passing; and a fence that never checks the buffer forbids nothing.
+    - question:
+        id: fix-double-checked
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The ticket gates sometimes read a fare of None just after the server starts. The program should print `[('gate1', 2), ('gate2', 2), ('gate3', 2)] ['gate1'] 3`. Find the fault and fix it.
+        starter: |
+          class Lock:
+              def __init__(self):
+                  self.holder = None
+                  self.taken = 0
+
+              def acquire(self, name):
+                  while self.holder is not None:
+                      yield "waiting"
+                  self.holder = name
+                  self.taken += 1
+
+              def release(self, name):
+                  self.holder = None
+
+
+          def load_fares():
+              return {"base": 10, "per_km": 2}
+
+
+          def get_fares(name, cache, lock, loads, out):
+              # Lazily load the fare table once and share it. The first check needs
+              # no lock, so that once the table exists, readers never wait. Anything
+              # a reader can see through cache["fares"] must already be complete.
+              if cache["fares"] is None:
+                  yield from lock.acquire(name)
+                  if cache["fares"] is None:
+                      loads.append(name)
+                      cache["fares"] = {}
+                      yield "reading the fare file"
+                      for key, value in load_fares().items():
+                          cache["fares"][key] = value
+                  lock.release(name)
+              out.append((name, cache["fares"].get("per_km")))
+
+
+          def run(threads):
+              while threads:
+                  for t in list(threads):
+                      try:
+                          next(t)
+                      except StopIteration:
+                          threads.remove(t)
+
+
+          cache = {"fares": None}
+          lock = Lock()
+          loads = []
+          out = []
+          run([get_fares(n, cache, lock, loads, out) for n in ["gate1", "gate2", "gate3"]])
+          print(out, loads, lock.taken)
+        solution: |
+          class Lock:
+              def __init__(self):
+                  self.holder = None
+                  self.taken = 0
+
+              def acquire(self, name):
+                  while self.holder is not None:
+                      yield "waiting"
+                  self.holder = name
+                  self.taken += 1
+
+              def release(self, name):
+                  self.holder = None
+
+
+          def load_fares():
+              return {"base": 10, "per_km": 2}
+
+
+          def get_fares(name, cache, lock, loads, out):
+              # Lazily load the fare table once and share it. The first check needs
+              # no lock, so that once the table exists, readers never wait. Anything
+              # a reader can see through cache["fares"] must already be complete.
+              if cache["fares"] is None:
+                  yield from lock.acquire(name)
+                  if cache["fares"] is None:
+                      loads.append(name)
+                      fresh = {}
+                      yield "reading the fare file"
+                      for key, value in load_fares().items():
+                          fresh[key] = value
+                      cache["fares"] = fresh
+                  lock.release(name)
+              out.append((name, cache["fares"].get("per_km")))
+
+
+          def run(threads):
+              while threads:
+                  for t in list(threads):
+                      try:
+                          next(t)
+                      except StopIteration:
+                          threads.remove(t)
+
+
+          cache = {"fares": None}
+          lock = Lock()
+          loads = []
+          out = []
+          run([get_fares(n, cache, lock, loads, out) for n in ["gate1", "gate2", "gate3"]])
+          print(out, loads, lock.taken)
+        tests: |
+          _c = {"fares": None}
+          _l = Lock()
+          _loads = []
+          _out = []
+          _seen = []
+          def _watch():
+              for _i in range(12):
+                  _f = _c["fares"]
+                  _seen.append(_f is None or (_f.get("base") == 10 and _f.get("per_km") == 2))
+                  yield "watching"
+          run([_watch(), get_fares("g1", _c, _l, _loads, _out), get_fares("g2", _c, _l, _loads, _out), get_fares("g3", _c, _l, _loads, _out), get_fares("g4", _c, _l, _loads, _out)])
+          assert all(_seen), "a thread looking at the cache saw a fare table that was published before it was filled in"
+          assert sorted(_out) == [("g1", 2), ("g2", 2), ("g3", 2), ("g4", 2)], "every gate should read per_km = 2, not " + repr(sorted(_out))
+          assert _loads == ["g1"], "the fare file should be read once, by the first gate, not by " + repr(_loads)
+          _before = _l.taken
+          _out2 = []
+          for _x in get_fares("late", _c, _l, _loads, _out2):
+              pass
+          assert _out2 == [("late", 2)] and _l.taken == _before, "a gate arriving after the table exists should read it without taking the lock"
+          assert output.splitlines() == ["[('gate1', 2), ('gate2', 2), ('gate3', 2)] ['gate1'] 3"], "The program should print [('gate1', 2), ('gate2', 2), ('gate3', 2)] ['gate1'] 3"
+        wrong:
+          - |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+                    self.taken = 0
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        yield "waiting"
+                    self.holder = name
+                    self.taken += 1
+
+                def release(self, name):
+                    self.holder = None
+
+
+            def load_fares():
+                return {"base": 10, "per_km": 2}
+
+
+            def get_fares(name, cache, lock, loads, out):
+                # Lazily load the fare table once and share it. The first check needs
+                # no lock, so that once the table exists, readers never wait. Anything
+                # a reader can see through cache["fares"] must already be complete.
+                if cache["fares"] is None:
+                    yield from lock.acquire(name)
+                    if cache["fares"] is None:
+                        loads.append(name)
+                        fresh = {}
+                        cache["fares"] = fresh
+                        yield "reading the fare file"
+                        for key, value in load_fares().items():
+                            fresh[key] = value
+                    lock.release(name)
+                out.append((name, cache["fares"].get("per_km")))
+
+
+            def run(threads):
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+
+
+            cache = {"fares": None}
+            lock = Lock()
+            loads = []
+            out = []
+            run([get_fares(n, cache, lock, loads, out) for n in ["gate1", "gate2", "gate3"]])
+            print(out, loads, lock.taken)
+          - |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+                    self.taken = 0
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        yield "waiting"
+                    self.holder = name
+                    self.taken += 1
+
+                def release(self, name):
+                    self.holder = None
+
+
+            def load_fares():
+                return {"base": 10, "per_km": 2}
+
+
+            def get_fares(name, cache, lock, loads, out):
+                # Lazily load the fare table once and share it. The first check needs
+                # no lock, so that once the table exists, readers never wait. Anything
+                # a reader can see through cache["fares"] must already be complete.
+                yield from lock.acquire(name)
+                if cache["fares"] is None:
+                    loads.append(name)
+                    fresh = {}
+                    yield "reading the fare file"
+                    for key, value in load_fares().items():
+                        fresh[key] = value
+                    cache["fares"] = fresh
+                lock.release(name)
+                out.append((name, cache["fares"].get("per_km")))
+
+
+            def run(threads):
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+
+
+            cache = {"fares": None}
+            lock = Lock()
+            loads = []
+            out = []
+            run([get_fares(n, cache, lock, loads, out) for n in ["gate1", "gate2", "gate3"]])
+            print(out, loads, lock.taken)
+          - |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+                    self.taken = 0
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        yield "waiting"
+                    self.holder = name
+                    self.taken += 1
+
+                def release(self, name):
+                    self.holder = None
+
+
+            def load_fares():
+                return {"base": 10, "per_km": 2}
+
+
+            def get_fares(name, cache, lock, loads, out):
+                # Lazily load the fare table once and share it. The first check needs
+                # no lock, so that once the table exists, readers never wait. Anything
+                # a reader can see through cache["fares"] must already be complete.
+                if cache["fares"] is None:
+                    yield from lock.acquire(name)
+                    loads.append(name)
+                    fresh = {}
+                    yield "reading the fare file"
+                    for key, value in load_fares().items():
+                        fresh[key] = value
+                    cache["fares"] = fresh
+                    lock.release(name)
+                out.append((name, cache["fares"].get("per_km")))
+
+
+            def run(threads):
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+
+
+            cache = {"fares": None}
+            lock = Lock()
+            loads = []
+            out = []
+            run([get_fares(n, cache, lock, loads, out) for n in ["gate1", "gate2", "gate3"]])
+            print(out, loads, lock.taken)
+        explanation: |
+          The table is published, through cache["fares"], before it is filled, and readers that skip the lock see the empty dictionary. Build it completely in a local variable and publish it with one store at the end. Publishing the local dictionary before filling it is the same bug, since it is the same object; taking the lock on every call is correct but makes every later reader wait; and dropping the check inside the lock lets every gate that arrived early load the file again.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. On an x86 laptop with no fences, how many of the four pairs (r1, r2) can the store-buffering test produce?
+        answer: "4"
+        explanation: |
+          The three that interleavings allow, plus (0, 0): both stores sit in store buffers while both loads read 0 from memory. A fence between each store and load, or sequentially consistent atomics, rules (0, 0) out again.
+    - question:
+        id: work-flag
+        type: choice
+        system: s2
+        prompt: |
+          A C++ program on an ARM server writes a result into a buffer and then sets an ordinary bool `ready = true`; another thread spins until ready and reads the buffer, and occasionally reads garbage. What is the right fix?
+        options:
+          - "Make ready a std::atomic<bool>, store it with release and load it with acquire"
+          - "Add a sleep before reading the buffer"
+          - "Mark ready volatile in C++"
+          - "Set ready twice"
+        answer: 0
+        explanation: |
+          The program has a data race, so it has no defined meaning; on ARM the flag can become visible before the buffer. Release and acquire make the buffer writes happen before the reads. C++'s volatile, unlike Java's, gives no ordering between threads.
+  connections:
+    - text: |
+        All four. The three interleavings allow, and (0, 0) as well: on x86 a load may run while its own core's earlier store still waits in the store buffer, so both threads can read 0. This is the one reordering x86 permits, and it is exactly what the puzzle's two programs expose.
+
+        From here on the cluster stops building synchronisation and starts using it. A pool of worker threads takes tasks from a shared queue; the queue's lock or atomics give the happens-before that makes each task's inputs visible to the worker that runs it, and its result visible to whoever collects it. [[d0.thread-pools-and-work-queues]] asks how many workers to run, how to share the work fairly, and how to stop a flood of tasks from sinking the pool.

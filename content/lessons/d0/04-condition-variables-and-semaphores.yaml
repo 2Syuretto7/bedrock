@@ -1,0 +1,1265 @@
+concept: d0.condition-variables-and-semaphores
+minutes: 85
+claim: You can make a thread wait efficiently until a condition holds, using a condition variable that gives up the lock and sleeps in one step; always re-check the condition in a loop after waking, and say why; choose between waking one waiter and waking all; build a bounded buffer for producers and consumers from a lock and two conditions; explain and prevent the lost wakeup; use a counting semaphore to limit how many threads do something at once, and build a fair one; and work out how a concurrency limit stretches a batch of work.
+recalls: [d0.deadlock]
+uses: [d0.locks-and-mutual-exclusion, d0.interleavings-and-race-conditions, s2.stacks-and-queues, h2.scheduling, s1.generators-and-context-managers, s1.classes-and-objects]
+leads: [d0.atomic-operations-and-compare-and-swap]
+starter: |
+  # Scratch space. A semaphore is a count of permits. Ten downloads,
+  # three permits: how many rounds of downloads does that take?
+  downloads = 10
+  permits = 3
+  rounds = (downloads + permits - 1) // permits
+  print(rounds, "rounds of", permits)
+parts:
+  recall:
+    - text: |
+        [[d0.deadlock]] showed threads stuck for ever waiting for locks. A lock is about who may enter; threads also need to wait for something to become true: a queue to have an item, a buffer to have space, a download slot to come free. Checking again and again while holding a lock wastes a core and blocks the very thread that would make it true. Three quick pulls first.
+  puzzle:
+    - text: |
+        A photo app uploads an album of 10 photos. Each upload takes 2 seconds, and the app limits itself to 3 uploads at once with a counting semaphore of 3 permits: each upload acquires a permit before starting and releases it when done.
+
+        **How many seconds until all 10 photos are uploaded?**
+  intuition:
+    - text: |
+        In a busy restaurant in Chennai, cooks put finished plates on the pass, a counter between the kitchen and the dining room with room for a few plates, and waiters carry them out. When the pass is full, a cook does not stand there checking every second; they wait until a bell tells them a plate has gone. When it is empty, a waiter waits until the bell says a plate has arrived. The pass is a **bounded buffer**, and the bell is a **condition variable**: a way to wait for a change and to announce one.
+
+        The figure runs a producer and a consumer through a buffer. Choose which side is slower and change the buffer's size. Bright cells are work, dark cells are waiting.
+    - figure: bounded-buffer
+      props: { speed: slow-consumer, capacity: 2 }
+    - text: |
+        When the consumer is slower, a bigger buffer lets the producer get further ahead and wait less, but the last item is used at the same moment: throughput is set by the slower side. When the producer is slower, the consumer waits for every item and the buffer never fills. Either way, the waiting side sleeps until something changes rather than burning a processor, and the change wakes it.
+  derivation:
+    - text: |
+        **Why a lock is not enough.** A consumer could take the lock, look at the queue, find it empty, release the lock and try again, for ever. That **busy waiting** burns a core, and on a busy machine it steals time from the producer it is waiting for. Sleeping for a fixed time between checks wastes less but reacts slowly. What is wanted is to sleep until exactly the moment the condition might have changed.
+
+        **Condition variables.** A **condition variable** is a queue of waiting threads tied to a lock. `wait` does two things in one indivisible step: it releases the lock and puts the thread to sleep on the queue. When woken, the thread reacquires the lock before `wait` returns. `notify` (or signal) wakes one waiting thread; `notify_all` (or broadcast) wakes them all. The thread that changes the shared state calls notify while holding the lock. A condition variable has no memory: notifying when nobody waits does nothing.
+    - question:
+        id: derivation-atomic-wait
+        type: choice
+        system: s2
+        prompt: |
+          Why must wait release the lock and go to sleep in one indivisible step?
+        options:
+          - "Otherwise a notify could arrive between the release and the sleep, find nobody waiting, and be lost, leaving the thread asleep for ever"
+          - "Releasing a lock is slow, so doing both at once saves time"
+          - "So that two threads cannot both be waiting"
+          - "Because the lock must be held while sleeping"
+        answer: 0
+        explanation: |
+          This is the lost wakeup. A notification is not stored; if the waiter is not yet on the queue when it comes, it is simply gone. Doing both in one step closes the gap.
+    - text: |
+        **Always wait in a loop.** The right shape is `while not condition: cond.wait()`, never `if`. By the time a woken thread has reacquired the lock, the condition may be false again: another consumer may have arrived and taken the item first, which is called **barging**. Also, most libraries allow **spurious wakeups**, a return from wait with no notify at all, because guaranteeing otherwise is expensive on some systems. The loop makes both harmless: the thread re-checks and, if need be, waits again. These are called **Mesa semantics**, after the language that introduced them; the older **Hoare semantics**, in which the notified thread runs at once with the condition guaranteed true, turned out to be hard to implement efficiently.
+
+        **One or all.** notify wakes a single waiter and is right when each change lets exactly one waiter proceed and every waiter is waiting for the same thing: one item added, one consumer woken. notify_all is needed when waiters wait for different conditions on the same condition variable, or when one change may let several proceed, such as a shutdown flag. Waking all is always safe with the while loop, but each woken thread must take the lock in turn, which costs time when there are many.
+    - question:
+        id: derivation-if
+        type: choice
+        system: s2
+        prompt: |
+          A consumer waits with `if queue is empty: not_empty.wait()` and then pops from the queue. What can go wrong?
+        options:
+          - "It can be woken, find that another consumer already took the item, and pop from an empty queue"
+          - "It can never be woken"
+          - "It holds the lock while sleeping"
+          - "Nothing, because notify wakes exactly one thread"
+        answer: 0
+        explanation: |
+          Between the notify and the moment the woken consumer gets the lock back, another consumer can take the item; and a spurious wakeup can happen with nothing added at all. The while loop checks again.
+    - text: |
+        **The bounded buffer.** A buffer of capacity N shared by producers and consumers needs one lock and two conditions. A producer takes the lock, waits on **not_full** while the buffer holds N items, adds its item and notifies **not_empty**. A consumer waits on not_empty while the buffer is empty, removes an item and notifies not_full. Each side wakes the other. Python's `queue.Queue(maxsize=N)` is exactly this, and so is a Unix pipe, which blocks a writer when its 64 KiB fills and a reader when it is empty. The bound matters: an unbounded queue in front of a slow consumer grows without limit until memory runs out, while a bounded one slows the producer down to the consumer's pace, which is called **backpressure**.
+
+        **Semaphores.** Dijkstra's **semaphore**, from 1965, is an integer count of permits with two operations. `acquire`, which Dijkstra called P, takes a permit, waiting while the count is zero. `release`, called V, returns one, waking a waiter. A semaphore of 1 behaves much like a lock, but it has no owner: any thread may release it. A **counting** semaphore of k limits how many threads do something at once: k database connections, k downloads, k requests to a fragile service. A fair semaphore keeps waiters in a queue and hands a released permit straight to the first, so a newcomer cannot overtake.
+    - question:
+        id: derivation-permits
+        type: numeric
+        system: s2
+        prompt: |
+          A semaphore starts with 4 permits. Six threads acquire, then two release. How many threads are still waiting?
+        answer: "0"
+        explanation: |
+          The first four acquires take the permits and the next two wait. Each release hands its permit to a waiter, so after two releases both waiters are running and nobody is left waiting.
+    - text: |
+        **Semaphores for a bounded buffer.** The bounded buffer can also be built from three semaphores: **empty_slots** starting at N, **full_slots** starting at 0, and a lock. A producer acquires an empty slot, adds under the lock, and releases a full slot; a consumer does the opposite. The order matters: a producer that took the lock first and then waited for an empty slot would hold the lock while asleep, and no consumer could ever free a slot, a deadlock.
+
+        **More waiting tools.** A **barrier** makes a group of threads wait until all have arrived, as each step of a parallel simulation must finish everywhere before the next begins. A **countdown latch** lets threads wait until some count of events have happened, such as "all five services have started". An **event** is a flag threads can wait on until it is set. All are built from a lock and a condition variable, and all share the same rules: check the condition under the lock, wait in a loop, and change the state and notify under the lock.
+    - question:
+        id: derivation-order
+        type: choice
+        system: s2
+        prompt: |
+          A producer using semaphores acquires the buffer's lock first and then waits on empty_slots. What happens when the buffer is full?
+        options:
+          - "It sleeps holding the lock, so no consumer can take an item to free a slot: deadlock"
+          - "It waits until a consumer frees a slot, as intended"
+          - "The semaphore raises an error"
+          - "It overwrites the oldest item"
+        answer: 0
+        explanation: |
+          Waiting while holding the lock that the other side needs is hold-and-wait with a cycle. Wait for the slot first, then take the lock just for the update.
+  formal:
+    - text: |
+        **Condition variable.** A wait queue tied to a lock. wait: release the lock and sleep, as one step; reacquire on waking. notify: wake one waiter. notify_all: wake all. No memory: a notify with no waiter is lost.
+
+        **Usage.** Under the lock: `while not condition: wait()`. Change the state and notify under the lock. Loop because of barging and spurious wakeups (Mesa semantics).
+
+        **Bounded buffer.** One lock, conditions not_full and not_empty; producers wait while full and notify not_empty; consumers wait while empty and notify not_full. Bounding gives backpressure.
+
+        **Semaphore.** A count of permits. acquire (P) takes one, waiting at zero; release (V) returns one. Counting semaphores limit concurrency; a fair one queues waiters and hands permits over in order. No owner.
+
+        **Others.** Barriers, countdown latches and events, all from a lock and a condition.
+  drill:
+    - text: Seconds each. Ask what each thread is waiting for, and who will wake it.
+    - question:
+        id: drill-loop
+        type: choice
+        system: s1
+        prompt: |
+          Which is the right way to wait for a queue to have an item?
+        options:
+          - "while queue is empty: not_empty.wait()"
+          - "if queue is empty: not_empty.wait()"
+          - "not_empty.wait() once, then take the item"
+          - "sleep for 10 ms, then check once"
+        answer: 0
+        explanation: Only the loop handles barging and spurious wakeups by checking again after every wake.
+    - question:
+        id: drill-owner
+        type: choice
+        system: s1
+        prompt: |
+          What can a semaphore of 1 do that a lock cannot?
+        options:
+          - "Be released by a different thread from the one that acquired it"
+          - "Let two threads in at once"
+          - "Prevent deadlock"
+          - "Wake waiters in random order"
+        answer: 0
+        explanation: A semaphore has no owner, which makes it useful for signalling between threads but loses the lock's check that only the holder releases.
+    - question:
+        id: predict-rounds
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          tasks, permits, secs = 7, 2, 3
+          rounds = (tasks + permits - 1) // permits
+          print(rounds * secs)
+        output: "12"
+        explanation: Seven tasks two at a time need 4 rounds, the last with one task, each lasting 3 seconds.
+    - question:
+        id: predict-lost
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          waiting = []
+          def notify():
+              if waiting:
+                  waiting.pop(0)
+          notify()
+          waiting.append("printer")
+          print(waiting)
+        output: "['printer']"
+        explanation: The notify came before the printer was waiting, so it woke nobody and was lost; the printer now waits for a notify that already happened.
+    - question:
+        id: predict-semaphore
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          count, queue = 1, []
+          for name in ["a", "b", "c"]:
+              if count > 0:
+                  count -= 1
+              else:
+                  queue.append(name)
+          print(count, queue)
+        output: "0 ['b', 'c']"
+        explanation: a takes the only permit; b and c queue behind it.
+  work:
+    - text: Slower now. Each answer is a way of waiting that neither spins nor sleeps through a wakeup.
+    - question:
+        id: write-buffer
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write the `put` and `get` methods of a bounded buffer, using its two condition variables. The program should print `finished ['dosa', 'idli', 'vada', 'upma', 'poha']`.
+        starter: |
+          class Condition:
+              # Threads wait here until another thread notifies them. As with every
+              # thread here, code between two yields runs as one step, as if the
+              # running thread held the buffer's lock; waiting gives the lock up.
+              def __init__(self):
+                  self.waiting = []
+
+              def wait(self, name):
+                  self.waiting.append(name)
+                  while name in self.waiting:
+                      yield "waiting"
+
+              def notify(self):
+                  if self.waiting:
+                      self.waiting.pop(0)
+
+
+          class Buffer:
+              # At most capacity items, shared by producers and consumers. put waits
+              # on not_full while the buffer is full; get waits on not_empty while it
+              # is empty. Each notifies the other side after changing the items.
+              def __init__(self, capacity):
+                  self.capacity = capacity
+                  self.items = []
+                  self.not_full = Condition()
+                  self.not_empty = Condition()
+
+              def put(self, name, item):
+                  self.items.append(item)
+                  yield "put"
+
+              def get(self, name, out):
+                  yield "get"
+
+
+          def producer(buf, name, items):
+              for item in items:
+                  yield from buf.put(name, item)
+                  yield "made one"
+
+
+          def consumer(buf, name, n, got):
+              for i in range(n):
+                  yield from buf.get(name, got)
+                  yield "used one"
+
+
+          def run(threads):
+              while threads:
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "finished"
+
+
+          buf = Buffer(2)
+          got = []
+          print(run([consumer(buf, "c", 5, got), producer(buf, "p", ["dosa", "idli", "vada", "upma", "poha"])]), got)
+        solution: |
+          class Condition:
+              # Threads wait here until another thread notifies them. As with every
+              # thread here, code between two yields runs as one step, as if the
+              # running thread held the buffer's lock; waiting gives the lock up.
+              def __init__(self):
+                  self.waiting = []
+
+              def wait(self, name):
+                  self.waiting.append(name)
+                  while name in self.waiting:
+                      yield "waiting"
+
+              def notify(self):
+                  if self.waiting:
+                      self.waiting.pop(0)
+
+
+          class Buffer:
+              # At most capacity items, shared by producers and consumers. put waits
+              # on not_full while the buffer is full; get waits on not_empty while it
+              # is empty. Each notifies the other side after changing the items.
+              def __init__(self, capacity):
+                  self.capacity = capacity
+                  self.items = []
+                  self.not_full = Condition()
+                  self.not_empty = Condition()
+
+              def put(self, name, item):
+                  while len(self.items) == self.capacity:
+                      yield from self.not_full.wait(name)
+                  self.items.append(item)
+                  self.not_empty.notify()
+
+              def get(self, name, out):
+                  while not self.items:
+                      yield from self.not_empty.wait(name)
+                  out.append(self.items.pop(0))
+                  self.not_full.notify()
+
+
+          def producer(buf, name, items):
+              for item in items:
+                  yield from buf.put(name, item)
+                  yield "made one"
+
+
+          def consumer(buf, name, n, got):
+              for i in range(n):
+                  yield from buf.get(name, got)
+                  yield "used one"
+
+
+          def run(threads):
+              while threads:
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "finished"
+
+
+          buf = Buffer(2)
+          got = []
+          print(run([consumer(buf, "c", 5, got), producer(buf, "p", ["dosa", "idli", "vada", "upma", "poha"])]), got)
+        tests: |
+          _b = Buffer(1)
+          _g = _b.get("c1", [])
+          assert next(_g) == "waiting" and "c1" in _b.not_empty.waiting, "a consumer finding the buffer empty should wait on not_empty, not spin"
+          _p = _b.put("p1", "x")
+          _done = False
+          try:
+              next(_p)
+          except StopIteration:
+              _done = True
+          assert _done and _b.items == ["x"], "putting into a buffer with room should not wait"
+          assert "c1" not in _b.not_empty.waiting, "putting an item should notify the waiting consumer"
+          _b2 = Buffer(1)
+          _b2.items.append("full")
+          _p2 = _b2.put("p2", "y")
+          assert next(_p2) == "waiting" and "p2" in _b2.not_full.waiting, "a producer finding the buffer full should wait on not_full"
+          _b = Buffer(1)
+          _got = []
+          _r = run([consumer(_b, "c1", 1, _got), producer(_b, "p", ["a", "b"]), consumer(_b, "c2", 1, _got)])
+          assert _r == "finished" and sorted(_got) == ["a", "b"], "a consumer woken for an item that another consumer took first must check again and wait, not crash; got " + repr(_got) + " " + _r
+          _b = Buffer(1)
+          _got = []
+          def _slow(_n):
+              for _i in range(_n):
+                  yield "busy"
+                  yield "busy"
+                  yield from _b.get("slow", _got)
+          _r = run([producer(_b, "p", ["a", "b", "c"]), _slow(3)])
+          assert _r == "finished" and _got == ["a", "b", "c"], "a producer that fills a buffer of 1 must be woken when a slow consumer makes room; the run was " + _r + " with " + repr(_got)
+          _b = Buffer(2)
+          _seen = []
+          _got = []
+          def _watch():
+              for _i in range(40):
+                  _seen.append(len(_b.items))
+                  yield "watching"
+          _r = run([producer(_b, "p1", list(range(6))), producer(_b, "p2", list(range(6, 12))), consumer(_b, "c1", 7, _got), consumer(_b, "c2", 5, _got), _watch()])
+          assert _r == "finished", "two producers and two consumers sharing a buffer of 2 should finish, not get " + _r
+          assert sorted(_got) == list(range(12)), "every item should be consumed exactly once, not " + repr(sorted(_got))
+          assert max(_seen) <= 2, "the buffer must never hold more than its capacity of 2, but held " + str(max(_seen))
+          assert output.splitlines() == ["finished ['dosa', 'idli', 'vada', 'upma', 'poha']"], "The program should print finished ['dosa', 'idli', 'vada', 'upma', 'poha']"
+        wrong:
+          - |
+            class Condition:
+                # Threads wait here until another thread notifies them. As with every
+                # thread here, code between two yields runs as one step, as if the
+                # running thread held the buffer's lock; waiting gives the lock up.
+                def __init__(self):
+                    self.waiting = []
+
+                def wait(self, name):
+                    self.waiting.append(name)
+                    while name in self.waiting:
+                        yield "waiting"
+
+                def notify(self):
+                    if self.waiting:
+                        self.waiting.pop(0)
+
+
+            class Buffer:
+                # At most capacity items, shared by producers and consumers. put waits
+                # on not_full while the buffer is full; get waits on not_empty while it
+                # is empty. Each notifies the other side after changing the items.
+                def __init__(self, capacity):
+                    self.capacity = capacity
+                    self.items = []
+                    self.not_full = Condition()
+                    self.not_empty = Condition()
+
+                def put(self, name, item):
+                    while len(self.items) == self.capacity:
+                        yield from self.not_full.wait(name)
+                    self.items.append(item)
+                    self.not_empty.notify()
+
+                def get(self, name, out):
+                    if not self.items:
+                        yield from self.not_empty.wait(name)
+                    out.append(self.items.pop(0))
+                    self.not_full.notify()
+
+
+            def producer(buf, name, items):
+                for item in items:
+                    yield from buf.put(name, item)
+                    yield "made one"
+
+
+            def consumer(buf, name, n, got):
+                for i in range(n):
+                    yield from buf.get(name, got)
+                    yield "used one"
+
+
+            def run(threads):
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            buf = Buffer(2)
+            got = []
+            print(run([consumer(buf, "c", 5, got), producer(buf, "p", ["dosa", "idli", "vada", "upma", "poha"])]), got)
+          - |
+            class Condition:
+                # Threads wait here until another thread notifies them. As with every
+                # thread here, code between two yields runs as one step, as if the
+                # running thread held the buffer's lock; waiting gives the lock up.
+                def __init__(self):
+                    self.waiting = []
+
+                def wait(self, name):
+                    self.waiting.append(name)
+                    while name in self.waiting:
+                        yield "waiting"
+
+                def notify(self):
+                    if self.waiting:
+                        self.waiting.pop(0)
+
+
+            class Buffer:
+                # At most capacity items, shared by producers and consumers. put waits
+                # on not_full while the buffer is full; get waits on not_empty while it
+                # is empty. Each notifies the other side after changing the items.
+                def __init__(self, capacity):
+                    self.capacity = capacity
+                    self.items = []
+                    self.not_full = Condition()
+                    self.not_empty = Condition()
+
+                def put(self, name, item):
+                    while len(self.items) == self.capacity:
+                        yield from self.not_full.wait(name)
+                    self.items.append(item)
+                    self.not_empty.notify()
+
+                def get(self, name, out):
+                    while not self.items:
+                        yield from self.not_empty.wait(name)
+                    out.append(self.items.pop(0))
+
+
+            def producer(buf, name, items):
+                for item in items:
+                    yield from buf.put(name, item)
+                    yield "made one"
+
+
+            def consumer(buf, name, n, got):
+                for i in range(n):
+                    yield from buf.get(name, got)
+                    yield "used one"
+
+
+            def run(threads):
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            buf = Buffer(2)
+            got = []
+            print(run([consumer(buf, "c", 5, got), producer(buf, "p", ["dosa", "idli", "vada", "upma", "poha"])]), got)
+          - |
+            class Condition:
+                # Threads wait here until another thread notifies them. As with every
+                # thread here, code between two yields runs as one step, as if the
+                # running thread held the buffer's lock; waiting gives the lock up.
+                def __init__(self):
+                    self.waiting = []
+
+                def wait(self, name):
+                    self.waiting.append(name)
+                    while name in self.waiting:
+                        yield "waiting"
+
+                def notify(self):
+                    if self.waiting:
+                        self.waiting.pop(0)
+
+
+            class Buffer:
+                # At most capacity items, shared by producers and consumers. put waits
+                # on not_full while the buffer is full; get waits on not_empty while it
+                # is empty. Each notifies the other side after changing the items.
+                def __init__(self, capacity):
+                    self.capacity = capacity
+                    self.items = []
+                    self.not_full = Condition()
+                    self.not_empty = Condition()
+
+                def put(self, name, item):
+                    while len(self.items) == self.capacity:
+                        yield from self.not_full.wait(name)
+                    self.items.append(item)
+                    self.not_full.notify()
+
+                def get(self, name, out):
+                    while not self.items:
+                        yield from self.not_empty.wait(name)
+                    out.append(self.items.pop(0))
+                    self.not_full.notify()
+
+
+            def producer(buf, name, items):
+                for item in items:
+                    yield from buf.put(name, item)
+                    yield "made one"
+
+
+            def consumer(buf, name, n, got):
+                for i in range(n):
+                    yield from buf.get(name, got)
+                    yield "used one"
+
+
+            def run(threads):
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            buf = Buffer(2)
+            got = []
+            print(run([consumer(buf, "c", 5, got), producer(buf, "p", ["dosa", "idli", "vada", "upma", "poha"])]), got)
+        explanation: |
+          put waits on not_full while the buffer is full, appends, and notifies not_empty; get waits on not_empty while it is empty, pops the oldest item, and notifies not_full. Waiting with if lets a consumer that was woken for an item someone else took pop from an empty list; forgetting to notify not_full leaves a producer asleep for ever once the buffer fills; and notifying not_full after a put wakes the wrong side, so a waiting consumer never hears of the item.
+    - question:
+        id: write-semaphore
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write a fair counting semaphore: `acquire` takes a free permit or queues, and `release` hands the permit to the first in the queue. The program should print `3 at once at most` and the ten photos in order.
+        starter: |
+          class Semaphore:
+              # A counting semaphore holding count permits. acquire takes a permit if
+              # one is free and nobody is queued; otherwise the thread joins the back
+              # of the queue and waits. release hands its permit straight to the
+              # first thread in the queue, or puts it back if nobody is waiting.
+              def __init__(self, count):
+                  self.count = count
+                  self.queue = []
+
+              def acquire(self, name):
+                  return
+                  yield "waiting"
+
+              def release(self):
+                  pass
+
+
+          def download(name, sem, active, log):
+              yield from sem.acquire(name)
+              active.append(name)
+              log.append((name, len(active)))
+              yield "downloading"
+              yield "downloading"
+              active.remove(name)
+              sem.release()
+
+
+          def run(threads):
+              seconds = 0
+              while threads:
+                  for t in list(threads):
+                      try:
+                          next(t)
+                      except StopIteration:
+                          threads.remove(t)
+                  seconds += 1
+              return seconds
+
+
+          sem = Semaphore(3)
+          active = []
+          log = []
+          names = ["photo" + str(i) for i in range(1, 11)]
+          seconds = run([download(n, sem, active, log) for n in names])
+          print(max(busy for name, busy in log), "at once at most")
+          print([name for name, busy in log])
+        solution: |
+          class Semaphore:
+              # A counting semaphore holding count permits. acquire takes a permit if
+              # one is free and nobody is queued; otherwise the thread joins the back
+              # of the queue and waits. release hands its permit straight to the
+              # first thread in the queue, or puts it back if nobody is waiting.
+              def __init__(self, count):
+                  self.count = count
+                  self.queue = []
+
+              def acquire(self, name):
+                  if self.count > 0 and not self.queue:
+                      self.count -= 1
+                      return
+                  self.queue.append(name)
+                  while name in self.queue:
+                      yield "waiting"
+
+              def release(self):
+                  if self.queue:
+                      self.queue.pop(0)
+                  else:
+                      self.count += 1
+
+
+          def download(name, sem, active, log):
+              yield from sem.acquire(name)
+              active.append(name)
+              log.append((name, len(active)))
+              yield "downloading"
+              yield "downloading"
+              active.remove(name)
+              sem.release()
+
+
+          def run(threads):
+              seconds = 0
+              while threads:
+                  for t in list(threads):
+                      try:
+                          next(t)
+                      except StopIteration:
+                          threads.remove(t)
+                  seconds += 1
+              return seconds
+
+
+          sem = Semaphore(3)
+          active = []
+          log = []
+          names = ["photo" + str(i) for i in range(1, 11)]
+          seconds = run([download(n, sem, active, log) for n in names])
+          print(max(busy for name, busy in log), "at once at most")
+          print([name for name, busy in log])
+        tests: |
+          _s = Semaphore(2)
+          for _x in _s.acquire("a"):
+              raise AssertionError("acquiring with permits free should not wait")
+          for _x in _s.acquire("b"):
+              raise AssertionError("acquiring the second of two permits should not wait")
+          assert _s.count == 0, "two acquires take both permits, leaving 0, not " + str(_s.count)
+          _g = _s.acquire("c")
+          _w = None
+          try:
+              _w = next(_g)
+          except StopIteration:
+              pass
+          assert _w == "waiting" and _s.queue == ["c"], "with no permits left, c should join the queue and wait, but it went straight in"
+          _s.release()
+          assert _s.queue == [] and _s.count == 0, "release with c waiting should hand the permit straight to c, leaving the count at 0"
+          _s.release()
+          _s.release()
+          assert _s.count == 2, "with nobody waiting, releases put the permits back: 2"
+          for _limit in [1, 2, 4]:
+              _s = Semaphore(_limit)
+              _act = []
+              _log = []
+              _names = ["d" + str(_i) for _i in range(9)]
+              run([download(_n, _s, _act, _log) for _n in _names])
+              assert max(_b for _n, _b in _log) <= _limit, "with " + str(_limit) + " permits, at most " + str(_limit) + " downloads may run at once, but " + str(max(_b for _n, _b in _log)) + " did"
+              assert [_n for _n, _b in _log] == _names, "downloads should start in the order they queued, " + repr(_names) + ", not " + repr([_n for _n, _b in _log])
+              assert _s.count == _limit and _s.queue == [], "when everything is done, all " + str(_limit) + " permits should be back, but the count is " + str(_s.count)
+          assert output.splitlines() == ["3 at once at most", "['photo1', 'photo2', 'photo3', 'photo4', 'photo5', 'photo6', 'photo7', 'photo8', 'photo9', 'photo10']"], "The program should print 3 at once at most and the ten photos in order"
+        wrong:
+          - |
+            class Semaphore:
+                # A counting semaphore holding count permits. acquire takes a permit if
+                # one is free and nobody is queued; otherwise the thread joins the back
+                # of the queue and waits. release hands its permit straight to the
+                # first thread in the queue, or puts it back if nobody is waiting.
+                def __init__(self, count):
+                    self.count = count
+                    self.queue = []
+
+                def acquire(self, name):
+                    if self.count > 0 and not self.queue:
+                        self.count -= 1
+                        return
+                    self.queue.append(name)
+                    while name in self.queue:
+                        yield "waiting"
+
+                def release(self):
+                    if self.queue:
+                        self.queue.pop(0)
+                    self.count += 1
+
+
+            def download(name, sem, active, log):
+                yield from sem.acquire(name)
+                active.append(name)
+                log.append((name, len(active)))
+                yield "downloading"
+                yield "downloading"
+                active.remove(name)
+                sem.release()
+
+
+            def run(threads):
+                seconds = 0
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+                    seconds += 1
+                return seconds
+
+
+            sem = Semaphore(3)
+            active = []
+            log = []
+            names = ["photo" + str(i) for i in range(1, 11)]
+            seconds = run([download(n, sem, active, log) for n in names])
+            print(max(busy for name, busy in log), "at once at most")
+            print([name for name, busy in log])
+          - |
+            class Semaphore:
+                # A counting semaphore holding count permits. acquire takes a permit if
+                # one is free and nobody is queued; otherwise the thread joins the back
+                # of the queue and waits. release hands its permit straight to the
+                # first thread in the queue, or puts it back if nobody is waiting.
+                def __init__(self, count):
+                    self.count = count
+                    self.queue = []
+
+                def acquire(self, name):
+                    if self.count > 0 and not self.queue:
+                        self.count -= 1
+                        return
+                    self.queue.append(name)
+                    while name in self.queue:
+                        yield "waiting"
+
+                def release(self):
+                    if self.queue:
+                        self.queue.pop()
+                    else:
+                        self.count += 1
+
+
+            def download(name, sem, active, log):
+                yield from sem.acquire(name)
+                active.append(name)
+                log.append((name, len(active)))
+                yield "downloading"
+                yield "downloading"
+                active.remove(name)
+                sem.release()
+
+
+            def run(threads):
+                seconds = 0
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+                    seconds += 1
+                return seconds
+
+
+            sem = Semaphore(3)
+            active = []
+            log = []
+            names = ["photo" + str(i) for i in range(1, 11)]
+            seconds = run([download(n, sem, active, log) for n in names])
+            print(max(busy for name, busy in log), "at once at most")
+            print([name for name, busy in log])
+          - |
+            class Semaphore:
+                # A counting semaphore holding count permits. acquire takes a permit if
+                # one is free and nobody is queued; otherwise the thread joins the back
+                # of the queue and waits. release hands its permit straight to the
+                # first thread in the queue, or puts it back if nobody is waiting.
+                def __init__(self, count):
+                    self.count = count
+                    self.queue = []
+
+                def acquire(self, name):
+                    if self.count >= 0 and not self.queue:
+                        self.count -= 1
+                        return
+                    self.queue.append(name)
+                    while name in self.queue:
+                        yield "waiting"
+
+                def release(self):
+                    if self.queue:
+                        self.queue.pop(0)
+                    else:
+                        self.count += 1
+
+
+            def download(name, sem, active, log):
+                yield from sem.acquire(name)
+                active.append(name)
+                log.append((name, len(active)))
+                yield "downloading"
+                yield "downloading"
+                active.remove(name)
+                sem.release()
+
+
+            def run(threads):
+                seconds = 0
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+                    seconds += 1
+                return seconds
+
+
+            sem = Semaphore(3)
+            active = []
+            log = []
+            names = ["photo" + str(i) for i in range(1, 11)]
+            seconds = run([download(n, sem, active, log) for n in names])
+            print(max(busy for name, busy in log), "at once at most")
+            print([name for name, busy in log])
+        explanation: |
+          acquire takes a permit at once only if one is free and nobody is queued; otherwise it joins the back of the queue and waits until it is removed. release removes the first in the queue, which hands it the permit, and only puts the permit back when nobody waits. Also adding to the count when handing over creates permits out of thin air; waking the last in the queue lets latecomers overtake; and testing count >= 0 lets a thread in when no permit is left.
+    - question:
+        id: fix-lost-wakeup
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          An office print queue sometimes stalls with a job sitting in it and the printer idle. The program should print `finished ['invoice'] []`. Find the fault and fix it.
+        starter: |
+          class Condition:
+              def __init__(self):
+                  self.waiting = []
+
+              def wait(self, name):
+                  self.waiting.append(name)
+                  while name in self.waiting:
+                      yield "waiting"
+
+              def notify(self):
+                  if self.waiting:
+                      self.waiting.pop(0)
+
+
+          class PrintQueue:
+              # Office computers send jobs; the printer's thread takes them one by one.
+              # As everywhere here, code between two yields is one step, done while
+              # holding the queue's lock; waiting on a condition gives the lock up.
+              def __init__(self):
+                  self.jobs = []
+                  self.ready = Condition()
+
+              def send(self, job):
+                  self.jobs.append(job)
+                  self.ready.notify()
+
+              def take(self, name, out):
+                  while not self.jobs:
+                      yield "checked: no jobs yet"
+                      yield from self.ready.wait(name)
+                  out.append(self.jobs.pop(0))
+
+
+          def printer(q, n, printed):
+              for i in range(n):
+                  yield from q.take("printer", printed)
+                  yield "printing"
+
+
+          def office(q, jobs):
+              for job in jobs:
+                  q.send(job)
+                  yield "sent"
+
+
+          def run(threads):
+              while threads:
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "finished"
+
+
+          q = PrintQueue()
+          printed = []
+          print(run([printer(q, 1, printed), office(q, ["invoice"])]), printed, q.jobs)
+        solution: |
+          class Condition:
+              def __init__(self):
+                  self.waiting = []
+
+              def wait(self, name):
+                  self.waiting.append(name)
+                  while name in self.waiting:
+                      yield "waiting"
+
+              def notify(self):
+                  if self.waiting:
+                      self.waiting.pop(0)
+
+
+          class PrintQueue:
+              # Office computers send jobs; the printer's thread takes them one by one.
+              # As everywhere here, code between two yields is one step, done while
+              # holding the queue's lock; waiting on a condition gives the lock up.
+              def __init__(self):
+                  self.jobs = []
+                  self.ready = Condition()
+
+              def send(self, job):
+                  self.jobs.append(job)
+                  self.ready.notify()
+
+              def take(self, name, out):
+                  while not self.jobs:
+                      yield from self.ready.wait(name)
+                  out.append(self.jobs.pop(0))
+
+
+          def printer(q, n, printed):
+              for i in range(n):
+                  yield from q.take("printer", printed)
+                  yield "printing"
+
+
+          def office(q, jobs):
+              for job in jobs:
+                  q.send(job)
+                  yield "sent"
+
+
+          def run(threads):
+              while threads:
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "finished"
+
+
+          q = PrintQueue()
+          printed = []
+          print(run([printer(q, 1, printed), office(q, ["invoice"])]), printed, q.jobs)
+        tests: |
+          _q = PrintQueue()
+          _out = []
+          _g = _q.take("p", _out)
+          assert next(_g) == "waiting" and "p" in _q.ready.waiting, "a printer finding no jobs should be waiting on the condition after its first step, with no gap between the check and the wait"
+          _q.send("j1")
+          _done = False
+          try:
+              next(_g)
+          except StopIteration:
+              _done = True
+          assert _done and _out == ["j1"], "once a job is sent, the waiting printer should take it"
+          for _order in ["printer first", "office first"]:
+              _q = PrintQueue()
+              _printed = []
+              _ts = [printer(_q, 3, _printed), office(_q, ["a", "b", "c"])]
+              if _order == "office first":
+                  _ts.reverse()
+              _r = run(_ts)
+              assert _r == "finished" and _printed == ["a", "b", "c"], "with the " + _order + ", all three jobs should be printed in order, not " + _r + " " + repr(_printed)
+          _q = PrintQueue()
+          _p = []
+          def _grab():
+              yield from _q.take("grabber", _p)
+          _r = run([printer(_q, 1, _p), office(_q, ["x", "y"]), _grab()])
+          assert _r == "finished" and sorted(_p) == ["x", "y"], "a printer woken for a job that another taker grabbed first must check again, not crash; got " + _r + " " + repr(_p)
+          assert output.splitlines() == ["finished ['invoice'] []"], "The program should print finished ['invoice'] []"
+        wrong:
+          - |
+            class Condition:
+                def __init__(self):
+                    self.waiting = []
+
+                def wait(self, name):
+                    self.waiting.append(name)
+                    while name in self.waiting:
+                        yield "waiting"
+
+                def notify(self):
+                    if self.waiting:
+                        self.waiting.pop(0)
+
+
+            class PrintQueue:
+                # Office computers send jobs; the printer's thread takes them one by one.
+                # As everywhere here, code between two yields is one step, done while
+                # holding the queue's lock; waiting on a condition gives the lock up.
+                def __init__(self):
+                    self.jobs = []
+                    self.ready = Condition()
+
+                def send(self, job):
+                    self.jobs.append(job)
+                    self.ready.notify()
+                    self.ready.notify()
+
+                def take(self, name, out):
+                    while not self.jobs:
+                        yield "checked: no jobs yet"
+                        yield from self.ready.wait(name)
+                    out.append(self.jobs.pop(0))
+
+
+            def printer(q, n, printed):
+                for i in range(n):
+                    yield from q.take("printer", printed)
+                    yield "printing"
+
+
+            def office(q, jobs):
+                for job in jobs:
+                    q.send(job)
+                    yield "sent"
+
+
+            def run(threads):
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            q = PrintQueue()
+            printed = []
+            print(run([printer(q, 1, printed), office(q, ["invoice"])]), printed, q.jobs)
+          - |
+            class Condition:
+                def __init__(self):
+                    self.waiting = []
+
+                def wait(self, name):
+                    self.waiting.append(name)
+                    while name in self.waiting:
+                        yield "waiting"
+
+                def notify(self):
+                    if self.waiting:
+                        self.waiting.pop(0)
+
+
+            class PrintQueue:
+                # Office computers send jobs; the printer's thread takes them one by one.
+                # As everywhere here, code between two yields is one step, done while
+                # holding the queue's lock; waiting on a condition gives the lock up.
+                def __init__(self):
+                    self.jobs = []
+                    self.ready = Condition()
+
+                def send(self, job):
+                    self.jobs.append(job)
+                    self.ready.notify()
+
+                def take(self, name, out):
+                    while not self.jobs:
+                        yield "checked: no jobs yet"
+                    out.append(self.jobs.pop(0))
+
+
+            def printer(q, n, printed):
+                for i in range(n):
+                    yield from q.take("printer", printed)
+                    yield "printing"
+
+
+            def office(q, jobs):
+                for job in jobs:
+                    q.send(job)
+                    yield "sent"
+
+
+            def run(threads):
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            q = PrintQueue()
+            printed = []
+            print(run([printer(q, 1, printed), office(q, ["invoice"])]), printed, q.jobs)
+          - |
+            class Condition:
+                def __init__(self):
+                    self.waiting = []
+
+                def wait(self, name):
+                    self.waiting.append(name)
+                    while name in self.waiting:
+                        yield "waiting"
+
+                def notify(self):
+                    if self.waiting:
+                        self.waiting.pop(0)
+
+
+            class PrintQueue:
+                # Office computers send jobs; the printer's thread takes them one by one.
+                # As everywhere here, code between two yields is one step, done while
+                # holding the queue's lock; waiting on a condition gives the lock up.
+                def __init__(self):
+                    self.jobs = []
+                    self.ready = Condition()
+
+                def send(self, job):
+                    self.jobs.append(job)
+                    self.ready.notify()
+
+                def take(self, name, out):
+                    if not self.jobs:
+                        yield from self.ready.wait(name)
+                    out.append(self.jobs.pop(0))
+
+
+            def printer(q, n, printed):
+                for i in range(n):
+                    yield from q.take("printer", printed)
+                    yield "printing"
+
+
+            def office(q, jobs):
+                for job in jobs:
+                    q.send(job)
+                    yield "sent"
+
+
+            def run(threads):
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            q = PrintQueue()
+            printed = []
+            print(run([printer(q, 1, printed), office(q, ["invoice"])]), printed, q.jobs)
+        explanation: |
+          take checks for jobs and then yields before it joins the condition's queue. In that gap the office sends the job and notifies nobody, and the printer then sleeps through a wakeup that has already happened. Checking and starting to wait must be one step, so remove the yield in between. Notifying twice cannot help a thread that is not yet waiting; spinning instead of waiting avoids the stall but burns the processor; and waiting with if instead of while crashes when another taker grabs the job first.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. 10 uploads of 2 seconds each, at most 3 at once. How many seconds until all are done?
+        answer: "8"
+        explanation: |
+          Three run in the first 2 seconds, three in the next 2, three in the next 2, and the tenth alone in the last 2: 4 rounds of 2 seconds. The last round uses only one permit, so a limit of 4 or 5 would cut it to 6 seconds.
+    - question:
+        id: work-unbounded
+        type: choice
+        system: s2
+        prompt: |
+          A logging service puts messages on an unbounded queue for a thread that writes them to a slow disk. During a traffic spike its memory grows until it crashes. What fixes it?
+        options:
+          - "Bound the queue, so producers wait or messages are dropped by policy when it is full, and the writer's pace pushes back on them"
+          - "Make the queue unbounded on disk too"
+          - "Use notify_all instead of notify"
+          - "Add a second lock around the queue"
+        answer: 0
+        explanation: |
+          An unbounded buffer hides a consumer that is slower than its producers until memory runs out. A bound turns the mismatch into backpressure, or into a deliberate decision about what to drop.
+  connections:
+    - text: |
+        8 seconds. The semaphore lets uploads through three at a time, so the 10 photos go in rounds of 3, 3, 3 and 1, each round lasting 2 seconds. The last round wastes two permits, which is why the total is set by rounding up, not by dividing.
+
+        Locks, condition variables and semaphores are all built on something smaller: a handful of machine instructions that read and change one memory word indivisibly, even when several cores run them at once. Those instructions can also be used directly, to build counters, stacks and queues that never lock at all. [[d0.atomic-operations-and-compare-and-swap]] looks at them, at compare-and-swap above all, and at the strange bug called ABA.

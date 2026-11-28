@@ -1,0 +1,939 @@
+concept: d0.deadlock
+minutes: 80
+claim: You can recognise a deadlock as a cycle of threads each waiting for a lock another holds; state the four conditions that must all hold for one and prevent deadlock by breaking any of them, above all by taking locks in one global order; build the wait-for graph of a running system and find a cycle in it, as databases do before aborting a victim; tell deadlock from livelock and starvation; explain priority inversion and how priority inheritance cures it; and solve the dining philosophers.
+recalls: [d0.locks-and-mutual-exclusion]
+uses: [d0.interleavings-and-race-conditions, h2.scheduling, s2.graphs-and-their-representations, s3.breadth-first-and-depth-first-search, s2.hash-tables, s1.generators-and-context-managers, s1.classes-and-objects, s0.dictionaries-and-sets]
+leads: [d0.condition-variables-and-semaphores]
+starter: |
+  # Scratch space. Who waits for whom? Follow the arrows until you come
+  # back to where you started, or run out of arrows.
+  waits_for = {"t1": "t2", "t2": "t3", "t3": "t1"}
+  t = "t1"
+  for i in range(4):
+      print(t, "waits for", waits_for[t])
+      t = waits_for[t]
+parts:
+  recall:
+    - text: |
+        [[d0.locks-and-mutual-exclusion]] ended with a hard choice: one big lock is safe but serial, while many small locks run in parallel, yet an operation that touches two pieces of data must then hold two locks. Holding two locks at once is where threads can wait for each other for ever. Three quick pulls first.
+  puzzle:
+    - text: |
+        Five philosophers sit at a round table with one fork between each pair of neighbours, five forks in all. To eat, a philosopher needs both the fork on their left and the fork on their right. Each picks up the left fork, then the right, eats, and puts both down. Sometimes all five pick up their left fork at the same moment, and the dinner stops for ever.
+
+        **What is the smallest number of philosophers who must instead pick up their right fork first, so that the dinner can never stop like this?**
+  intuition:
+    - text: |
+        On a narrow ghat road above Ooty, two lorries meet on a stretch only wide enough for one. Each driver has a lorry full of tea behind them and will not reverse. Each is waiting for the other to move, so neither ever does. Nothing is broken; the road and both engines are fine. They are stuck only because each holds what the other needs and waits for what the other holds.
+
+        Threads do the same with locks. The figure follows two money transfers between accounts A and B, each needing both locks. Solid arrows show which thread holds a lock; dashed arrows show a thread waiting for a lock. Step through them taking the locks in opposite orders, and then in the same order.
+    - figure: deadlock-graph
+      props: { order: opposite, step: 0 }
+    - text: |
+        With opposite orders, the arrows close into a loop: T1 waits for a lock T2 holds, and T2 waits for a lock T1 holds. That loop is the deadlock, and nothing inside the program will ever break it. With the same order, a thread that has to wait always waits holding nothing, so no loop can form. One rule about order removed the deadlock entirely, and the philosophers' table is just the same loop with five people in it.
+  derivation:
+    - text: |
+        **What a deadlock is.** A set of threads is **deadlocked** when each is waiting for something that only another thread in the set can provide. With locks, that means each waits for a lock held by another thread of the set. No timeout fires, no error is raised, and CPU use drops to nothing; the program simply stops making progress, often only under heavy load, when the unlucky interleaving finally happens.
+
+        **The four conditions.** Coffman and his colleagues showed in 1971 that a deadlock needs four conditions at once. **Mutual exclusion**: a resource can be held by only one thread. **Hold and wait**: a thread holds one resource while waiting for another. **No preemption**: a resource cannot be taken away from its holder; only the holder can release it. **Circular wait**: there is a cycle of threads, each waiting for a resource held by the next. Remove any one condition and deadlock is impossible. Every prevention technique breaks one of them.
+    - question:
+        id: derivation-condition
+        type: choice
+        system: s2
+        prompt: |
+          A program takes every lock it will need in one atomic step before it starts, and releases them all at the end. Which condition does this break?
+        options:
+          - "Hold and wait"
+          - "Mutual exclusion"
+          - "No preemption"
+          - "Circular wait"
+        answer: 0
+        explanation: |
+          No thread ever holds some locks while waiting for others, because it gets all of them or none. The price is that it must know its locks in advance and holds them longer than it needs to.
+    - text: |
+        **The wait-for graph.** To see a deadlock, draw a **wait-for graph**: a node for each thread, and an arrow from each waiting thread to the thread holding the lock it wants. Since a waiting thread waits for one lock, and a lock has one holder, each node has at most one arrow out. The system is deadlocked exactly when the graph has a **cycle**; the threads on the cycle are stuck, and any thread waiting for one of them is stuck too, though it is not part of the cause. Following arrows from each thread until you return, or run out of arrows, finds every cycle.
+
+        **Detect and recover.** Databases take this route. Transactions lock rows in whatever order the queries touch them, so deadlocks are expected. The database builds the wait-for graph periodically, or whenever a lock wait goes on too long, and when it finds a cycle it picks a **victim**, usually the transaction that has done the least work, aborts it and releases its locks. The others carry on, and the application retries the victim. This breaks **no preemption**: the lock is taken away by force, which is safe because aborting a transaction undoes its changes.
+    - question:
+        id: derivation-graph
+        type: choice
+        system: s2
+        prompt: |
+          t1 waits for t2, t2 waits for t3, t3 waits for t2, and t4 waits for t1. Which threads are on the cycle?
+        options:
+          - "t2 and t3 only"
+          - "All four"
+          - "t1, t2 and t3"
+          - "None, since t4 is not waited for"
+        answer: 0
+        explanation: |
+          Following arrows from t2 returns to t2 through t3. t1 and t4 are stuck because they wait for the cycle, but aborting either would not help; the victim must be t2 or t3.
+    - text: |
+        **Prevent by ordering.** For locks inside one program, the standard cure breaks **circular wait**: give every lock a place in one **global order**, and always acquire locks in that order. For account locks, order by account number: a transfer from 12 to 7 takes 7's lock first, just as a transfer from 7 to 12 does. A cycle would need some thread to hold a later lock while waiting for an earlier one, which the rule forbids. The order can be anything all threads agree on: a number, an address, a level in a hierarchy, such as "table locks before row locks". Linux has a tool, lockdep, that records the order in which locks are taken while the kernel runs and complains the first time any two are taken in opposite orders, before the deadlock ever happens.
+
+        **Prevent by giving up.** A thread can instead **try** the second lock, and if it is held, release the first, wait a little and start again. This breaks **hold and wait**. The danger is **livelock**: two threads that keep politely backing off in step, both busy and neither making progress, like two people in a corridor stepping aside the same way again and again. Random, growing waits between attempts, **back-off with jitter**, make it vanishingly unlikely. A plain **timeout** on lock waits is a cruder form of the same idea, often used as a last line of defence.
+    - question:
+        id: derivation-order
+        type: numeric
+        system: s2
+        prompt: |
+          Three transfers run at once: from account 30 to 10, from 10 to 20, and from 20 to 30. Each takes its lower-numbered account's lock first. How many of them begin by asking for account 10's lock?
+        answer: "2"
+        explanation: |
+          30 to 10 and 10 to 20 both start with lock 10; 20 to 30 starts with lock 20. Whichever of the first two gets lock 10, the other waits holding nothing, so no cycle can close.
+    - text: |
+        **Starvation and priority inversion.** A thread **starves** when it could run but never gets what it needs, because others always go first: an unfair lock that always favours the newest arrival can do this. A subtler failure is **priority inversion**. A low-priority thread holds a lock that a high-priority thread needs, and a medium-priority thread, which needs no lock at all, keeps the low one off the processor, so the high-priority thread waits behind the medium one. In 1997 NASA's Mars Pathfinder kept resetting itself on Mars for exactly this reason, until engineers enabled **priority inheritance** by a remote patch: while a thread holds a lock that a higher-priority thread wants, it temporarily runs at that higher priority, finishes its critical section quickly and releases the lock.
+
+        **Deadlocks without two locks.** A thread can deadlock alone, by acquiring a non-reentrant lock it already holds, for example when a function holding a lock calls another that takes the same lock. A thread can wait to **join** another that is waiting for a lock it holds. And with the condition variables of the next lesson, threads can wait for signals that will never come. The cycle in the wait-for graph is the same idea in every case.
+    - question:
+        id: derivation-inversion
+        type: choice
+        system: s2
+        prompt: |
+          A high-priority control thread waits for a lock held by a low-priority logging thread, while a medium-priority thread computes for seconds. What does priority inheritance do?
+        options:
+          - "Runs the logging thread at high priority while it holds the lock, so it finishes and releases the lock ahead of the medium thread"
+          - "Lowers the control thread to low priority"
+          - "Takes the lock away from the logging thread"
+          - "Stops the medium thread for good"
+        answer: 0
+        explanation: |
+          The holder borrows the waiter's priority, so the medium thread can no longer keep it off the processor. Once it releases the lock it drops back to its own priority.
+  formal:
+    - text: |
+        **Deadlock.** A set of threads each waiting for a resource held by another thread in the set.
+
+        **Coffman conditions**, all needed: mutual exclusion, hold and wait, no preemption, circular wait.
+
+        **Wait-for graph.** An arrow from each waiting thread to the holder of the lock it wants. Deadlock exactly when there is a cycle.
+
+        **Handling.** Prevent: a global lock order (breaks circular wait), take all locks at once (breaks hold and wait), try-lock and back off with jitter (breaks hold and wait, risks livelock). Detect and recover: find a cycle and abort a victim (breaks no preemption), as databases do. Timeouts as a last resort.
+
+        **Related failures.** Livelock: busy but no progress. Starvation: never served. Priority inversion: a medium-priority thread delays a high-priority one through a low-priority lock holder; cured by priority inheritance.
+  drill:
+    - text: Seconds each. Find the cycle, or the order that prevents one.
+    - question:
+        id: drill-four
+        type: choice
+        system: s1
+        prompt: |
+          Which of these is not one of the four conditions for deadlock?
+        options:
+          - "Threads run on more than one core"
+          - "Hold and wait"
+          - "Circular wait"
+          - "No preemption"
+        answer: 0
+        explanation: Deadlock happens on one core too; the four conditions are mutual exclusion, hold and wait, no preemption and circular wait.
+    - question:
+        id: drill-livelock
+        type: choice
+        system: s1
+        prompt: |
+          Two threads keep taking one lock, failing to get the second, releasing and retrying, in step. What is this called?
+        options:
+          - "Livelock"
+          - "Deadlock"
+          - "Priority inversion"
+          - "A data race"
+        answer: 0
+        explanation: Both are busy and neither progresses. Random back-off breaks the lockstep.
+    - question:
+        id: predict-follow
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          waits_for = {"a": "b", "b": "c", "c": "a"}
+          t = "a"
+          path = []
+          while t not in path:
+              path.append(t)
+              t = waits_for[t]
+          print(path, t)
+        output: "['a', 'b', 'c'] a"
+        explanation: Following the arrows from a visits b and c and returns to a, so all three are on the cycle.
+    - question:
+        id: predict-order
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          transfers = [(12, 7), (7, 12)]
+          print([(min(s, d), max(s, d)) for s, d in transfers])
+        output: "[(7, 12), (7, 12)]"
+        explanation: Both transfers take lock 7 first, whichever way the money moves, so they cannot each hold one lock and wait for the other.
+    - question:
+        id: predict-holds
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          holds = {"A": "t1", "B": "t2"}
+          wants = {"t1": "B", "t2": "A"}
+          print({t: holds[lock] for t, lock in wants.items()})
+        output: "{'t1': 't2', 't2': 't1'}"
+        explanation: Each waiting thread waits for the holder of the lock it wants, and these two wait for each other.
+  work:
+    - text: Slower now. Each answer finds a deadlock or makes one impossible.
+    - question:
+        id: write-find-cycle
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `find_cycle`, which builds the wait-for graph from who holds which lock and who wants which, and returns the threads on a cycle. The program should print `['t1', 't2']`, `[]` and `['p0', 'p1', 'p2']`.
+        starter: |
+          def find_cycle(holds, wants):
+              # holds maps each held lock to the thread holding it; wants maps each
+              # waiting thread to the lock it is waiting for. A thread waits for the
+              # holder of the lock it wants. Return a deadlock as the list of threads
+              # on a cycle of waiting, starting from the first thread in sorted order
+              # that lies on one, or [] if there is none.
+              return []
+
+          print(find_cycle({"A": "t1", "B": "t2"}, {"t1": "B", "t2": "A"}))
+          print(find_cycle({"A": "t1", "B": "t2"}, {"t2": "A"}))
+          print(find_cycle({"f0": "p0", "f1": "p1", "f2": "p2"}, {"p0": "f1", "p1": "f2", "p2": "f0", "p3": "f0"}))
+        solution: |
+          def find_cycle(holds, wants):
+              # holds maps each held lock to the thread holding it; wants maps each
+              # waiting thread to the lock it is waiting for. A thread waits for the
+              # holder of the lock it wants. Return a deadlock as the list of threads
+              # on a cycle of waiting, starting from the first thread in sorted order
+              # that lies on one, or [] if there is none.
+              waits_for = {}
+              for thread, lock in wants.items():
+                  if lock in holds:
+                      waits_for[thread] = holds[lock]
+              for start in sorted(waits_for):
+                  seen = []
+                  t = start
+                  while t in waits_for and t not in seen:
+                      seen.append(t)
+                      t = waits_for[t]
+                  if t == start:
+                      return seen
+              return []
+
+
+          print(find_cycle({"A": "t1", "B": "t2"}, {"t1": "B", "t2": "A"}))
+          print(find_cycle({"A": "t1", "B": "t2"}, {"t2": "A"}))
+          print(find_cycle({"f0": "p0", "f1": "p1", "f2": "p2"}, {"p0": "f1", "p1": "f2", "p2": "f0", "p3": "f0"}))
+        tests: |
+          assert find_cycle({}, {}) == [], "no locks and no waiting is no deadlock"
+          assert find_cycle({"A": "t1"}, {"t2": "A"}) == [], "t2 waits for t1, which is running, so there is no deadlock"
+          _c = find_cycle({"A": "t1", "B": "t2"}, {"t1": "B", "t2": "A"})
+          assert _c == ["t1", "t2"], "t1 holds A and wants B, t2 holds B and wants A: the cycle is ['t1', 't2'], not " + repr(_c)
+          _c = find_cycle({"L1": "x", "L2": "y", "L3": "z"}, {"x": "L2", "y": "L3", "z": "L1"})
+          assert _c == ["x", "y", "z"], "three threads waiting in a ring are deadlocked: ['x', 'y', 'z'], not " + repr(_c)
+          _c = find_cycle({"L1": "b", "L2": "c"}, {"a": "L1", "b": "L2", "c": "L1"})
+          assert _c == ["b", "c"], "a waits on the deadlocked pair b and c but is not part of the cycle itself, which is ['b', 'c'], not " + repr(_c)
+          _c = find_cycle({"L": "solo"}, {"solo": "L"})
+          assert _c == ["solo"], "a thread waiting for a lock it already holds is deadlocked on its own: ['solo'], not " + repr(_c)
+          _c = find_cycle({"A": "t1", "B": "t2", "C": "t3"}, {"t1": "B", "t2": "C"})
+          assert _c == [], "a chain of waiting that ends at a running thread is not a deadlock, but got " + repr(_c)
+          _c = find_cycle({"f" + str(_i): "p" + str(_i) for _i in range(5)}, {"p" + str(_i): "f" + str((_i + 1) % 5) for _i in range(5)})
+          assert _c == ["p0", "p1", "p2", "p3", "p4"], "five philosophers each holding one fork and wanting the next form one cycle, not " + repr(_c)
+          assert output.splitlines() == ["['t1', 't2']", "[]", "['p0', 'p1', 'p2']"], "The program should print ['t1', 't2'], [] and ['p0', 'p1', 'p2']"
+        wrong:
+          - |
+            def find_cycle(holds, wants):
+                # holds maps each held lock to the thread holding it; wants maps each
+                # waiting thread to the lock it is waiting for. A thread waits for the
+                # holder of the lock it wants. Return a deadlock as the list of threads
+                # on a cycle of waiting, starting from the first thread in sorted order
+                # that lies on one, or [] if there is none.
+                waits_for = {}
+                for thread, lock in wants.items():
+                    if lock in holds:
+                        waits_for[thread] = holds[lock]
+                for start in sorted(waits_for):
+                    seen = []
+                    t = start
+                    while t in waits_for and t not in seen:
+                        seen.append(t)
+                        t = waits_for[t]
+                    if t in seen:
+                        return seen
+                return []
+
+
+            print(find_cycle({"A": "t1", "B": "t2"}, {"t1": "B", "t2": "A"}))
+            print(find_cycle({"A": "t1", "B": "t2"}, {"t2": "A"}))
+            print(find_cycle({"f0": "p0", "f1": "p1", "f2": "p2"}, {"p0": "f1", "p1": "f2", "p2": "f0", "p3": "f0"}))
+          - |
+            def find_cycle(holds, wants):
+                # holds maps each held lock to the thread holding it; wants maps each
+                # waiting thread to the lock it is waiting for. A thread waits for the
+                # holder of the lock it wants. Return a deadlock as the list of threads
+                # on a cycle of waiting, starting from the first thread in sorted order
+                # that lies on one, or [] if there is none.
+                waits_for = {}
+                for thread, lock in wants.items():
+                    if lock in holds:
+                        waits_for[thread] = lock
+                for start in sorted(waits_for):
+                    seen = []
+                    t = start
+                    while t in waits_for and t not in seen:
+                        seen.append(t)
+                        t = waits_for[t]
+                    if t == start:
+                        return seen
+                return []
+
+
+            print(find_cycle({"A": "t1", "B": "t2"}, {"t1": "B", "t2": "A"}))
+            print(find_cycle({"A": "t1", "B": "t2"}, {"t2": "A"}))
+            print(find_cycle({"f0": "p0", "f1": "p1", "f2": "p2"}, {"p0": "f1", "p1": "f2", "p2": "f0", "p3": "f0"}))
+          - |
+            def find_cycle(holds, wants):
+                # holds maps each held lock to the thread holding it; wants maps each
+                # waiting thread to the lock it is waiting for. A thread waits for the
+                # holder of the lock it wants. Return a deadlock as the list of threads
+                # on a cycle of waiting, starting from the first thread in sorted order
+                # that lies on one, or [] if there is none.
+                waits_for = {}
+                for thread, lock in wants.items():
+                    if lock in holds:
+                        waits_for[thread] = holds[lock]
+                for start in sorted(waits_for):
+                    other = waits_for[start]
+                    if waits_for.get(other) == start:
+                        return [start, other]
+                return []
+
+
+            print(find_cycle({"A": "t1", "B": "t2"}, {"t1": "B", "t2": "A"}))
+            print(find_cycle({"A": "t1", "B": "t2"}, {"t2": "A"}))
+            print(find_cycle({"f0": "p0", "f1": "p1", "f2": "p2"}, {"p0": "f1", "p1": "f2", "p2": "f0", "p3": "f0"}))
+        explanation: |
+          Each waiting thread waits for the holder of the lock it wants. From each thread in sorted order, follow those arrows, recording the path, until you reach a thread with no arrow or one already on the path; it is a cycle through the start only if you come back to the start. Reporting any path that revisits some thread includes threads that merely wait on a cycle; mapping threads to locks instead of to their holders never closes a loop; and checking only pairs misses rings of three or more.
+    - question:
+        id: write-ordered-transfer
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `transfer` so that it holds both accounts' locks, taken in one global order, and can never deadlock with another transfer. The program should print `finished {7: 800, 12: 1200}`.
+        starter: |
+          class Lock:
+              def __init__(self):
+                  self.holder = None
+
+              def acquire(self, name):
+                  while self.holder is not None:
+                      yield "waiting"
+                  self.holder = name
+
+              def release(self, name):
+                  if self.holder != name:
+                      raise RuntimeError(name + " released a lock it does not hold")
+                  self.holder = None
+
+
+          def run(threads):
+              # Round robin. If a whole round passes in which every thread was only
+              # waiting, nothing can ever change, so the threads are stuck.
+              while threads:
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "finished"
+
+
+          def transfer(name, locks, accounts, src, dst, amount):
+              # Move amount from account src to account dst (both are numbers), holding
+              # the locks of both accounts. Every transfer takes the two locks in the
+              # same global order, lower account number first, so no two transfers can
+              # each hold one lock and wait for the other. A transfer from an account
+              # to itself changes nothing, but must not hang.
+              yield from locks[src].acquire(name)
+              yield "holding one lock"
+              yield from locks[dst].acquire(name)
+              accounts[src] -= amount
+              accounts[dst] += amount
+              locks[dst].release(name)
+              locks[src].release(name)
+
+
+          locks = {7: Lock(), 12: Lock()}
+          accounts = {7: 1000, 12: 1000}
+          result = run([
+              transfer("t1", locks, accounts, 7, 12, 300),
+              transfer("t2", locks, accounts, 12, 7, 100),
+          ])
+          print(result, accounts)
+        solution: |
+          class Lock:
+              def __init__(self):
+                  self.holder = None
+
+              def acquire(self, name):
+                  while self.holder is not None:
+                      yield "waiting"
+                  self.holder = name
+
+              def release(self, name):
+                  if self.holder != name:
+                      raise RuntimeError(name + " released a lock it does not hold")
+                  self.holder = None
+
+
+          def run(threads):
+              # Round robin. If a whole round passes in which every thread was only
+              # waiting, nothing can ever change, so the threads are stuck.
+              while threads:
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "finished"
+
+
+          def transfer(name, locks, accounts, src, dst, amount):
+              # Move amount from account src to account dst (both are numbers), holding
+              # the locks of both accounts. Every transfer takes the two locks in the
+              # same global order, lower account number first, so no two transfers can
+              # each hold one lock and wait for the other. A transfer from an account
+              # to itself changes nothing, but must not hang.
+              if src == dst:
+                  return
+              first, second = min(src, dst), max(src, dst)
+              yield from locks[first].acquire(name)
+              yield "holding one lock"
+              yield from locks[second].acquire(name)
+              accounts[src] -= amount
+              accounts[dst] += amount
+              locks[second].release(name)
+              locks[first].release(name)
+
+
+          locks = {7: Lock(), 12: Lock()}
+          accounts = {7: 1000, 12: 1000}
+          result = run([
+              transfer("t1", locks, accounts, 7, 12, 300),
+              transfer("t2", locks, accounts, 12, 7, 100),
+          ])
+          print(result, accounts)
+        tests: |
+          _locks = {1: Lock(), 2: Lock(), 3: Lock()}
+          _acc = {1: 100, 2: 100, 3: 100}
+          _r = run([transfer("a", _locks, _acc, 1, 2, 10), transfer("b", _locks, _acc, 2, 3, 20), transfer("c", _locks, _acc, 3, 1, 30)])
+          assert _r == "finished", "three transfers around a ring of accounts, 1 to 2, 2 to 3 and 3 to 1, should all finish, but the run was " + _r
+          assert _acc == {1: 120, 2: 90, 3: 90}, "after the three transfers the balances should be {1: 120, 2: 90, 3: 90}, not " + repr(_acc)
+          assert all(_l.holder is None for _l in _locks.values()), "every lock must be free when the transfers are done"
+          _locks = {5: Lock(), 40: Lock()}
+          _acc = {5: 50, 40: 50}
+          _r = run([transfer("x" + str(_i), _locks, _acc, 40 if _i % 2 else 5, 5 if _i % 2 else 40, 1) for _i in range(6)])
+          assert _r == "finished" and _acc == {5: 50, 40: 50}, "six transfers back and forth between 5 and 40 should finish and leave 50 each, not " + _r + " " + repr(_acc)
+          _locks = {9: Lock()}
+          _acc = {9: 70}
+          _r = run([transfer("self", _locks, _acc, 9, 9, 20)])
+          assert _r == "finished" and _acc == {9: 70} and _locks[9].holder is None, "a transfer from 9 to itself should finish at once and change nothing, not " + _r + " " + repr(_acc)
+          assert output.splitlines() == ["finished {7: 800, 12: 1200}"], "The program should print finished {7: 800, 12: 1200}"
+        wrong:
+          - |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        yield "waiting"
+                    self.holder = name
+
+                def release(self, name):
+                    if self.holder != name:
+                        raise RuntimeError(name + " released a lock it does not hold")
+                    self.holder = None
+
+
+            def run(threads):
+                # Round robin. If a whole round passes in which every thread was only
+                # waiting, nothing can ever change, so the threads are stuck.
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            def transfer(name, locks, accounts, src, dst, amount):
+                # Move amount from account src to account dst (both are numbers), holding
+                # the locks of both accounts. Every transfer takes the two locks in the
+                # same global order, lower account number first, so no two transfers can
+                # each hold one lock and wait for the other. A transfer from an account
+                # to itself changes nothing, but must not hang.
+                if src == dst:
+                    return
+                first, second = src, dst
+                yield from locks[first].acquire(name)
+                yield "holding one lock"
+                yield from locks[second].acquire(name)
+                accounts[src] -= amount
+                accounts[dst] += amount
+                locks[second].release(name)
+                locks[first].release(name)
+
+
+            locks = {7: Lock(), 12: Lock()}
+            accounts = {7: 1000, 12: 1000}
+            result = run([
+                transfer("t1", locks, accounts, 7, 12, 300),
+                transfer("t2", locks, accounts, 12, 7, 100),
+            ])
+            print(result, accounts)
+          - |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        yield "waiting"
+                    self.holder = name
+
+                def release(self, name):
+                    if self.holder != name:
+                        raise RuntimeError(name + " released a lock it does not hold")
+                    self.holder = None
+
+
+            def run(threads):
+                # Round robin. If a whole round passes in which every thread was only
+                # waiting, nothing can ever change, so the threads are stuck.
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            def transfer(name, locks, accounts, src, dst, amount):
+                # Move amount from account src to account dst (both are numbers), holding
+                # the locks of both accounts. Every transfer takes the two locks in the
+                # same global order, lower account number first, so no two transfers can
+                # each hold one lock and wait for the other. A transfer from an account
+                # to itself changes nothing, but must not hang.
+                first, second = min(src, dst), max(src, dst)
+                yield from locks[first].acquire(name)
+                yield "holding one lock"
+                yield from locks[second].acquire(name)
+                accounts[src] -= amount
+                accounts[dst] += amount
+                locks[second].release(name)
+                locks[first].release(name)
+
+
+            locks = {7: Lock(), 12: Lock()}
+            accounts = {7: 1000, 12: 1000}
+            result = run([
+                transfer("t1", locks, accounts, 7, 12, 300),
+                transfer("t2", locks, accounts, 12, 7, 100),
+            ])
+            print(result, accounts)
+          - |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        yield "waiting"
+                    self.holder = name
+
+                def release(self, name):
+                    if self.holder != name:
+                        raise RuntimeError(name + " released a lock it does not hold")
+                    self.holder = None
+
+
+            def run(threads):
+                # Round robin. If a whole round passes in which every thread was only
+                # waiting, nothing can ever change, so the threads are stuck.
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            def transfer(name, locks, accounts, src, dst, amount):
+                # Move amount from account src to account dst (both are numbers), holding
+                # the locks of both accounts. Every transfer takes the two locks in the
+                # same global order, lower account number first, so no two transfers can
+                # each hold one lock and wait for the other. A transfer from an account
+                # to itself changes nothing, but must not hang.
+                if src == dst:
+                    return
+                first, second = min(src, dst), max(src, dst)
+                yield from locks[first].acquire(name)
+                yield "holding one lock"
+                yield from locks[second].acquire(name)
+                accounts[src] -= amount
+                accounts[dst] += amount
+                locks[first].release(name)
+
+
+            locks = {7: Lock(), 12: Lock()}
+            accounts = {7: 1000, 12: 1000}
+            result = run([
+                transfer("t1", locks, accounts, 7, 12, 300),
+                transfer("t2", locks, accounts, 12, 7, 100),
+            ])
+            print(result, accounts)
+        explanation: |
+          Take the lower-numbered account's lock first and the higher second, move the money, and release both; a transfer to the same account does nothing. Taking the source first is the starter's order again, so opposite transfers deadlock; without the check for the same account, a transfer waits for a lock it already holds; and releasing only one lock leaves the other held for ever.
+    - question:
+        id: fix-philosophers
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The dining philosophers sometimes never finish their dinner. The program should print `finished [0, 1, 2, 3, 4]`. Find the fault and fix it.
+        starter: |
+          class Lock:
+              def __init__(self):
+                  self.holder = None
+
+              def acquire(self, name):
+                  while self.holder is not None:
+                      yield "waiting"
+                  self.holder = name
+
+              def release(self, name):
+                  if self.holder != name:
+                      raise RuntimeError(name + " released a lock it does not hold")
+                  self.holder = None
+
+
+          def run(threads, rounds=200):
+              # Round robin. If a whole round passes in which every thread was only
+              # waiting, nothing can ever change: stuck. If the threads are still
+              # going after many rounds, they are busy but getting nowhere.
+              for i in range(rounds):
+                  if not threads:
+                      return "finished"
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "gave up"
+
+
+          def philosopher(i, forks, ate):
+              # Philosopher i sits between fork i on the left and fork (i + 1) % n on
+              # the right, and needs both to eat once.
+              n = len(forks)
+              left, right = i, (i + 1) % n
+              yield from forks[left].acquire(i)
+              yield "thinking about the other fork"
+              yield from forks[right].acquire(i)
+              ate.append(i)
+              forks[right].release(i)
+              forks[left].release(i)
+
+
+          forks = [Lock() for i in range(5)]
+          ate = []
+          print(run([philosopher(i, forks, ate) for i in range(5)]), sorted(ate))
+        solution: |
+          class Lock:
+              def __init__(self):
+                  self.holder = None
+
+              def acquire(self, name):
+                  while self.holder is not None:
+                      yield "waiting"
+                  self.holder = name
+
+              def release(self, name):
+                  if self.holder != name:
+                      raise RuntimeError(name + " released a lock it does not hold")
+                  self.holder = None
+
+
+          def run(threads, rounds=200):
+              # Round robin. If a whole round passes in which every thread was only
+              # waiting, nothing can ever change: stuck. If the threads are still
+              # going after many rounds, they are busy but getting nowhere.
+              for i in range(rounds):
+                  if not threads:
+                      return "finished"
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "gave up"
+
+
+          def philosopher(i, forks, ate):
+              # Philosopher i sits between fork i on the left and fork (i + 1) % n on
+              # the right, and needs both to eat once.
+              n = len(forks)
+              left, right = i, (i + 1) % n
+              first, second = min(left, right), max(left, right)
+              yield from forks[first].acquire(i)
+              yield "thinking about the other fork"
+              yield from forks[second].acquire(i)
+              ate.append(i)
+              forks[second].release(i)
+              forks[first].release(i)
+
+
+          forks = [Lock() for i in range(5)]
+          ate = []
+          print(run([philosopher(i, forks, ate) for i in range(5)]), sorted(ate))
+        tests: |
+          for _n in [2, 3, 5, 7]:
+              _forks = [Lock() for _i in range(_n)]
+              _ate = []
+              _r = run([philosopher(_i, _forks, _ate) for _i in range(_n)])
+              assert _r == "finished" and sorted(_ate) == list(range(_n)), "with " + str(_n) + " philosophers all should eat and the run finish, not " + _r + " with " + repr(sorted(_ate)) + " fed"
+              assert all(_f.holder is None for _f in _forks), "every fork must be back on the table at the end"
+          _forks = [Lock() for _i in range(4)]
+          _ate = []
+          _r = run([philosopher(_i, _forks, _ate) for _i in [3, 2, 1, 0]])
+          assert _r == "finished" and sorted(_ate) == [0, 1, 2, 3], "seated in a different order, four philosophers should still all eat, not " + _r
+          assert output.splitlines() == ["finished [0, 1, 2, 3, 4]"], "The program should print finished [0, 1, 2, 3, 4]"
+        wrong:
+          - |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        yield "waiting"
+                    self.holder = name
+
+                def release(self, name):
+                    if self.holder != name:
+                        raise RuntimeError(name + " released a lock it does not hold")
+                    self.holder = None
+
+
+            def run(threads, rounds=200):
+                # Round robin. If a whole round passes in which every thread was only
+                # waiting, nothing can ever change: stuck. If the threads are still
+                # going after many rounds, they are busy but getting nowhere.
+                for i in range(rounds):
+                    if not threads:
+                        return "finished"
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "gave up"
+
+
+            def philosopher(i, forks, ate):
+                # Philosopher i sits between fork i on the left and fork (i + 1) % n on
+                # the right, and needs both to eat once.
+                n = len(forks)
+                left, right = i, (i + 1) % n
+                yield from forks[right].acquire(i)
+                yield "thinking about the other fork"
+                yield from forks[left].acquire(i)
+                ate.append(i)
+                forks[left].release(i)
+                forks[right].release(i)
+
+
+            forks = [Lock() for i in range(5)]
+            ate = []
+            print(run([philosopher(i, forks, ate) for i in range(5)]), sorted(ate))
+          - |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        yield "waiting"
+                    self.holder = name
+
+                def release(self, name):
+                    if self.holder != name:
+                        raise RuntimeError(name + " released a lock it does not hold")
+                    self.holder = None
+
+
+            def run(threads, rounds=200):
+                # Round robin. If a whole round passes in which every thread was only
+                # waiting, nothing can ever change: stuck. If the threads are still
+                # going after many rounds, they are busy but getting nowhere.
+                for i in range(rounds):
+                    if not threads:
+                        return "finished"
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "gave up"
+
+
+            butler = {"seated": 0}
+
+
+            def philosopher(i, forks, ate):
+                # Philosopher i sits between fork i on the left and fork (i + 1) % n on
+                # the right, and needs both to eat once.
+                n = len(forks)
+                left, right = i, (i + 1) % n
+                while butler["seated"] >= n:
+                    yield "waiting"
+                butler["seated"] += 1
+                yield from forks[left].acquire(i)
+                yield "thinking about the other fork"
+                yield from forks[right].acquire(i)
+                ate.append(i)
+                forks[right].release(i)
+                forks[left].release(i)
+                butler["seated"] -= 1
+
+
+            forks = [Lock() for i in range(5)]
+            ate = []
+            print(run([philosopher(i, forks, ate) for i in range(5)]), sorted(ate))
+          - |
+            class Lock:
+                def __init__(self):
+                    self.holder = None
+
+                def acquire(self, name):
+                    while self.holder is not None:
+                        yield "waiting"
+                    self.holder = name
+
+                def release(self, name):
+                    if self.holder != name:
+                        raise RuntimeError(name + " released a lock it does not hold")
+                    self.holder = None
+
+
+            def run(threads, rounds=200):
+                # Round robin. If a whole round passes in which every thread was only
+                # waiting, nothing can ever change: stuck. If the threads are still
+                # going after many rounds, they are busy but getting nowhere.
+                for i in range(rounds):
+                    if not threads:
+                        return "finished"
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "gave up"
+
+
+            def philosopher(i, forks, ate):
+                # Philosopher i sits between fork i on the left and fork (i + 1) % n on
+                # the right, and needs both to eat once.
+                n = len(forks)
+                left, right = i, (i + 1) % n
+                first, second = min(left, right), max(left, right)
+                yield from forks[first].acquire(i)
+                yield "thinking about the other fork"
+                yield from forks[second].acquire(i)
+                ate.append(i)
+                forks[second].release(i)
+
+
+            forks = [Lock() for i in range(5)]
+            ate = []
+            print(run([philosopher(i, forks, ate) for i in range(5)]), sorted(ate))
+        explanation: |
+          Every philosopher takes the left fork first, so when all hold one fork, each waits for a neighbour: a cycle. Take the lower-numbered fork first; then the last philosopher, whose right fork is fork 0, reaches for it first, and the cycle cannot close. Everyone taking the right fork first is the same cycle the other way round; a butler who lets all n sit at once prevents nothing, since the rule needs n - 1; and putting back only one fork leaves the other held for ever.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. Five philosophers each take the left fork, then the right. What is the smallest number who must take their right fork first to make the deadlock impossible?
+        answer: "1"
+        explanation: |
+          With one philosopher reversed, the five can never each hold one fork while waiting for the next: the reversed one and a neighbour compete for the same first fork, and whoever loses waits holding nothing. This is the global order rule, numbering the forks 0 to 4 and taking the lower first.
+    - question:
+        id: work-database
+        type: choice
+        system: s2
+        prompt: |
+          A web app's database sometimes reports "deadlock detected" and aborts one of two transactions that update the same two rows. What should the application do?
+        options:
+          - "Retry the aborted transaction, and where possible update rows in a consistent order, such as by id, so the deadlock becomes rare"
+          - "Turn off the database's deadlock detection"
+          - "Show the error to the user and give up"
+          - "Run every transaction on one connection"
+        answer: 0
+        explanation: |
+          The database broke the cycle by aborting a victim, so retrying is safe and expected. Ordering the updates removes the cycle at its source; turning detection off would leave the two transactions stuck until a timeout, and one connection serialises everything.
+  connections:
+    - text: |
+        One. Number the forks 0 to 4 and make everyone take the lower-numbered fork first. For philosophers 0 to 3 that is the left fork, as before; only philosopher 4, whose forks are 4 and 0, changes, taking fork 0 first. Now philosophers 0 and 4 compete for fork 0 before holding anything, and whoever loses waits empty-handed, so the ring of waiting can never close.
+
+        Locks answer "only one at a time". Threads also need to wait for things to happen: for a queue to have an item, for a buffer to have space, for a result to be ready. Spinning on a lock to check is wasteful, and sleeping blindly is slow. [[d0.condition-variables-and-semaphores]] adds the tools for waiting until a condition holds, and for counting how many threads may proceed at once.

@@ -1,0 +1,1236 @@
+concept: d0.atomic-operations-and-compare-and-swap
+minutes: 85
+claim: You can name the atomic instructions processors provide, load, store, exchange, fetch-and-add and compare-and-swap, and say what each guarantees; write the compare-and-swap retry loop and count how many attempts it wastes under contention; build a fair ticket lock from fetch-and-add; tell lock-free from wait-free; follow a lock-free stack's push and pop; explain the ABA problem and fix it with a version counter; and judge when atomics beat locks and when a lock is the better tool.
+recalls: [d0.condition-variables-and-semaphores]
+uses: [d0.locks-and-mutual-exclusion, d0.interleavings-and-race-conditions, h1.an-instruction-set-risc-v, h1.superscalar-and-out-of-order-execution, h2.threads-in-the-kernel, s2.linked-lists, s2.stacks-and-queues, s1.classes-and-objects, s1.generators-and-context-managers]
+leads: [d0.memory-models-and-happens-before]
+starter: |
+  # Scratch space. Compare-and-swap: change the word only if it still holds
+  # what you saw.
+  word = {"value": 41}
+
+  def cas(expected, new):
+      if word["value"] == expected:
+          word["value"] = new
+          return True
+      return False
+
+  seen = word["value"]
+  print(cas(seen, seen + 1), cas(seen, seen + 1), word["value"])
+parts:
+  recall:
+    - text: |
+        [[d0.condition-variables-and-semaphores]] built waiting on top of locks, and locks were built in the lesson before on an atomic test-and-set. This lesson goes down to that layer: the few instructions that read and change one memory word indivisibly even with many cores racing, and what can be built from them directly, without any lock at all. Three quick pulls first.
+  puzzle:
+    - text: |
+        Four threads each add 1 to a shared counter, using a compare-and-swap loop: read the counter, then try to swap in the value plus one, which succeeds only if the counter still holds the value read; on failure, read again and retry. All four read the counter at the same moment, and then their compare-and-swaps run one after another.
+
+        **If every thread that fails re-reads at the same moment as the others again, how many compare-and-swap attempts are made in all?**
+  intuition:
+    - text: |
+        At a club cricket ground in Pune, the scorer changes the board by hand. Two volunteers help: one runs to report a four, the other a single. Each reads the board, works out the new total, and climbs up to change it. The rule that keeps the board right is simple: before changing the number, check it still says what you read. If it has changed, someone else got there first, so read it again and recompute. That check-and-change is **compare-and-swap**: change the word only if it still holds what you expected.
+
+        The figure runs several threads that all try to increment one counter at the same moment, first with a compare-and-swap loop and then with fetch-and-add, which adds and returns the old value in a single step.
+    - figure: cas-retry
+      props: { op: cas, threads: 4 }
+    - text: |
+        Under compare-and-swap, each round lets exactly one thread through, and everyone else wastes an attempt and retries. Nobody ever waits for a lock, and some thread always succeeds, yet with many threads the waste piles up. Fetch-and-add has no failure case at all: the hardware does the read, the add and the write as one step. Choosing the right atomic operation matters as much as choosing to use one.
+  derivation:
+    - text: |
+        **Atomic instructions.** Every multi-core processor guarantees that an aligned load or store of a word is atomic: no other core sees half of it. On top of that it offers **read-modify-write** instructions that read a word, compute and write the result back with no other core's access in between. **Exchange** (swap) writes a new value and returns the old. **Fetch-and-add** adds and returns the old value. **Compare-and-swap** (CAS) takes an address, an expected value and a new value; if the word holds the expected value it writes the new one and reports success, otherwise it changes nothing and reports failure. x86 has `lock xadd` and `lock cmpxchg`; RISC-V has `amoadd`, `amoswap` and the pair **load-reserved** and **store-conditional**, where the store succeeds only if nobody has written the word since the load, which is enough to build all the rest.
+
+        **How the hardware does it.** Each core's cache holds a copy of the memory it is using, and the **cache coherence** protocol lets only one core have a line in a writable state at a time. An atomic instruction takes the line in that exclusive state and keeps it for the whole read-modify-write. An uncontended atomic costs a few tens of cycles. When many cores hit the same word, the line bounces from core to core, and each operation may cost hundreds of cycles.
+    - question:
+        id: derivation-fetch-add
+        type: numeric
+        system: s2
+        prompt: |
+          A word holds 7. Three cores run fetch-and-add(2) on it, one after another. What value does the third one get back?
+        answer: "11"
+        explanation: |
+          Each fetch-and-add returns the value it found: 7, then 9, then 11, and the word ends at 13. Every caller gets a different value back, which is why fetch-and-add is perfect for handing out tickets and slots.
+    - text: |
+        **The compare-and-swap loop.** CAS turns any update of one word into a lock-free operation: read the old value, compute the new value from it, and CAS it in; if the CAS fails, another thread changed the word in between, so read again and retry. Nothing is ever lost, because a CAS only succeeds against the value it was computed from. A failed CAS always means another thread's CAS succeeded, so the system as a whole always makes progress, even if one unlucky thread keeps failing.
+
+        **Lock-free and wait-free.** An algorithm is **lock-free** if, however the threads are scheduled, some thread completes its operation in a bounded number of its own steps: no thread can block the others by being paused, as a lock holder that is preempted can. It is **wait-free** if every thread completes in a bounded number of steps. A CAS loop is lock-free but not wait-free: one thread can, in principle, lose every race. Fetch-and-add is wait-free. Both properties matter where a stalled thread must not stall the rest, such as in interrupt handlers or real-time code.
+    - question:
+        id: derivation-progress
+        type: choice
+        system: s2
+        prompt: |
+          A thread holding a lock is preempted for 50 ms. Under a lock-free counter instead, what happens to the other threads in those 50 ms?
+        options:
+          - "They carry on, since no thread ever holds anything that others must wait for"
+          - "They all wait 50 ms"
+          - "They spin, burning their cores"
+          - "The paused thread's update is lost"
+        answer: 0
+        explanation: |
+          A paused thread in a lock-free algorithm has at most read a value; when it resumes, its CAS fails if the value changed and it retries. Nobody waits for it.
+    - text: |
+        **A ticket lock.** Fetch-and-add makes a fair lock in two lines. Keep two counters, `next_ticket` and `now_serving`. To acquire, take a ticket with `mine = next_ticket.fetch_add(1)`, then wait until `now_serving` equals `mine`. To release, add one to `now_serving`. Threads enter in exactly the order they took tickets, like the token machine at a bank, so nobody starves, which a simple test-and-set spinlock cannot promise. Linux used ticket locks for years for its spinlocks.
+
+        **A lock-free stack.** In 1986 Treiber published a stack built on one CAS. The stack is a linked list whose head is the shared word `top`. To push a node, set its next pointer to the current top and CAS top from that old value to the node. To pop, read top, read its next, and CAS top from the old top to that next node. If another thread pushed or popped in between, the CAS fails and the operation retries.
+    - question:
+        id: derivation-push
+        type: choice
+        system: s2
+        prompt: |
+          Two threads push at once onto a lock-free stack whose top is node 5. Both set their node's next to 5 and try CAS(top, 5, mine). What happens?
+        options:
+          - "One CAS succeeds; the other fails, re-reads the new top, points its node at it and retries"
+          - "Both succeed and one node is lost"
+          - "Both fail and the stack is unchanged for ever"
+          - "The stack becomes a tree"
+        answer: 0
+        explanation: |
+          Only one CAS can find top still equal to 5. The loser sees the winner's node as the new top, links to it and tries again, so both nodes end up on the stack.
+    - text: |
+        **The ABA problem.** CAS checks that the word holds the same value, not that nothing happened. Suppose thread 1 starts a pop: it reads top = A and A's next = B, and is preempted. Thread 2 pops A, pops B, and pushes A back, reusing the same node, as a memory allocator often does with freed memory. Top is A again, but A's next is now whatever was below B. Thread 1 resumes, its CAS(top, A, B) succeeds because top is A, and top becomes B, a node that has already been popped. The stack is corrupted. The value went from A to B and back to A, hence the name.
+
+        **Fixing ABA.** The standard fix pairs the pointer with a **version counter** that every successful change increments, and CASes both together; many processors offer a double-width CAS for exactly this. Thread 1's CAS then fails, because although the node is A again, the version has moved on. Other fixes stop nodes from being reused while any thread might still hold a pointer to them: **hazard pointers**, epoch-based reclamation, or a garbage collector, which is why Java and Go programs meet ABA less often.
+
+        **When to use atomics.** Use them for single words with simple rules: counters, flags, sequence numbers, reference counts, statistics, and as the building blocks of locks. For anything with an invariant across several fields, use a lock: lock-free data structures are notoriously hard to get right and to prove. Under heavy contention on one counter, even atomics bounce the cache line; spreading the count over one slot per core and summing on demand, as Java's `LongAdder` does, scales far better. Pure Python code has no CAS; CPython's global interpreter lock makes single bytecodes atomic, but `x += 1` is several bytecodes, so it still races.
+    - question:
+        id: derivation-aba
+        type: choice
+        system: s2
+        prompt: |
+          Why does pairing the top pointer with a version counter stop the ABA bug?
+        options:
+          - "Every change increases the version, so a node that leaves and returns to the top comes back with a different version and the stale CAS fails"
+          - "The version counter makes CAS wait for other threads"
+          - "It stops nodes from being reused"
+          - "It makes pop run under a lock"
+        answer: 0
+        explanation: |
+          The stale thread expects (A, old version) and finds (A, newer version), so the comparison fails and it re-reads, now seeing the true state of the stack.
+  formal:
+    - text: |
+        **Atomic instructions.** Load, store, exchange, fetch-and-add, compare-and-swap (CAS: write new only if the word holds expected; report success). LL/SC: a store that fails if the word was written since the load. Implemented by holding the cache line exclusively.
+
+        **CAS loop.** Read old, compute new, CAS(old, new), retry on failure. With n threads colliding at once: n(n + 1)/2 attempts.
+
+        **Progress.** Lock-free: some thread always completes in bounded steps. Wait-free: every thread does. CAS loops are lock-free; fetch-and-add is wait-free.
+
+        **Built from atomics.** Ticket lock (fetch-and-add tickets; FIFO). Treiber stack (CAS on top).
+
+        **ABA.** A CAS succeeds because the value returned to what was read, though the state changed. Fix: version counters with double-width CAS, hazard pointers, epochs, or garbage collection.
+
+        **Choice.** Atomics for single words with simple rules; locks for invariants over several fields; sharded counters under heavy contention.
+  drill:
+    - text: Seconds each. Ask what each atomic returns, and what it guarantees.
+    - question:
+        id: drill-cas-fail
+        type: choice
+        system: s1
+        prompt: |
+          A CAS(word, 10, 11) fails. What do you know?
+        options:
+          - "The word did not hold 10 at that instant, so another thread changed it"
+          - "The word now holds 11"
+          - "The processor is out of atomic instructions"
+          - "Nothing; CAS can fail at random"
+        answer: 0
+        explanation: CAS fails only when the comparison fails, which in a CAS loop means someone else's update got in first.
+    - question:
+        id: drill-wait-free
+        type: choice
+        system: s1
+        prompt: |
+          Which of these is wait-free?
+        options:
+          - "Incrementing with one fetch-and-add"
+          - "Incrementing with a compare-and-swap loop"
+          - "Incrementing under a spinlock"
+          - "Incrementing under a mutex"
+        answer: 0
+        explanation: Fetch-and-add always completes in one step; the others can be made to wait or retry indefinitely.
+    - question:
+        id: predict-attempts
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          n = 6
+          print(n * (n + 1) // 2, n * (n + 1) // 2 - n)
+        output: "21 15"
+        explanation: Six threads colliding at once make 21 CAS attempts in all, 15 of them wasted.
+    - question:
+        id: predict-tickets
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          next_ticket = 0
+          mine = []
+          for person in ["ravi", "anu", "joseph"]:
+              mine.append(next_ticket)
+              next_ticket += 1
+          print(mine, next_ticket)
+        output: "[0, 1, 2] 3"
+        explanation: Each fetch-and-add hands out the old value, so the tickets are 0, 1 and 2 and the next one is 3.
+    - question:
+        id: predict-aba
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          top = ("A", 7)
+          seen = top
+          top = ("B", 8)
+          top = ("A", 9)
+          print(seen == top, seen[0] == top[0])
+        output: "False True"
+        explanation: The node is A again, so a CAS on the node alone would succeed, but the version moved from 7 to 9, so a CAS on both fails.
+  work:
+    - text: Slower now. Each answer is built from one atomic instruction.
+    - question:
+        id: write-atomic
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `cas` and `fetch_add` for an atomic word, and `increment`, which adds 1 with a compare-and-swap loop and counts its attempts. The program should print `4 {'A': 1, 'B': 2, 'C': 3, 'D': 4} 10` and `100 101 102`.
+        starter: |
+          class Atomic:
+              # One memory word that threads change only with atomic instructions.
+              # Each method runs as one indivisible step.
+              def __init__(self, value):
+                  self.value = value
+
+              def load(self):
+                  return self.value
+
+              def cas(self, expected, new):
+                  # If the word still holds expected, put new in it and return True;
+                  # otherwise change nothing and return False.
+                  return False
+
+              def fetch_add(self, amount):
+                  # Add amount and return the value from before the addition.
+                  return self.value
+
+
+          def increment(counter, attempts, name):
+              # Add 1 with a compare-and-swap loop: read the value, let other threads
+              # run, then try to swap in value + 1, and go round again if another
+              # thread changed the counter in between. Record the tries in attempts.
+              attempts[name] = 0
+              yield "read"
+
+
+          def run(threads):
+              while threads:
+                  for t in list(threads):
+                      try:
+                          next(t)
+                      except StopIteration:
+                          threads.remove(t)
+
+
+          counter = Atomic(0)
+          attempts = {}
+          run([increment(counter, attempts, name) for name in ["A", "B", "C", "D"]])
+          print(counter.load(), attempts, sum(attempts.values()))
+          tickets = Atomic(100)
+          print(tickets.fetch_add(1), tickets.fetch_add(1), tickets.load())
+        solution: |
+          class Atomic:
+              # One memory word that threads change only with atomic instructions.
+              # Each method runs as one indivisible step.
+              def __init__(self, value):
+                  self.value = value
+
+              def load(self):
+                  return self.value
+
+              def cas(self, expected, new):
+                  # If the word still holds expected, put new in it and return True;
+                  # otherwise change nothing and return False.
+                  if self.value == expected:
+                      self.value = new
+                      return True
+                  return False
+
+              def fetch_add(self, amount):
+                  # Add amount and return the value from before the addition.
+                  old = self.value
+                  self.value = old + amount
+                  return old
+
+
+          def increment(counter, attempts, name):
+              # Add 1 with a compare-and-swap loop: read the value, let other threads
+              # run, then try to swap in value + 1, and go round again if another
+              # thread changed the counter in between. Record the tries in attempts.
+              attempts[name] = 0
+              while True:
+                  old = counter.load()
+                  yield "read"
+                  attempts[name] += 1
+                  if counter.cas(old, old + 1):
+                      return
+
+
+          def run(threads):
+              while threads:
+                  for t in list(threads):
+                      try:
+                          next(t)
+                      except StopIteration:
+                          threads.remove(t)
+
+
+          counter = Atomic(0)
+          attempts = {}
+          run([increment(counter, attempts, name) for name in ["A", "B", "C", "D"]])
+          print(counter.load(), attempts, sum(attempts.values()))
+          tickets = Atomic(100)
+          print(tickets.fetch_add(1), tickets.fetch_add(1), tickets.load())
+        tests: |
+          _a = Atomic(5)
+          assert _a.cas(5, 9) is True and _a.load() == 9, "cas(5, 9) on a word holding 5 should succeed and leave 9"
+          assert _a.cas(5, 7) is False and _a.load() == 9, "cas(5, 7) on a word holding 9 should fail and change nothing"
+          _a = Atomic(10)
+          assert _a.fetch_add(3) == 10 and _a.load() == 13, "fetch_add(3) on 10 should return the old value 10 and leave 13"
+          assert _a.fetch_add(-13) == 13 and _a.load() == 0, "fetch_add(-13) on 13 should return 13 and leave 0"
+          for _n in [1, 2, 3, 6]:
+              _c = Atomic(0)
+              _att = {}
+              run([increment(_c, _att, "t" + str(_i)) for _i in range(_n)])
+              assert _c.load() == _n, str(_n) + " threads incrementing once each should leave " + str(_n) + ", not " + str(_c.load())
+              assert sum(_att.values()) == _n * (_n + 1) // 2, "when all " + str(_n) + " threads read at once, the CAS loops take " + str(_n * (_n + 1) // 2) + " tries in all, not " + str(sum(_att.values()))
+          _c = Atomic(0)
+          _att = {}
+          run([increment(_c, _att, "x"), increment(_c, _att, "y")] + [increment(_c, _att, "z")])
+          assert _c.load() == 3, "no increment may be lost"
+          assert output.splitlines() == ["4 {'A': 1, 'B': 2, 'C': 3, 'D': 4} 10", "100 101 102"], "The program should print 4 {'A': 1, 'B': 2, 'C': 3, 'D': 4} 10 and 100 101 102"
+        wrong:
+          - |
+            class Atomic:
+                # One memory word that threads change only with atomic instructions.
+                # Each method runs as one indivisible step.
+                def __init__(self, value):
+                    self.value = value
+
+                def load(self):
+                    return self.value
+
+                def cas(self, expected, new):
+                    # If the word still holds expected, put new in it and return True;
+                    # otherwise change nothing and return False.
+                    self.value = new
+                    return True
+
+                def fetch_add(self, amount):
+                    # Add amount and return the value from before the addition.
+                    old = self.value
+                    self.value = old + amount
+                    return old
+
+
+            def increment(counter, attempts, name):
+                # Add 1 with a compare-and-swap loop: read the value, let other threads
+                # run, then try to swap in value + 1, and go round again if another
+                # thread changed the counter in between. Record the tries in attempts.
+                attempts[name] = 0
+                while True:
+                    old = counter.load()
+                    yield "read"
+                    attempts[name] += 1
+                    if counter.cas(old, old + 1):
+                        return
+
+
+            def run(threads):
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+
+
+            counter = Atomic(0)
+            attempts = {}
+            run([increment(counter, attempts, name) for name in ["A", "B", "C", "D"]])
+            print(counter.load(), attempts, sum(attempts.values()))
+            tickets = Atomic(100)
+            print(tickets.fetch_add(1), tickets.fetch_add(1), tickets.load())
+          - |
+            class Atomic:
+                # One memory word that threads change only with atomic instructions.
+                # Each method runs as one indivisible step.
+                def __init__(self, value):
+                    self.value = value
+
+                def load(self):
+                    return self.value
+
+                def cas(self, expected, new):
+                    # If the word still holds expected, put new in it and return True;
+                    # otherwise change nothing and return False.
+                    if self.value == expected:
+                        self.value = new
+                        return True
+                    return False
+
+                def fetch_add(self, amount):
+                    # Add amount and return the value from before the addition.
+                    old = self.value
+                    self.value = old + amount
+                    return old
+
+
+            def increment(counter, attempts, name):
+                # Add 1 with a compare-and-swap loop: read the value, let other threads
+                # run, then try to swap in value + 1, and go round again if another
+                # thread changed the counter in between. Record the tries in attempts.
+                attempts[name] = 0
+                old = counter.load()
+                yield "read"
+                attempts[name] += 1
+                counter.cas(old, old + 1)
+
+
+            def run(threads):
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+
+
+            counter = Atomic(0)
+            attempts = {}
+            run([increment(counter, attempts, name) for name in ["A", "B", "C", "D"]])
+            print(counter.load(), attempts, sum(attempts.values()))
+            tickets = Atomic(100)
+            print(tickets.fetch_add(1), tickets.fetch_add(1), tickets.load())
+          - |
+            class Atomic:
+                # One memory word that threads change only with atomic instructions.
+                # Each method runs as one indivisible step.
+                def __init__(self, value):
+                    self.value = value
+
+                def load(self):
+                    return self.value
+
+                def cas(self, expected, new):
+                    # If the word still holds expected, put new in it and return True;
+                    # otherwise change nothing and return False.
+                    if self.value == expected:
+                        self.value = new
+                        return True
+                    return False
+
+                def fetch_add(self, amount):
+                    # Add amount and return the value from before the addition.
+                    self.value = self.value + amount
+                    return self.value
+
+
+            def increment(counter, attempts, name):
+                # Add 1 with a compare-and-swap loop: read the value, let other threads
+                # run, then try to swap in value + 1, and go round again if another
+                # thread changed the counter in between. Record the tries in attempts.
+                attempts[name] = 0
+                while True:
+                    old = counter.load()
+                    yield "read"
+                    attempts[name] += 1
+                    if counter.cas(old, old + 1):
+                        return
+
+
+            def run(threads):
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+
+
+            counter = Atomic(0)
+            attempts = {}
+            run([increment(counter, attempts, name) for name in ["A", "B", "C", "D"]])
+            print(counter.load(), attempts, sum(attempts.values()))
+            tickets = Atomic(100)
+            print(tickets.fetch_add(1), tickets.fetch_add(1), tickets.load())
+        explanation: |
+          cas compares, writes and reports; fetch_add remembers the old value, adds, and returns the old value; increment loops: load, yield, count the attempt, and return once the cas succeeds. A cas that writes without comparing loses updates; trying once without retrying loses every increment that collides; and returning the new value from fetch_add breaks every use of it as a ticket, since the first caller should get the original value.
+    - question:
+        id: write-ticket-lock
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `acquire` and `release` for a ticket lock built on fetch-and-add. The program should print `finished ['ravi', 'ravi', 'anu', 'anu', 'joseph', 'joseph']` and `3 3`.
+        starter: |
+          class Atomic:
+              def __init__(self, value):
+                  self.value = value
+
+              def load(self):
+                  return self.value
+
+              def store(self, value):
+                  self.value = value
+
+              def fetch_add(self, amount):
+                  old = self.value
+                  self.value = old + amount
+                  return old
+
+
+          class TicketLock:
+              # A fair spinlock, like the queue tokens at a bank. acquire takes the
+              # next ticket with one atomic fetch_add, then waits until now_serving
+              # reaches it. release serves the next ticket. Threads enter strictly in
+              # the order they took tickets.
+              def __init__(self):
+                  self.next_ticket = Atomic(0)
+                  self.now_serving = Atomic(0)
+
+              def acquire(self):
+                  yield "waiting"
+
+              def release(self):
+                  pass
+
+
+          def customer(name, lock, order):
+              yield "walking in"
+              yield from lock.acquire()
+              order.append(name)
+              yield "at the counter"
+              order.append(name)
+              lock.release()
+
+
+          def run(threads):
+              while threads:
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "finished"
+
+
+          lock = TicketLock()
+          order = []
+          print(run([customer(name, lock, order) for name in ["ravi", "anu", "joseph"]]), order)
+          print(lock.next_ticket.load(), lock.now_serving.load())
+        solution: |
+          class Atomic:
+              def __init__(self, value):
+                  self.value = value
+
+              def load(self):
+                  return self.value
+
+              def store(self, value):
+                  self.value = value
+
+              def fetch_add(self, amount):
+                  old = self.value
+                  self.value = old + amount
+                  return old
+
+
+          class TicketLock:
+              # A fair spinlock, like the queue tokens at a bank. acquire takes the
+              # next ticket with one atomic fetch_add, then waits until now_serving
+              # reaches it. release serves the next ticket. Threads enter strictly in
+              # the order they took tickets.
+              def __init__(self):
+                  self.next_ticket = Atomic(0)
+                  self.now_serving = Atomic(0)
+
+              def acquire(self):
+                  mine = self.next_ticket.fetch_add(1)
+                  while self.now_serving.load() != mine:
+                      yield "waiting"
+
+              def release(self):
+                  self.now_serving.store(self.now_serving.load() + 1)
+
+
+          def customer(name, lock, order):
+              yield "walking in"
+              yield from lock.acquire()
+              order.append(name)
+              yield "at the counter"
+              order.append(name)
+              lock.release()
+
+
+          def run(threads):
+              while threads:
+                  moved = False
+                  for t in list(threads):
+                      try:
+                          if next(t) != "waiting":
+                              moved = True
+                      except StopIteration:
+                          threads.remove(t)
+                          moved = True
+                  if not moved:
+                      return "stuck"
+              return "finished"
+
+
+          lock = TicketLock()
+          order = []
+          print(run([customer(name, lock, order) for name in ["ravi", "anu", "joseph"]]), order)
+          print(lock.next_ticket.load(), lock.now_serving.load())
+        tests: |
+          _l = TicketLock()
+          for _x in _l.acquire():
+              raise AssertionError("the first thread to take a ticket should go straight in")
+          assert _l.next_ticket.load() == 1 and _l.now_serving.load() == 0, "after one acquire, ticket 1 is next and ticket 0 is being served"
+          _g = _l.acquire()
+          assert next(_g) == "waiting", "a second thread must wait while ticket 0 is served"
+          _l.release()
+          assert _l.now_serving.load() == 1, "release should serve the next ticket, 1"
+          _done = False
+          try:
+              next(_g)
+          except StopIteration:
+              _done = True
+          assert _done, "once ticket 1 is served, the waiting thread goes in"
+          for _names in [["a", "b"], ["p", "q", "r", "s", "t"]]:
+              _l = TicketLock()
+              _order = []
+              _r = run([customer(_n, _l, _order) for _n in _names])
+              assert _r == "finished", "all customers should be served, but the run was " + _r
+              assert _order == [_n for _n in _names for _k in range(2)], "each customer must finish at the counter before the next starts, in ticket order: " + repr(_order)
+              assert _l.next_ticket.load() == len(_names) and _l.now_serving.load() == len(_names), "at the end every ticket has been taken and served"
+          assert output.splitlines() == ["finished ['ravi', 'ravi', 'anu', 'anu', 'joseph', 'joseph']", "3 3"], "The program should print finished ['ravi', 'ravi', 'anu', 'anu', 'joseph', 'joseph'] and 3 3"
+        wrong:
+          - |
+            class Atomic:
+                def __init__(self, value):
+                    self.value = value
+
+                def load(self):
+                    return self.value
+
+                def store(self, value):
+                    self.value = value
+
+                def fetch_add(self, amount):
+                    old = self.value
+                    self.value = old + amount
+                    return old
+
+
+            class TicketLock:
+                # A fair spinlock, like the queue tokens at a bank. acquire takes the
+                # next ticket with one atomic fetch_add, then waits until now_serving
+                # reaches it. release serves the next ticket. Threads enter strictly in
+                # the order they took tickets.
+                def __init__(self):
+                    self.next_ticket = Atomic(0)
+                    self.now_serving = Atomic(0)
+
+                def acquire(self):
+                    mine = self.next_ticket.fetch_add(1)
+                    while self.now_serving.load() != mine:
+                        yield "waiting"
+
+                def release(self):
+                    self.now_serving.store(self.next_ticket.load())
+
+
+            def customer(name, lock, order):
+                yield "walking in"
+                yield from lock.acquire()
+                order.append(name)
+                yield "at the counter"
+                order.append(name)
+                lock.release()
+
+
+            def run(threads):
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            lock = TicketLock()
+            order = []
+            print(run([customer(name, lock, order) for name in ["ravi", "anu", "joseph"]]), order)
+            print(lock.next_ticket.load(), lock.now_serving.load())
+          - |
+            class Atomic:
+                def __init__(self, value):
+                    self.value = value
+
+                def load(self):
+                    return self.value
+
+                def store(self, value):
+                    self.value = value
+
+                def fetch_add(self, amount):
+                    old = self.value
+                    self.value = old + amount
+                    return old
+
+
+            class TicketLock:
+                # A fair spinlock, like the queue tokens at a bank. acquire takes the
+                # next ticket with one atomic fetch_add, then waits until now_serving
+                # reaches it. release serves the next ticket. Threads enter strictly in
+                # the order they took tickets.
+                def __init__(self):
+                    self.next_ticket = Atomic(0)
+                    self.now_serving = Atomic(0)
+
+                def acquire(self):
+                    mine = self.next_ticket.fetch_add(1)
+                    while self.now_serving.load() != mine:
+                        yield "waiting"
+
+                def release(self):
+                    self.next_ticket.fetch_add(1)
+
+
+            def customer(name, lock, order):
+                yield "walking in"
+                yield from lock.acquire()
+                order.append(name)
+                yield "at the counter"
+                order.append(name)
+                lock.release()
+
+
+            def run(threads):
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            lock = TicketLock()
+            order = []
+            print(run([customer(name, lock, order) for name in ["ravi", "anu", "joseph"]]), order)
+            print(lock.next_ticket.load(), lock.now_serving.load())
+          - |
+            class Atomic:
+                def __init__(self, value):
+                    self.value = value
+
+                def load(self):
+                    return self.value
+
+                def store(self, value):
+                    self.value = value
+
+                def fetch_add(self, amount):
+                    old = self.value
+                    self.value = old + amount
+                    return old
+
+
+            class TicketLock:
+                # A fair spinlock, like the queue tokens at a bank. acquire takes the
+                # next ticket with one atomic fetch_add, then waits until now_serving
+                # reaches it. release serves the next ticket. Threads enter strictly in
+                # the order they took tickets.
+                def __init__(self):
+                    self.next_ticket = Atomic(0)
+                    self.now_serving = Atomic(0)
+
+                def acquire(self):
+                    mine = self.next_ticket.load()
+                    yield "taking a ticket"
+                    self.next_ticket.store(mine + 1)
+                    while self.now_serving.load() != mine:
+                        yield "waiting"
+
+                def release(self):
+                    self.now_serving.store(self.now_serving.load() + 1)
+
+
+            def customer(name, lock, order):
+                yield "walking in"
+                yield from lock.acquire()
+                order.append(name)
+                yield "at the counter"
+                order.append(name)
+                lock.release()
+
+
+            def run(threads):
+                while threads:
+                    moved = False
+                    for t in list(threads):
+                        try:
+                            if next(t) != "waiting":
+                                moved = True
+                        except StopIteration:
+                            threads.remove(t)
+                            moved = True
+                    if not moved:
+                        return "stuck"
+                return "finished"
+
+
+            lock = TicketLock()
+            order = []
+            print(run([customer(name, lock, order) for name in ["ravi", "anu", "joseph"]]), order)
+            print(lock.next_ticket.load(), lock.now_serving.load())
+        explanation: |
+          acquire takes a ticket with fetch_add(1) and waits until now_serving equals it; release serves the next ticket by adding one to now_serving. Setting now_serving to next_ticket skips every waiter's ticket, so they wait for ever; adding to next_ticket on release serves nobody; and taking a ticket with a load, a yield and a store lets two threads take the same ticket and enter together.
+    - question:
+        id: fix-aba
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A lock-free stack occasionally hands out the same item twice and loses others. The program should print `['z'] ['a', 'b'] ['c']`. Find the fault and fix it.
+        starter: |
+          class Atomic:
+              def __init__(self, value):
+                  self.value = value
+
+              def load(self):
+                  return self.value
+
+              def cas(self, expected, new):
+                  if self.value == expected:
+                      self.value = new
+                      return True
+                  return False
+
+
+          class Stack:
+              # A lock-free stack. Nodes are kept by number in self.nodes and are
+              # reused after they are popped, as a memory allocator reuses freed
+              # memory. top is the only shared word, changed by compare-and-swap.
+              def __init__(self):
+                  self.nodes = {}
+                  self.top = Atomic(None)
+
+              def push(self, node, value):
+                  self.nodes[node] = {"value": value, "next": None}
+                  while True:
+                      old = self.top.load()
+                      self.nodes[node]["next"] = old
+                      yield "read the top"
+                      if self.top.cas(old, node):
+                          return
+
+              def pop(self, out):
+                  while True:
+                      old = self.top.load()
+                      if old is None:
+                          out.append(None)
+                          return
+                      after = self.nodes[old]["next"]
+                      yield "read the top"
+                      if self.top.cas(old, after):
+                          out.append(self.nodes[old]["value"])
+                          return
+
+
+          def finish(steps):
+              for step in steps:
+                  pass
+
+
+          def drain(stack):
+              got = []
+              while not got or got[-1] is not None:
+                  finish(stack.pop(got))
+              return got[:-1]
+
+
+          s = Stack()
+          for node, value in [(3, "c"), (2, "b"), (1, "a")]:
+              finish(s.push(node, value))
+          t1_got = []
+          t1 = s.pop(t1_got)
+          next(t1)                  # T1 reads the top, node 1, and its next, node 2
+          t2_got = []
+          finish(s.pop(t2_got))     # meanwhile T2 pops a
+          finish(s.pop(t2_got))     # and b
+          finish(s.push(1, "z"))    # and reuses node 1 for a new item, z
+          finish(t1)                # T1 carries on
+          print(t1_got, t2_got, drain(s))
+        solution: |
+          class Atomic:
+              def __init__(self, value):
+                  self.value = value
+
+              def load(self):
+                  return self.value
+
+              def cas(self, expected, new):
+                  if self.value == expected:
+                      self.value = new
+                      return True
+                  return False
+
+
+          class Stack:
+              # A lock-free stack. Nodes are kept by number in self.nodes and are
+              # reused after they are popped, as a memory allocator reuses freed
+              # memory. top is the only shared word, changed by compare-and-swap. It
+              # holds the top node and a version that every change increases, so a
+              # node that comes back to the top no longer looks unchanged.
+              def __init__(self):
+                  self.nodes = {}
+                  self.top = Atomic((None, 0))
+
+              def push(self, node, value):
+                  self.nodes[node] = {"value": value, "next": None}
+                  while True:
+                      old = self.top.load()
+                      self.nodes[node]["next"] = old[0]
+                      yield "read the top"
+                      if self.top.cas(old, (node, old[1] + 1)):
+                          return
+
+              def pop(self, out):
+                  while True:
+                      old = self.top.load()
+                      if old[0] is None:
+                          out.append(None)
+                          return
+                      after = self.nodes[old[0]]["next"]
+                      yield "read the top"
+                      if self.top.cas(old, (after, old[1] + 1)):
+                          out.append(self.nodes[old[0]]["value"])
+                          return
+
+
+          def finish(steps):
+              for step in steps:
+                  pass
+
+
+          def drain(stack):
+              got = []
+              while not got or got[-1] is not None:
+                  finish(stack.pop(got))
+              return got[:-1]
+
+
+          s = Stack()
+          for node, value in [(3, "c"), (2, "b"), (1, "a")]:
+              finish(s.push(node, value))
+          t1_got = []
+          t1 = s.pop(t1_got)
+          next(t1)                  # T1 reads the top, node 1, and its next, node 2
+          t2_got = []
+          finish(s.pop(t2_got))     # meanwhile T2 pops a
+          finish(s.pop(t2_got))     # and b
+          finish(s.push(1, "z"))    # and reuses node 1 for a new item, z
+          finish(t1)                # T1 carries on
+          print(t1_got, t2_got, drain(s))
+        tests: |
+          _s = Stack()
+          for _n, _v in [(1, "x"), (2, "y")]:
+              finish(_s.push(_n, _v))
+          assert drain(_s) == ["y", "x"], "pushing x then y and popping all should give y then x"
+          _e = []
+          finish(_s.pop(_e))
+          assert _e == [None], "popping an empty stack gives None"
+          _s = Stack()
+          for _n, _v in [(30, "p"), (20, "q"), (10, "r")]:
+              finish(_s.push(_n, _v))
+          _a = []
+          _ta = _s.pop(_a)
+          next(_ta)
+          _b = []
+          finish(_s.pop(_b))
+          finish(_s.pop(_b))
+          finish(_s.push(10, "new"))
+          finish(_ta)
+          _rest = drain(_s)
+          _all = _a + _b + _rest
+          assert sorted(_all) == ["new", "p", "q", "r"], "after the stalled pop, every item should come off exactly once, but the pops gave " + repr(_all) + ": a node that left and came back to the top fooled the compare-and-swap"
+          _s = Stack()
+          for _n, _v in [(3, "c"), (2, "b"), (1, "a")]:
+              finish(_s.push(_n, _v))
+          _a = []
+          _ta = _s.pop(_a)
+          next(_ta)
+          _b = []
+          finish(_s.pop(_b))
+          finish(_s.push(1, "a2"))
+          finish(_ta)
+          _rest = drain(_s)
+          assert sorted(_a + _b + _rest) == ["a", "a2", "b", "c"], "a pop that is overtaken once must still leave every item to be popped once, not " + repr(_a + _b + _rest)
+          assert output.splitlines() == ["['z'] ['a', 'b'] ['c']"], "The program should print ['z'] ['a', 'b'] ['c']"
+        wrong:
+          - |
+            class Atomic:
+                def __init__(self, value):
+                    self.value = value
+
+                def load(self):
+                    return self.value
+
+                def cas(self, expected, new):
+                    if self.value == expected:
+                        self.value = new
+                        return True
+                    return False
+
+
+            class Stack:
+                # A lock-free stack. Nodes are kept by number in self.nodes and are
+                # reused after they are popped, as a memory allocator reuses freed
+                # memory. top is the only shared word, changed by compare-and-swap.
+                def __init__(self):
+                    self.nodes = {}
+                    self.top = Atomic(None)
+
+                def push(self, node, value):
+                    self.nodes[node] = {"value": value, "next": None}
+                    while True:
+                        old = self.top.load()
+                        self.nodes[node]["next"] = old
+                        yield "read the top"
+                        if self.top.cas(old, node):
+                            return
+
+                def pop(self, out):
+                    while True:
+                        old = self.top.load()
+                        if old is None:
+                            out.append(None)
+                            return
+                        after = self.nodes[old]["next"]
+                        yield "read the top"
+                        if self.top.load() == old and self.top.cas(old, after):
+                            out.append(self.nodes[old]["value"])
+                            return
+
+
+            def finish(steps):
+                for step in steps:
+                    pass
+
+
+            def drain(stack):
+                got = []
+                while not got or got[-1] is not None:
+                    finish(stack.pop(got))
+                return got[:-1]
+
+
+            s = Stack()
+            for node, value in [(3, "c"), (2, "b"), (1, "a")]:
+                finish(s.push(node, value))
+            t1_got = []
+            t1 = s.pop(t1_got)
+            next(t1)                  # T1 reads the top, node 1, and its next, node 2
+            t2_got = []
+            finish(s.pop(t2_got))     # meanwhile T2 pops a
+            finish(s.pop(t2_got))     # and b
+            finish(s.push(1, "z"))    # and reuses node 1 for a new item, z
+            finish(t1)                # T1 carries on
+            print(t1_got, t2_got, drain(s))
+          - |
+            class Atomic:
+                def __init__(self, value):
+                    self.value = value
+
+                def load(self):
+                    return self.value
+
+                def cas(self, expected, new):
+                    if self.value == expected:
+                        self.value = new
+                        return True
+                    return False
+
+
+            class Stack:
+                # A lock-free stack. Nodes are kept by number in self.nodes and are
+                # reused after they are popped, as a memory allocator reuses freed
+                # memory. top is the only shared word, changed by compare-and-swap.
+                def __init__(self):
+                    self.nodes = {}
+                    self.top = Atomic(None)
+
+                def push(self, node, value):
+                    self.nodes[node] = {"value": value, "next": None}
+                    while True:
+                        old = self.top.load()
+                        self.nodes[node]["next"] = old
+                        yield "read the top"
+                        if self.top.cas(old, node):
+                            return
+
+                def pop(self, out):
+                    while True:
+                        old = self.top.load()
+                        if old is None:
+                            out.append(None)
+                            return
+                        after = self.nodes[old]["next"]
+                        yield "read the top"
+                        old = self.top.load()
+                        if self.top.cas(old, after):
+                            out.append(self.nodes[old]["value"])
+                            return
+
+
+            def finish(steps):
+                for step in steps:
+                    pass
+
+
+            def drain(stack):
+                got = []
+                while not got or got[-1] is not None:
+                    finish(stack.pop(got))
+                return got[:-1]
+
+
+            s = Stack()
+            for node, value in [(3, "c"), (2, "b"), (1, "a")]:
+                finish(s.push(node, value))
+            t1_got = []
+            t1 = s.pop(t1_got)
+            next(t1)                  # T1 reads the top, node 1, and its next, node 2
+            t2_got = []
+            finish(s.pop(t2_got))     # meanwhile T2 pops a
+            finish(s.pop(t2_got))     # and b
+            finish(s.push(1, "z"))    # and reuses node 1 for a new item, z
+            finish(t1)                # T1 carries on
+            print(t1_got, t2_got, drain(s))
+          - |
+            class Atomic:
+                def __init__(self, value):
+                    self.value = value
+
+                def load(self):
+                    return self.value
+
+                def cas(self, expected, new):
+                    if self.value == expected:
+                        self.value = new
+                        return True
+                    return False
+
+
+            class Stack:
+                # A lock-free stack. Nodes are kept by number in self.nodes and are
+                # reused after they are popped, as a memory allocator reuses freed
+                # memory. top is the only shared word, changed by compare-and-swap. It
+                # holds the top node and a version that every change increases, so a
+                # node that comes back to the top no longer looks unchanged.
+                def __init__(self):
+                    self.nodes = {}
+                    self.top = Atomic((None, 0))
+
+                def push(self, node, value):
+                    self.nodes[node] = {"value": value, "next": None}
+                    while True:
+                        old = self.top.load()
+                        self.nodes[node]["next"] = old[0]
+                        yield "read the top"
+                        if self.top.cas(old, (node, old[1] + 1)):
+                            return
+
+                def pop(self, out):
+                    while True:
+                        old = self.top.load()
+                        if old is None:
+                            out.append(None)
+                            return
+                        after = self.nodes[old[0]]["next"]
+                        yield "read the top"
+                        if self.top.cas(old, (after, old[1] + 1)):
+                            out.append(self.nodes[old[0]]["value"])
+                            return
+
+
+            def finish(steps):
+                for step in steps:
+                    pass
+
+
+            def drain(stack):
+                got = []
+                while not got or got[-1] is not None:
+                    finish(stack.pop(got))
+                return got[:-1]
+
+
+            s = Stack()
+            for node, value in [(3, "c"), (2, "b"), (1, "a")]:
+                finish(s.push(node, value))
+            t1_got = []
+            t1 = s.pop(t1_got)
+            next(t1)                  # T1 reads the top, node 1, and its next, node 2
+            t2_got = []
+            finish(s.pop(t2_got))     # meanwhile T2 pops a
+            finish(s.pop(t2_got))     # and b
+            finish(s.push(1, "z"))    # and reuses node 1 for a new item, z
+            finish(t1)                # T1 carries on
+            print(t1_got, t2_got, drain(s))
+        explanation: |
+          T1's pop read top = node 1 and next = node 2; while it was paused, node 2 was popped and node 1 was reused, so the CAS that compares only the node succeeds and makes the popped node 2 the top again. Make top a pair of node and version, increase the version on every successful push and pop, and compare both. Checking top again just before the CAS checks the same thing the CAS checks; re-reading top after the pause but keeping the stale next makes things worse; and switching to pairs but still testing for an empty stack with `old is None` never sees the empty stack.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. Four threads all read the counter at once and increment it with a compare-and-swap loop; each round one succeeds and the rest retry together. How many attempts in all?
+        answer: "10"
+        explanation: |
+          4 attempts in the first round, 3 in the second, 2 in the third and 1 in the fourth: 4 + 3 + 2 + 1 = 10, of which 6 failed. With fetch-and-add it would be 4.
+    - question:
+        id: work-hot-counter
+        type: choice
+        system: s2
+        prompt: |
+          A web server on 64 cores counts every request in one atomic counter, and profiling shows the counter itself is slowing requests down. What is the usual fix?
+        options:
+          - "Give each core its own counter and add them up only when the total is read"
+          - "Replace the atomic counter with a mutex"
+          - "Use a compare-and-swap loop instead of fetch-and-add"
+          - "Count only every tenth request"
+        answer: 0
+        explanation: |
+          The cost is the cache line bouncing between 64 cores. Per-core counters are written only by their own core, so they stay in its cache; reading the total sums 64 numbers, which is rare and cheap. A mutex or a CAS loop bounces the same line, and worse.
+  connections:
+    - text: |
+        Ten. In the first round all four compare against the same old value and only one wins; the three losers re-read and try again, and two of them lose; then one; then the last succeeds alone. 4 + 3 + 2 + 1 attempts, growing with the square of the threads. Fetch-and-add would do the same work in four.
+
+        All of this lesson quietly assumed that when one core writes a word, every other core sees the writes in the order they were made. Real processors and compilers do not promise that: they reorder loads and stores for speed, and a thread can see another's flag set before the data the flag announces. [[d0.memory-models-and-happens-before]] explains what is actually promised, and how fences, acquire and release restore order where it matters.

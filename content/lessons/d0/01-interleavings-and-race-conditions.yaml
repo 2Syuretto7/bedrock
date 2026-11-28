@@ -1,0 +1,636 @@
+concept: d0.interleavings-and-race-conditions
+minutes: 80
+claim: You can treat concurrent threads as interleaved sequences of atomic steps, count the interleavings of two threads and see why testing them all is hopeless; simulate a read-modify-write race step by step and predict every final value it can produce, including the surprising smallest one; recognise the other common races, check-then-act and publishing half-built data; tell a race condition from a data race; explain why races hide from ordinary tests and surface under load; and repair a race by making the check and the action one indivisible step.
+recalls: [h2.signals-and-the-life-of-a-process, s6.fuzzing, s6.deterministic-tests-seeds-clocks-and-fakes]
+uses: [h2.threads-in-the-kernel, h2.scheduling, h2.interrupts-and-i-o, s6.flaky-tests-and-their-causes, s1.generators-and-context-managers, s1.recursion, f3.permutations-and-combinations, s0.dictionaries-and-sets]
+leads: [d0.locks-and-mutual-exclusion]
+bridges:
+  h2.signals-and-the-life-of-a-process: The operating systems cluster ended with signals, which can arrive between any two instructions of a program and run a handler in the middle of whatever it was doing. That is already concurrency on one thread, and it is why a handler should only set a flag. This lesson generalises the idea to threads, whose steps the scheduler can interleave anywhere, and asks which results each interleaving can produce.
+  s6.fuzzing: The testing cluster's last lesson fed a program huge numbers of generated inputs to reach the rare ones that break it. A concurrent program has a second, hidden input, the order in which its threads' steps run, and the bad orders are rare in the same way. This lesson counts those orders and shows why only a few of them break the program.
+  s6.deterministic-tests-seeds-clocks-and-fakes: The testing cluster showed how to pin a test's hidden inputs, the clock, randomness and the order of events, so that a failure replays exactly. For threads, the hidden input is the schedule. In this lesson threads are written as Python generators and a small scheduler of our own decides which one moves next, so every interleaving can be chosen, printed and replayed.
+starter: |
+  # Scratch space. Two threads each add 1 to a shared count, as three
+  # steps: load, add, store. Here the steps are interleaved by hand.
+  count = 0
+  reg_a = count       # A loads 0
+  reg_b = count       # B loads 0
+  reg_a = reg_a + 1   # A adds
+  reg_b = reg_b + 1   # B adds
+  count = reg_a       # A stores 1
+  count = reg_b       # B stores 1
+  print(count)
+parts:
+  recall:
+    - text: |
+        [[h2.signals-and-the-life-of-a-process]] showed a handler running in the middle of a program, between any two of its instructions, and the threads of the kernel cluster run that way all the time. [[s6.fuzzing]] hunted for rare inputs that break a program, and [[s6.deterministic-tests-seeds-clocks-and-fakes]] pinned down a test's hidden inputs so that a failure replays. For a program with threads, the rarest and most hidden input is the order in which their steps happen. Three quick pulls first.
+  puzzle:
+    - text: |
+        Two threads share a variable `count`, which starts at 0. Each thread runs the same loop, with no locks:
+
+        ```python
+        for i in range(10):
+            count += 1
+        ```
+
+        Each `count += 1` is really three steps: load `count` into the thread's own register, add 1 to the register, and store the register back into `count`. The scheduler may switch threads between any two steps, in any pattern it likes.
+
+        **What is the smallest final value of `count` that some schedule can produce?**
+  intuition:
+    - text: |
+        Two cashiers at a sweet shop in Kolkata share one notebook in which they keep the day's count of boxes sold. Each, after a sale, reads the number, works out one more in their head, and writes it down. If both read 41 at the same moment, both write 42, and one box has vanished from the count. Nobody made an arithmetic mistake; each cashier did exactly the right thing with what they read. The trouble is only the **order** in which their steps fell.
+
+        A thread's work is a sequence of small steps. When two threads run, their steps are merged into one timeline, an **interleaving**, keeping each thread's own steps in their order. The figure shows every interleaving of one increment by A and one by B, each made of a load, an add and a store, and the count each leaves behind.
+    - figure: thread-interleaving
+      props: { mode: steps, schedule: 1 }
+    - text: |
+        Of the 20 interleavings, only two give the right answer, 2: those where one thread finishes its store before the other loads. In the other 18, both threads load the same old value, and one store overwrites the other. Make the increment a single indivisible step, and only two interleavings remain, both correct. Most of concurrency is about which steps must be indivisible, and how to make them so.
+  derivation:
+    - text: |
+        **Atomic steps and interleavings.** To reason about threads we split their work into **atomic** steps, steps that happen entirely or not at all, with nothing from another thread in the middle. For a machine, a single load or store of an aligned word is atomic; `count += 1` is not, because it is a load, an add and a store. A run of a concurrent program is then one interleaving of its threads' atomic steps. On one core the interleaving comes from the scheduler preempting threads at timer interrupts; on several cores the steps truly overlap, but their effects on memory still fall into some order, and for now we assume each step takes effect in one global order. That assumption, **sequential consistency**, is not quite what real hardware gives, as a later lesson will show, but it is the right starting point.
+
+        **Counting interleavings.** Two threads with m and n steps can be merged in C(m + n, m) ways: choose which of the m + n positions in the timeline belong to the first thread, and the order inside each thread is already fixed. One increment each, 3 steps and 3 steps, gives C(6, 3) = 20. Ten increments each, 30 and 30 steps, gives C(60, 30), about 1.2 × 10^17. With three threads the count is a multinomial, and it grows faster still. No test can try them all, which is why concurrent bugs must be prevented by design and then hunted with the methods at the end of this cluster.
+    - question:
+        id: derivation-count
+        type: numeric
+        system: s2
+        prompt: |
+          Thread A has 2 atomic steps and thread B has 3. In how many ways can their steps be interleaved?
+        answer: "10"
+        explanation: |
+          Choose which 2 of the 5 positions belong to A: C(5, 2) = 10. Each thread's steps then fill their positions in their own order.
+    - text: |
+        **A race condition.** A program has a **race condition** when its result depends on the interleaving and some interleavings give a wrong result. The lost update above is the classic **read-modify-write** race: two threads read the same value, modify it, and write it back, and the second write erases the first. It hides in every `count += 1`, `total = total + amount` and `balance -= price` on shared data.
+
+        **Check-then-act.** The second classic race tests a condition and then acts on it, assuming the condition still holds. "If a seat is free, take the payment, then book it": two threads both see the last seat free, both take payment, and the seat is sold twice. "If the file does not exist, create it": two processes both see no file, and one overwrites the other's. The gap between the check and the act is where another thread slips in, and the longer the gap, a network call or a payment, the likelier the collision.
+
+        **Publishing half-built data.** The third: one thread builds an object and sets a flag or a pointer to announce it; another sees the announcement and reads the object. If the announcement can be seen before the building is finished, the reader sees half an object. With sequential consistency this happens only if the code announces too early; on real hardware it can happen even when the code looks right, which is the subject of the memory models lesson.
+    - question:
+        id: derivation-check-act
+        type: choice
+        system: s2
+        prompt: |
+          A cache function checks `if key not in cache:`, then computes the value for 200 ms and stores it. Two threads ask for the same missing key at once. What happens?
+        options:
+          - "Both see the key missing and both spend 200 ms computing it; the second store overwrites the first"
+          - "The second thread waits for the first to finish"
+          - "Python raises an error because two threads touched the dictionary"
+          - "Only one thread can run the check, so the value is computed once"
+        answer: 0
+        explanation: |
+          This is check-then-act: both checks happen before either store. Here the damage is only wasted work, since both compute the same value, but the same shape with a seat or a bank balance sells twice or overdraws.
+    - text: |
+        **Races and data races.** Two terms are often confused. A **data race** is a precise, low-level thing: two threads access the same memory location, at least one access is a write, and nothing orders the two accesses. Languages such as C, C++ and Rust treat a data race as a bug in itself, and C and C++ give a program with one no meaning at all. A **race condition** is a higher-level bug in the program's logic: some interleaving gives a wrong answer. They overlap but neither contains the other. A check-then-act on a database row has no data race inside the program, yet it is a race condition. And a data race on a statistics counter whose exact value nobody needs may be harmless as logic, while still being undefined behaviour in C.
+
+        **Why races hide.** A race only bites when the bad interleaving happens, and on an idle machine the scheduler rarely switches threads in the middle of a three-instruction increment, since each thread runs for milliseconds between switches. On a developer's laptop the test passes ten thousand times. In production, with 64 cores, heavy load and threads stalled on cache misses and page faults, the window opens many times a second. This is why races are the archetypal **heisenbug**: adding a print statement changes the timing and the bug disappears.
+    - question:
+        id: derivation-why-hidden
+        type: choice
+        system: s2
+        prompt: |
+          A test that runs two threads, each incrementing a shared counter 100 times, passes every time on a developer's laptop. Why might it still have a race?
+        options:
+          - "Each thread probably finishes its 100 increments within one time slice, so the threads never overlap mid-increment"
+          - "Python makes `+=` atomic for small numbers"
+          - "Races only happen on machines with more than 8 cores"
+          - "A test that passes every time cannot contain a race"
+        answer: 0
+        explanation: |
+          100 increments take microseconds, far less than a scheduler's time slice, so the first thread is usually done before the second starts. The bad interleavings exist; this timing just never produces them.
+    - text: |
+        **Making the schedule an input.** To study races we will write each thread as a Python generator: the code between two `yield`s is one atomic step, and a small scheduler of our own decides which thread moves next. This is the trick of [[s6.deterministic-tests-seeds-clocks-and-fakes]] applied to threads: the schedule, normally hidden and random, becomes an explicit input that we can choose, print, enumerate and replay. In this model, a race fix often means rearranging the code so that a check and its action sit in the same step, with no `yield` between them. Real threads need real tools to get the same guarantee, and the next lessons supply them: locks, condition variables and atomic instructions.
+
+        **The smallest value.** Some interleavings are worse than a single lost update. With several increments per thread, one thread can load an early value, sit on it while the other does almost all its work, and then store its stale value, wiping out many increments at once. The puzzle asks how bad it can get.
+    - question:
+        id: derivation-two-each
+        type: choice
+        system: s2
+        prompt: |
+          Two threads each run `count += 1` twice, starting from 0. Which final values are possible?
+        options:
+          - "2, 3 and 4"
+          - "Only 4"
+          - "3 and 4"
+          - "1, 2, 3 and 4"
+        answer: 0
+        explanation: |
+          4 when nothing overlaps, and 3 when one increment is lost. 2 when, for example, A loads 0, B runs both its increments to 2, A stores 1 over them, and A's second increment loads 1 and stores 2. It cannot be 1: the last store is some thread's second increment, which loaded a value that a first increment had already stored, so at least 1.
+  formal:
+    - text: |
+        **Atomic step.** A step that takes effect entirely, with no other thread's step inside it. An aligned load or store is atomic; `x += 1` is not.
+
+        **Interleaving.** A merge of the threads' atomic steps into one order, keeping each thread's order. Two threads of m and n steps: C(m + n, m) interleavings. Assuming each run is one interleaving is sequential consistency.
+
+        **Race condition.** The result depends on the interleaving, and some interleavings are wrong. Common shapes: read-modify-write (lost update), check-then-act (the condition changes between check and action), and publishing data before it is complete.
+
+        **Data race.** Two unordered accesses to one location, at least one a write. Undefined behaviour in C and C++; neither implies nor is implied by a race condition.
+
+        **Hiding.** Bad interleavings are rare under light load and common under heavy load, so passing tests prove little.
+
+        **Model.** Threads as generators, one atomic step between yields, a scheduler that chooses the order: the schedule becomes an input.
+  drill:
+    - text: Seconds each. Count steps, and look for the gap between a read and its write.
+    - question:
+        id: drill-atomic
+        type: choice
+        system: s1
+        prompt: |
+          Which of these is a single atomic step on a typical machine?
+        options:
+          - "Storing an aligned 64-bit word"
+          - "count += 1"
+          - "balance = balance - price"
+          - "if seats > 0: seats -= 1"
+        answer: 0
+        explanation: An aligned store is one memory operation. The others read, compute and write, with gaps between.
+    - question:
+        id: drill-shape
+        type: choice
+        system: s1
+        prompt: |
+          "If the username is not taken, insert the new user." What kind of race is this?
+        options:
+          - "Check-then-act"
+          - "Read-modify-write"
+          - "Deadlock"
+          - "None, since each line is fine"
+        answer: 0
+        explanation: Two sign-ups can both find the name free before either inserts it.
+    - question:
+        id: predict-choose
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          from math import comb
+          print(comb(4, 2), comb(6, 3))
+        output: "6 20"
+        explanation: Two threads of 2 steps each interleave in C(4, 2) = 6 ways; of 3 steps each, in C(6, 3) = 20 ways.
+    - question:
+        id: predict-overlap
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          count = 5
+          a = count
+          b = count
+          count = b + 1
+          count = a + 1
+          print(count)
+        output: "6"
+        explanation: Both threads read 5 and both write 6, so two increments leave the count one higher.
+    - question:
+        id: predict-steps
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def thread(name):
+              yield name + " loads"
+              yield name + " adds"
+              yield name + " stores"
+
+          a = thread("A")
+          b = thread("B")
+          print(next(a), next(b), next(a), sep=", ")
+        output: "A loads, B loads, A adds"
+        explanation: Each next runs one thread up to its next yield, so the scheduler chooses the interleaving A, B, A.
+  work:
+    - text: Slower now. Each answer is a tool for seeing, or removing, a race.
+    - question:
+        id: write-interleavings
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `interleavings`, which returns every merge of two threads' steps that keeps each thread's own order. The program should print `20 interleavings`, then the first two merges and the last one.
+        starter: |
+          def interleavings(a, b):
+              # Every way the steps of two threads can be merged into one timeline,
+              # keeping each thread's own steps in order. Each result is a list of
+              # steps. Results that take a's next step come before those that take
+              # b's next step.
+              return []
+
+          merges = interleavings(["A1", "A2", "A3"], ["B1", "B2", "B3"])
+          print(len(merges), "interleavings")
+          print(merges[:2])
+          print(merges[-1:])
+        solution: |
+          def interleavings(a, b):
+              # Every way the steps of two threads can be merged into one timeline,
+              # keeping each thread's own steps in order. Each result is a list of
+              # steps. Results that take a's next step come before those that take
+              # b's next step.
+              if not a:
+                  return [list(b)]
+              if not b:
+                  return [list(a)]
+              first_a = [[a[0]] + rest for rest in interleavings(a[1:], b)]
+              first_b = [[b[0]] + rest for rest in interleavings(a, b[1:])]
+              return first_a + first_b
+
+
+          merges = interleavings(["A1", "A2", "A3"], ["B1", "B2", "B3"])
+          print(len(merges), "interleavings")
+          print(merges[:2])
+          print(merges[-1:])
+        tests: |
+          _m = interleavings(["A1", "A2"], ["B1"])
+          assert _m == [["A1", "A2", "B1"], ["A1", "B1", "A2"], ["B1", "A1", "A2"]], "two steps of A and one of B can merge 3 ways, A's next step first: " + repr(_m)
+          _m = interleavings(["x"], [])
+          assert _m == [["x"]], "with one thread empty there is exactly one timeline, the other thread's steps: " + repr(_m)
+          _m = interleavings([], [])
+          assert _m == [[]], "two empty threads give one empty timeline, not " + repr(_m)
+          _a = ["a1", "a2", "a3", "a4"]
+          _b = ["b1", "b2", "b3"]
+          _m = interleavings(_a, _b)
+          assert len(_m) == 35, "4 steps and 3 steps merge in 7 choose 3 = 35 ways, not " + str(len(_m))
+          for _t in _m:
+              assert [_s for _s in _t if _s in _a] == _a and [_s for _s in _t if _s in _b] == _b, "each thread's steps must stay in their own order, but " + repr(_t) + " breaks that"
+          assert len(set(tuple(_t) for _t in _m)) == 35, "every merge should appear once"
+          assert _a == ["a1", "a2", "a3", "a4"] and _b == ["b1", "b2", "b3"], "interleavings should not change the lists it is given"
+          assert output.splitlines() == ["20 interleavings", "[['A1', 'A2', 'A3', 'B1', 'B2', 'B3'], ['A1', 'A2', 'B1', 'A3', 'B2', 'B3']]", "[['B1', 'B2', 'B3', 'A1', 'A2', 'A3']]"], "The program should print 20 interleavings and the first, second and last of them"
+        wrong:
+          - |
+            def interleavings(a, b):
+                # Every way the steps of two threads can be merged into one timeline,
+                # keeping each thread's own steps in order. Each result is a list of
+                # steps. Results that take a's next step come before those that take
+                # b's next step.
+                if not a or not b:
+                    return []
+                first_a = [[a[0]] + rest for rest in interleavings(a[1:], b)]
+                first_b = [[b[0]] + rest for rest in interleavings(a, b[1:])]
+                return first_a + first_b
+
+
+            merges = interleavings(["A1", "A2", "A3"], ["B1", "B2", "B3"])
+            print(len(merges), "interleavings")
+            print(merges[:2])
+            print(merges[-1:])
+          - |
+            def interleavings(a, b):
+                # Every way the steps of two threads can be merged into one timeline,
+                # keeping each thread's own steps in order. Each result is a list of
+                # steps. Results that take a's next step come before those that take
+                # b's next step.
+                if not a:
+                    return [list(a)]
+                if not b:
+                    return [list(b)]
+                first_a = [[a[0]] + rest for rest in interleavings(a[1:], b)]
+                first_b = [[b[0]] + rest for rest in interleavings(a, b[1:])]
+                return first_a + first_b
+
+
+            merges = interleavings(["A1", "A2", "A3"], ["B1", "B2", "B3"])
+            print(len(merges), "interleavings")
+            print(merges[:2])
+            print(merges[-1:])
+          - |
+            def interleavings(a, b):
+                # Every way the steps of two threads can be merged into one timeline,
+                # keeping each thread's own steps in order. Each result is a list of
+                # steps. Results that take a's next step come before those that take
+                # b's next step.
+                if not a:
+                    return [list(b)]
+                if not b:
+                    return [list(a)]
+                first_a = [[a[0]] + rest for rest in interleavings(a[1:], b)]
+                first_b = [[b[-1]] + rest for rest in interleavings(a, b[:-1])]
+                return first_a + first_b
+
+
+            merges = interleavings(["A1", "A2", "A3"], ["B1", "B2", "B3"])
+            print(len(merges), "interleavings")
+            print(merges[:2])
+            print(merges[-1:])
+        explanation: |
+          If one thread has no steps left, there is exactly one merge, the other thread's remaining steps. Otherwise the next step is a's first or b's first, and the rest is any merge of what remains. Returning nothing when one list is empty loses every merge; returning the empty list instead of the other one drops steps; and taking b's last step first breaks the order inside b, so the merges are no longer real runs.
+    - question:
+        id: write-run-schedule
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `run`, which executes two threads' increments step by step under a given schedule and returns the final count. The program should print `2 1 1` and `4 2`.
+        starter: |
+          def run(schedule, k):
+              # Threads A and B each run `count += 1` k times. Each increment is three
+              # steps: load count into the thread's own register, add 1 to that
+              # register, and store the register back into count. schedule is a
+              # string of "A" and "B", one letter per step, saying which thread takes
+              # the next step. Return the final value of count.
+              return 0
+
+          print(run("AAABBB", 1), run("ABABAB", 1), run("AABBBA", 1))
+          print(run("AAAAAABBBBBB", 2), run("ABBBBBAAAAAB", 2))
+        solution: |
+          def run(schedule, k):
+              # Threads A and B each run `count += 1` k times. Each increment is three
+              # steps: load count into the thread's own register, add 1 to that
+              # register, and store the register back into count. schedule is a
+              # string of "A" and "B", one letter per step, saying which thread takes
+              # the next step. Return the final value of count.
+              count = 0
+              reg = {"A": 0, "B": 0}
+              done = {"A": 0, "B": 0}
+              for who in schedule:
+                  step = done[who] % 3
+                  if step == 0:
+                      reg[who] = count
+                  elif step == 1:
+                      reg[who] = reg[who] + 1
+                  else:
+                      count = reg[who]
+                  done[who] += 1
+              return count
+
+
+          print(run("AAABBB", 1), run("ABABAB", 1), run("AABBBA", 1))
+          print(run("AAAAAABBBBBB", 2), run("ABBBBBAAAAAB", 2))
+        tests: |
+          assert run("AAABBB", 1) == 2, "A finishes its increment before B loads, so count is 2"
+          assert run("BBBAAA", 1) == 2, "B finishes before A loads, so count is 2"
+          assert run("ABABAB", 1) == 1, "both load 0 before either stores, so both store 1 and one increment is lost"
+          assert run("ABBBAA", 1) == 1, "A loads 0, B loads, adds and stores 1, then A adds and stores 1 over it: count is 1"
+          assert run("", 0) == 0, "no steps leave count at 0"
+          assert run("AAAAAABBBBBB", 2) == 4, "A's two increments and then B's two give 4"
+          assert run("ABBBBBAAAAAB", 2) == 2, "A loads 0 and waits while B does one increment and half of the next; A stores 1 over B's work and finishes its second increment, and B's late store writes 2 again: count is 2"
+          assert run("AAABBBAAABBB", 2) == 4, "taking turns a whole increment at a time loses nothing: 4"
+          assert run("AAAAAAAAA", 3) == 3, "A alone, three increments, gives 3"
+          _r = run("AB" * 6 + "AAABBB", 3)
+          assert _r == 4, "in lockstep both threads lose one of their first two increments each, giving 2, and then one more each gives 4, not " + str(_r)
+          assert output.splitlines() == ["2 1 1", "4 2"], "The program should print 2 1 1 and then 4 2"
+        wrong:
+          - |
+            def run(schedule, k):
+                # Threads A and B each run `count += 1` k times. Each increment is three
+                # steps: load count into the thread's own register, add 1 to that
+                # register, and store the register back into count. schedule is a
+                # string of "A" and "B", one letter per step, saying which thread takes
+                # the next step. Return the final value of count.
+                count = 0
+                reg = 0
+                done = {"A": 0, "B": 0}
+                for who in schedule:
+                    step = done[who] % 3
+                    if step == 0:
+                        reg = count
+                    elif step == 1:
+                        reg = reg + 1
+                    else:
+                        count = reg
+                    done[who] += 1
+                return count
+
+
+            print(run("AAABBB", 1), run("ABABAB", 1), run("AABBBA", 1))
+            print(run("AAAAAABBBBBB", 2), run("ABBBBBAAAAAB", 2))
+          - |
+            def run(schedule, k):
+                # Threads A and B each run `count += 1` k times. Each increment is three
+                # steps: load count into the thread's own register, add 1 to that
+                # register, and store the register back into count. schedule is a
+                # string of "A" and "B", one letter per step, saying which thread takes
+                # the next step. Return the final value of count.
+                count = 0
+                reg = {"A": 0, "B": 0}
+                done = {"A": 0, "B": 0}
+                for who in schedule:
+                    step = done[who] % 3
+                    if step == 0:
+                        reg[who] = count
+                    elif step == 1:
+                        count = count + 1
+                    else:
+                        pass
+                    done[who] += 1
+                return count
+
+
+            print(run("AAABBB", 1), run("ABABAB", 1), run("AABBBA", 1))
+            print(run("AAAAAABBBBBB", 2), run("ABBBBBAAAAAB", 2))
+          - |
+            def run(schedule, k):
+                # Threads A and B each run `count += 1` k times. Each increment is three
+                # steps: load count into the thread's own register, add 1 to that
+                # register, and store the register back into count. schedule is a
+                # string of "A" and "B", one letter per step, saying which thread takes
+                # the next step. Return the final value of count.
+                count = 0
+                reg = {"A": 0, "B": 0}
+                done = {"A": 0, "B": 0}
+                for who in schedule:
+                    step = done[who]
+                    if step == 0:
+                        reg[who] = count
+                    elif step == 1:
+                        reg[who] = reg[who] + 1
+                    else:
+                        count = reg[who]
+                    done[who] += 1
+                return count
+
+
+            print(run("AAABBB", 1), run("ABABAB", 1), run("AABBBA", 1))
+            print(run("AAAAAABBBBBB", 2), run("ABBBBBAAAAAB", 2))
+        explanation: |
+          Keep a register and a step counter for each thread. Each letter in the schedule moves that thread one step: the step number modulo 3 says whether it loads, adds or stores. One register shared by both threads is not how threads work, since each has its own registers, and it produces the wrong values; adding straight into count makes the increment atomic, so no update is ever lost; and forgetting the modulo makes the second increment do nothing.
+    - question:
+        id: fix-oversold
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          A bus booking service sometimes sells the last seat to several people. The program should print `['asha'] 0`. Find the fault and fix it.
+        starter: |
+          def book(name, seats, booked):
+              # One thread booking a seat on an overnight bus. Taking the payment is
+              # slow, and while it waits, the other booking threads run. A seat must
+              # never be sold twice, and seats["left"] must never go below 0.
+              if seats["left"] > 0:
+                  yield "taking payment"
+                  seats["left"] -= 1
+                  booked.append(name)
+
+
+          def run(names, seats):
+              # A simple scheduler: each thread runs until it yields, in turn.
+              booked = []
+              threads = [book(name, seats, booked) for name in names]
+              while threads:
+                  for t in list(threads):
+                      try:
+                          next(t)
+                      except StopIteration:
+                          threads.remove(t)
+              return booked
+
+
+          seats = {"left": 1}
+          print(run(["asha", "ravi", "meena"], seats), seats["left"])
+        solution: |
+          def book(name, seats, booked):
+              # One thread booking a seat on an overnight bus. Taking the payment is
+              # slow, and while it waits, the other booking threads run. A seat must
+              # never be sold twice, and seats["left"] must never go below 0.
+              if seats["left"] > 0:
+                  seats["left"] -= 1
+                  yield "taking payment"
+                  booked.append(name)
+
+
+          def run(names, seats):
+              # A simple scheduler: each thread runs until it yields, in turn.
+              booked = []
+              threads = [book(name, seats, booked) for name in names]
+              while threads:
+                  for t in list(threads):
+                      try:
+                          next(t)
+                      except StopIteration:
+                          threads.remove(t)
+              return booked
+
+
+          seats = {"left": 1}
+          print(run(["asha", "ravi", "meena"], seats), seats["left"])
+        tests: |
+          _s = {"left": 1}
+          _b = run(["asha", "ravi", "meena"], _s)
+          assert _b == ["asha"] and _s["left"] == 0, "with one seat and three buyers, only the first should get it and 0 seats are left, not " + repr(_b) + " with " + str(_s["left"]) + " left"
+          _s = {"left": 2}
+          _b = run(["p1", "p2", "p3", "p4", "p5"], _s)
+          assert _b == ["p1", "p2"] and _s["left"] == 0, "with two seats and five buyers, p1 and p2 should get them and 0 are left, not " + repr(_b) + " with " + str(_s["left"]) + " left"
+          _s = {"left": 5}
+          _b = run(["x", "y"], _s)
+          assert _b == ["x", "y"] and _s["left"] == 3, "with five seats, both buyers get one and 3 are left, not " + repr(_b) + " with " + str(_s["left"]) + " left"
+          _s = {"left": 0}
+          _b = run(["late"], _s)
+          assert _b == [] and _s["left"] == 0, "with no seats left nobody books and the count stays 0"
+          _s = {"left": 1}
+          _booked = []
+          _ts = [book("u" + str(_i), _s, _booked) for _i in range(4)]
+          for _t in reversed(_ts):
+              for _x in _t:
+                  pass
+          _ts = [book("v" + str(_i), _s, _booked) for _i in range(3)]
+          for _t in _ts:
+              for _x in _t:
+                  pass
+          assert len(_booked) == 1 and _s["left"] == 0, "however the threads are scheduled, one seat is sold once"
+          assert output.splitlines() == ["['asha'] 0"], "The program should print ['asha'] 0"
+        wrong:
+          - |
+            def book(name, seats, booked):
+                # One thread booking a seat on an overnight bus. Taking the payment is
+                # slow, and while it waits, the other booking threads run. A seat must
+                # never be sold twice, and seats["left"] must never go below 0.
+                left = seats["left"]
+                if left > 0:
+                    yield "taking payment"
+                    seats["left"] = left - 1
+                    booked.append(name)
+
+
+            def run(names, seats):
+                # A simple scheduler: each thread runs until it yields, in turn.
+                booked = []
+                threads = [book(name, seats, booked) for name in names]
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+                return booked
+
+
+            seats = {"left": 1}
+            print(run(["asha", "ravi", "meena"], seats), seats["left"])
+          - |
+            def book(name, seats, booked):
+                # One thread booking a seat on an overnight bus. Taking the payment is
+                # slow, and while it waits, the other booking threads run. A seat must
+                # never be sold twice, and seats["left"] must never go below 0.
+                seats["left"] -= 1
+                yield "taking payment"
+                if seats["left"] >= 0:
+                    booked.append(name)
+
+
+            def run(names, seats):
+                # A simple scheduler: each thread runs until it yields, in turn.
+                booked = []
+                threads = [book(name, seats, booked) for name in names]
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+                return booked
+
+
+            seats = {"left": 1}
+            print(run(["asha", "ravi", "meena"], seats), seats["left"])
+          - |
+            def book(name, seats, booked):
+                # One thread booking a seat on an overnight bus. Taking the payment is
+                # slow, and while it waits, the other booking threads run. A seat must
+                # never be sold twice, and seats["left"] must never go below 0.
+                if seats["left"] > 0:
+                    yield "taking payment"
+                    if seats["left"] > 0:
+                        booked.append(name)
+                    seats["left"] -= 1
+
+
+            def run(names, seats):
+                # A simple scheduler: each thread runs until it yields, in turn.
+                booked = []
+                threads = [book(name, seats, booked) for name in names]
+                while threads:
+                    for t in list(threads):
+                        try:
+                            next(t)
+                        except StopIteration:
+                            threads.remove(t)
+                return booked
+
+
+            seats = {"left": 1}
+            print(run(["asha", "ravi", "meena"], seats), seats["left"])
+        explanation: |
+          The check and the decrement are separated by the slow payment, where other threads run, so all three see a free seat. Claim the seat in the same step as the check, before the yield, and only then take payment. Copying the count into a local before waiting turns the race into a lost update, selling three seats while the count says 0; decrementing without checking first drives the count negative; and re-checking after payment but decrementing regardless still drives it below zero.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. Two threads each run `count += 1` ten times, as load, add and store, starting from 0. What is the smallest final value some schedule can produce?
+        answer: "2"
+        explanation: |
+          A loads 0. B runs nine whole increments, to 9. A stores 1. B loads 1 for its tenth increment. A runs its other nine increments, to 10. B adds and stores 2. The final value is 2, and it cannot be lower: the last store comes from an increment whose load saw some earlier store of at least 1.
+    - question:
+        id: work-tests
+        type: choice
+        system: s2
+        prompt: |
+          A team's concurrent counter passed a stress test of 10,000 runs in continuous integration. In production it is occasionally wrong. What is the best next step?
+        options:
+          - "Control the schedule in the test, so that it can explore or replay the interleavings that lose updates, and fix the code so no interleaving can"
+          - "Run the stress test 100,000 times"
+          - "Add print statements to the counter to see when it goes wrong"
+          - "Add short sleeps between the load and the store"
+        answer: 0
+        explanation: |
+          More runs of the same timing reach the same interleavings; prints change the timing and hide the bug; and sleeps only move the window. Making the schedule an input finds the bad orders on purpose, and the fix must make them impossible rather than rare.
+  connections:
+    - text: |
+        The smallest value is 2. A loads 0 and stalls; B runs nine increments to 9; A stores 1, wiping them out; B loads 1 and stalls; A runs its remaining nine increments to 10; and B finally stores 2. Twenty increments, and the count says 2. No real machine is likely to produce this exact schedule, but every step of it is allowed, and allowed is what matters.
+
+        Rearranging code so that a check and its action share a step works in our generator model, but real threads can be preempted between any two instructions. They need a way to make a whole sequence of steps behave as one. [[d0.locks-and-mutual-exclusion]] builds the lock, which lets only one thread at a time into a critical section, and asks what it costs.

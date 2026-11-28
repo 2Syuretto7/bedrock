@@ -1,0 +1,1069 @@
+concept: d0.event-loops-and-asynchronous-i-o
+minutes: 85
+claim: You can explain how one thread serves thousands of connections by never waiting in the thread itself, asking the kernel which connections are ready, with epoll or kqueue, or which operations are complete, with io_uring; write an event loop that keeps its timers in a heap and resumes each task when what it awaits is ready; multiplex many sessions over one thread by readiness; read async and await as the points where a task hands the loop back; predict how a blocking call or a long computation stalls every task on the loop, and move such work to a thread pool; keep check-then-act races out of code that spans an await; and bound, time out and cancel asynchronous work.
+recalls: [d0.thread-pools-and-work-queues]
+uses: [h2.interrupts-and-i-o, h2.processes-and-system-calls, h2.threads-in-the-kernel, s2.heaps-and-priority-queues, s1.generators-and-context-managers, d0.interleavings-and-race-conditions, d0.condition-variables-and-semaphores]
+leads: [d0.actors-and-message-passing]
+starter: |
+  # Scratch space. Three requests on one event loop: all three wait 100 ms
+  # for the database together, then each computes 1 ms, one at a time.
+  finish = []
+  clock = 100
+  for r in range(3):
+      clock += 1
+      finish.append(clock)
+  print(finish)
+parts:
+  recall:
+    - text: |
+        [[d0.thread-pools-and-work-queues]] sized a pool by how much of its time a task spends waiting: work that computes 10 ms and then waits 90 ms needed ten threads for every core, nine of them asleep at any moment. Each sleeping thread still costs a stack and a place in the kernel's tables, and a chat server holding a hundred thousand mostly idle connections cannot afford a hundred thousand of them. This lesson keeps the waiting and drops the threads. Three quick pulls first.
+  puzzle:
+    - text: |
+        One thread runs the event loop of a booking API. A thousand requests arrive together. Each waits 100 ms for the database, without blocking the thread, and then computes for 1 ms to build its reply.
+
+        **When is the last reply ready?**
+  intuition:
+    - text: |
+        A waiter in a busy Udupi restaurant in Matunga does not take one table's order, carry it to the kitchen and stand there until the dosa is ready. They take the order, hand the slip in and go to the next table, and come back to the hatch whenever the bell says a plate is up. One waiter can look after twenty tables, because most of each table's time is spent waiting for the kitchen, and waiting needs no waiter. What one waiter cannot do is two things at once: if they stop to argue over a bill for five minutes, every table waits.
+
+        An **event loop** is that waiter. The figure runs requests that each wait 100 ms for a database and then compute for 20 ms, first on one thread that makes blocking calls and then on an event loop.
+    - figure: event-loop
+      props: { mode: async, requests: 3 }
+    - text: |
+        With blocking calls the thread itself sits out every wait, so the requests take turns end to end. The event loop sends every query at once and lets the waits overlap; only the computing still happens one request at a time, on the one thread. That is the whole trade. Waiting becomes nearly free, and computing, or anything else that holds the thread, delays everyone, like the waiter arguing over the bill.
+  derivation:
+    - text: |
+        **Not waiting in the thread.** A `read` on a network socket normally **blocks**: the thread sleeps in the kernel until data arrives, the interrupt-driven wait of the operating systems cluster. A socket can instead be made **non-blocking**, and then `read` returns at once, with whatever data has arrived or with the error EAGAIN, meaning "nothing yet, try later". Trying every socket over and over would burn a core, so the kernel also offers **readiness notification**. The old calls, `select` and `poll`, take the whole list of sockets on every call and scan it, which costs time proportional to the number of connections even when only one is active. Linux's **epoll** and the BSDs' and macOS's **kqueue** keep the list of sockets of interest inside the kernel and return only the ready ones, so the cost follows the activity, not the number of connections. That is how nginx or Redis holds tens of thousands of connections on a handful of threads.
+
+        epoll can report readiness in two ways. **Level-triggered**, it reports a socket on every call for as long as unread data remains. **Edge-triggered**, it reports a socket only when new data arrives, so the program must keep reading until EAGAIN, or the rest of the data can sit unread with no further notice. A different design reports **completion** instead of readiness: with Windows' IOCP and Linux's io_uring, the program submits the read itself, the kernel does it, and the program is told when it is done.
+    - question:
+        id: derivation-epoll
+        type: choice
+        system: s2
+        prompt: |
+          A server holds 100 000 connections, of which about 50 are active at any moment. Why does it use epoll rather than select?
+        options:
+          - "select passes and scans all 100 000 sockets on every call; epoll keeps them registered in the kernel and returns only the ready ones"
+          - "select cannot report sockets at all"
+          - "epoll makes each read faster"
+          - "epoll creates a thread for each connection"
+        answer: 0
+        explanation: |
+          With select, every call costs time in proportion to all 100 000 connections. epoll's interest list lives in the kernel, so each wait costs in proportion to the 50 that are ready.
+    - text: |
+        **The loop.** An event loop is one thread repeating four steps. Run every task that is ready, each until it gives control back. Look at the earliest timer, kept in a heap since the loop only ever needs the soonest. Ask the kernel to wait for readiness, with a timeout that ends at that timer. Then mark ready every task whose socket became ready or whose timer has passed. Node's libuv, Python's asyncio, nginx and Redis all run loops of this shape.
+
+        Early event-driven code registered a **callback** for every event, and a sequence of steps became a chain of nested callbacks that was hard to read and harder to handle errors in. A **coroutine** is a function that can pause in the middle and be resumed later with its local variables intact, which is exactly what a generator is. In Python, `async def` defines a coroutine and `await` pauses it until what it awaits is finished, handing the thread back to the loop meanwhile; a **task** is a coroutine the loop is running. The exercises use plain generators, and `yield ("sleep", ms)` stands for `await asyncio.sleep(ms / 1000)`.
+    - question:
+        id: derivation-loop-order
+        type: order
+        system: s2
+        prompt: |
+          Put one turn of an event loop in order.
+        steps:
+          - "Run each ready task until it reaches an await and hands the loop back."
+          - "Look at the earliest timer in the heap to decide how long the loop may sleep."
+          - "Call epoll_wait with that timeout, sleeping until a socket is ready or the timer is due."
+          - "Mark ready the tasks whose sockets are now readable or whose timers have passed."
+        explanation: |
+          The loop only sleeps when nothing is ready, and never longer than the soonest timer, so neither a socket nor a timer is noticed late.
+    - text: |
+        **Cooperative, and what that costs.** Tasks on a loop switch only where a task awaits. That makes the code between two awaits atomic with respect to every other task on the loop, so state used only by one loop needs no locks. It also means a race still exists **across** an await: a task that checks a balance, awaits a payment, and then deducts has given every other task a chance to run between its check and its act, the same check-then-act race met with threads, now with its interleaving points written in plain sight.
+
+        Worse, nothing forces a task to hand the loop back. A call that blocks, such as `time.sleep`, an old database driver or reading a large file, or a computation that runs for 200 ms, holds the one thread, and every other task, timer and connection waits for it. A thousand requests that each make a 100 ms blocking call take 100 seconds on one loop. The cure is to move such work off the loop: run it on a thread pool or a process pool and await its result, as `asyncio.to_thread` and `run_in_executor` do, or split a long computation into pieces with awaits between them.
+    - question:
+        id: derivation-blocking
+        type: choice
+        system: s2
+        prompt: |
+          A handler on an asyncio server calls time.sleep(2) where it meant await asyncio.sleep(2). What happens while it sleeps?
+        options:
+          - "Every task on that loop is frozen for 2 seconds, since the loop's only thread is asleep"
+          - "Only that request waits; the others carry on"
+          - "Python turns it into an await automatically"
+          - "The loop starts a second thread to cover"
+        answer: 0
+        explanation: |
+          time.sleep blocks the thread, and the thread is the loop. No other task can run, no timer fires and no socket is read until it returns.
+    - text: |
+        **Bounding, timing out, cancelling.** Starting asynchronous work is so cheap that it is easy to start too much: a crawler that launches 10 000 fetches at once overwhelms the site it is fetching. A semaphore with, say, 20 permits around each fetch bounds how many run at a time, and a bounded queue between stages pushes back on the producer as it did with threads. A **timeout** wraps an await so that it gives up after a limit, as `asyncio.wait_for` does. Giving up means **cancelling** the task: the loop raises a cancellation error inside the coroutine at the await where it is paused, so its `finally` blocks and `with` blocks still close files and connections. A task that never awaits can never be cancelled, for the same reason it can never be interrupted.
+
+        Two more facts round out the picture. An `async` function can only be awaited from another `async` function, so asynchronous code spreads upward through a program, sometimes called function colouring. And some runtimes hide the loop entirely: Go's goroutines look like blocking threads, but the runtime parks a goroutine that waits on a socket and multiplexes thousands of them over a few threads with epoll underneath.
+    - question:
+        id: derivation-cancel
+        type: choice
+        system: s2
+        prompt: |
+          A task is cancelled by a timeout while it is in the middle of a 3-second loop of pure computation with no await. When does the cancellation take effect?
+        options:
+          - "Only when the task next reaches an await, here after the computation ends"
+          - "Immediately, in the middle of the loop"
+          - "Never; a timeout cannot cancel a task"
+          - "After the loop restarts"
+        answer: 0
+        explanation: |
+          Cancellation is delivered as an error raised at the await where the task is paused. A task that is computing is not paused anywhere, and it also holds up every other task until it finishes.
+  formal:
+    - text: |
+        **Non-blocking I/O.** A non-blocking read returns data or EAGAIN at once. Readiness: select and poll scan the whole set each call; epoll and kqueue keep the set in the kernel and return only ready sockets. Level-triggered reports while data remains; edge-triggered reports new data, so read until EAGAIN. Completion: io_uring and IOCP perform the operation and report when it is done.
+
+        **Event loop.** One thread: run ready tasks until each awaits; sleep in epoll_wait no longer than the earliest timer, kept in a heap; wake the tasks whose sockets or timers are due.
+
+        **Coroutines.** `async def` defines one, `await` pauses it and returns the thread to the loop, a task is a coroutine being run. Switches happen only at awaits.
+
+        **Costs.** Waiting is cheap; anything that holds the thread, a blocking call or long computation, stalls every task. Move it to a thread or process pool and await the result. Check-then-act across an await is a race.
+
+        **Control.** Bound concurrency with a semaphore and bounded queues; time out with wait_for; cancellation is raised at an await, so cleanup runs, and a task that never awaits cannot be cancelled.
+  drill:
+    - text: Seconds each. Ask where the thread is, and what holds it.
+    - question:
+        id: drill-stall
+        type: choice
+        system: s1
+        prompt: |
+          Inside an async handler, which of these stalls every other task on the loop?
+        options:
+          - "Parsing a 50 MB JSON file for 300 ms, with no await"
+          - "Awaiting a 300 ms database query"
+          - "Awaiting asyncio.sleep for 300 ms"
+          - "Awaiting a connection to another server"
+        answer: 0
+        explanation: The parse holds the loop's thread for 300 ms. Every await hands the thread back while it waits.
+    - question:
+        id: drill-edge
+        type: choice
+        system: s1
+        prompt: |
+          Edge-triggered epoll reports a socket once when 10 KB arrive. The handler reads 4 KB and goes back to waiting. What can happen?
+        options:
+          - "The other 6 KB sit unread, with no further notice until more data arrives"
+          - "epoll reports the socket again at once"
+          - "The kernel throws the 6 KB away"
+          - "The read returns EAGAIN"
+        answer: 0
+        explanation: Edge-triggered means notice of new data only, so a handler must read until EAGAIN. Level-triggered would report the socket again.
+    - question:
+        id: predict-timers
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          import heapq
+          timers = []
+          for when, name in [(30, "retry"), (10, "ping"), (20, "flush")]:
+              heapq.heappush(timers, (when, name))
+          print([heapq.heappop(timers)[1] for i in range(3)])
+        output: "['ping', 'flush', 'retry']"
+        explanation: The heap hands back the earliest timer first, whatever order they were set in.
+    - question:
+        id: predict-switch
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          def task(name, n):
+              for i in range(n):
+                  yield name + str(i)
+
+          a, b = task("a", 2), task("b", 3)
+          print([next(t) for t in [a, b, a, b, b]])
+        output: "['a0', 'b0', 'a1', 'b1', 'b2']"
+        explanation: Each next runs a task up to its next yield and no further, so the order is whatever the loop chooses.
+    - question:
+        id: predict-totals
+        type: predict
+        system: s1
+        prompt: What does this show?
+        code: |
+          requests, wait, cpu = 400, 50, 2
+          print(requests * (wait + cpu), wait + requests * cpu)
+        output: "20800 850"
+        explanation: With blocking calls each request pays its own wait; on a loop the waits overlap and only the computing adds up.
+  work:
+    - text: Slower now. Each answer is part of how one thread keeps many conversations going.
+    - question:
+        id: write-run-loop
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `run_loop`, an event loop that keeps ready tasks in a heap by the time they become ready, lets a sleep overlap with everything else, and lets computing hold the loop. The program should print `[(101, 'a'), (102, 'b'), (103, 'c')]`, then `[(101, 'a'), (202, 'b'), (303, 'c')]`, then `[(1100, 'r999')]`.
+        starter: |
+          import heapq
+
+
+          def run_loop(tasks):
+              # tasks is a list of (name, generator); every task is ready at time 0.
+              # A task yields ("sleep", ms) to wait without holding the loop, as an
+              # await on the network does: it is ready again ms later. It yields
+              # ("cpu", ms) to compute, which holds the loop: the clock moves on by ms
+              # and the same task carries on at once. Always resume the task that
+              # became ready earliest; on a tie, the one that became ready first.
+              # Return a list of (time, name) in the order the tasks finish.
+              return []
+
+
+          def request(wait_ms, cpu_ms):
+              yield ("sleep", wait_ms)   # await the database's reply
+              yield ("cpu", cpu_ms)      # build the page
+
+
+          def blocking_request(wait_ms, cpu_ms):
+              yield ("cpu", wait_ms)     # a blocking database call holds the loop
+              yield ("cpu", cpu_ms)
+
+
+          print(run_loop([(n, request(100, 1)) for n in ["a", "b", "c"]]))
+          print(run_loop([(n, blocking_request(100, 1)) for n in ["a", "b", "c"]]))
+          print(run_loop([("r" + str(i), request(100, 1)) for i in range(1000)])[-1:])
+        solution: |
+          import heapq
+
+
+          def run_loop(tasks):
+              # tasks is a list of (name, generator); every task is ready at time 0.
+              # A task yields ("sleep", ms) to wait without holding the loop, as an
+              # await on the network does: it is ready again ms later. It yields
+              # ("cpu", ms) to compute, which holds the loop: the clock moves on by ms
+              # and the same task carries on at once. Always resume the task that
+              # became ready earliest; on a tie, the one that became ready first.
+              # Return a list of (time, name) in the order the tasks finish.
+              ready = []
+              order = 0
+              for name, task in tasks:
+                  heapq.heappush(ready, (0, order, name, task))
+                  order += 1
+              clock = 0
+              finished = []
+              while ready:
+                  when, _, name, task = heapq.heappop(ready)
+                  clock = max(clock, when)
+                  while True:
+                      try:
+                          kind, ms = next(task)
+                      except StopIteration:
+                          finished.append((clock, name))
+                          break
+                      if kind == "cpu":
+                          clock += ms
+                      else:
+                          heapq.heappush(ready, (clock + ms, order, name, task))
+                          order += 1
+                          break
+              return finished
+
+
+          def request(wait_ms, cpu_ms):
+              yield ("sleep", wait_ms)   # await the database's reply
+              yield ("cpu", cpu_ms)      # build the page
+
+
+          def blocking_request(wait_ms, cpu_ms):
+              yield ("cpu", wait_ms)     # a blocking database call holds the loop
+              yield ("cpu", cpu_ms)
+
+
+          print(run_loop([(n, request(100, 1)) for n in ["a", "b", "c"]]))
+          print(run_loop([(n, blocking_request(100, 1)) for n in ["a", "b", "c"]]))
+          print(run_loop([("r" + str(i), request(100, 1)) for i in range(1000)])[-1:])
+        tests: |
+          def _steps(*steps):
+              for step in steps:
+                  yield step
+
+
+          def _names(result):
+              return [name for time, name in result]
+
+
+          _r = run_loop([("slow", _steps(("sleep", 50), ("cpu", 1))), ("fast", _steps(("sleep", 10), ("cpu", 1)))])
+          assert _r == [(11, "fast"), (51, "slow")], "a task that sleeps 10 ms should be resumed before one that sleeps 50 ms, whatever order they started in: expected [(11, 'fast'), (51, 'slow')], not " + repr(_r)
+          _r = run_loop([("x", _steps(("cpu", 5))), ("y", _steps(("sleep", 1), ("cpu", 1)))])
+          assert _r == [(5, "x"), (7, "y")], "computing holds the loop: while x computes for 5 ms, y cannot even start its 1 ms sleep, so the answer is [(5, 'x'), (7, 'y')], not " + repr(_r)
+          _r = run_loop([("p", _steps(("sleep", 20), ("cpu", 2))), ("q", _steps(("sleep", 20), ("cpu", 2))), ("s", _steps(("sleep", 20), ("cpu", 2)))])
+          assert _r == [(22, "p"), (24, "q"), (26, "s")], "tasks ready at the same moment should run in the order they became ready: expected [(22, 'p'), (24, 'q'), (26, 's')], not " + repr(_r)
+          _r = run_loop([("m", _steps(("sleep", 5), ("cpu", 3), ("sleep", 5), ("cpu", 3))), ("n", _steps(("cpu", 4), ("sleep", 1), ("cpu", 1)))])
+          assert _r == [(9, "n"), (16, "m")], "with several awaits per task, expected [(9, 'n'), (16, 'm')], not " + repr(_r)
+          assert run_loop([]) == [], "with no tasks, nothing finishes"
+          _r = run_loop([("r" + str(_i), _steps(("sleep", 100), ("cpu", 1))) for _i in range(50)])
+          assert len(_r) == 50 and _r[-1] == (150, "r49"), "fifty requests that each wait 100 ms and compute 1 ms should all finish by 150 ms, not " + repr(_r[-1:])
+          assert output.splitlines() == ["[(101, 'a'), (102, 'b'), (103, 'c')]", "[(101, 'a'), (202, 'b'), (303, 'c')]", "[(1100, 'r999')]"], "The program should print [(101, 'a'), (102, 'b'), (103, 'c')], then [(101, 'a'), (202, 'b'), (303, 'c')], then [(1100, 'r999')]"
+        wrong:
+          - |
+            import heapq
+
+
+            def run_loop(tasks):
+                # tasks is a list of (name, generator); every task is ready at time 0.
+                # A task yields ("sleep", ms) to wait without holding the loop, as an
+                # await on the network does: it is ready again ms later. It yields
+                # ("cpu", ms) to compute, which holds the loop: the clock moves on by ms
+                # and the same task carries on at once. Always resume the task that
+                # became ready earliest; on a tie, the one that became ready first.
+                # Return a list of (time, name) in the order the tasks finish.
+                ready = []
+                order = 0
+                for name, task in tasks:
+                    heapq.heappush(ready, (0, order, name, task))
+                    order += 1
+                clock = 0
+                finished = []
+                while ready:
+                    when, _, name, task = heapq.heappop(ready)
+                    clock = max(clock, when)
+                    while True:
+                        try:
+                            kind, ms = next(task)
+                        except StopIteration:
+                            finished.append((clock, name))
+                            break
+                        heapq.heappush(ready, (clock + ms, order, name, task))
+                        order += 1
+                        break
+                return finished
+
+
+            def request(wait_ms, cpu_ms):
+                yield ("sleep", wait_ms)   # await the database's reply
+                yield ("cpu", cpu_ms)      # build the page
+
+
+            def blocking_request(wait_ms, cpu_ms):
+                yield ("cpu", wait_ms)     # a blocking database call holds the loop
+                yield ("cpu", cpu_ms)
+
+
+            print(run_loop([(n, request(100, 1)) for n in ["a", "b", "c"]]))
+            print(run_loop([(n, blocking_request(100, 1)) for n in ["a", "b", "c"]]))
+            print(run_loop([("r" + str(i), request(100, 1)) for i in range(1000)])[-1:])
+          - |
+            import heapq
+
+
+            def run_loop(tasks):
+                # tasks is a list of (name, generator); every task is ready at time 0.
+                # A task yields ("sleep", ms) to wait without holding the loop, as an
+                # await on the network does: it is ready again ms later. It yields
+                # ("cpu", ms) to compute, which holds the loop: the clock moves on by ms
+                # and the same task carries on at once. Always resume the task that
+                # became ready earliest; on a tie, the one that became ready first.
+                # Return a list of (time, name) in the order the tasks finish.
+                ready = []
+                order = 0
+                for name, task in tasks:
+                    heapq.heappush(ready, (0, order, name, task))
+                    order += 1
+                clock = 0
+                finished = []
+                while ready:
+                    when, _, name, task = heapq.heappop(ready)
+                    clock = max(clock, when)
+                    while True:
+                        try:
+                            kind, ms = next(task)
+                        except StopIteration:
+                            finished.append((clock, name))
+                            break
+                        clock += ms
+                return finished
+
+
+            def request(wait_ms, cpu_ms):
+                yield ("sleep", wait_ms)   # await the database's reply
+                yield ("cpu", cpu_ms)      # build the page
+
+
+            def blocking_request(wait_ms, cpu_ms):
+                yield ("cpu", wait_ms)     # a blocking database call holds the loop
+                yield ("cpu", cpu_ms)
+
+
+            print(run_loop([(n, request(100, 1)) for n in ["a", "b", "c"]]))
+            print(run_loop([(n, blocking_request(100, 1)) for n in ["a", "b", "c"]]))
+            print(run_loop([("r" + str(i), request(100, 1)) for i in range(1000)])[-1:])
+          - |
+            def run_loop(tasks):
+                # tasks is a list of (name, generator); every task is ready at time 0.
+                # A task yields ("sleep", ms) to wait without holding the loop, as an
+                # await on the network does: it is ready again ms later. It yields
+                # ("cpu", ms) to compute, which holds the loop: the clock moves on by ms
+                # and the same task carries on at once. Always resume the task that
+                # became ready earliest; on a tie, the one that became ready first.
+                # Return a list of (time, name) in the order the tasks finish.
+                ready = []
+                order = 0
+                for name, task in tasks:
+                    ready.append((0, order, name, task))
+                    order += 1
+                clock = 0
+                finished = []
+                while ready:
+                    when, _, name, task = ready.pop(0)
+                    clock = max(clock, when)
+                    while True:
+                        try:
+                            kind, ms = next(task)
+                        except StopIteration:
+                            finished.append((clock, name))
+                            break
+                        if kind == "cpu":
+                            clock += ms
+                        else:
+                            ready.append((clock + ms, order, name, task))
+                            order += 1
+                            break
+                return finished
+
+
+            def request(wait_ms, cpu_ms):
+                yield ("sleep", wait_ms)   # await the database's reply
+                yield ("cpu", cpu_ms)      # build the page
+
+
+            def blocking_request(wait_ms, cpu_ms):
+                yield ("cpu", wait_ms)     # a blocking database call holds the loop
+                yield ("cpu", cpu_ms)
+
+
+            print(run_loop([(n, request(100, 1)) for n in ["a", "b", "c"]]))
+            print(run_loop([(n, blocking_request(100, 1)) for n in ["a", "b", "c"]]))
+            print(run_loop([("r" + str(i), request(100, 1)) for i in range(1000)])[-1:])
+        explanation: |
+          Push every task with ready time 0 and an order number, then repeatedly pop the earliest. Move the clock up to its ready time, never back, and run the task: a computation adds to the clock and the task carries on, while a sleep pushes the task back with the clock plus the sleep as its ready time. Treating computing like a sleep lets work overlap that one thread cannot overlap; treating a sleep like computing is the blocking server; and a plain first-come list resumes a long sleep before a short one.
+    - question:
+        id: write-serve
+        type: code
+        mode: write
+        system: s2
+        prompt: |
+          Write `serve`, which runs many chat sessions on one thread, resuming each only when the kernel says its connection has a message. The program should print the six messages at 0, 5, 8, 12, 20 and 30 ms, then `['meena']`.
+        starter: |
+          class Kernel:
+              # Stands in for the kernel's epoll. arrivals is a list of
+              # (time, connection, message), in time order.
+              def __init__(self, arrivals):
+                  self.arrivals = list(arrivals)
+                  self.inbox = {}
+                  self.count = 0
+                  self.now = 0
+
+              def wait(self, interested):
+                  # Sleeps until a message is waiting on at least one connection in
+                  # interested, then returns those connections, oldest message first.
+                  # Returns [] if no message will ever come for any of them.
+                  while not [c for c in interested if self.inbox.get(c)]:
+                      if not self.arrivals:
+                          return []
+                      time, conn, message = self.arrivals.pop(0)
+                      self.now = time
+                      self.inbox[conn] = self.inbox.get(conn, []) + [(self.count, message)]
+                      self.count += 1
+                  while self.arrivals and self.arrivals[0][0] == self.now:
+                      time, conn, message = self.arrivals.pop(0)
+                      self.inbox[conn] = self.inbox.get(conn, []) + [(self.count, message)]
+                      self.count += 1
+                  ready = [(self.inbox[c][0][0], c) for c in interested if self.inbox.get(c)]
+                  return [c for first, c in sorted(ready)]
+
+              def recv(self, conn):
+                  # Never blocks: the oldest waiting message on conn, or None.
+                  if not self.inbox.get(conn):
+                      return None
+                  return self.inbox[conn].pop(0)[1]
+
+
+          def session(conn, kernel, log):
+              # Talks to one client: logs each message until the client says bye.
+              while True:
+                  yield conn                  # park until conn has a message
+                  message = kernel.recv(conn)
+                  log.append((kernel.now, conn, message))
+                  if message == "bye":
+                      return
+
+
+          def serve(kernel, sessions):
+              # One thread serves every session. A session yields the connection it
+              # wants to read next and must be resumed only once that connection has
+              # a message. Return the sorted list of connections whose sessions are
+              # still waiting when no more messages will arrive.
+              return []
+
+
+          arrivals = [(0, "asha", "hi"), (5, "ravi", "hello"), (8, "meena", "hi"),
+                      (12, "asha", "order 41?"), (20, "ravi", "bye"), (30, "asha", "bye")]
+          kernel = Kernel(arrivals)
+          log = []
+          left = serve(kernel, [session(c, kernel, log) for c in ["asha", "ravi", "meena"]])
+          for time, conn, message in log:
+              print(time, conn, message)
+          print(left)
+        solution: |
+          class Kernel:
+              # Stands in for the kernel's epoll. arrivals is a list of
+              # (time, connection, message), in time order.
+              def __init__(self, arrivals):
+                  self.arrivals = list(arrivals)
+                  self.inbox = {}
+                  self.count = 0
+                  self.now = 0
+
+              def wait(self, interested):
+                  # Sleeps until a message is waiting on at least one connection in
+                  # interested, then returns those connections, oldest message first.
+                  # Returns [] if no message will ever come for any of them.
+                  while not [c for c in interested if self.inbox.get(c)]:
+                      if not self.arrivals:
+                          return []
+                      time, conn, message = self.arrivals.pop(0)
+                      self.now = time
+                      self.inbox[conn] = self.inbox.get(conn, []) + [(self.count, message)]
+                      self.count += 1
+                  while self.arrivals and self.arrivals[0][0] == self.now:
+                      time, conn, message = self.arrivals.pop(0)
+                      self.inbox[conn] = self.inbox.get(conn, []) + [(self.count, message)]
+                      self.count += 1
+                  ready = [(self.inbox[c][0][0], c) for c in interested if self.inbox.get(c)]
+                  return [c for first, c in sorted(ready)]
+
+              def recv(self, conn):
+                  # Never blocks: the oldest waiting message on conn, or None.
+                  if not self.inbox.get(conn):
+                      return None
+                  return self.inbox[conn].pop(0)[1]
+
+
+          def session(conn, kernel, log):
+              # Talks to one client: logs each message until the client says bye.
+              while True:
+                  yield conn                  # park until conn has a message
+                  message = kernel.recv(conn)
+                  log.append((kernel.now, conn, message))
+                  if message == "bye":
+                      return
+
+
+          def serve(kernel, sessions):
+              # One thread serves every session. A session yields the connection it
+              # wants to read next and must be resumed only once that connection has
+              # a message. Return the sorted list of connections whose sessions are
+              # still waiting when no more messages will arrive.
+              waiting = {}
+              for s in sessions:
+                  waiting[next(s)] = s
+              while waiting:
+                  ready = kernel.wait(list(waiting))
+                  if not ready:
+                      break
+                  for conn in ready:
+                      s = waiting.pop(conn)
+                      try:
+                          waiting[next(s)] = s
+                      except StopIteration:
+                          pass
+              return sorted(waiting)
+
+
+          arrivals = [(0, "asha", "hi"), (5, "ravi", "hello"), (8, "meena", "hi"),
+                      (12, "asha", "order 41?"), (20, "ravi", "bye"), (30, "asha", "bye")]
+          kernel = Kernel(arrivals)
+          log = []
+          left = serve(kernel, [session(c, kernel, log) for c in ["asha", "ravi", "meena"]])
+          for time, conn, message in log:
+              print(time, conn, message)
+          print(left)
+        tests: |
+          def _serve(arrivals, conns):
+              _k = Kernel(arrivals)
+              _log = []
+              _left = serve(_k, [session(_c, _k, _log) for _c in conns])
+              return _log, _left
+
+
+          _log, _left = _serve([(10, "a", "x"), (10, "b", "y"), (10, "a", "bye"), (11, "b", "bye")], ["a", "b"])
+          assert _log == [(10, "a", "x"), (10, "b", "y"), (10, "a", "bye"), (11, "b", "bye")] and _left == [], "messages that arrive together should all be served at 10 ms in the order they came, and the 11 ms one after: expected [(10, 'a', 'x'), (10, 'b', 'y'), (10, 'a', 'bye'), (11, 'b', 'bye')], but the log was " + repr(_log)
+          _log, _left = _serve([(1, "kiran", "hi"), (2, "dev", "hi"), (3, "kiran", "bye"), (4, "dev", "bye")], ["dev", "kiran"])
+          assert _log == [(1, "kiran", "hi"), (2, "dev", "hi"), (3, "kiran", "bye"), (4, "dev", "bye")], "each message should be served when it arrives, whatever order the sessions were listed in, but the log was " + repr(_log)
+          _log, _left = _serve([(3, "spam", "x"), (5, "ok", "bye")], ["ok"])
+          assert _log == [(5, "ok", "bye")] and _left == [], "a message on a connection nobody is serving should be left alone, but the log was " + repr(_log)
+          _log, _left = _serve([(1, "p", "hi"), (2, "q", "hi")], ["p", "q", "r"])
+          assert _left == ["p", "q", "r"] and len(_log) == 2, "sessions that never hear bye should be reported as still waiting, here ['p', 'q', 'r'], not " + repr(_left)
+          _n = 200
+          _log, _left = _serve([(1000 - _i, "c" + str(_i), "bye") for _i in range(_n - 1, -1, -1)], ["c" + str(_i) for _i in range(_n)])
+          assert [_t for _t, _c, _m in _log] == list(range(1000 - _n + 1, 1001)) and _left == [], "two hundred clients should each be served the moment their message arrives"
+          assert None not in [_m for _t, _c, _m in _log], "a session must only be resumed when its connection has a message"
+          assert output.splitlines() == ["0 asha hi", "5 ravi hello", "8 meena hi", "12 asha order 41?", "20 ravi bye", "30 asha bye", "['meena']"], "The program should print the six messages at 0, 5, 8, 12, 20 and 30 ms, then ['meena']"
+        wrong:
+          - |
+            class Kernel:
+                # Stands in for the kernel's epoll. arrivals is a list of
+                # (time, connection, message), in time order.
+                def __init__(self, arrivals):
+                    self.arrivals = list(arrivals)
+                    self.inbox = {}
+                    self.count = 0
+                    self.now = 0
+
+                def wait(self, interested):
+                    # Sleeps until a message is waiting on at least one connection in
+                    # interested, then returns those connections, oldest message first.
+                    # Returns [] if no message will ever come for any of them.
+                    while not [c for c in interested if self.inbox.get(c)]:
+                        if not self.arrivals:
+                            return []
+                        time, conn, message = self.arrivals.pop(0)
+                        self.now = time
+                        self.inbox[conn] = self.inbox.get(conn, []) + [(self.count, message)]
+                        self.count += 1
+                    while self.arrivals and self.arrivals[0][0] == self.now:
+                        time, conn, message = self.arrivals.pop(0)
+                        self.inbox[conn] = self.inbox.get(conn, []) + [(self.count, message)]
+                        self.count += 1
+                    ready = [(self.inbox[c][0][0], c) for c in interested if self.inbox.get(c)]
+                    return [c for first, c in sorted(ready)]
+
+                def recv(self, conn):
+                    # Never blocks: the oldest waiting message on conn, or None.
+                    if not self.inbox.get(conn):
+                        return None
+                    return self.inbox[conn].pop(0)[1]
+
+
+            def session(conn, kernel, log):
+                # Talks to one client: logs each message until the client says bye.
+                while True:
+                    yield conn                  # park until conn has a message
+                    message = kernel.recv(conn)
+                    log.append((kernel.now, conn, message))
+                    if message == "bye":
+                        return
+
+
+            def serve(kernel, sessions):
+                # One thread serves every session. A session yields the connection it
+                # wants to read next and must be resumed only once that connection has
+                # a message. Return the sorted list of connections whose sessions are
+                # still waiting when no more messages will arrive.
+                left = []
+                for s in sessions:
+                    conn = next(s)
+                    while True:
+                        if not kernel.wait([conn]):
+                            left.append(conn)
+                            break
+                        try:
+                            conn = next(s)
+                        except StopIteration:
+                            break
+                return sorted(left)
+
+
+            arrivals = [(0, "asha", "hi"), (5, "ravi", "hello"), (8, "meena", "hi"),
+                        (12, "asha", "order 41?"), (20, "ravi", "bye"), (30, "asha", "bye")]
+            kernel = Kernel(arrivals)
+            log = []
+            left = serve(kernel, [session(c, kernel, log) for c in ["asha", "ravi", "meena"]])
+            for time, conn, message in log:
+                print(time, conn, message)
+            print(left)
+          - |
+            class Kernel:
+                # Stands in for the kernel's epoll. arrivals is a list of
+                # (time, connection, message), in time order.
+                def __init__(self, arrivals):
+                    self.arrivals = list(arrivals)
+                    self.inbox = {}
+                    self.count = 0
+                    self.now = 0
+
+                def wait(self, interested):
+                    # Sleeps until a message is waiting on at least one connection in
+                    # interested, then returns those connections, oldest message first.
+                    # Returns [] if no message will ever come for any of them.
+                    while not [c for c in interested if self.inbox.get(c)]:
+                        if not self.arrivals:
+                            return []
+                        time, conn, message = self.arrivals.pop(0)
+                        self.now = time
+                        self.inbox[conn] = self.inbox.get(conn, []) + [(self.count, message)]
+                        self.count += 1
+                    while self.arrivals and self.arrivals[0][0] == self.now:
+                        time, conn, message = self.arrivals.pop(0)
+                        self.inbox[conn] = self.inbox.get(conn, []) + [(self.count, message)]
+                        self.count += 1
+                    ready = [(self.inbox[c][0][0], c) for c in interested if self.inbox.get(c)]
+                    return [c for first, c in sorted(ready)]
+
+                def recv(self, conn):
+                    # Never blocks: the oldest waiting message on conn, or None.
+                    if not self.inbox.get(conn):
+                        return None
+                    return self.inbox[conn].pop(0)[1]
+
+
+            def session(conn, kernel, log):
+                # Talks to one client: logs each message until the client says bye.
+                while True:
+                    yield conn                  # park until conn has a message
+                    message = kernel.recv(conn)
+                    log.append((kernel.now, conn, message))
+                    if message == "bye":
+                        return
+
+
+            def serve(kernel, sessions):
+                # One thread serves every session. A session yields the connection it
+                # wants to read next and must be resumed only once that connection has
+                # a message. Return the sorted list of connections whose sessions are
+                # still waiting when no more messages will arrive.
+                waiting = {}
+                for s in sessions:
+                    waiting[next(s)] = s
+                while waiting:
+                    ready = kernel.wait(list(waiting))
+                    if not ready:
+                        break
+                    for conn in list(waiting):
+                        s = waiting.pop(conn)
+                        try:
+                            waiting[next(s)] = s
+                        except StopIteration:
+                            pass
+                return sorted(waiting)
+
+
+            arrivals = [(0, "asha", "hi"), (5, "ravi", "hello"), (8, "meena", "hi"),
+                        (12, "asha", "order 41?"), (20, "ravi", "bye"), (30, "asha", "bye")]
+            kernel = Kernel(arrivals)
+            log = []
+            left = serve(kernel, [session(c, kernel, log) for c in ["asha", "ravi", "meena"]])
+            for time, conn, message in log:
+                print(time, conn, message)
+            print(left)
+          - |
+            class Kernel:
+                # Stands in for the kernel's epoll. arrivals is a list of
+                # (time, connection, message), in time order.
+                def __init__(self, arrivals):
+                    self.arrivals = list(arrivals)
+                    self.inbox = {}
+                    self.count = 0
+                    self.now = 0
+
+                def wait(self, interested):
+                    # Sleeps until a message is waiting on at least one connection in
+                    # interested, then returns those connections, oldest message first.
+                    # Returns [] if no message will ever come for any of them.
+                    while not [c for c in interested if self.inbox.get(c)]:
+                        if not self.arrivals:
+                            return []
+                        time, conn, message = self.arrivals.pop(0)
+                        self.now = time
+                        self.inbox[conn] = self.inbox.get(conn, []) + [(self.count, message)]
+                        self.count += 1
+                    while self.arrivals and self.arrivals[0][0] == self.now:
+                        time, conn, message = self.arrivals.pop(0)
+                        self.inbox[conn] = self.inbox.get(conn, []) + [(self.count, message)]
+                        self.count += 1
+                    ready = [(self.inbox[c][0][0], c) for c in interested if self.inbox.get(c)]
+                    return [c for first, c in sorted(ready)]
+
+                def recv(self, conn):
+                    # Never blocks: the oldest waiting message on conn, or None.
+                    if not self.inbox.get(conn):
+                        return None
+                    return self.inbox[conn].pop(0)[1]
+
+
+            def session(conn, kernel, log):
+                # Talks to one client: logs each message until the client says bye.
+                while True:
+                    yield conn                  # park until conn has a message
+                    message = kernel.recv(conn)
+                    log.append((kernel.now, conn, message))
+                    if message == "bye":
+                        return
+
+
+            def serve(kernel, sessions):
+                # One thread serves every session. A session yields the connection it
+                # wants to read next and must be resumed only once that connection has
+                # a message. Return the sorted list of connections whose sessions are
+                # still waiting when no more messages will arrive.
+                waiting = {}
+                for s in sessions:
+                    waiting[next(s)] = s
+                while waiting:
+                    ready = kernel.wait(list(waiting))
+                    if not ready:
+                        break
+                    for conn in ready:
+                        s = waiting.pop(conn)
+                        try:
+                            waiting[next(s)] = s
+                        except StopIteration:
+                            return sorted(waiting)
+                return sorted(waiting)
+
+
+            arrivals = [(0, "asha", "hi"), (5, "ravi", "hello"), (8, "meena", "hi"),
+                        (12, "asha", "order 41?"), (20, "ravi", "bye"), (30, "asha", "bye")]
+            kernel = Kernel(arrivals)
+            log = []
+            left = serve(kernel, [session(c, kernel, log) for c in ["asha", "ravi", "meena"]])
+            for time, conn, message in log:
+                print(time, conn, message)
+            print(left)
+        explanation: |
+          Keep a dictionary from each connection to the session parked on it. Start every session to learn its first connection, then loop: ask the kernel which of the parked connections are ready, and resume exactly those, parking each again on the connection it yields next. Serving one session until it ends is the blocking server, and the others' messages wait; resuming every session each time makes them read connections with nothing on them; and stopping when the first session ends abandons the rest.
+    - question:
+        id: fix-await-race
+        type: code
+        mode: find-bug
+        system: s2
+        prompt: |
+          The bus booking service sells more seats than the bus has whenever people book at the same moment. The program should print `['ravi refused', 'asha booked', 'joseph booked'] 0`. Find the fault and fix it.
+        starter: |
+          import heapq
+
+
+          def run(tasks):
+              # A small event loop: a task yields the number of ms it awaits.
+              ready = [(0, i, tasks[i]) for i in range(len(tasks))]
+              heapq.heapify(ready)
+              order = len(tasks)
+              while ready:
+                  when, _, task = heapq.heappop(ready)
+                  try:
+                      ms = next(task)
+                  except StopIteration:
+                      continue
+                  heapq.heappush(ready, (when + ms, order, task))
+                  order += 1
+
+
+          def book(name, want, pays, seats, log):
+              # Sells want seats on the Bengaluru to Mysuru bus if enough are left.
+              # The payment gateway takes 5 ms to answer; pays says whether the
+              # payment goes through. A failed payment must not cost anyone a seat.
+              if seats["left"] < want:
+                  log.append(name + " refused")
+                  return
+              yield 5                      # await the payment gateway
+              if pays:
+                  seats["left"] -= want
+                  log.append(name + " booked")
+              else:
+                  log.append(name + " payment failed")
+
+
+          seats = {"left": 3}
+          log = []
+          run([book("asha", 2, True, seats, log), book("ravi", 2, True, seats, log), book("joseph", 1, True, seats, log)])
+          print(log, seats["left"])
+        solution: |
+          import heapq
+
+
+          def run(tasks):
+              # A small event loop: a task yields the number of ms it awaits.
+              ready = [(0, i, tasks[i]) for i in range(len(tasks))]
+              heapq.heapify(ready)
+              order = len(tasks)
+              while ready:
+                  when, _, task = heapq.heappop(ready)
+                  try:
+                      ms = next(task)
+                  except StopIteration:
+                      continue
+                  heapq.heappush(ready, (when + ms, order, task))
+                  order += 1
+
+
+          def book(name, want, pays, seats, log):
+              # Sells want seats on the Bengaluru to Mysuru bus if enough are left.
+              # The payment gateway takes 5 ms to answer; pays says whether the
+              # payment goes through. A failed payment must not cost anyone a seat.
+              if seats["left"] < want:
+                  log.append(name + " refused")
+                  return
+              seats["left"] -= want        # hold the seats before awaiting
+              yield 5                      # await the payment gateway
+              if pays:
+                  log.append(name + " booked")
+              else:
+                  seats["left"] += want    # give them back
+                  log.append(name + " payment failed")
+
+
+          seats = {"left": 3}
+          log = []
+          run([book("asha", 2, True, seats, log), book("ravi", 2, True, seats, log), book("joseph", 1, True, seats, log)])
+          print(log, seats["left"])
+        tests: |
+          def _later(ms, task):
+              yield ms
+              yield from task
+
+
+          _seats = {"left": 2}
+          _log = []
+          run([book("asha", 2, False, _seats, _log), _later(10, book("ravi", 2, True, _seats, _log))])
+          assert _log == ["asha payment failed", "ravi booked"] and _seats["left"] == 0, "when asha's payment fails her seats must go back on sale, so ravi, who comes later, can book them: expected ['asha payment failed', 'ravi booked'] with 0 left, not " + repr(_log) + " with " + str(_seats["left"]) + " left"
+          _seats = {"left": 1}
+          _log = []
+          run([book("c" + str(_i), 1, True, _seats, _log) for _i in range(5)])
+          assert _seats["left"] >= 0, "five people asking at once for the last seat oversold the bus: " + str(_seats["left"]) + " seats left"
+          assert sorted(_log) == ["c0 booked", "c1 refused", "c2 refused", "c3 refused", "c4 refused"], "with one seat and five people asking at once, the first should get it and the other four be refused, not " + repr(_log)
+          assert _log[:4] == ["c1 refused", "c2 refused", "c3 refused", "c4 refused"], "people who cannot have a seat should be refused at once, before they pay, not after the payment has gone through: the log was " + repr(_log)
+          _seats = {"left": 3}
+          _log = []
+          run([book("asha", 2, False, _seats, _log), book("ravi", 1, True, _seats, _log)])
+          assert _log == ["asha payment failed", "ravi booked"] and _seats["left"] == 2, "asha's failed payment should leave her 2 seats on sale and ravi's 1 sold: expected ['asha payment failed', 'ravi booked'] with 2 left, not " + repr(_log) + " with " + str(_seats["left"]) + " left"
+          assert output.splitlines() == ["['ravi refused', 'asha booked', 'joseph booked'] 0"], "The program should print ['ravi refused', 'asha booked', 'joseph booked'] 0"
+        wrong:
+          - |
+            import heapq
+
+
+            def run(tasks):
+                # A small event loop: a task yields the number of ms it awaits.
+                ready = [(0, i, tasks[i]) for i in range(len(tasks))]
+                heapq.heapify(ready)
+                order = len(tasks)
+                while ready:
+                    when, _, task = heapq.heappop(ready)
+                    try:
+                        ms = next(task)
+                    except StopIteration:
+                        continue
+                    heapq.heappush(ready, (when + ms, order, task))
+                    order += 1
+
+
+            def book(name, want, pays, seats, log):
+                # Sells want seats on the Bengaluru to Mysuru bus if enough are left.
+                # The payment gateway takes 5 ms to answer; pays says whether the
+                # payment goes through. A failed payment must not cost anyone a seat.
+                if seats["left"] < want:
+                    log.append(name + " refused")
+                    return
+                seats["left"] -= want        # hold the seats before awaiting
+                yield 5                      # await the payment gateway
+                if pays:
+                    log.append(name + " booked")
+                else:
+                    log.append(name + " payment failed")
+
+
+            seats = {"left": 3}
+            log = []
+            run([book("asha", 2, True, seats, log), book("ravi", 2, True, seats, log), book("joseph", 1, True, seats, log)])
+            print(log, seats["left"])
+          - |
+            import heapq
+
+
+            def run(tasks):
+                # A small event loop: a task yields the number of ms it awaits.
+                ready = [(0, i, tasks[i]) for i in range(len(tasks))]
+                heapq.heapify(ready)
+                order = len(tasks)
+                while ready:
+                    when, _, task = heapq.heappop(ready)
+                    try:
+                        ms = next(task)
+                    except StopIteration:
+                        continue
+                    heapq.heappush(ready, (when + ms, order, task))
+                    order += 1
+
+
+            def book(name, want, pays, seats, log):
+                # Sells want seats on the Bengaluru to Mysuru bus if enough are left.
+                # The payment gateway takes 5 ms to answer; pays says whether the
+                # payment goes through. A failed payment must not cost anyone a seat.
+                seats["left"] -= want        # hold the seats before awaiting
+                yield 5                      # await the payment gateway
+                if pays:
+                    log.append(name + " booked")
+                else:
+                    seats["left"] += want    # give them back
+                    log.append(name + " payment failed")
+
+
+            seats = {"left": 3}
+            log = []
+            run([book("asha", 2, True, seats, log), book("ravi", 2, True, seats, log), book("joseph", 1, True, seats, log)])
+            print(log, seats["left"])
+          - |
+            import heapq
+
+
+            def run(tasks):
+                # A small event loop: a task yields the number of ms it awaits.
+                ready = [(0, i, tasks[i]) for i in range(len(tasks))]
+                heapq.heapify(ready)
+                order = len(tasks)
+                while ready:
+                    when, _, task = heapq.heappop(ready)
+                    try:
+                        ms = next(task)
+                    except StopIteration:
+                        continue
+                    heapq.heappush(ready, (when + ms, order, task))
+                    order += 1
+
+
+            def book(name, want, pays, seats, log):
+                # Sells want seats on the Bengaluru to Mysuru bus if enough are left.
+                # The payment gateway takes 5 ms to answer; pays says whether the
+                # payment goes through. A failed payment must not cost anyone a seat.
+                if seats["left"] < want:
+                    log.append(name + " refused")
+                    return
+                yield 5                      # await the payment gateway
+                if pays and seats["left"] >= want:
+                    seats["left"] -= want    # check again now that we are back
+                    log.append(name + " booked")
+                elif pays:
+                    log.append(name + " refused")
+                else:
+                    log.append(name + " payment failed")
+
+
+            seats = {"left": 3}
+            log = []
+            run([book("asha", 2, True, seats, log), book("ravi", 2, True, seats, log), book("joseph", 1, True, seats, log)])
+            print(log, seats["left"])
+        explanation: |
+          The check happens before the await and the sale after it, so every booking that starts while a payment is pending passes the check against the same count. Code between awaits runs without interruption, so take the seats in the same step as the check, before awaiting, and give them back if the payment fails. Holding seats without returning them loses seats to failed payments; holding without checking oversells; and checking again after the payment refuses people who have already paid.
+    - question:
+        id: work-puzzle
+        type: numeric
+        system: s2
+        prompt: |
+          Back to the opening question. A thousand requests arrive together at one event loop. Each waits 100 ms for the database without blocking, then computes 1 ms. When is the last reply ready, in ms?
+        answer: "1100"
+        unit: ms
+        explanation: |
+          All thousand queries go out at once and their waits overlap, so the replies are back at about 100 ms. The thread then computes the thousand replies one after another, 1 ms each, finishing at 100 + 1000 × 1 = 1100 ms.
+    - question:
+        id: work-bound
+        type: choice
+        system: s2
+        prompt: |
+          An async crawler gathers 10 000 page fetches at once, and the website starts refusing its connections. What is the fix?
+        options:
+          - "Wrap each fetch in a semaphore with a few dozen permits, so only that many run at a time"
+          - "Run the crawler on more threads"
+          - "Switch from epoll to select"
+          - "Remove the awaits so the fetches finish faster"
+        answer: 0
+        explanation: |
+          Asynchronous work is cheap to start, so it needs an explicit bound. A semaphore caps the fetches in flight, and the rest wait their turn on the loop at almost no cost.
+  connections:
+    - text: |
+        1100 ms. All thousand queries go out at once, so their waits overlap and the database's replies are back at about 100 ms. The one thread then builds the thousand replies one after another, 1 ms each. With blocking calls the same work would take 101 seconds; the waiting was never the cost, only waiting inside the thread.
+
+        An event loop needs no locks because each piece of its state belongs to one thread, and tasks change it only between awaits. Push that idea further: give every piece of state its own owner that handles one message at a time, and let everyone else send it messages instead of touching the state. [[d0.actors-and-message-passing]] builds those owners, the actors, and the mailboxes and channels between them.

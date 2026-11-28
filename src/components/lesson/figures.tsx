@@ -12287,6 +12287,860 @@ function ProcessLife(props: Props) {
   );
 }
 
+type TiStep = { who: "A" | "B"; op: string };
+
+function tiMerges(a: TiStep[], b: TiStep[]): TiStep[][] {
+  if (!a.length) return [b];
+  if (!b.length) return [a];
+  return [...tiMerges(a.slice(1), b).map((m) => [a[0], ...m]), ...tiMerges(a, b.slice(1)).map((m) => [b[0], ...m])];
+}
+
+function tiRun(order: TiStep[]) {
+  let count = 0;
+  const reg = { A: 0, B: 0 };
+  const notes: string[] = [];
+  const after: number[] = [];
+  for (const s of order) {
+    if (s.op === "load") {
+      reg[s.who] = count;
+      notes.push(`load ${count}`);
+    } else if (s.op === "add") {
+      reg[s.who] += 1;
+      notes.push(`add → ${reg[s.who]}`);
+    } else if (s.op === "store") {
+      count = reg[s.who];
+      notes.push(`store ${count}`);
+    } else {
+      count += 1;
+      notes.push(`+1 → ${count}`);
+    }
+    after.push(count);
+  }
+  return { count, notes, after };
+}
+
+/** Every interleaving of two threads' increments of one shared count, as three steps each or as one atomic step. */
+function ThreadInterleaving(props: Props) {
+  const modes = ["steps", "atomic"];
+  const [mode, setMode] = useState(modes.includes(String(props.mode)) ? String(props.mode) : "steps");
+  const ops = mode === "steps" ? ["load", "add", "store"] : ["increment"];
+  const merges = tiMerges(
+    ops.map((op) => ({ who: "A" as const, op })),
+    ops.map((op) => ({ who: "B" as const, op })),
+  );
+  const total = merges.length;
+  const [raw, setRaw] = useState(clamp(num(props.schedule, 1), 1, 20));
+  const k = Math.min(raw, total);
+  const order = merges[k - 1];
+  const { count, notes, after } = tiRun(order);
+  const bad = merges.filter((m) => tiRun(m).count !== 2).length;
+  const words = order.map((s) => `${s.who} ${s.op === "increment" ? "increments" : s.op}`).join(", ");
+  const summary =
+    `Schedule ${k} of ${total}: ${words}. The count ends at ${count}` +
+    (count === 2 ? ", which is right." : ": both threads loaded the same old value, and one store overwrote the other, so one increment is lost.") +
+    ` ${bad === 0 ? `None of the ${total} schedules loses` : `${bad} of the ${total} schedules lose`} an update.`;
+  const col = mode === "steps" ? 64 : 160;
+  const x0 = 70;
+  const laneY = { A: 40, B: 96 };
+  return (
+    <Frame
+      title={mode === "steps" ? "Two threads, count += 1 each, as load, add, store" : "Two threads, count += 1 each, as one atomic step"}
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={mode === "steps"} onClick={() => setMode("steps")}>
+            load, add, store
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={mode === "atomic"} onClick={() => setMode("atomic")}>
+            one atomic step
+          </button>
+          <Stepper label="schedule" value={k} onChange={setRaw} min={1} max={total} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 210" role="img" aria-label={`Schedule ${k} of ${total}: count ends at ${count}`}>
+        <text x={8} y={18} className="fig-small">time →</text>
+        {(["A", "B"] as const).map((who) => (
+          <text key={who} x={8} y={laneY[who] + 20} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>
+            {`thread ${who}`}
+          </text>
+        ))}
+        {order.map((s, i) => {
+          const x = x0 + i * col;
+          const lost = mode === "steps" && s.op === "store" && count !== 2 && i === order.length - 1;
+          return (
+            <g key={i}>
+              <rect x={x} y={laneY[s.who]} width={col - 6} height={30} rx={5} className={lost ? "fig-accent" : "fig-fill"} style={lost ? { opacity: 0.5 } : undefined} />
+              <text x={x + (col - 6) / 2} y={laneY[s.who] + 19} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+                {notes[i]}
+              </text>
+              <text x={x + (col - 6) / 2} y={160} textAnchor="middle" className="fig-small">{String(after[i])}</text>
+            </g>
+          );
+        })}
+        <line x1={x0} y1={142} x2={x0 + order.length * col - 6} y2={142} className="fig-line" />
+        <text x={8} y={160} className="fig-small">count</text>
+        <text x={8} y={196} style={{ fill: count === 2 ? "var(--text)" : "var(--focus)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>
+          {count === 2 ? "count = 2, correct" : `count = ${count}, one increment lost`}
+        </text>
+        <text x={452} y={196} textAnchor="end" className="fig-small">{`${bad} of ${total} schedules lose an update`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** Threads that each do some work, a short critical section and some more work, with and without a lock around the critical section. */
+function LockTimeline(props: Props) {
+  const [mode, setMode] = useState(props.mode === "none" ? "none" : "lock");
+  const [n, setN] = useState(clamp(num(props.threads, 3), 1, 5));
+  const names = ["A", "B", "C", "D", "E"].slice(0, n);
+  const before = 2;
+  const crit = 2;
+  const after = 1;
+  const rows = names.map((name, k) => {
+    const start = mode === "lock" ? before + crit * k : before;
+    return { name, wait: start - before, start, end: start + crit + after };
+  });
+  const total = Math.max(...rows.map((r) => r.end));
+  const count = mode === "lock" ? n : 1;
+  const last = rows[rows.length - 1];
+  const summary =
+    mode === "lock"
+      ? `With the lock, ${plural(n, "thread")} on ${plural(n, "core")} finish in ${total} time units, against ${before + crit + after} without it, and the count is ${count}, correct. ` +
+        (n > 1 ? `Thread ${last.name} waited ${last.wait} units for the lock, ${crit} for each critical section ahead of it. ` : "") +
+        `At most one thread is ever inside, so at most one critical section finishes every ${crit} units, however many threads there are.`
+      : `Without the lock, ${plural(n, "thread")} finish in ${total} time units, ` +
+        (n > 1
+          ? `but every thread loads the count inside its critical section before any of them stores, so all store 1 and the count is 1: ${plural(n - 1, "increment")} lost.`
+          : "and with one thread there is nobody to collide with, so the count is 1, correct.");
+  const unit = 26;
+  const x0 = 76;
+  return (
+    <Frame
+      title={mode === "lock" ? "A lock around the critical section" : "No lock around the critical section"}
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={mode === "lock"} onClick={() => setMode("lock")}>
+            with a lock
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={mode === "none"} onClick={() => setMode("none")}>
+            no lock
+          </button>
+          <Stepper label="threads" value={n} onChange={setN} min={1} max={5} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 240" role="img" aria-label={`${n} threads, ${mode === "lock" ? "with" : "without"} a lock: ${total} units, count ${count}`}>
+        {rows.map((r, k) => {
+          const y = 20 + k * 34;
+          return (
+            <g key={r.name}>
+              <text x={8} y={y + 18} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>{`thread ${r.name}`}</text>
+              <rect x={x0} y={y} width={before * unit - 2} height={26} rx={4} className="fig-fill" />
+              {r.wait > 0 ? (
+                <g>
+                  <rect x={x0 + before * unit} y={y + 9} width={r.wait * unit - 2} height={8} rx={3} className="fig-ghost" />
+                  <text x={x0 + (before + r.wait / 2) * unit} y={y + 6} textAnchor="middle" className="fig-small">wait</text>
+                </g>
+              ) : null}
+              <rect x={x0 + r.start * unit} y={y} width={crit * unit - 2} height={26} rx={4} className="fig-accent" style={{ opacity: 0.6 }} />
+              <text x={x0 + (r.start + crit / 2) * unit} y={y + 17} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+                {mode === "lock" ? `${k} → ${k + 1}` : "0 → 1"}
+              </text>
+              <rect x={x0 + (r.start + crit) * unit} y={y} width={after * unit - 2} height={26} rx={4} className="fig-fill" />
+            </g>
+          );
+        })}
+        <line x1={x0} y1={194} x2={x0 + 13 * unit} y2={194} className="fig-line" />
+        {Array.from({ length: 14 }, (_, t) => (t % 2 === 1 ? null : (
+          <text key={t} x={x0 + t * unit} y={208} textAnchor="middle" className="fig-small">{t}</text>
+        )))}
+        <text x={8} y={232} className="fig-small">{"time units · bright: critical section"}</text>
+        <text x={452} y={232} textAnchor="end" style={{ fill: count === n ? "var(--text)" : "var(--focus)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>
+          {`count ${count} of ${n}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+type DgEvent = { text: string; holds: Record<string, string>; waits: Record<string, string> };
+
+const DG_SCRIPTS: Record<string, { label: string; events: DgEvent[] }> = {
+  opposite: {
+    label: "opposite orders",
+    events: [
+      { text: "T1 will move money from A to B and takes A first; T2 will move money from B to A and takes B first. Both locks are free.", holds: {}, waits: {} },
+      { text: "T1 takes lock A.", holds: { A: "T1" }, waits: {} },
+      { text: "T2 takes lock B.", holds: { A: "T1", B: "T2" }, waits: {} },
+      { text: "T1 asks for B, which T2 holds, and waits.", holds: { A: "T1", B: "T2" }, waits: { T1: "B" } },
+      { text: "T2 asks for A, which T1 holds, and waits. T1 waits for T2 and T2 waits for T1: the graph has a cycle, and neither thread can ever move. Deadlock.", holds: { A: "T1", B: "T2" }, waits: { T1: "B", T2: "A" } },
+    ],
+  },
+  ordered: {
+    label: "same order",
+    events: [
+      { text: "Both threads take the locks in the same order, A before B, whichever way the money goes. Both locks are free.", holds: {}, waits: {} },
+      { text: "T1 takes lock A.", holds: { A: "T1" }, waits: {} },
+      { text: "T2 asks for A, which T1 holds, and waits, holding nothing.", holds: { A: "T1" }, waits: { T2: "A" } },
+      { text: "T1 takes lock B and now holds both.", holds: { A: "T1", B: "T1" }, waits: { T2: "A" } },
+      { text: "T1 makes its transfer and releases B and A. T2's wait is over.", holds: {}, waits: { T2: "A" } },
+      { text: "T2 takes lock A.", holds: { A: "T2" }, waits: {} },
+      { text: "T2 takes lock B, makes its transfer and releases both. A thread waiting for A holds nothing, so no cycle can form: no deadlock.", holds: { A: "T2", B: "T2" }, waits: {} },
+    ],
+  },
+};
+
+function dgArrow(x1: number, y1: number, x2: number, y2: number) {
+  const a = Math.atan2(y2 - y1, x2 - x1);
+  const p = (d: number, t: number) => `${x2 - d * Math.cos(a + t)},${y2 - d * Math.sin(a + t)}`;
+  return `${x2},${y2} ${p(10, 0.4)} ${p(10, -0.4)}`;
+}
+
+/** A wait-for graph of two threads and two locks, as they take the locks in opposite orders or in the same order. */
+function DeadlockGraph(props: Props) {
+  const keys = Object.keys(DG_SCRIPTS);
+  const [key, setKey] = useState(keys.includes(String(props.order)) ? String(props.order) : "opposite");
+  const script = DG_SCRIPTS[key];
+  const last = script.events.length - 1;
+  const [raw, setStep] = useState(clamp(num(props.step, 0), 0, 6));
+  const step = Math.min(raw, last);
+  const ev = script.events[step];
+  const cycle = Object.keys(ev.waits).length === 2 && Object.keys(ev.holds).length === 2 && ev.holds.A !== ev.holds.B;
+  const pos: Record<string, { x: number; y: number }> = { T1: { x: 100, y: 56 }, T2: { x: 100, y: 156 }, A: { x: 340, y: 56 }, B: { x: 340, y: 156 } };
+  const summary = `Step ${step + 1} of ${last + 1}: ${ev.text}`;
+  const edge = (from: string, to: string, kind: "hold" | "wait", k: string) => {
+    const a = pos[from];
+    const b = pos[to];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    const ux = (b.x - a.x) / len;
+    const uy = (b.y - a.y) / len;
+    const off = kind === "hold" ? 6 : -6;
+    const x1 = a.x + ux * 30 - uy * off;
+    const y1 = a.y + uy * 30 + ux * off;
+    const x2 = b.x - ux * 30 - uy * off;
+    const y2 = b.y - uy * 30 + ux * off;
+    const hot = kind === "wait";
+    return (
+      <g key={k}>
+        <line x1={x1} y1={y1} x2={x2} y2={y2} className={hot ? "fig-accent-line" : "fig-line"} style={{ strokeWidth: 2, strokeDasharray: hot ? "6 4" : undefined }} />
+        <polygon points={dgArrow(x1, y1, x2, y2)} className={hot ? "fig-accent" : "fig-fill"} style={hot ? undefined : { fill: "var(--line)" }} />
+      </g>
+    );
+  };
+  return (
+    <Frame
+      title={`Two transfers, locks taken in ${script.label}`}
+      summary={summary}
+      controls={
+        <>
+          {keys.map((k) => (
+            <button key={k} type="button" className="btn btn-secondary btn-small" aria-pressed={key === k} onClick={() => { setKey(k); setStep(0); }}>
+              {DG_SCRIPTS[k].label}
+            </button>
+          ))}
+          <Stepper label="step" value={step + 1} onChange={(v) => setStep(v - 1)} min={1} max={last + 1} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 230" role="img" aria-label={`Step ${step + 1}: ${cycle ? "deadlock" : "no cycle"}`}>
+        {Object.entries(ev.holds).map(([lock, t]) => edge(lock, t, "hold", `h${lock}`))}
+        {Object.entries(ev.waits).map(([t, lock]) => edge(t, lock, "wait", `w${t}`))}
+        {["T1", "T2"].map((t) => (
+          <g key={t}>
+            <circle cx={pos[t].x} cy={pos[t].y} r={26} className={cycle ? "fig-accent" : "fig-fill"} style={{ stroke: "var(--line)", opacity: cycle ? 0.6 : 1 }} />
+            <text x={pos[t].x} y={pos[t].y + 5} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 600 }}>{t}</text>
+          </g>
+        ))}
+        {["A", "B"].map((l) => (
+          <g key={l}>
+            <rect x={pos[l].x - 32} y={pos[l].y - 22} width={64} height={44} rx={6} className="fig-fill" style={{ stroke: "var(--line)" }} />
+            <text x={pos[l].x} y={pos[l].y + 5} textAnchor="middle" style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 600 }}>{`lock ${l}`}</text>
+          </g>
+        ))}
+        <text x={8} y={206} className="fig-small">{"solid: lock held by thread · dashed: thread waits for lock"}</text>
+        <text x={8} y={224} style={{ fill: cycle ? "var(--focus)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>
+          {cycle ? "cycle: deadlock" : Object.keys(ev.waits).length ? "waiting, but no cycle" : "nobody waiting"}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+function bbSimulate(make: number, use: number, cap: number, n: number) {
+  let buf = 0;
+  let made = 0;
+  let consumed = 0;
+  let pLeft = make;
+  let ready = false;
+  let using = false;
+  let cLeft = 0;
+  const rows: { p: string; level: number; c: string }[] = [];
+  for (let t = 0; consumed < n && t < 60; t++) {
+    if (!using && buf > 0) {
+      buf -= 1;
+      using = true;
+      cLeft = use;
+    }
+    if (ready && buf < cap) {
+      buf += 1;
+      made += 1;
+      ready = false;
+      pLeft = make;
+    }
+    let p: string;
+    if (made === n && !ready) p = "done";
+    else if (ready) p = "wait";
+    else {
+      p = "make";
+      pLeft -= 1;
+      if (pLeft === 0) ready = true;
+    }
+    let c: string;
+    if (using) {
+      c = "use";
+      cLeft -= 1;
+      if (cLeft === 0) {
+        consumed += 1;
+        using = false;
+      }
+    } else c = consumed === n ? "done" : "wait";
+    rows.push({ p, level: buf, c });
+  }
+  return rows;
+}
+
+/** A producer and a consumer joined by a bounded buffer: who waits for whom, as the buffer grows. */
+function BoundedBuffer(props: Props) {
+  const [speed, setSpeed] = useState(props.speed === "slow-producer" ? "slow-producer" : "slow-consumer");
+  const [cap, setCap] = useState(clamp(num(props.capacity, 2), 1, 4));
+  const make = speed === "slow-consumer" ? 1 : 2;
+  const use = speed === "slow-consumer" ? 2 : 1;
+  const n = 8;
+  const rows = bbSimulate(make, use, cap, n);
+  const total = rows.length;
+  const pWait = rows.filter((r) => r.p === "wait").length;
+  const cWait = rows.filter((r) => r.c === "wait").length;
+  const pDone = rows.findIndex((r) => r.p === "done");
+  const summary =
+    `The producer makes an item every ${plural(make, "time unit")} and the consumer uses one every ${plural(use, "unit")}, through a buffer with room for ${cap}. ` +
+    `All ${n} items are used by time ${total}. The producer spends ${plural(pWait, "unit")} waiting for space` +
+    (pDone >= 0 ? ` and is finished at time ${pDone}` : "") +
+    `; the consumer spends ${plural(cWait, "unit")} waiting for items. ` +
+    (speed === "slow-consumer"
+      ? "A bigger buffer lets the producer run further ahead and wait less, but the last item is used no sooner: the slower side sets the pace."
+      : "The consumer is always waiting for the next item, so the buffer never holds more than one and its size makes no difference.");
+  const cell = 19;
+  const x0 = 92;
+  const color = (s: string) => (s === "make" || s === "use" ? "fig-accent" : s === "wait" ? "fig-ghost" : "");
+  return (
+    <Frame
+      title={`Producer and consumer, buffer of ${cap}`}
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={speed === "slow-consumer"} onClick={() => setSpeed("slow-consumer")}>
+            slow consumer
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={speed === "slow-producer"} onClick={() => setSpeed("slow-producer")}>
+            slow producer
+          </button>
+          <Stepper label="capacity" value={cap} onChange={setCap} min={1} max={4} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 210" role="img" aria-label={`Buffer of ${cap}: done at ${total}, producer waits ${pWait}, consumer waits ${cWait}`}>
+        <text x={8} y={36} className="fig-small" style={{ fill: "var(--text)" }}>producer</text>
+        <text x={8} y={96} className="fig-small" style={{ fill: "var(--text)" }}>in buffer</text>
+        <text x={8} y={156} className="fig-small" style={{ fill: "var(--text)" }}>consumer</text>
+        {rows.map((r, t) => (
+          <g key={t}>
+            {r.p !== "done" ? <rect x={x0 + t * cell} y={22} width={cell - 2} height={22} rx={3} className={color(r.p)} style={r.p === "make" ? { opacity: 0.6 } : undefined} /> : null}
+            {Array.from({ length: r.level }, (_, k) => (
+              <rect key={k} x={x0 + t * cell} y={108 - (k + 1) * 9} width={cell - 2} height={7} rx={2} className="fig-fill" style={{ stroke: "var(--line)" }} />
+            ))}
+            {r.c !== "done" ? <rect x={x0 + t * cell} y={142} width={cell - 2} height={22} rx={3} className={color(r.c)} style={r.c === "use" ? { opacity: 0.6 } : undefined} /> : null}
+          </g>
+        ))}
+        <line x1={x0} y1={176} x2={x0 + 18 * cell} y2={176} className="fig-line" />
+        {[0, 5, 10, 15].map((t) => (
+          <text key={t} x={x0 + t * cell} y={190} className="fig-small">{t}</text>
+        ))}
+        <text x={8} y={206} className="fig-small">{"bright: working · dark: waiting"}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+/** Threads that all read a counter at once and increment it, by a compare-and-swap loop or by one fetch-and-add each. */
+function CasRetry(props: Props) {
+  const [op, setOp] = useState(props.op === "fetch-add" ? "fetch-add" : "cas");
+  const [n, setN] = useState(clamp(num(props.threads, 4), 1, 5));
+  const names = ["A", "B", "C", "D", "E"].slice(0, n);
+  const total = op === "cas" ? (n * (n + 1)) / 2 : n;
+  const wasted = total - n;
+  const summary =
+    n === 1
+      ? `One thread ${op === "cas" ? "reads the counter and swaps in one more; with nobody else changing it, its first compare-and-swap succeeds" : "adds 1 with one indivisible fetch-and-add and gets back 0"}. 1 increment takes 1 attempt, none wasted.`
+      : op === "cas"
+      ? `${plural(n, "thread")} read the counter at the same moment and each tries to swap in one more. In every round only the first compare-and-swap succeeds; the others find the value changed, read again and retry. ` +
+        `${n} increments take ${plural(total, "attempt")}, ${wasted} of them wasted, and the last thread needs ${n}: the waste grows with the square of the number of threads.`
+      : `Each thread's fetch-and-add is one indivisible step that adds 1 and returns the value it replaced: ${names.map((x, i) => `${x} gets ${i}`).join(", ")}. ` +
+        `${n} increments take ${plural(n, "attempt")}, none wasted, however many threads collide.`;
+  const x0 = 78;
+  const colW = 74;
+  return (
+    <Frame
+      title={op === "cas" ? "Incrementing with a compare-and-swap loop" : "Incrementing with fetch-and-add"}
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={op === "cas"} onClick={() => setOp("cas")}>
+            compare-and-swap loop
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={op === "fetch-add"} onClick={() => setOp("fetch-add")}>
+            fetch-and-add
+          </button>
+          <Stepper label="threads" value={n} onChange={setN} min={1} max={5} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 230" role="img" aria-label={`${n} threads, ${op === "cas" ? "compare-and-swap" : "fetch-and-add"}: ${total} attempts`}>
+        {(op === "cas" ? Array.from({ length: n }, (_, r) => r) : [0]).map((r) => (
+          <text key={r} x={x0 + r * colW + colW / 2 - 3} y={16} textAnchor="middle" className="fig-small">{op === "cas" ? `round ${r + 1}` : "one step"}</text>
+        ))}
+        {names.map((name, i) => {
+          const y = 26 + i * 34;
+          return (
+            <g key={name}>
+              <text x={8} y={y + 18} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>{`thread ${name}`}</text>
+              {op === "cas"
+                ? Array.from({ length: i + 1 }, (_, r) => {
+                    const ok = r === i;
+                    return (
+                      <g key={r}>
+                        <rect x={x0 + r * colW} y={y} width={colW - 6} height={26} rx={4} className={ok ? "fig-accent" : "fig-ghost"} style={ok ? { opacity: 0.6 } : undefined} />
+                        <text x={x0 + r * colW + (colW - 6) / 2} y={y + 17} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>
+                          {`${r}→${r + 1} ${ok ? "ok" : "fail"}`}
+                        </text>
+                      </g>
+                    );
+                  })
+                : (
+                  <g>
+                    <rect x={x0} y={y} width={colW + 40} height={26} rx={4} className="fig-accent" style={{ opacity: 0.6 }} />
+                    <text x={x0 + (colW + 40) / 2} y={y + 17} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>{`add 1, got ${i}`}</text>
+                  </g>
+                )}
+            </g>
+          );
+        })}
+        <text x={8} y={222} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>
+          {`${total} attempts for ${n} increments · ${wasted} wasted`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+type SbState = { text: string; pc: [number, number]; bufs: [string[], string[]]; mem: { x: number; y: number }; r1: string; r2: string };
+
+const SB_SCRIPTS: Record<string, SbState[]> = {
+  plain: [
+    { text: "x and y start at 0 in memory, and both store buffers are empty.", pc: [0, 0], bufs: [[], []], mem: { x: 0, y: 0 }, r1: "?", r2: "?" },
+    { text: "Core 1 runs x = 1. The store goes into core 1's store buffer, not yet to memory, and the core moves straight on.", pc: [1, 0], bufs: [["x = 1"], []], mem: { x: 0, y: 0 }, r1: "?", r2: "?" },
+    { text: "Core 2 runs y = 1, into its own store buffer.", pc: [1, 1], bufs: [["x = 1"], ["y = 1"]], mem: { x: 0, y: 0 }, r1: "?", r2: "?" },
+    { text: "Core 1 runs r1 = y. Its own buffer holds no y, so it reads memory, which still says 0: r1 = 0.", pc: [2, 1], bufs: [["x = 1"], ["y = 1"]], mem: { x: 0, y: 0 }, r1: "0", r2: "?" },
+    { text: "Core 2 runs r2 = x. Its buffer holds no x, so it reads memory: r2 = 0.", pc: [2, 2], bufs: [["x = 1"], ["y = 1"]], mem: { x: 0, y: 0 }, r1: "0", r2: "0" },
+    { text: "The buffers drain and memory ends with x = 1 and y = 1. Yet both cores read 0, which no interleaving of the two programs allows: each load overtook its own core's earlier store.", pc: [2, 2], bufs: [[], []], mem: { x: 1, y: 1 }, r1: "0", r2: "0" },
+  ],
+  fence: [
+    { text: "x and y start at 0 in memory, and both store buffers are empty. Each program now has a fence between its store and its load.", pc: [0, 0], bufs: [[], []], mem: { x: 0, y: 0 }, r1: "?", r2: "?" },
+    { text: "Core 1 runs x = 1, into its store buffer.", pc: [1, 0], bufs: [["x = 1"], []], mem: { x: 0, y: 0 }, r1: "?", r2: "?" },
+    { text: "Core 2 runs y = 1, into its store buffer.", pc: [1, 1], bufs: [["x = 1"], ["y = 1"]], mem: { x: 0, y: 0 }, r1: "?", r2: "?" },
+    { text: "Core 1 reaches its fence, which waits until core 1's buffer has drained: x = 1 is now in memory.", pc: [2, 1], bufs: [[], ["y = 1"]], mem: { x: 1, y: 0 }, r1: "?", r2: "?" },
+    { text: "Core 2's fence drains its buffer: y = 1 is now in memory.", pc: [2, 2], bufs: [[], []], mem: { x: 1, y: 1 }, r1: "?", r2: "?" },
+    { text: "Core 1 runs r1 = y and reads 1 from memory.", pc: [3, 2], bufs: [[], []], mem: { x: 1, y: 1 }, r1: "1", r2: "?" },
+    { text: "Core 2 runs r2 = x and reads 1. With fences, each core's store reaches memory before its own load runs, so r1 and r2 can never both be 0.", pc: [3, 3], bufs: [[], []], mem: { x: 1, y: 1 }, r1: "1", r2: "1" },
+  ],
+};
+
+/** The store-buffering litmus test on two cores with store buffers, with and without fences. */
+function StoreBuffer(props: Props) {
+  const [fence, setFence] = useState(props.fence === true);
+  const script = SB_SCRIPTS[fence ? "fence" : "plain"];
+  const last = script.length - 1;
+  const [raw, setStep] = useState(clamp(num(props.step, 0), 0, 6));
+  const step = Math.min(raw, last);
+  const s = script[step];
+  const programs = fence ? [["x = 1", "fence", "r1 = y"], ["y = 1", "fence", "r2 = x"]] : [["x = 1", "r1 = y"], ["y = 1", "r2 = x"]];
+  const summary = `Step ${step + 1} of ${last + 1}: ${s.text}`;
+  const mono = { fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12 };
+  return (
+    <Frame
+      title={fence ? "Store buffering, with fences" : "Store buffering, no fences"}
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!fence} onClick={() => { setFence(false); setStep(0); }}>
+            no fence
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={fence} onClick={() => { setFence(true); setStep(0); }}>
+            with fences
+          </button>
+          <Stepper label="step" value={step + 1} onChange={(v) => setStep(v - 1)} min={1} max={last + 1} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 236" role="img" aria-label={`Step ${step + 1}: r1 = ${s.r1}, r2 = ${s.r2}`}>
+        {[0, 1].map((c) => {
+          const y = 12 + c * 112;
+          return (
+            <g key={c}>
+              <rect x={8} y={y} width={136} height={96} rx={8} className="fig-fill" style={{ stroke: "var(--line)" }} />
+              <text x={18} y={y + 18} style={{ ...mono, fontWeight: 600 }}>{`core ${c + 1}`}</text>
+              {programs[c].map((line, k) => (
+                <g key={k}>
+                  {s.pc[c] === k + 1 ? <rect x={14} y={y + 26 + k * 18} width={124} height={17} rx={3} className="fig-accent" style={{ opacity: 0.45 }} /> : null}
+                  <text x={20} y={y + 39 + k * 18} style={mono}>{line}</text>
+                </g>
+              ))}
+              <text x={18} y={y + 88} className="fig-small" style={{ fill: "var(--text)" }}>{`r${c + 1} = ${c === 0 ? s.r1 : s.r2}`}</text>
+              <rect x={160} y={y + 24} width={130} height={48} rx={6} className="fig-ghost" />
+              <text x={166} y={y + 18} className="fig-small">store buffer</text>
+              {s.bufs[c].map((entry, k) => (
+                <g key={k}>
+                  <rect x={168} y={y + 34 + k * 22} width={114} height={26} rx={4} className="fig-accent" style={{ opacity: 0.6 }} />
+                  <text x={225} y={y + 52 + k * 22} textAnchor="middle" style={mono}>{entry}</text>
+                </g>
+              ))}
+              <line x1={290} y1={y + 48} x2={318} y2={118} className="fig-line" />
+            </g>
+          );
+        })}
+        <rect x={318} y={70} width={134} height={96} rx={8} className="fig-fill" style={{ stroke: "var(--line)" }} />
+        <text x={328} y={90} style={{ ...mono, fontWeight: 600 }}>memory</text>
+        <text x={328} y={120} style={mono}>{`x = ${s.mem.x}`}</text>
+        <text x={328} y={144} style={mono}>{`y = ${s.mem.y}`}</text>
+        <text x={318} y={196} style={{ fill: s.r1 === "0" && s.r2 === "0" ? "var(--focus)" : "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>
+          {`r1 = ${s.r1}, r2 = ${s.r2}`}
+        </text>
+      </svg>
+    </Frame>
+  );
+}
+
+const WQ_TASKS = [6, 1, 1, 1, 5, 1, 1, 2];
+
+function wqPlan(workers: number, shared: boolean) {
+  const free = Array.from({ length: workers }, () => 0);
+  const bars: { w: number; task: number; start: number; len: number }[] = [];
+  WQ_TASKS.forEach((len, task) => {
+    let w = task % workers;
+    if (shared) {
+      w = 0;
+      for (let k = 1; k < workers; k++) if (free[k] < free[w]) w = k;
+    }
+    bars.push({ w, task, start: free[w], len });
+    free[w] += len;
+  });
+  return { bars, end: Math.max(...free), free };
+}
+
+/** Eight tasks of uneven length run by a pool of workers, taking from one shared queue or split among them in advance. */
+function WorkQueue(props: Props) {
+  const [mode, setMode] = useState(props.mode === "fixed" ? "fixed" : "shared");
+  const [n, setN] = useState(clamp(num(props.workers, 2), 1, 4));
+  const { bars, end, free } = wqPlan(n, mode === "shared");
+  const total = WQ_TASKS.reduce((a, b) => a + b, 0);
+  const idle = n * end - total;
+  const busiest = free.indexOf(end);
+  const summary =
+    (mode === "shared"
+      ? `With one shared queue, ${plural(n, "worker")} finish all ${WQ_TASKS.length} tasks at ${end} ms. Whenever a worker is free it takes the next task, so the short tasks flow around the long ones. `
+      : `Handing task i to worker i mod ${n} in advance finishes at ${end} ms: worker ${busiest} was given ${end} ms of work while the others ran out early. `) +
+    `The tasks need ${total} ms of work in all, and the workers spend ${idle} ms idle before the last one finishes.`;
+  const unit = 20;
+  const x0 = 76;
+  return (
+    <Frame
+      title={mode === "shared" ? `A pool of ${n} taking from one queue` : `${WQ_TASKS.length} tasks split among ${n} in advance`}
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={mode === "shared"} onClick={() => setMode("shared")}>
+            shared queue
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={mode === "fixed"} onClick={() => setMode("fixed")}>
+            fixed split
+          </button>
+          <Stepper label="workers" value={n} onChange={setN} min={1} max={4} />
+        </>
+      }
+    >
+      <svg viewBox={`0 0 460 ${28 + n * 32 + 52}`} role="img" aria-label={`${n} workers, ${mode === "shared" ? "shared queue" : "fixed split"}: done at ${end} ms`}>
+        <text x={8} y={16} className="fig-small">{`queue, in order: t0 to t7, lasting ${WQ_TASKS.join(", ")} ms`}</text>
+        {Array.from({ length: n }, (_, w) => (
+          <text key={w} x={8} y={46 + w * 32} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>{`worker ${w}`}</text>
+        ))}
+        {bars.map((b) => (
+          <g key={b.task}>
+            <rect x={x0 + b.start * unit} y={28 + b.w * 32} width={b.len * unit - 2} height={26} rx={4} className={b.len >= 5 ? "fig-accent" : "fig-fill"} style={b.len >= 5 ? { opacity: 0.6 } : { stroke: "var(--line)" }} />
+            <text x={x0 + (b.start + b.len / 2) * unit - 1} y={45 + b.w * 32} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>{`t${b.task}`}</text>
+          </g>
+        ))}
+        <line x1={x0 + end * unit - 1} y1={24} x2={x0 + end * unit - 1} y2={28 + n * 32} className="fig-accent-line" style={{ strokeWidth: 2 }} />
+        <line x1={x0} y1={28 + n * 32 + 6} x2={x0 + 18 * unit} y2={28 + n * 32 + 6} className="fig-line" />
+        {[0, 3, 6, 9, 12, 15, 18].map((t) => (
+          <text key={t} x={x0 + t * unit} y={28 + n * 32 + 20} textAnchor="middle" className="fig-small">{t}</text>
+        ))}
+        <text x={8} y={28 + n * 32 + 42} className="fig-small">{`ms · done at ${end} · ${idle} ms idle`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+const EL_WAIT = 100;
+const EL_CPU = 20;
+
+/** Requests that each wait for a database and then compute, served by one thread with blocking calls or by an event loop. */
+function EventLoop(props: Props) {
+  const [mode, setMode] = useState(props.mode === "blocking" ? "blocking" : "async");
+  const [n, setN] = useState(clamp(num(props.requests, 3), 1, 6));
+  const blocking = mode === "blocking";
+  const bars = Array.from({ length: n }, (_, i) =>
+    blocking
+      ? { wait: i * (EL_WAIT + EL_CPU), cpu: i * (EL_WAIT + EL_CPU) + EL_WAIT }
+      : { wait: 0, cpu: EL_WAIT + i * EL_CPU },
+  );
+  const end = blocking ? n * (EL_WAIT + EL_CPU) : EL_WAIT + n * EL_CPU;
+  const summary = blocking
+    ? `With blocking calls, the one thread waits out each database call before it can start the next request, so ${plural(n, "request")} take ${n} × ${EL_WAIT + EL_CPU} = ${end} ms, and the thread spends ${n * EL_WAIT} ms of that doing nothing.`
+    : n === 1
+      ? `With an event loop, the one thread sends the query, is free while it waits, and computes the reply when it arrives, ready at ${EL_WAIT} + ${EL_CPU} = ${end} ms. With one request there is nothing to overlap; add requests to see the waits overlap.`
+      : `With an event loop, the one thread sends all ${n} queries at once and computes each reply as it arrives, so the waits overlap and the last reply is ready at ${EL_WAIT} + ${n} × ${EL_CPU} = ${end} ms. Only the computing is still one at a time.`;
+  const x0 = 60;
+  const span = n * (EL_WAIT + EL_CPU);
+  const scale = 390 / span;
+  const axisY = 54 + n * 24 + 10;
+  const height = axisY + 40;
+  const x = (t: number) => x0 + t * scale;
+  const row = (i: number) => 54 + i * 24;
+  return (
+    <Frame
+      title={blocking ? `${plural(n, "request")}, one thread, blocking calls` : `${plural(n, "request")} on an event loop`}
+      summary={summary}
+      controls={
+        <>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={blocking} onClick={() => setMode("blocking")}>
+            blocking
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!blocking} onClick={() => setMode("async")}>
+            event loop
+          </button>
+          <Stepper label="requests" value={n} onChange={setN} min={1} max={6} />
+        </>
+      }
+    >
+      <svg viewBox={`0 0 460 ${height}`} role="img" aria-label={`${plural(n, "request")}, ${blocking ? "blocking" : "event loop"}: last reply at ${end} ms`}>
+        <text x={8} y={16} className="fig-small">{`each request waits ${EL_WAIT} ms for the database, then computes ${EL_CPU} ms`}</text>
+        <text x={8} y={39} style={{ fill: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>thread</text>
+        {bars.map((b, i) => (
+          <rect key={`t${i}`} x={x(b.cpu)} y={26} width={EL_CPU * scale - 1} height={18} rx={3} className="fig-accent" />
+        ))}
+        {blocking &&
+          bars.map((b, i) => (
+            <rect key={`tb${i}`} x={x(b.wait)} y={26} width={EL_WAIT * scale - 1} height={18} rx={3} className="fig-ghost" style={{ stroke: "var(--text-secondary)", strokeDasharray: "4 3" }} />
+          ))}
+        {Array.from({ length: n }, (_, i) => (
+          <text key={`l${i}`} x={8} y={row(i) + 13} className="fig-small" style={{ fill: "var(--text)" }}>{`r${i + 1}`}</text>
+        ))}
+        {bars.map((b, i) => (
+          <g key={`r${i}`}>
+            <rect x={x(b.wait)} y={row(i)} width={EL_WAIT * scale - 1} height={18} rx={3} className="fig-ghost" style={{ stroke: "var(--text-secondary)" }} />
+            <rect x={x(b.cpu)} y={row(i)} width={EL_CPU * scale - 1} height={18} rx={3} className="fig-accent" style={{ opacity: 0.6 }} />
+          </g>
+        ))}
+        <line x1={x(end)} y1={22} x2={x(end)} y2={row(n - 1) + 22} className="fig-accent-line" style={{ strokeWidth: 2 }} />
+        <line x1={x0} y1={axisY} x2={x(span)} y2={axisY} className="fig-line" />
+        {[0, 1, 2, 3, 4, 5, 6].map((j) => (
+          <text key={j} x={x((j * span) / 6)} y={axisY + 14} textAnchor="middle" className="fig-small">{(j * span) / 6}</text>
+        ))}
+        <text x={8} y={axisY + 34} className="fig-small">{`ms · outline: waiting · solid: computing · last reply at ${end}`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+const AM_SERVICE = 200;
+const AM_CAP = 1000;
+
+/** Senders filling an actor's mailbox faster or slower than it can handle messages, with an unbounded or a bounded mailbox. */
+function ActorMailbox(props: Props) {
+  const [n, setN] = useState(clamp(num(props.senders, 3), 1, 4));
+  const [kind, setKind] = useState(props.mailbox === "bounded" ? "bounded" : "unbounded");
+  const bounded = kind === "bounded";
+  const rate = n * 100;
+  const growth = Math.max(0, rate - AM_SERVICE);
+  const at = (t: number) => (bounded ? Math.min(growth * t, AM_CAP) : growth * t);
+  const final = at(60);
+  const rejected = growth * 60 - final;
+  const wait = final / AM_SERVICE;
+  const full = growth > 0 ? AM_CAP / growth : 0;
+  const head =
+    n === 1
+      ? `One sender sends 100 messages a second to an actor that handles ${AM_SERVICE}. `
+      : `${n} senders sending 100 messages a second each add up to ${group(rate)} a second, to an actor that handles ${AM_SERVICE}. `;
+  const summary =
+    growth === 0
+      ? head +
+        (rate === AM_SERVICE
+          ? "Messages arrive exactly as fast as they are handled, so the mailbox stays empty only while they arrive perfectly evenly; any burst would never drain."
+          : "The actor keeps up, so its mailbox stays empty and each message is handled as it arrives.")
+      : bounded
+        ? head + `The mailbox fills to ${group(AM_CAP)} after ${full} s; from then on the actor turns away ${growth} messages a second, ${group(rejected)} in the minute, and no message waits more than ${AM_CAP / AM_SERVICE} s.`
+        : head + `The mailbox grows by ${growth} a second, to ${group(final)} after a minute, and a message arriving then waits ${wait} s before the actor reaches it.`;
+  const x0 = 64;
+  const w = 380;
+  const y0 = 176;
+  const h = 150;
+  const ymax = 12000;
+  const px = (t: number) => x0 + (t / 60) * w;
+  const py = (v: number) => y0 - (v / ymax) * h;
+  const pts = bounded && growth > 0 ? [0, full, 60] : [0, 60];
+  return (
+    <Frame
+      title={`Mailbox of an actor fed by ${plural(n, "sender")}`}
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="senders" value={n} onChange={setN} min={1} max={4} />
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={!bounded} onClick={() => setKind("unbounded")}>
+            unbounded
+          </button>
+          <button type="button" className="btn btn-secondary btn-small" aria-pressed={bounded} onClick={() => setKind("bounded")}>
+            bounded at {group(AM_CAP)}
+          </button>
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 226" role="img" aria-label={`${plural(n, "sender")}, ${kind} mailbox: ${group(final)} waiting after 60 s`}>
+        <text x={8} y={16} className="fig-small">{`messages waiting · arriving ${group(rate)}/s · handled ${AM_SERVICE}/s`}</text>
+        {[0, 4000, 8000, 12000].map((v) => (
+          <g key={v}>
+            <line x1={x0} y1={py(v)} x2={x0 + w} y2={py(v)} className="fig-line" style={{ opacity: v === 0 ? 1 : 0.35 }} />
+            <text x={x0 - 6} y={py(v) + 4} textAnchor="end" className="fig-small">{group(v)}</text>
+          </g>
+        ))}
+        {bounded && (
+          <>
+            <line x1={x0} y1={py(AM_CAP)} x2={x0 + w} y2={py(AM_CAP)} className="fig-line" style={{ strokeDasharray: "4 3" }} />
+            <text x={x0 + w} y={py(AM_CAP) - 5} textAnchor="end" className="fig-small">{`capacity ${group(AM_CAP)}`}</text>
+          </>
+        )}
+        <polyline points={pts.map((t) => `${px(t)},${py(at(t))}`).join(" ")} className="fig-accent-line" style={{ fill: "none", strokeWidth: 2 }} />
+        <circle cx={px(60)} cy={py(final)} r={4} className="fig-accent" />
+        {[0, 10, 20, 30, 40, 50, 60].map((t) => (
+          <text key={t} x={px(t)} y={y0 + 16} textAnchor="middle" className="fig-small">{t}</text>
+        ))}
+        <text x={8} y={220} className="fig-small">{`s · after a minute: ${group(final)} waiting${bounded ? `, ${group(rejected)} turned away` : `, newest waits ${wait} s`}`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
+function seSchedules(k: number) {
+  const out: string[] = [];
+  const walk = (s: string, a: number, b: number) => {
+    if (a === k && b === k) {
+      out.push(s);
+      return;
+    }
+    if (a < k) walk(s + "A", a + 1, b);
+    if (b < k) walk(s + "B", a, b + 1);
+  };
+  walk("", 0, 0);
+  return out;
+}
+
+function sePreemptions(s: string, k: number) {
+  let p = 0;
+  let a = 0;
+  let b = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (i > 0 && s[i] !== s[i - 1]) {
+      const left = s[i - 1] === "A" ? k - a : k - b;
+      if (left > 0) p++;
+    }
+    if (s[i] === "A") a++;
+    else b++;
+  }
+  return p;
+}
+
+/** Every interleaving of two threads as a path through a grid, with how often each schedule preempts a thread. */
+function ScheduleExplorer(props: Props) {
+  const [k, setK] = useState(clamp(num(props.steps, 3), 1, 6));
+  const all = seSchedules(k);
+  const [pick, setPick] = useState(clamp(num(props.schedule, 1), 1, all.length));
+  const i = clamp(pick, 1, all.length);
+  const s = all[i - 1];
+  const pre = sePreemptions(s, k);
+  const few = all.filter((x) => sePreemptions(x, k) <= 2).length;
+  const summary =
+    `Two threads of ${plural(k, "step")} each can interleave in C(${2 * k}, ${k}) = ${group(all.length)} ways, one for each path through the grid. ` +
+    `Schedule ${i} runs ${s.split("").join(" ")} and preempts a thread ${plural(pre, "time")}. ` +
+    `${group(few)} of the ${group(all.length)} schedules preempt at most twice.`;
+  const cell = Math.min(45, Math.floor(180 / k));
+  const gx = 40;
+  const gy = 200;
+  const pts: string[] = [`${gx},${gy}`];
+  let a = 0;
+  let b = 0;
+  for (const c of s) {
+    if (c === "A") a++;
+    else b++;
+    pts.push(`${gx + a * cell},${gy - b * cell}`);
+  }
+  return (
+    <Frame
+      title={`Schedule ${i} of ${group(all.length)}`}
+      summary={summary}
+      controls={
+        <>
+          <Stepper label="steps each" value={k} onChange={(v) => { setK(v); setPick(1); }} min={1} max={6} />
+          <Stepper label="schedule" value={i} onChange={setPick} min={1} max={all.length} />
+        </>
+      }
+    >
+      <svg viewBox="0 0 460 236" role="img" aria-label={`Schedule ${i} of ${all.length}: ${s}, ${pre} preemptions`}>
+        {Array.from({ length: k + 1 }, (_, j) => (
+          <g key={j}>
+            <line x1={gx} y1={gy - j * cell} x2={gx + k * cell} y2={gy - j * cell} className="fig-line" style={{ opacity: 0.4 }} />
+            <line x1={gx + j * cell} y1={gy} x2={gx + j * cell} y2={gy - k * cell} className="fig-line" style={{ opacity: 0.4 }} />
+          </g>
+        ))}
+        <polyline points={pts.join(" ")} className="fig-accent-line" style={{ fill: "none", strokeWidth: 3 }} />
+        <circle cx={gx} cy={gy} r={4} className="fig-accent" />
+        <circle cx={gx + k * cell} cy={gy - k * cell} r={4} className="fig-accent" />
+        <text x={gx} y={gy + 18} className="fig-small">thread A steps, rightwards</text>
+        <text x={gx - 8} y={gy - k * cell - 8} className="fig-small">thread B steps, upwards</text>
+        <text x={260} y={40} className="fig-small">schedule</text>
+        {s.split("").map((c, j) => (
+          <g key={j}>
+            <rect x={260 + (j % 6) * 30} y={48 + Math.floor(j / 6) * 30} width={26} height={24} rx={4} className={c === "A" ? "fig-accent" : "fig-fill"} style={c === "A" ? { opacity: 0.6 } : undefined} />
+            <text x={273 + (j % 6) * 30} y={64 + Math.floor(j / 6) * 30} textAnchor="middle" className="fig-small" style={{ fill: "var(--text)" }}>{c}</text>
+          </g>
+        ))}
+        <text x={260} y={130} className="fig-small">{`preemptions: ${pre}`}</text>
+        <text x={260} y={148} className="fig-small">{`schedules in all: ${group(all.length)}`}</text>
+        <text x={260} y={166} className="fig-small">{`at most 2 preemptions: ${group(few)}`}</text>
+      </svg>
+    </Frame>
+  );
+}
+
 const WALK_NODES: Record<string, Spot> = { A: [60, 130], B: [160, 56], C: [160, 204], D: [270, 30], E: [270, 112], F: [290, 204], G: [394, 204] };
 const WALK_EDGES = ["AB", "AC", "BD", "BE", "CF", "EF", "FG"];
 const nextTo = (node: string) =>
@@ -13672,6 +14526,16 @@ const FIGURES: Record<FigureName, ComponentType<Props>> = {
   "inode-blocks": InodeBlocks,
   "thread-models": ThreadModels,
   "process-life": ProcessLife,
+  "thread-interleaving": ThreadInterleaving,
+  "lock-timeline": LockTimeline,
+  "deadlock-graph": DeadlockGraph,
+  "bounded-buffer": BoundedBuffer,
+  "cas-retry": CasRetry,
+  "store-buffer": StoreBuffer,
+  "work-queue": WorkQueue,
+  "event-loop": EventLoop,
+  "actor-mailbox": ActorMailbox,
+  "schedule-explorer": ScheduleExplorer,
   "graph-walk": GraphWalk,
   "sort-steps": SortSteps,
   "binary-search": BinarySearch,
